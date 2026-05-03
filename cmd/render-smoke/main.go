@@ -32,6 +32,8 @@ func main() {
 		side     string
 		body     string
 		userMsg  string
+		elapsed  time.Duration
+		total    time.Duration
 	}{
 		{
 			name:  "01-idle",
@@ -82,6 +84,8 @@ func main() {
 			side:    "affirmative",
 			body:    "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
 			userMsg: "請問正方,如果 AI 替代了所有初級程序員,新人從哪裡入行?",
+			elapsed: 3*time.Minute + 42*time.Second,
+			total:   10 * time.Minute,
 		},
 		{
 			name:    "07-user-overlay-idle",
@@ -93,7 +97,7 @@ func main() {
 
 	for _, c := range cases {
 		path := fmt.Sprintf("%s/%s.png", *out, c.name)
-		if err := writeFrame(path, c.topic, c.phase, c.speaker, c.role, c.side, c.body, c.userMsg); err != nil {
+		if err := writeFrame(path, c.topic, c.phase, c.speaker, c.role, c.side, c.body, c.userMsg, c.elapsed, c.total); err != nil {
 			fmt.Fprintln(os.Stderr, c.name, err)
 			os.Exit(1)
 		}
@@ -101,7 +105,7 @@ func main() {
 	}
 }
 
-func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string) error {
+func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string, elapsed, total time.Duration) error {
 	rend, err := video.NewRendererForTest(1280, 720)
 	if err != nil {
 		return err
@@ -109,6 +113,9 @@ func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string) e
 	rend.SetTopic(topic)
 	rend.SetPhase(phase)
 	rend.SetState(speaker, role, side, body)
+	if elapsed > 0 || total > 0 {
+		rend.SetClock(elapsed, total)
+	}
 	if userMsg != "" {
 		rend.ShowUserMessage(userMsg, 30*time.Second)
 	}

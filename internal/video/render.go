@@ -1,6 +1,7 @@
 package video
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -27,6 +28,7 @@ type Renderer struct {
 
 	titleFace font.Face // topic title at the top
 	phaseFace font.Face // phase status line
+	clockFace font.Face // elapsed/total clock in top-right
 	tagFace   font.Face // speaker pill in the subtitle
 	bodyFace  font.Face // spoken text in the subtitle
 
@@ -37,6 +39,10 @@ type Renderer struct {
 	role    string
 	side    string
 	body    string
+
+	// Wall-clock display fed by the pipeline's once-per-second TickMsg.
+	clockElapsed time.Duration
+	clockTotal   time.Duration
 
 	// Transient overlay for user/chat messages. Drawn on top of the subtitle
 	// without disturbing it; expires automatically.
@@ -79,6 +85,10 @@ func newRenderer(width, height int) (*Renderer, error) {
 	if err != nil {
 		return nil, err
 	}
+	clockFace, err := mk(srcBold, 26)
+	if err != nil {
+		return nil, err
+	}
 	tagFace, err := mk(srcBold, 32)
 	if err != nil {
 		return nil, err
@@ -92,6 +102,7 @@ func newRenderer(width, height int) (*Renderer, error) {
 		width: width, height: height,
 		titleFace: titleFace,
 		phaseFace: phaseFace,
+		clockFace: clockFace,
 		tagFace:   tagFace,
 		bodyFace:  bodyFace,
 	}, nil
@@ -181,6 +192,16 @@ func (r *Renderer) SetPhase(s string) {
 	r.mu.Unlock()
 }
 
+// SetClock updates the elapsed / total wall-clock display in the top-right
+// corner. Pass zero for total to hide the "/ MM:SS" half (still shows
+// elapsed).
+func (r *Renderer) SetClock(elapsed, total time.Duration) {
+	r.mu.Lock()
+	r.clockElapsed = elapsed
+	r.clockTotal = total
+	r.mu.Unlock()
+}
+
 // SetState updates the active-speaker subtitle. Empty speaker clears it (idle
 // state — shows a "waiting" hint instead of a subtitle).
 func (r *Renderer) SetState(speaker, role, side, body string) {
@@ -217,6 +238,7 @@ func (r *Renderer) Frame() []byte {
 	r.mu.RLock()
 	topic, phase := r.topic, r.phase
 	speaker, role, body := r.speaker, r.role, r.body
+	clockE, clockT := r.clockElapsed, r.clockTotal
 	userMsg := r.userMsg
 	userActive := userMsg != "" && time.Now().Before(r.userExpiry)
 	r.mu.RUnlock()
@@ -236,6 +258,9 @@ func (r *Renderer) Frame() []byte {
 	}
 	if phase != "" {
 		drawCenteredText(img, r.phaseFace, "Phase: "+phase, r.width/2, 120, phaseFG)
+	}
+	if clockE > 0 || clockT > 0 {
+		drawClock(img, r.clockFace, clockE, clockT, r.width, 32, 60, titleFG, phaseFG)
 	}
 
 	// Subtitle area sits in the lower-middle region.
@@ -436,6 +461,51 @@ func roleColor(role string) color.RGBA {
 		return color.RGBA{0xc0, 0x84, 0xfc, 0xff}
 	}
 	return color.RGBA{0x91, 0x47, 0xff, 0xff}
+}
+
+// drawClock paints the elapsed / total wall-clock display anchored to the
+// top-right of the frame. Elapsed is drawn in fg; the " / total" segment uses
+// the dim fg so the active counter pops.
+func drawClock(dst *image.RGBA, face font.Face, elapsed, total time.Duration, width, rightMargin, y int, fg, dimFG color.RGBA) {
+	mainText := formatMMSS(elapsed)
+	tailText := ""
+	if total > 0 {
+		tailText = " / " + formatMMSS(total)
+	}
+
+	tailD := &font.Drawer{Face: face}
+	tailW := tailD.MeasureString(tailText).Ceil()
+	mainD := &font.Drawer{Face: face}
+	mainW := mainD.MeasureString(mainText).Ceil()
+
+	// Right edge of the whole string.
+	rightX := width - rightMargin
+	tailX := rightX - tailW
+	mainX := tailX - mainW
+
+	if tailText != "" {
+		td := &font.Drawer{Dst: dst, Src: image.NewUniform(dimFG), Face: face}
+		td.Dot = fixed.P(tailX, y)
+		td.DrawString(tailText)
+	}
+	md := &font.Drawer{Dst: dst, Src: image.NewUniform(fg), Face: face}
+	md.Dot = fixed.P(mainX, y)
+	md.DrawString(mainText)
+}
+
+// formatMMSS turns a duration into "MM:SS" (or "HH:MM:SS" when ≥ 1 hour).
+func formatMMSS(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d.Round(time.Second).Seconds())
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
 }
 
 // drawCenteredText draws text horizontally centered on cx, with baseline at y.

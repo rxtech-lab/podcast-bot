@@ -90,22 +90,13 @@ export function VideoStage() {
   return (
     <section className="flex-1 min-h-0 flex items-center justify-center bg-black p-2 sm:p-4 relative">
       {mode === 'video' && (
-        <div className="w-full h-full flex flex-col gap-2">
-          <video
-            ref={videoRef}
-            muted
-            autoPlay
-            playsInline
-            className="flex-1 min-h-0 w-full bg-black rounded outline-none"
-          />
-          {/* HLS is video-only; TTS audio comes from /api/audio/stream. */}
-          <audio
-            src="/api/audio/stream"
-            controls
-            autoPlay
-            className="w-full"
-          />
-        </div>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          controls
+          className="w-full h-full bg-black rounded outline-none"
+        />
       )}
       {mode === 'warming' && (
         <div className="text-muted-foreground text-center p-4 sm:p-8 max-w-xl text-sm sm:text-base">
