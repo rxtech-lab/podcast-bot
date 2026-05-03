@@ -28,8 +28,12 @@ type Env struct {
 
 // LoadEnv reads .env (if present) then env vars, validates, and freezes config.
 // Compression endpoint/key fall back to OpenAI ones when blank.
+//
+// Uses godotenv.Overload so values in .env take precedence over the inherited
+// shell environment — otherwise a stray OPENAI_API_KEY exported in ~/.zshrc
+// silently shadows the project's .env, which is a frequent footgun.
 func LoadEnv() (*Env, error) {
-	_ = godotenv.Load() // .env optional; env vars take precedence
+	_ = godotenv.Overload() // .env wins over inherited shell env
 
 	e := &Env{
 		OpenAIBaseURL:      strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),

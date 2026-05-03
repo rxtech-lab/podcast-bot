@@ -203,8 +203,14 @@ func formatLine(l renderedLine, width int) string {
 		style = userStyle
 	}
 	tag := style.Render(prefix + ":")
-	body := l.text
-	return tag + " " + body
+	line := tag + " " + l.text
+	if width <= 0 {
+		return line
+	}
+	// Wrap to viewport width. lipgloss.Width is ANSI-safe (doesn't count colour
+	// escape codes) and uses go-runewidth so CJK double-width glyphs are
+	// measured correctly.
+	return lipgloss.NewStyle().Width(width).Render(line)
 }
 
 // View renders the model.

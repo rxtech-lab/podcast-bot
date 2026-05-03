@@ -2,3 +2,4 @@
 bin
 mcp.json
 out
+.DS_Store

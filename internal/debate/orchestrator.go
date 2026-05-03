@@ -74,6 +74,22 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	if err := audio.VerifyTools(); err != nil {
 		return err
 	}
+	// Dump the loaded env (with secrets masked) so users can confirm godotenv
+	// picked up the values they expected.
+	o.Log.Info("env loaded",
+		"OPENAI_BASE_URL", o.Env.OpenAIBaseURL,
+		"OPENAI_API_KEY_len", len(o.Env.OpenAIKey),
+		"OPENAI_API_KEY_preview", maskKey(o.Env.OpenAIKey),
+		"HOST_MODEL", o.Env.HostModel,
+		"COMPRESSION_BASE_URL", o.Env.CompressionBaseURL,
+		"COMPRESSION_API_KEY_len", len(o.Env.CompressionKey),
+		"COMPRESSION_API_KEY_preview", maskKey(o.Env.CompressionKey),
+		"COMPRESSION_MODEL", o.Env.CompressionModel,
+		"AZURE_SPEECH_REGION", o.Env.AzureSpeechRegion,
+		"AZURE_SPEECH_KEY_len", len(o.Env.AzureSpeechKey),
+		"AZURE_SPEECH_KEY_preview", maskKey(o.Env.AzureSpeechKey),
+		"OUT_DIR", o.Env.OutDir)
+
 	o.Send(StatusMsg{Text: "fetching Azure voice list..."})
 	voices, err := tts.FetchVoices(ctx, o.Env.AzureSpeechRegion, o.Env.AzureSpeechKey)
 	if err != nil {
@@ -100,6 +116,10 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	for _, a := range o.Registry.All() {
 		o.Log.Info("agent ready", "name", a.Name(), "role", string(a.Role()), "voice", a.Voice().ShortName)
 	}
+	// Clear the setup-phase status text so the TUI status bar stops showing
+	// "starting MCP servers..." once the pipeline takes over.
+	o.Send(StatusMsg{Text: ""})
+	o.Send(PhaseMsg{Phase: agent.PhaseOpening})
 	return nil
 }
 
@@ -199,4 +219,16 @@ func (o *Orchestrator) PushUserMessage(text string) {
 // EnsureOutDir makes sure the output dir exists (called before logger setup).
 func EnsureOutDir(p string) error {
 	return os.MkdirAll(p, 0o755)
+}
+
+// maskKey shows the first 4 and last 4 characters with the middle elided so
+// debug logs can confirm a key was loaded without leaking it.
+func maskKey(k string) string {
+	if k == "" {
+		return "<empty>"
+	}
+	if len(k) <= 8 {
+		return "***"
+	}
+	return k[:4] + "..." + k[len(k)-4:]
 }

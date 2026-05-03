@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -192,7 +193,9 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 			}
 		}
 		if err := stream.Err(); err != nil {
-			p.d.Log.Warn("llm stream error", "turn", t.ID, "err", err)
+			p.d.Log.Warn("llm stream error", "turn", t.ID, "speaker", t.Speaker.Name(), "err", err)
+			t.SetErr(err)
+			p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d %s: %w", t.ID, t.Speaker.Name(), err)})
 		}
 	}()
 
@@ -225,11 +228,20 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, pw i
 }
 
 // play streams the per-turn audio reader to ffplay and the on-disk MP3 file.
+// If the upstream reader yields zero bytes (e.g. the LLM call failed before
+// any audio was produced), no file is written and t.AudioPath is cleared so
+// the empty turn drops out of the final ffmpeg concat list.
 func (p *Pipeline) play(ctx context.Context, t *Turn) error {
 	if t.audioReader == nil || t.AudioPath == "" {
 		return nil
 	}
-	return audio.PlayStream(ctx, t.AudioPath, t.audioReader)
+	n, err := audio.PlayStream(ctx, t.AudioPath, t.audioReader)
+	if n == 0 {
+		// Don't keep an empty-stream artefact, and don't include it in concat.
+		_ = os.Remove(t.AudioPath)
+		t.AudioPath = ""
+	}
+	return err
 }
 
 // updateMemories pushes the played turn into the transcript log AND into every
@@ -249,17 +261,5 @@ func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 	})
 }
 
-// Helper: per-Turn pipe reader. We attach it as a field via type assertion to
-// avoid widening the public Turn struct.
-type pipeBearer interface {
-	setReader(io.Reader)
-	reader() io.Reader
-}
-
-// Note: rather than reflection, we expose audioReader as a field on Turn.
-// Append to Turn declaration via this file's init? Go doesn't allow re-decl —
-// instead we add it directly here using build-time interface trick: nope. Just
-// inline a small embedded pointer field via this package. Done in turn.go.
-
-// Helper: ensure the LLM message type is referenced (silence linter for now).
+// Keep the llm package referenced even when no inline use exists.
 var _ = llm.RoleUser
