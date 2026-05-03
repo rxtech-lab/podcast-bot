@@ -23,6 +23,8 @@ type Env struct {
 	AzureSpeechKey    string
 	AzureSpeechRegion string
 
+	ElevenLabsAPIKey string
+
 	OutDir string
 }
 
@@ -44,6 +46,7 @@ func LoadEnv() (*Env, error) {
 		CompressionModel:   strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
 		AzureSpeechKey:     strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
 		AzureSpeechRegion:  strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
+		ElevenLabsAPIKey:   strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
 		OutDir:             strings.TrimSpace(os.Getenv("OUT_DIR")),
 	}
 
@@ -70,12 +73,9 @@ func LoadEnv() (*Env, error) {
 	if e.CompressionModel == "" {
 		missing = append(missing, "COMPRESSION_MODEL")
 	}
-	if e.AzureSpeechKey == "" {
-		missing = append(missing, "AZURE_SPEECH_KEY")
-	}
-	if e.AzureSpeechRegion == "" {
-		missing = append(missing, "AZURE_SPEECH_REGION")
-	}
+	// Provider-specific keys (Azure, ElevenLabs) are NOT required here —
+	// the orchestrator validates the credentials matching the chosen
+	// `tts_provider` from topic.md, so users only need to set what they use.
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}

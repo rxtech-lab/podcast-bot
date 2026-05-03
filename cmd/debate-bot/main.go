@@ -55,7 +55,8 @@ usage:
 env (loaded from .env if present):
   OPENAI_BASE_URL   OPENAI_API_KEY   HOST_MODEL
   COMPRESSION_BASE_URL   COMPRESSION_API_KEY   COMPRESSION_MODEL
-  AZURE_SPEECH_KEY   AZURE_SPEECH_REGION
+  AZURE_SPEECH_KEY   AZURE_SPEECH_REGION   (required when tts_provider=azure)
+  ELEVENLABS_API_KEY                        (required when tts_provider=eleven)
   OUT_DIR (optional, default ./out)`)
 }
 
@@ -154,7 +155,15 @@ func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
 	} else {
 		hlsDir = enc.HLSDir()
 		enc.AttachAudio(ctx, live)
-		stage := video.NewStage(enc, topic.Title)
+		affNames := make([]string, len(topic.Affirmative))
+		for i, s := range topic.Affirmative {
+			affNames[i] = s.Name
+		}
+		negNames := make([]string, len(topic.Negative))
+		for i, s := range topic.Negative {
+			negNames[i] = s.Name
+		}
+		stage := video.NewStage(enc, topic.Title, affNames, negNames)
 		go stage.Run(ctx, bus)
 	}
 

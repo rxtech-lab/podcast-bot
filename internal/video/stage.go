@@ -28,10 +28,11 @@ type Stage struct {
 	body       strings.Builder
 }
 
-// NewStage creates a Stage bound to enc and primes the topic title shown at
-// the top of the video.
-func NewStage(enc *Encoder, topicTitle string) *Stage {
+// NewStage creates a Stage bound to enc and primes the topic title plus the
+// affirmative / negative roster panels on the left and right of the frame.
+func NewStage(enc *Encoder, topicTitle string, affNames, negNames []string) *Stage {
 	enc.SetTopic(topicTitle)
+	enc.SetSides(affNames, negNames)
 	return &Stage{enc: enc}
 }
 

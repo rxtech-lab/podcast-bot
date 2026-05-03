@@ -8,3 +8,4 @@ frontend/dist
 internal/server/web-dist
 *.png
 .playwright-mcp
+topics/*.md

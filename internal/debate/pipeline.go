@@ -22,7 +22,7 @@ type Deps struct {
 	Planner    *Planner
 	Tracker    *Tracker
 	Registry   *agent.Registry
-	TTS        *tts.Client
+	TTS        tts.Provider
 	OutDir     string
 	Send       func(any) // event-bus publish wrapper
 	Log        *slog.Logger

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
+import { SpeakerHigh, WarningCircle } from '@phosphor-icons/react'
 
 type Mode = 'warming' | 'video' | 'audio-fallback'
 
@@ -7,10 +8,15 @@ const HLS_URL = '/api/video/stream.m3u8'
 const WARMUP_MS = 60_000
 const POLL_MS = 1500
 
-export function VideoStage() {
+interface VideoStageProps {
+  phase: string
+}
+
+export function VideoStage({ phase }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [mode, setMode] = useState<Mode>('warming')
-  const [warmingText, setWarmingText] = useState('warming up video stream…')
+  const [warmingText, setWarmingText] = useState('warming up the video stream')
+  const [degraded, setDegraded] = useState(false)
 
   // Phase 1: poll the manifest until ffmpeg has produced segments, then flip
   // mode to 'video'. This effect does not touch the <video> element itself —
@@ -28,7 +34,10 @@ export function VideoStage() {
             return
           }
           if (resp.status !== 404) {
-            if (!cancelled) setMode('audio-fallback')
+            if (!cancelled) {
+              setDegraded(true)
+              setMode('audio-fallback')
+            }
             return
           }
         } catch {
@@ -38,8 +47,9 @@ export function VideoStage() {
       }
       if (!cancelled) {
         setWarmingText(
-          "video stream didn't start within the warmup window. check the latest out/<session>/run.log and ffmpeg-encoder.log — most often this means ffmpeg isn't on PATH or the encoder crashed. audio still plays below.",
+          "video didn't start in time. check the latest out/<session>/run.log and ffmpeg-encoder.log — most often this means ffmpeg isn't on PATH or the encoder crashed. audio still plays below.",
         )
+        setDegraded(true)
         setMode('audio-fallback')
       }
     }
@@ -71,13 +81,17 @@ export function VideoStage() {
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data.fatal) {
           console.warn('hls fatal', data)
-          if (!cancelled) setMode('audio-fallback')
+          if (!cancelled) {
+            setDegraded(true)
+            setMode('audio-fallback')
+          }
         }
       })
     } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
       player.src = HLS_URL
       player.play().catch(() => {})
     } else {
+      setDegraded(true)
       setMode('audio-fallback')
     }
 
@@ -87,31 +101,71 @@ export function VideoStage() {
     }
   }, [mode])
 
+  const isLive = phase !== 'setup' && phase !== 'ended'
+
   return (
-    <section className="flex-1 min-h-0 flex items-center justify-center bg-black p-2 sm:p-4 relative">
+    <section className="flex-1 min-h-0 flex items-center justify-center bg-black/80 rounded-2xl overflow-hidden border border-border/50 shadow-2xl shadow-black/50 relative">
       {mode === 'video' && (
         <video
           ref={videoRef}
           autoPlay
           playsInline
           controls
-          className="w-full h-full bg-black rounded outline-none"
+          className="w-full h-full bg-black outline-none"
         />
       )}
+
       {mode === 'warming' && (
-        <div className="text-muted-foreground text-center p-4 sm:p-8 max-w-xl text-sm sm:text-base">
-          {warmingText}
+        <div className="flex flex-col items-center gap-5 p-8 max-w-md text-center">
+          <div className="relative h-12 w-12">
+            <div className="absolute inset-0 rounded-full border-2 border-primary/15" />
+            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primary border-r-primary/60 animate-spin" />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-foreground/90">
+              {warmingText}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              this can take up to a minute on a cold start.
+            </p>
+          </div>
         </div>
       )}
+
       {mode === 'audio-fallback' && (
-        <div className="flex flex-col items-center gap-4 text-muted-foreground text-center p-4 sm:p-8 max-w-xl text-sm sm:text-base">
-          <p>{warmingText}</p>
+        <div className="flex flex-col items-center gap-4 p-6 sm:p-8 w-full max-w-md text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/15 ring-1 ring-amber-500/30">
+            {degraded ? (
+              <WarningCircle
+                weight="duotone"
+                className="h-6 w-6 text-amber-300"
+              />
+            ) : (
+              <SpeakerHigh
+                weight="duotone"
+                className="h-6 w-6 text-amber-300"
+              />
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            {warmingText}
+          </p>
           <audio
             src="/api/audio/stream"
             controls
             autoPlay
-            className="w-full max-w-md"
+            className="w-full"
           />
+        </div>
+      )}
+
+      {mode === 'video' && isLive && (
+        <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-full bg-black/60 backdrop-blur-md px-2.5 py-1 text-[10px] font-bold tracking-widest uppercase text-red-400 ring-1 ring-red-500/40">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inset-0 rounded-full bg-red-500 animate-ping" />
+            <span className="relative h-1.5 w-1.5 rounded-full bg-red-500" />
+          </span>
+          live
         </div>
       )}
     </section>

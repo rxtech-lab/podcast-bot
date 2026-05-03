@@ -18,12 +18,19 @@ type AgentSpec struct {
 	APIKey  string `yaml:"api_key,omitempty"`
 }
 
+// TTS provider identifiers used in topic.md `tts_provider:` field.
+const (
+	TTSProviderAzure  = "azure"
+	TTSProviderEleven = "eleven"
+)
+
 // Topic is the full topic.md content: YAML frontmatter + named markdown sections.
 type Topic struct {
 	Title             string      `yaml:"title"`
 	Language          string      `yaml:"language"`
 	TotalMinutes      int         `yaml:"total_minutes"`
 	SegmentMaxSeconds int         `yaml:"segment_max_seconds"`
+	TTSProvider       string      `yaml:"tts_provider,omitempty"`
 	Affirmative       []AgentSpec `yaml:"affirmative"`
 	Negative          []AgentSpec `yaml:"negative"`
 	Judge             AgentSpec   `yaml:"judge"`
@@ -62,6 +69,9 @@ func LoadTopic(path string) (*Topic, error) {
 	}
 	if t.TotalMinutes == 0 {
 		t.TotalMinutes = 30
+	}
+	if t.TTSProvider == "" {
+		t.TTSProvider = TTSProviderAzure
 	}
 	return &t, nil
 }
@@ -128,6 +138,12 @@ func parseSections(body string, t *Topic) {
 func validateTopic(t *Topic) error {
 	if t.Title == "" {
 		return fmt.Errorf("topic title is required")
+	}
+	switch t.TTSProvider {
+	case "", TTSProviderAzure, TTSProviderEleven:
+	default:
+		return fmt.Errorf("tts_provider must be %q or %q (got %q)",
+			TTSProviderAzure, TTSProviderEleven, t.TTSProvider)
 	}
 	if len(t.Affirmative) == 0 {
 		return fmt.Errorf("at least one affirmative candidate required")

@@ -44,19 +44,23 @@ func main() {
 			name:    "02-affirmative-zh",
 			topic:   "AI 是否會取代程序員",
 			phase:   "opening",
-			speaker: "Linda",
+			speaker: "Alice",
 			role:    "affirmative",
 			side:    "affirmative",
 			body:    "AI 將在未來十年內取代大多數初級和中級程序員的工作。其能力提升曲線陡峭、邊際成本低、工具鏈正在快速成熟。",
+			elapsed: 1*time.Minute + 12*time.Second,
+			total:   30 * time.Minute,
 		},
 		{
 			name:    "03-negative-zh-long",
 			topic:   "AI 是否會取代程序員",
 			phase:   "free-speech",
-			speaker: "Alice",
+			speaker: "Linda",
 			role:    "negative",
 			side:    "negative",
 			body:    "反方主張:AI 不會取代程序員,反而會放大他們的能力。寫代碼只是程序員工作的一小部分;設計、溝通、判斷、責任承擔仍需人類。即使工具更強大,責任邊界仍由人來界定。",
+			elapsed: 14*time.Minute + 27*time.Second,
+			total:   30 * time.Minute,
 		},
 		{
 			name:    "04-host-mixed",
@@ -79,7 +83,7 @@ func main() {
 			name:    "06-user-overlay-zh",
 			topic:   "AI 是否會取代程序員",
 			phase:   "free-speech",
-			speaker: "Linda",
+			speaker: "Carol",
 			role:    "affirmative",
 			side:    "affirmative",
 			body:    "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
@@ -112,6 +116,10 @@ func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string, e
 	}
 	rend.SetTopic(topic)
 	rend.SetPhase(phase)
+	rend.SetSides(
+		[]string{"Alice", "Carol"},
+		[]string{"Linda", "Bob"},
+	)
 	rend.SetState(speaker, role, side, body)
 	if elapsed > 0 || total > 0 {
 		rend.SetClock(elapsed, total)

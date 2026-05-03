@@ -216,8 +216,12 @@ func (e *Encoder) SetTopic(s string) { e.rend.SetTopic(s) }
 // SetPhase updates the phase status line under the topic title.
 func (e *Encoder) SetPhase(s string) { e.rend.SetPhase(s) }
 
-// SetClock updates the elapsed/total clock display in the top-right corner.
+// SetClock updates the elapsed/total clock display at the bottom of the frame.
 func (e *Encoder) SetClock(elapsed, total time.Duration) { e.rend.SetClock(elapsed, total) }
+
+// SetSides loads the affirmative / negative speaker rosters into the side
+// panels rendered on the left and right of the stage.
+func (e *Encoder) SetSides(aff, neg []string) { e.rend.SetSides(aff, neg) }
 
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).

@@ -48,15 +48,17 @@ type Planner struct {
 }
 
 type plannerState struct {
-	phase           agent.Phase
-	openingIdx      int  // 0..(maxSide*2-1) — alternating
-	openingSent     bool // whether host intro has been emitted
-	freeSpeechIdx   int  // counter for who speaks next in free speech
-	closingIdx      int
-	conclusionIdx   int
-	endRequested    bool
-	verdictEmitted  bool
-	conclusionDone  bool
+	phase          agent.Phase
+	openingIdx     int  // 0..(maxSide*2-1) — alternating
+	openingSent    bool // whether host intro has been emitted
+	freeSpeechIdx  int  // counter for who speaks next in free speech
+	affRRIdx       int  // round-robin cursor inside the affirmative side
+	negRRIdx       int  // round-robin cursor inside the negative side
+	closingIdx     int
+	conclusionIdx  int
+	endRequested   bool
+	verdictEmitted bool
+	conclusionDone bool
 }
 
 // NewPlanner constructs the planner; the queue is kept by the orchestrator.
@@ -152,31 +154,25 @@ func (p *Planner) planFreeSpeech(ctx context.Context) (*Turn, bool) {
 		}
 	}
 
-	var side string
+	// Strict round-robin within each side. We can't use "smallest accumulated
+	// speaking time" here because the planner runs ahead of the producer (turn
+	// channel is buffered) and `tracker.Used` only updates after a turn finishes
+	// playing, so the same speaker would be re-picked while their previous turn
+	// is still being synthesised — which produced two same-side answers in a row.
+	var candidates []agent.Agent
+	var rrIdx *int
 	if idx%2 == 0 {
-		side = "affirmative"
+		candidates = p.registry.Affirmatve
+		rrIdx = &p.state.affRRIdx
 	} else {
-		side = "negative"
-	}
-
-	candidates := p.registry.Affirmatve
-	if side == "negative" {
 		candidates = p.registry.Negative
+		rrIdx = &p.state.negRRIdx
 	}
-	// Find the candidate on this side with the smallest accumulated speaking time.
-	var pick agent.Agent
-	var min time.Duration = -1
-	for _, c := range candidates {
-		used := p.tracker.Used(c.Name())
-		if min < 0 || used < min {
-			min = used
-			pick = c
-		}
-	}
-	if pick == nil {
-		// Defensive: skip ahead.
+	if len(candidates) == 0 {
 		return p.makeTurn(p.registry.Host, "transition:next-side", p.budgetSeconds(10)), true
 	}
+	pick := candidates[*rrIdx%len(candidates)]
+	*rrIdx++
 	// If this candidate is already over their fair share, swap to host warn-time.
 	totalCands := len(p.registry.Affirmatve) + len(p.registry.Negative)
 	share := (p.tracker.Total() / 2) / time.Duration(max(1, totalCands/2))

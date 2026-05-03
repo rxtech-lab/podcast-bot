@@ -26,19 +26,24 @@ import (
 type Renderer struct {
 	width, height int
 
-	titleFace font.Face // topic title at the top
-	phaseFace font.Face // phase status line
-	clockFace font.Face // elapsed/total clock in top-right
-	tagFace   font.Face // speaker pill in the subtitle
-	bodyFace  font.Face // spoken text in the subtitle
+	titleFace      font.Face // topic title at the top
+	phaseFace      font.Face // phase pill under the title
+	clockFace      font.Face // elapsed/total clock at the bottom
+	tagFace        font.Face // speaker pill in the subtitle
+	bodyFace       font.Face // spoken text in the subtitle
+	panelHdrFace   font.Face // side-panel section header ("正方")
+	panelNameFace  font.Face // side-panel speaker name (idle)
+	panelActFace   font.Face // side-panel speaker name (active)
 
-	mu      sync.RWMutex
-	topic   string
-	phase   string
-	speaker string
-	role    string
-	side    string
-	body    string
+	mu       sync.RWMutex
+	topic    string
+	phase    string
+	speaker  string
+	role     string
+	side     string
+	body     string
+	affNames []string
+	negNames []string
 
 	// Wall-clock display fed by the pipeline's once-per-second TickMsg.
 	clockElapsed time.Duration
@@ -77,34 +82,49 @@ func newRenderer(width, height int) (*Renderer, error) {
 		})
 	}
 
-	titleFace, err := mk(srcBold, 44)
+	titleFace, err := mk(srcBold, 42)
 	if err != nil {
 		return nil, err
 	}
-	phaseFace, err := mk(srcBody, 22)
+	phaseFace, err := mk(srcBold, 18)
 	if err != nil {
 		return nil, err
 	}
-	clockFace, err := mk(srcBold, 26)
+	clockFace, err := mk(srcBold, 22)
 	if err != nil {
 		return nil, err
 	}
-	tagFace, err := mk(srcBold, 32)
+	tagFace, err := mk(srcBold, 28)
 	if err != nil {
 		return nil, err
 	}
-	bodyFace, err := mk(srcBody, 36)
+	bodyFace, err := mk(srcBody, 32)
+	if err != nil {
+		return nil, err
+	}
+	panelHdrFace, err := mk(srcBold, 22)
+	if err != nil {
+		return nil, err
+	}
+	panelNameFace, err := mk(srcBody, 22)
+	if err != nil {
+		return nil, err
+	}
+	panelActFace, err := mk(srcBold, 24)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Renderer{
 		width: width, height: height,
-		titleFace: titleFace,
-		phaseFace: phaseFace,
-		clockFace: clockFace,
-		tagFace:   tagFace,
-		bodyFace:  bodyFace,
+		titleFace:     titleFace,
+		phaseFace:     phaseFace,
+		clockFace:     clockFace,
+		tagFace:       tagFace,
+		bodyFace:      bodyFace,
+		panelHdrFace:  panelHdrFace,
+		panelNameFace: panelNameFace,
+		panelActFace:  panelActFace,
 	}, nil
 }
 
@@ -213,6 +233,16 @@ func (r *Renderer) SetState(speaker, role, side, body string) {
 	r.body = body
 }
 
+// SetSides loads the affirmative / negative speaker rosters into the side
+// panels. Names render in the order given; the panel highlights whichever one
+// matches the active speaker. Safe to call once at startup.
+func (r *Renderer) SetSides(aff, neg []string) {
+	r.mu.Lock()
+	r.affNames = append(r.affNames[:0], aff...)
+	r.negNames = append(r.negNames[:0], neg...)
+	r.mu.Unlock()
+}
+
 // ShowUserMessage flashes a viewer/chat message on the frame for ttl. It does
 // NOT disturb the active speaker subtitle or any other state — it's a
 // stand-alone overlay that disappears on its own.
@@ -223,77 +253,125 @@ func (r *Renderer) ShowUserMessage(text string, ttl time.Duration) {
 	r.userExpiry = time.Now().Add(ttl)
 }
 
-// Frame renders one RGBA frame. Layout:
+// Frame renders one RGBA frame. Layout (1280×720):
 //
-//	┌──────────────────────────────────────────┐
-//	│              [Topic title]               │ ← always (when known)
-//	│              [Phase: opening]            │
-//	│                                          │
-//	│       ┌──────────────────────────┐       │
-//	│       │  [Pill: AFFIRMATIVE — X] │       │ ← only when speaking
-//	│       │  spoken text wrapped …   │       │
-//	│       └──────────────────────────┘       │
-//	└──────────────────────────────────────────┘
+//	┌────────────────────────────────────────────────────────┐
+//	│                  [Topic title]                         │  title (y≈70)
+//	│                   [phase pill]                         │  phase (y≈110)
+//	│ ┌───────────┐  ┌────────────────────┐  ┌───────────┐   │
+//	│ │  正方     │  │  [AFFIRMATIVE — X] │  │   反方    │   │  panels + subtitle
+//	│ │ AFFIRM.   │  │                    │  │  NEGATIVE │   │
+//	│ │ • Alice ● │  │  spoken text …     │  │ • Linda   │   │
+//	│ │ • Carol   │  │                    │  │ • Bob     │   │
+//	│ └───────────┘  └────────────────────┘  └───────────┘   │
+//	│                                                        │
+//	│                  [02:14 / 30:00]                       │  clock (y≈660)
+//	└────────────────────────────────────────────────────────┘
 func (r *Renderer) Frame() []byte {
 	r.mu.RLock()
 	topic, phase := r.topic, r.phase
 	speaker, role, body := r.speaker, r.role, r.body
 	clockE, clockT := r.clockElapsed, r.clockTotal
+	affNames := append([]string(nil), r.affNames...)
+	negNames := append([]string(nil), r.negNames...)
 	userMsg := r.userMsg
 	userActive := userMsg != "" && time.Now().Before(r.userExpiry)
 	r.mu.RUnlock()
 
 	img := image.NewRGBA(image.Rect(0, 0, r.width, r.height))
-	bg := color.RGBA{0x0e, 0x0e, 0x10, 0xff}
-	draw.Draw(img, img.Bounds(), &image.Uniform{bg}, image.Point{}, draw.Src)
+	drawGradientBackground(img,
+		color.RGBA{0x12, 0x14, 0x1f, 0xff}, // top
+		color.RGBA{0x07, 0x08, 0x0e, 0xff}, // bottom
+	)
 
 	titleFG := color.RGBA{0xff, 0xff, 0xff, 0xff}
-	phaseFG := color.RGBA{0xa0, 0xa8, 0xb8, 0xff}
-	hintFG := color.RGBA{0x70, 0x78, 0x88, 0xff}
+	phaseChipBG := color.RGBA{0x24, 0x27, 0x35, 0xff}
+	phaseChipFG := color.RGBA{0xc8, 0xcd, 0xdb, 0xff}
+	dimFG := color.RGBA{0x88, 0x90, 0xa3, 0xff}
+	hintFG := color.RGBA{0x60, 0x66, 0x76, 0xff}
 	bodyFG := color.RGBA{0xee, 0xee, 0xf1, 0xff}
 
-	// Top banner.
+	// Title bar.
 	if topic != "" {
 		drawCenteredText(img, r.titleFace, topic, r.width/2, 70, titleFG)
 	}
 	if phase != "" {
-		drawCenteredText(img, r.phaseFace, "Phase: "+phase, r.width/2, 120, phaseFG)
-	}
-	if clockE > 0 || clockT > 0 {
-		drawClock(img, r.clockFace, clockE, clockT, r.width, 32, 60, titleFG, phaseFG)
+		drawCenteredPill(img, r.phaseFace, strings.ToUpper(phase),
+			r.width/2, 110, phaseChipBG, phaseChipFG)
 	}
 
-	// Subtitle area sits in the lower-middle region.
+	// Thin accent rail under the title bar — visually separates the header
+	// from the stage area.
+	rail := image.Rect(120, 138, r.width-120, 140)
+	draw.Draw(img, rail, &image.Uniform{color.RGBA{0x24, 0x28, 0x36, 0xff}},
+		image.Point{}, draw.Src)
+
+	// Stage area: side panels + centered subtitle.
+	const (
+		panelW      = 240
+		panelMargin = 36
+		panelTop    = 168
+		panelBot    = 588
+	)
+	leftX := panelMargin
+	rightX := r.width - panelMargin - panelW
+
+	drawSidePanel(img,
+		r.panelHdrFace, r.panelNameFace, r.panelActFace,
+		leftX, panelTop, panelW, panelBot-panelTop,
+		"正方", "AFFIRMATIVE", affNames,
+		speaker, role, "affirmative",
+		roleColor("affirmative"))
+
+	drawSidePanel(img,
+		r.panelHdrFace, r.panelNameFace, r.panelActFace,
+		rightX, panelTop, panelW, panelBot-panelTop,
+		"反方", "NEGATIVE", negNames,
+		speaker, role, "negative",
+		roleColor("negative"))
+
+	// Subtitle area sits between the two panels.
+	subLeft := leftX + panelW + 28
+	subRight := rightX - 28
 	if speaker != "" {
 		drawSubtitle(img, r.tagFace, r.bodyFace,
 			speaker, role, body,
-			r.width, r.height,
+			subLeft, panelTop+8, subRight, panelBot-8,
 			bodyFG)
 	} else {
-		// Idle: show a centered "waiting" hint instead of a subtitle box.
-		drawCenteredText(img, r.bodyFace, "等待辯手發言…", r.width/2, r.height/2+40, hintFG)
+		drawCenteredText(img, r.bodyFace, "等待辯手發言…",
+			(subLeft+subRight)/2, (panelTop+panelBot)/2, hintFG)
 	}
 
-	// User overlay — drawn last so it sits ON TOP of whatever is below.
+	// Clock floats as a pill above the background at bottom-center.
+	if clockE > 0 || clockT > 0 {
+		drawClockPill(img, r.clockFace, clockE, clockT,
+			r.width/2, 668, titleFG, dimFG)
+	}
+
+	// User overlay — drawn last so it sits on top, centered in the subtitle
+	// column so it never overlaps the side panels.
 	if userActive {
-		drawUserOverlay(img, r.tagFace, r.bodyFace, userMsg, r.width)
+		drawUserOverlay(img, r.tagFace, r.bodyFace, userMsg,
+			subLeft, panelTop+8, subRight)
 	}
 
 	return img.Pix
 }
 
 // drawUserOverlay paints a transient amber notification card anchored to the
-// top-right corner. It's narrow enough to leave the centered topic title and
-// the lower-third subtitle untouched.
-func drawUserOverlay(dst *image.RGBA, tagFace, bodyFace font.Face, msg string, width int) {
+// top of the subtitle column (between the side panels) so it never overlaps
+// the affirmative / negative roster panels. The card width adapts to the
+// message length up to the column width.
+func drawUserOverlay(dst *image.RGBA,
+	tagFace, bodyFace font.Face, msg string,
+	areaLeft, areaTop, areaRight int,
+) {
 	const (
-		pad         = 16
-		gapTagText  = 8
-		lineGap     = 6
-		maxLines    = 4
-		boxW        = 460
-		rightMargin = 32
-		topY        = 160
+		pad        = 16
+		gapTagText = 8
+		lineGap    = 6
+		maxLines   = 3
 	)
 	if msg == "" {
 		return
@@ -304,12 +382,30 @@ func drawUserOverlay(dst *image.RGBA, tagFace, bodyFace font.Face, msg string, w
 	textFG := color.RGBA{0xff, 0xfb, 0xeb, 0xff}
 	pillFG := color.RGBA{0x1a, 0x14, 0x06, 0xff}
 
-	innerW := boxW - 2*pad
+	maxBoxW := areaRight - areaLeft
+	innerW := maxBoxW - 2*pad
 
 	lines := wrapLines(bodyFace, msg, innerW)
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 		lines[maxLines-1] = strings.TrimRight(lines[maxLines-1], " ") + "…"
+	}
+
+	contentW := 0
+	{
+		d := &font.Drawer{Face: bodyFace}
+		for _, ln := range lines {
+			if w := d.MeasureString(ln).Ceil(); w > contentW {
+				contentW = w
+			}
+		}
+	}
+	boxW := contentW + 2*pad
+	if boxW > maxBoxW {
+		boxW = maxBoxW
+	}
+	if min := 360; boxW < min && min < maxBoxW {
+		boxW = min
 	}
 
 	bodyM := bodyFace.Metrics()
@@ -318,9 +414,12 @@ func drawUserOverlay(dst *image.RGBA, tagFace, bodyFace font.Face, msg string, w
 	tagH := tagM.Ascent.Ceil() + tagM.Descent.Ceil() + 16
 	boxH := pad*2 + tagH + gapTagText + len(lines)*lineH
 
-	boxX := width - rightMargin - boxW
-	box := image.Rect(boxX, topY, boxX+boxW, topY+boxH)
+	boxX := areaLeft + (maxBoxW-boxW)/2
+	boxY := areaTop
+	box := image.Rect(boxX, boxY, boxX+boxW, boxY+boxH)
 
+	draw.Draw(dst, box.Inset(-4),
+		&image.Uniform{withAlpha(accent, 0x22)}, image.Point{}, draw.Over)
 	draw.Draw(dst, box, &image.Uniform{boxBG}, image.Point{}, draw.Src)
 	drawRectOutline(dst, box, 2, accent)
 
@@ -329,11 +428,11 @@ func drawUserOverlay(dst *image.RGBA, tagFace, bodyFace font.Face, msg string, w
 	tagD := &font.Drawer{Face: tagFace}
 	tagW := tagD.MeasureString(tagText).Ceil()
 	pillCx := boxX + pad + tagW/2 + 14
-	pillCy := topY + pad + tagM.Ascent.Ceil()
+	pillCy := boxY + pad + tagM.Ascent.Ceil()
 	drawCenteredPill(dst, tagFace, tagText, pillCx, pillCy, accent, pillFG)
 
 	// Message lines: left-aligned within the box.
-	textTop := topY + pad + tagH + gapTagText + bodyM.Ascent.Ceil()
+	textTop := boxY + pad + tagH + gapTagText + bodyM.Ascent.Ceil()
 	d := &font.Drawer{Dst: dst, Src: image.NewUniform(textFG), Face: bodyFace}
 	for i, ln := range lines {
 		d.Dot = fixed.P(boxX+pad, textTop+i*lineH)
@@ -341,25 +440,25 @@ func drawUserOverlay(dst *image.RGBA, tagFace, bodyFace font.Face, msg string, w
 	}
 }
 
-// drawSubtitle paints a centered lower-third subtitle: a role-colored pill
-// with the speaker label, then the spoken text wrapped within a bounded box.
-// Text is right-trimmed to the most recent N lines so it always fits.
+// drawSubtitle paints the centered subtitle card inside the rectangle
+// (areaLeft,areaTop)-(areaRight,areaBot): a role-colored pill with the speaker
+// label, then the spoken text wrapped within a bounded box. Text is
+// right-trimmed to the most recent N lines so it always fits.
 func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	speaker, role, body string,
-	width, height int,
+	areaLeft, areaTop, areaRight, areaBot int,
 	fg color.RGBA,
 ) {
 	const (
-		pad         = 28
-		gapTagBody  = 18
-		lineGap     = 10
-		maxLines    = 6
-		boxMinW     = 600
-		sideMargin  = 80
-		topAnchorY  = 360 // top edge of the subtitle box (above-center)
+		pad        = 26
+		gapTagBody = 18
+		lineGap    = 10
+		maxLines   = 6
 	)
 
-	maxBoxW := width - 2*sideMargin
+	areaW := areaRight - areaLeft
+	areaH := areaBot - areaTop
+	maxBoxW := areaW
 	innerW := maxBoxW - 2*pad
 
 	tagText := formatTagPlain(speaker, role)
@@ -374,7 +473,6 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		lines = lines[len(lines)-maxLines:]
 	}
 
-	// Box width = max(tagW, longest line width, boxMinW), capped at maxBoxW.
 	contentW := tagW
 	{
 		d := &font.Drawer{Face: bodyFace}
@@ -384,36 +482,45 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 			}
 		}
 	}
-	boxW := min(max(contentW+2*pad, boxMinW), maxBoxW)
+	boxW := min(contentW+2*pad, maxBoxW)
+	if boxW < min(420, maxBoxW) {
+		boxW = min(420, maxBoxW)
+	}
 
 	bodyMetrics := bodyFace.Metrics()
 	lineH := bodyMetrics.Height.Ceil() + lineGap
-	tagH := tagFace.Metrics().Ascent.Ceil() + tagFace.Metrics().Descent.Ceil() + 28
+	tagH := tagFace.Metrics().Ascent.Ceil() + tagFace.Metrics().Descent.Ceil() + 24
 	bodyH := 0
 	if len(lines) > 0 {
 		bodyH = len(lines)*lineH + gapTagBody
 	}
-	boxH := max(pad*2+tagH+bodyH, 140)
-
-	// Center the box horizontally; anchor near the vertical middle.
-	boxX := (width - boxW) / 2
-	boxY := topAnchorY
-	if boxY+boxH > height-40 {
-		boxY = height - 40 - boxH
+	boxH := pad*2 + tagH + bodyH
+	if boxH < 200 {
+		boxH = 200
+	}
+	if boxH > areaH {
+		boxH = areaH
 	}
 
-	// Box background — semi-transparent dark over the dark frame just adds
-	// definition; we use a slightly lighter shade than the page background.
+	// Center the box inside the available area.
+	boxX := areaLeft + (areaW-boxW)/2
+	boxY := areaTop + (areaH-boxH)/2
+
 	box := image.Rect(boxX, boxY, boxX+boxW, boxY+boxH)
-	draw.Draw(dst, box, &image.Uniform{color.RGBA{0x1a, 0x1c, 0x22, 0xff}}, image.Point{}, draw.Src)
-	// 2px outline using role color.
+	// Layered backdrop: a subtle outer glow halo plus the card fill.
 	outline := roleColor(role)
+	halo := withAlpha(outline, 0x22)
+	draw.Draw(dst, box.Inset(-6),
+		&image.Uniform{halo}, image.Point{}, draw.Over)
+	draw.Draw(dst, box,
+		&image.Uniform{color.RGBA{0x18, 0x1b, 0x26, 0xff}}, image.Point{}, draw.Src)
 	drawRectOutline(dst, box, 2, outline)
 
 	// Pill: centered horizontally inside the box, near the top.
 	pillCx := boxX + boxW/2
 	pillCy := boxY + pad + tagFace.Metrics().Ascent.Ceil()
-	drawCenteredPill(dst, tagFace, tagText, pillCx, pillCy, outline, color.RGBA{0xff, 0xff, 0xff, 0xff})
+	drawCenteredPill(dst, tagFace, tagText, pillCx, pillCy,
+		outline, color.RGBA{0xff, 0xff, 0xff, 0xff})
 
 	// Body lines: centered horizontally, top-down below the pill.
 	textTop := boxY + pad + tagH + gapTagBody + bodyMetrics.Ascent.Ceil()
@@ -424,6 +531,216 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		y := textTop + i*lineH
 		d.Dot = fixed.P(x, y)
 		d.DrawString(ln)
+	}
+}
+
+// drawSidePanel paints one of the two roster panels (affirmative/negative).
+// activeSpeaker + activeRole are the current speaker; if their role matches
+// panelSide, the matching name is highlighted. accent is the role color used
+// for the header text and the active row's marker.
+func drawSidePanel(dst *image.RGBA,
+	hdrFace, nameFace, activeFace font.Face,
+	x, y, w, h int,
+	zh, en string,
+	names []string,
+	activeSpeaker, activeRole, panelSide string,
+	accent color.RGBA,
+) {
+	box := image.Rect(x, y, x+w, y+h)
+	// Soft halo behind the card, tinted with the side accent.
+	draw.Draw(dst, box.Inset(-4),
+		&image.Uniform{withAlpha(accent, 0x18)}, image.Point{}, draw.Over)
+	// Card fill.
+	draw.Draw(dst, box,
+		&image.Uniform{color.RGBA{0x14, 0x16, 0x21, 0xff}}, image.Point{}, draw.Src)
+
+	// Vertical accent rail on the outside edge of the card.
+	railW := 4
+	var rail image.Rectangle
+	if panelSide == "affirmative" {
+		rail = image.Rect(x, y, x+railW, y+h)
+	} else {
+		rail = image.Rect(x+w-railW, y, x+w, y+h)
+	}
+	draw.Draw(dst, rail, &image.Uniform{accent}, image.Point{}, draw.Src)
+
+	// Header (Chinese label on top, English subtitle below).
+	hdrTop := y + 28
+	d := &font.Drawer{Face: hdrFace}
+	zhW := d.MeasureString(zh).Ceil()
+	dz := &font.Drawer{Dst: dst, Src: image.NewUniform(accent), Face: hdrFace}
+	dz.Dot = fixed.P(x+(w-zhW)/2, hdrTop+hdrFace.Metrics().Ascent.Ceil())
+	dz.DrawString(zh)
+
+	enFace := nameFace
+	enFG := color.RGBA{0x90, 0x96, 0xa6, 0xff}
+	enW := (&font.Drawer{Face: enFace}).MeasureString(en).Ceil()
+	enY := hdrTop + hdrFace.Metrics().Height.Ceil() + 4 + enFace.Metrics().Ascent.Ceil()
+	de := &font.Drawer{Dst: dst, Src: image.NewUniform(enFG), Face: enFace}
+	de.Dot = fixed.P(x+(w-enW)/2, enY)
+	de.DrawString(en)
+
+	// Divider under header.
+	divY := enY + enFace.Metrics().Descent.Ceil() + 18
+	div := image.Rect(x+24, divY, x+w-24, divY+1)
+	draw.Draw(dst, div,
+		&image.Uniform{color.RGBA{0x2a, 0x2d, 0x3c, 0xff}}, image.Point{}, draw.Src)
+
+	// Name list.
+	listTop := divY + 28
+	rowH := 44
+	for i, name := range names {
+		rowCy := listTop + i*rowH
+		isActive := name == activeSpeaker && string(activeRole) == panelSide
+		face := nameFace
+		fg := color.RGBA{0xb6, 0xbc, 0xcc, 0xff}
+		if isActive {
+			face = activeFace
+			fg = color.RGBA{0xff, 0xff, 0xff, 0xff}
+			// Active row pill background spanning the inner width.
+			pad := 12
+			rowBox := image.Rect(x+pad, rowCy-22, x+w-pad, rowCy+12)
+			draw.Draw(dst, rowBox,
+				&image.Uniform{withAlpha(accent, 0x33)}, image.Point{}, draw.Over)
+			drawRectOutline(dst, rowBox, 1, withAlpha(accent, 0x66))
+		}
+		// Marker dot on the inner side.
+		markerCx := x + 24
+		if panelSide == "negative" {
+			markerCx = x + w - 24
+		}
+		markerR := 4
+		if isActive {
+			markerR = 6
+		}
+		fillCircle(dst, markerCx, rowCy-6, markerR, fg)
+
+		// Name text aligned away from the marker.
+		nd := &font.Drawer{Dst: dst, Src: image.NewUniform(fg), Face: face}
+		nameW := nd.MeasureString(name).Ceil()
+		var nx int
+		if panelSide == "affirmative" {
+			nx = markerCx + 16
+		} else {
+			nx = markerCx - 16 - nameW
+		}
+		nd.Dot = fixed.P(nx, rowCy)
+		nd.DrawString(name)
+	}
+}
+
+// drawGradientBackground paints a vertical gradient from top to bottom.
+func drawGradientBackground(dst *image.RGBA, top, bot color.RGBA) {
+	b := dst.Bounds()
+	h := b.Dy()
+	if h <= 1 {
+		draw.Draw(dst, b, &image.Uniform{top}, image.Point{}, draw.Src)
+		return
+	}
+	for y := 0; y < h; y++ {
+		t := float64(y) / float64(h-1)
+		c := color.RGBA{
+			R: lerpByte(top.R, bot.R, t),
+			G: lerpByte(top.G, bot.G, t),
+			B: lerpByte(top.B, bot.B, t),
+			A: 0xff,
+		}
+		line := image.Rect(b.Min.X, b.Min.Y+y, b.Max.X, b.Min.Y+y+1)
+		draw.Draw(dst, line, &image.Uniform{c}, image.Point{}, draw.Src)
+	}
+}
+
+func lerpByte(a, b uint8, t float64) uint8 {
+	v := float64(a) + (float64(b)-float64(a))*t
+	if v < 0 {
+		v = 0
+	}
+	if v > 255 {
+		v = 255
+	}
+	return uint8(v)
+}
+
+// withAlpha returns c with its alpha channel replaced. The RGB channels are
+// premultiplied to match Go's image/color expectation.
+func withAlpha(c color.RGBA, a uint8) color.RGBA {
+	af := float64(a) / 255
+	return color.RGBA{
+		R: uint8(float64(c.R) * af),
+		G: uint8(float64(c.G) * af),
+		B: uint8(float64(c.B) * af),
+		A: a,
+	}
+}
+
+// fillCircle paints a filled circle of radius r centered at (cx, cy).
+func fillCircle(dst *image.RGBA, cx, cy, r int, c color.RGBA) {
+	if r <= 0 {
+		return
+	}
+	for dy := -r; dy <= r; dy++ {
+		dxMax := r*r - dy*dy
+		if dxMax < 0 {
+			continue
+		}
+		dx := isqrt(dxMax)
+		line := image.Rect(cx-dx, cy+dy, cx+dx+1, cy+dy+1)
+		draw.Draw(dst, line, &image.Uniform{c}, image.Point{}, draw.Src)
+	}
+}
+
+func isqrt(n int) int {
+	if n < 2 {
+		return n
+	}
+	x := n
+	y := (x + 1) / 2
+	for y < x {
+		x = y
+		y = (x + n/x) / 2
+	}
+	return x
+}
+
+// drawClockPill paints "MM:SS / MM:SS" inside a soft floating chip centered
+// on (cx, cy) — sits as a layer above the background. Elapsed renders in fg;
+// the " / total" tail uses dimFG so the active counter pops.
+func drawClockPill(dst *image.RGBA, face font.Face,
+	elapsed, total time.Duration, cx, cy int, fg, dimFG color.RGBA,
+) {
+	main := formatMMSS(elapsed)
+	tail := ""
+	if total > 0 {
+		tail = " / " + formatMMSS(total)
+	}
+	mainW := (&font.Drawer{Face: face}).MeasureString(main).Ceil()
+	tailW := 0
+	if tail != "" {
+		tailW = (&font.Drawer{Face: face}).MeasureString(tail).Ceil()
+	}
+	totalW := mainW + tailW
+
+	// Pill chrome: soft halo + filled chip + 1px stroke.
+	const padX, padY = 18, 8
+	metrics := face.Metrics()
+	asc := metrics.Ascent.Ceil()
+	desc := metrics.Descent.Ceil()
+	chip := image.Rect(cx-totalW/2-padX, cy-asc-padY,
+		cx+totalW/2+padX, cy+desc+padY)
+	draw.Draw(dst, chip.Inset(-3),
+		&image.Uniform{color.RGBA{0xff, 0xff, 0xff, 0x14}}, image.Point{}, draw.Over)
+	draw.Draw(dst, chip,
+		&image.Uniform{color.RGBA{0x1a, 0x1d, 0x28, 0xff}}, image.Point{}, draw.Src)
+	drawRectOutline(dst, chip, 1, color.RGBA{0x2c, 0x30, 0x42, 0xff})
+
+	startX := cx - totalW/2
+	md := &font.Drawer{Dst: dst, Src: image.NewUniform(fg), Face: face}
+	md.Dot = fixed.P(startX, cy)
+	md.DrawString(main)
+	if tail != "" {
+		td := &font.Drawer{Dst: dst, Src: image.NewUniform(dimFG), Face: face}
+		td.Dot = fixed.P(startX+mainW, cy)
+		td.DrawString(tail)
 	}
 }
 
@@ -461,36 +778,6 @@ func roleColor(role string) color.RGBA {
 		return color.RGBA{0xc0, 0x84, 0xfc, 0xff}
 	}
 	return color.RGBA{0x91, 0x47, 0xff, 0xff}
-}
-
-// drawClock paints the elapsed / total wall-clock display anchored to the
-// top-right of the frame. Elapsed is drawn in fg; the " / total" segment uses
-// the dim fg so the active counter pops.
-func drawClock(dst *image.RGBA, face font.Face, elapsed, total time.Duration, width, rightMargin, y int, fg, dimFG color.RGBA) {
-	mainText := formatMMSS(elapsed)
-	tailText := ""
-	if total > 0 {
-		tailText = " / " + formatMMSS(total)
-	}
-
-	tailD := &font.Drawer{Face: face}
-	tailW := tailD.MeasureString(tailText).Ceil()
-	mainD := &font.Drawer{Face: face}
-	mainW := mainD.MeasureString(mainText).Ceil()
-
-	// Right edge of the whole string.
-	rightX := width - rightMargin
-	tailX := rightX - tailW
-	mainX := tailX - mainW
-
-	if tailText != "" {
-		td := &font.Drawer{Dst: dst, Src: image.NewUniform(dimFG), Face: face}
-		td.Dot = fixed.P(tailX, y)
-		td.DrawString(tailText)
-	}
-	md := &font.Drawer{Dst: dst, Src: image.NewUniform(fg), Face: face}
-	md.Dot = fixed.P(mainX, y)
-	md.DrawString(mainText)
 }
 
 // formatMMSS turns a duration into "MM:SS" (or "HH:MM:SS" when ≥ 1 hour).

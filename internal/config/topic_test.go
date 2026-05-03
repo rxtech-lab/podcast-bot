@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,5 +46,32 @@ func TestLoadTopicMissing(t *testing.T) {
 	_, err := config.LoadTopic("does-not-exist.md")
 	if err == nil {
 		t.Errorf("expected error for missing file")
+	}
+}
+
+func TestLoadTopicTTSProviderDefaultAndValidation(t *testing.T) {
+	tp, err := config.LoadTopic("../../examples/topic.md")
+	if err != nil {
+		t.Fatalf("load topic: %v", err)
+	}
+	if tp.TTSProvider != config.TTSProviderAzure && tp.TTSProvider != config.TTSProviderEleven {
+		t.Errorf("tts_provider must be azure or eleven; got %q", tp.TTSProvider)
+	}
+
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.md")
+	if err := os.WriteFile(bad, []byte(`---
+title: "x"
+language: en-US
+tts_provider: bogus
+affirmative: [{name: A, model: m}]
+negative:    [{name: B, model: m}]
+judge:       {model: m}
+---
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadTopic(bad); err == nil {
+		t.Errorf("expected error for bogus tts_provider")
 	}
 }

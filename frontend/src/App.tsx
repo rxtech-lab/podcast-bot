@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Chat } from '@/components/Chat'
-import { StatusBar } from '@/components/StatusBar'
+import { AppHeader } from '@/components/AppHeader'
 import { VideoStage } from '@/components/VideoStage'
 import { loadHistory } from '@/lib/api'
 import { useDebateEvents } from '@/lib/sse'
@@ -19,17 +19,27 @@ function App() {
     useDebateEvents(initialHistory)
 
   return (
-    <div className="dark flex flex-col h-screen bg-background text-foreground font-sans">
-      <StatusBar
-        phase={phase}
-        elapsedMs={elapsedMs}
-        remainingMs={remainingMs}
-        status={status}
+    <div className="dark relative flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-80"
+        style={{
+          background:
+            'radial-gradient(circle at 12% 0%, oklch(0.795 0.184 86.047 / 0.10), transparent 45%), radial-gradient(circle at 90% 100%, oklch(0.541 0.281 293.009 / 0.12), transparent 50%)',
+        }}
       />
-      <main className="flex-1 flex flex-col md:flex-row min-h-0">
-        <VideoStage />
-        <Chat history={history} />
-      </main>
+      <div className="relative flex h-full flex-col">
+        <AppHeader
+          phase={phase}
+          elapsedMs={elapsedMs}
+          remainingMs={remainingMs}
+          status={status}
+        />
+        <main className="flex-1 flex flex-col md:flex-row min-h-0 gap-3 p-3">
+          <VideoStage phase={phase} />
+          <Chat history={history} />
+        </main>
+      </div>
     </div>
   )
 }

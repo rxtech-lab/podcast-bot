@@ -26,7 +26,7 @@ type Orchestrator struct {
 	Tools      *tools.Registry
 	MemStore   *memory.Store
 	Compressor *memory.Compressor
-	TTS        *tts.Client
+	TTS        tts.Provider
 	MCPSrvs    []*debatemcp.Server
 
 	Registry   *agent.Registry
@@ -49,7 +49,10 @@ func New(env *config.Env, topic *config.Topic, mcpCfg *config.MCPConfig,
 	}
 	compLLM := llm.New(env.CompressionBaseURL, env.CompressionKey, env.CompressionModel)
 	compressor := memory.New(compLLM, memory.DefaultThreshold)
-	ttsClient := tts.New(env.AzureSpeechRegion, env.AzureSpeechKey)
+	ttsClient, err := buildTTSProvider(env, topic)
+	if err != nil {
+		return nil, err
+	}
 	ttsRegistry := tools.New()
 	tools.RegisterBuiltins(ttsRegistry)
 
@@ -88,13 +91,16 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 		"COMPRESSION_API_KEY_len", len(o.Env.CompressionKey),
 		"COMPRESSION_API_KEY_preview", maskKey(o.Env.CompressionKey),
 		"COMPRESSION_MODEL", o.Env.CompressionModel,
+		"TTS_PROVIDER", o.Topic.TTSProvider,
 		"AZURE_SPEECH_REGION", o.Env.AzureSpeechRegion,
 		"AZURE_SPEECH_KEY_len", len(o.Env.AzureSpeechKey),
 		"AZURE_SPEECH_KEY_preview", maskKey(o.Env.AzureSpeechKey),
+		"ELEVENLABS_API_KEY_len", len(o.Env.ElevenLabsAPIKey),
+		"ELEVENLABS_API_KEY_preview", maskKey(o.Env.ElevenLabsAPIKey),
 		"OUT_DIR", o.Env.OutDir)
 
-	o.Send(StatusMsg{Text: "fetching Azure voice list..."})
-	voices, err := tts.FetchVoices(ctx, o.Env.AzureSpeechRegion, o.Env.AzureSpeechKey)
+	o.Send(StatusMsg{Text: fmt.Sprintf("fetching %s voice list...", o.Topic.TTSProvider)})
+	voices, err := o.TTS.FetchVoices(ctx, o.Topic.Language)
 	if err != nil {
 		return fmt.Errorf("voice list: %w", err)
 	}
@@ -227,6 +233,37 @@ func (o *Orchestrator) PushUserMessage(text string) {
 // EnsureOutDir makes sure the output dir exists (called before logger setup).
 func EnsureOutDir(p string) error {
 	return os.MkdirAll(p, 0o755)
+}
+
+// buildTTSProvider constructs the TTS provider selected by topic.tts_provider
+// and validates the env vars that provider requires. Defaults to Azure when
+// the field is blank.
+func buildTTSProvider(env *config.Env, topic *config.Topic) (tts.Provider, error) {
+	provider := topic.TTSProvider
+	if provider == "" {
+		provider = config.TTSProviderAzure
+	}
+	switch provider {
+	case config.TTSProviderAzure:
+		var missing []string
+		if env.AzureSpeechRegion == "" {
+			missing = append(missing, "AZURE_SPEECH_REGION")
+		}
+		if env.AzureSpeechKey == "" {
+			missing = append(missing, "AZURE_SPEECH_KEY")
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("tts_provider=azure but missing env vars: %v", missing)
+		}
+		return tts.NewAzure(env.AzureSpeechRegion, env.AzureSpeechKey), nil
+	case config.TTSProviderEleven:
+		if env.ElevenLabsAPIKey == "" {
+			return nil, fmt.Errorf("tts_provider=eleven but ELEVENLABS_API_KEY is not set")
+		}
+		return tts.NewElevenLabs(env.ElevenLabsAPIKey), nil
+	default:
+		return nil, fmt.Errorf("unknown tts_provider %q", provider)
+	}
 }
 
 // maskKey shows the first 4 and last 4 characters with the middle elided so
