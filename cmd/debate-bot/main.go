@@ -95,18 +95,33 @@ type runtime struct {
 	stopSig  chan os.Signal
 }
 
-// resolveTopics expands a literal path or glob into one or more topic files
-// (deduped, sorted). Each resulting Topic gets a URL-safe id derived from its
-// filename; collisions are suffixed with -2, -3, ...
-func resolveTopics(spec string) ([]loadedTopic, error) {
-	matches, err := filepath.Glob(spec)
-	if err != nil {
-		return nil, fmt.Errorf("topic glob %q: %w", spec, err)
+// resolveTopics expands a list of literal paths or globs into the queue of
+// topic files (deduped, sorted). Each resulting Topic gets a URL-safe id
+// derived from its filename; collisions are suffixed with -2, -3, ...
+//
+// Each spec is glob-expanded; specs without metacharacters fall back to a
+// literal lookup so users get a clear "file not found" from LoadTopic.
+func resolveTopics(specs []string) ([]loadedTopic, error) {
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("no topic paths provided")
 	}
-	if len(matches) == 0 {
-		// Fall back to a literal path so users get a clearer error from
-		// LoadTopic when the file simply doesn't exist.
-		matches = []string{spec}
+	seen := map[string]bool{}
+	var matches []string
+	for _, spec := range specs {
+		ms, err := filepath.Glob(spec)
+		if err != nil {
+			return nil, fmt.Errorf("topic glob %q: %w", spec, err)
+		}
+		if len(ms) == 0 {
+			ms = []string{spec}
+		}
+		for _, m := range ms {
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			matches = append(matches, m)
+		}
 	}
 	sort.Strings(matches)
 
@@ -131,6 +146,43 @@ func resolveTopics(spec string) ([]loadedTopic, error) {
 	return out, nil
 }
 
+// stringSlice satisfies flag.Value so --topic can be supplied multiple times.
+type stringSlice []string
+
+func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
+func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
+
+// extractTopicArgs hoists every --topic occurrence out of args so the stdlib
+// flag parser doesn't trip on the trailing values an unquoted shell glob
+// produces. Without this, `--topic ./topics/*.md --mcp x.json` (which the
+// shell expands into `--topic a.md b.md c.md --mcp x.json`) would see `b.md`
+// as the first positional arg and silently stop, so --mcp would be ignored.
+//
+// All non-flag tokens that immediately follow a --topic occurrence are
+// collected as topic paths until the next flag (anything starting with -).
+func extractTopicArgs(args []string) (topics []string, rest []string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--topic" || a == "-topic":
+			i++
+			for i < len(args) && !strings.HasPrefix(args[i], "-") {
+				topics = append(topics, args[i])
+				i++
+			}
+			i-- // outer loop will increment
+		case strings.HasPrefix(a, "--topic="):
+			topics = append(topics, strings.TrimPrefix(a, "--topic="))
+		case strings.HasPrefix(a, "-topic="):
+			topics = append(topics, strings.TrimPrefix(a, "-topic="))
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return
+}
+
 var slugRe = regexp.MustCompile(`[^a-z0-9_-]+`)
 
 func slugify(s string) string {
@@ -142,7 +194,7 @@ func slugify(s string) string {
 // bootstrap loads config, sets up the event bus, livestream, video encoder
 // and HTTP server. It does NOT build any orchestrators — those are built
 // per-topic by runQueue.
-func bootstrap(topicSpec, mcpPath, outOverride, addr string) (*runtime, int) {
+func bootstrap(topicSpecs []string, mcpPath, outOverride, addr string) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
@@ -164,12 +216,12 @@ func bootstrap(topicSpec, mcpPath, outOverride, addr string) (*runtime, int) {
 	}
 	fmt.Fprintln(os.Stdout, "session output:", env.OutDir)
 
-	topics, err := resolveTopics(topicSpec)
+	topics, err := resolveTopics(topicSpecs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "topic:", err)
 		return nil, 1
 	}
-	fmt.Fprintf(os.Stdout, "found %d topic(s) matching %q:\n", len(topics), topicSpec)
+	fmt.Fprintf(os.Stdout, "found %d topic(s) matching %v:\n", len(topics), topicSpecs)
 	for i, t := range topics {
 		fmt.Fprintf(os.Stdout, "  [%d/%d] %s  (%s)  — %s\n",
 			i+1, len(topics), t.id, t.path, t.title)
@@ -186,7 +238,7 @@ func bootstrap(topicSpec, mcpPath, outOverride, addr string) (*runtime, int) {
 		fmt.Fprintln(os.Stderr, "logger init warning:", err)
 	}
 
-	log.Info("topic queue resolved", "spec", topicSpec, "count", len(topics))
+	log.Info("topic queue resolved", "specs", topicSpecs, "count", len(topics))
 	for i, t := range topics {
 		log.Info("queued topic",
 			"index", i+1,
@@ -354,20 +406,21 @@ func agentNames(specs []config.AgentSpec) []string {
 
 // runCmd: TUI + embedded server (loopback).
 func runCmd(args []string) int {
+	specs, rest := extractTopicArgs(args)
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	topicPath := fs.String("topic", "", "path or glob to topic .md file(s) (required)")
+	fs.Var((*stringSlice)(&specs), "topic", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --topic are also accepted")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", "127.0.0.1:0", "loopback HTTP listen address")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	if *topicPath == "" {
+	if len(specs) == 0 {
 		fmt.Fprintln(os.Stderr, "missing --topic")
 		return 2
 	}
 
-	rt, code := bootstrap(*topicPath, *mcpPath, *outDir, *addr)
+	rt, code := bootstrap(specs, *mcpPath, *outDir, *addr)
 	if code != 0 {
 		return code
 	}
@@ -404,20 +457,21 @@ func runCmd(args []string) int {
 
 // serverCmd: headless HTTP server only (no TUI, no local audio playback).
 func serverCmd(args []string) int {
+	specs, rest := extractTopicArgs(args)
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	topicPath := fs.String("topic", "", "path or glob to topic .md file(s) (required)")
+	fs.Var((*stringSlice)(&specs), "topic", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --topic are also accepted")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", ":3000", "HTTP listen address")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	if *topicPath == "" {
+	if len(specs) == 0 {
 		fmt.Fprintln(os.Stderr, "missing --topic")
 		return 2
 	}
 
-	rt, code := bootstrap(*topicPath, *mcpPath, *outDir, *addr)
+	rt, code := bootstrap(specs, *mcpPath, *outDir, *addr)
 	if code != 0 {
 		return code
 	}
