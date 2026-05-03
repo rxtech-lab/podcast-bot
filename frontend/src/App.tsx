@@ -15,8 +15,30 @@ function App() {
       .catch((e) => console.warn('history load failed', e))
   }, [])
 
-  const { history, phase, elapsedMs, remainingMs, status } =
-    useDebateEvents(initialHistory)
+  const {
+    history,
+    phase,
+    elapsedMs,
+    remainingMs,
+    status,
+    topics,
+    currentTopicId,
+    currentTopicIndex,
+    totalTopics,
+  } = useDebateEvents(initialHistory)
+
+  useEffect(() => {
+    const current = topics.find((t) => t.id === currentTopicId)
+    const title = current?.title ?? topics[0]?.title
+    if (!title) {
+      document.title = 'debate-bot — live'
+      return
+    }
+    document.title =
+      totalTopics > 1
+        ? `[${currentTopicIndex + 1}/${totalTopics}] ${title} — debate-bot`
+        : `${title} — debate-bot`
+  }, [topics, currentTopicId, currentTopicIndex, totalTopics])
 
   return (
     <div className="dark relative flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
@@ -34,6 +56,10 @@ function App() {
           elapsedMs={elapsedMs}
           remainingMs={remainingMs}
           status={status}
+          topics={topics}
+          currentTopicId={currentTopicId}
+          currentTopicIndex={currentTopicIndex}
+          totalTopics={totalTopics}
         />
         <main className="flex-1 flex flex-col md:flex-row min-h-0 gap-3 p-3">
           <VideoStage phase={phase} />

@@ -205,6 +205,17 @@ func decodeEvent(event string, data []byte) tea.Msg {
 			return nil
 		}
 		return debate.EndedMsg{TranscriptPath: p.TranscriptPath, AudioPath: p.AudioPath}
+	case "topic":
+		var p struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Index int    `json:"index"`
+			Total int    `json:"total"`
+		}
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil
+		}
+		return debate.TopicMsg{ID: p.ID, Title: p.Title, Index: p.Index, Total: p.Total}
 	}
 	return nil
 }

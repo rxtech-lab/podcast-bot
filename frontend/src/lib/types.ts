@@ -42,3 +42,20 @@ export interface EndedEvent {
   transcript_path: string
   audio_path: string
 }
+
+export type SessionStatus = 'pending' | 'running' | 'done' | 'error'
+
+export interface Session {
+  id: string
+  title: string
+  status: SessionStatus
+  transcript_path?: string
+  audio_path?: string
+}
+
+export interface TopicEvent {
+  id: string
+  title: string
+  index: number
+  total: number
+}

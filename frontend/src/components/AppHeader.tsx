@@ -1,4 +1,6 @@
 import { Broadcast } from '@phosphor-icons/react'
+import { TopicQueue } from './TopicQueue'
+import type { Session } from '@/lib/types'
 
 function fmtMs(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) ms = 0
@@ -42,6 +44,10 @@ interface AppHeaderProps {
   elapsedMs: number
   remainingMs: number
   status: string
+  topics: Session[]
+  currentTopicId: string | null
+  currentTopicIndex: number
+  totalTopics: number
 }
 
 export function AppHeader({
@@ -49,6 +55,10 @@ export function AppHeader({
   elapsedMs,
   remainingMs,
   status,
+  topics,
+  currentTopicId,
+  currentTopicIndex,
+  totalTopics,
 }: AppHeaderProps) {
   const total = elapsedMs + remainingMs
   const pct = total > 0 ? Math.min(100, (elapsedMs / total) * 100) : 0
@@ -68,7 +78,9 @@ export function AppHeader({
               debate bot
             </span>
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-              live broadcast
+              {totalTopics > 1
+                ? `topic ${currentTopicIndex + 1} of ${totalTopics}`
+                : 'live broadcast'}
             </span>
           </div>
         </div>
@@ -115,6 +127,8 @@ export function AppHeader({
           />
         </div>
       </div>
+
+      <TopicQueue topics={topics} currentTopicId={currentTopicId} />
     </header>
   )
 }

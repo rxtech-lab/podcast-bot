@@ -1,10 +1,17 @@
-// Package server hosts the HTTP API for a single debate run.
+// Package server hosts the HTTP API for a debate run.
+//
+// One server is shared across a sequential queue of topics: the underlying
+// event bus, audio livestream and HLS encoder are reused, and the active
+// orchestrator (the one whose transcript and chat sink the API exposes) is
+// tracked via SessionRegistry.
 //
 // Endpoints:
-//   GET  /api/transcript        — JSON snapshot of the full transcript history.
+//   GET  /api/topics            — JSON list of every queued topic + status.
+//   GET  /api/transcript        — JSON snapshot of the current topic transcript.
 //   GET  /api/events            — Server-Sent Events stream of live events.
 //   GET  /api/audio/stream      — chunked MP3 audio stream of the live debate.
-//   POST /api/messages          — push a user message into the orchestrator.
+//   GET  /api/video/...         — HLS playlist + segments.
+//   POST /api/messages          — push a user message into the live orchestrator.
 //   GET  /                      — embedded web UI (Twitch-like viewer).
 package server
 
@@ -27,12 +34,12 @@ import (
 	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
-// Deps wires the server to live orchestrator state.
+// Deps wires the server to shared (cross-topic) state plus the registry that
+// tracks which orchestrator is currently running.
 type Deps struct {
 	Bus        *eventbus.Bus
 	LiveStream *audio.LiveStream
-	Transcript *debate.Transcript
-	PushUser   func(text string) // forwarded to orch.PushUserMessage
+	Sessions   *SessionRegistry
 	Log        *slog.Logger
 	// VideoHLSDir is the directory holding stream.m3u8 + segments. When empty,
 	// the /api/video/* routes return 404.
@@ -48,6 +55,7 @@ type Server struct {
 // New builds a Server with all routes mounted.
 func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /api/topics", s.handleTopics)
 	s.mux.HandleFunc("GET /api/transcript", s.handleTranscript)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/audio/stream", s.handleAudio)
@@ -103,13 +111,23 @@ func toDTO(l agent.TranscriptLine) transcriptDTO {
 	}
 }
 
+func (s *Server) handleTopics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.d.Sessions.List())
+}
+
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	lines := s.d.Transcript.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	cur := s.d.Sessions.Current()
+	if cur == nil {
+		_ = json.NewEncoder(w).Encode([]transcriptDTO{})
+		return
+	}
+	lines := cur.Transcript.Snapshot()
 	out := make([]transcriptDTO, len(lines))
 	for i, l := range lines {
 		out[i] = toDTO(l)
 	}
-	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
 
@@ -146,6 +164,13 @@ func envelope(v any) (eventEnvelope, bool) {
 	case debate.EndedMsg:
 		return eventEnvelope{"ended", map[string]any{
 			"transcript_path": m.TranscriptPath, "audio_path": m.AudioPath,
+		}}, true
+	case debate.TopicMsg:
+		return eventEnvelope{"topic", map[string]any{
+			"id":    m.ID,
+			"title": m.Title,
+			"index": m.Index,
+			"total": m.Total,
 		}}, true
 	}
 	return eventEnvelope{}, false
@@ -275,6 +300,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty text", http.StatusBadRequest)
 		return
 	}
-	s.d.PushUser(req.Text)
+	cur := s.d.Sessions.Current()
+	if cur == nil {
+		http.Error(w, "no active topic", http.StatusServiceUnavailable)
+		return
+	}
+	cur.PushUserMessage(req.Text)
 	w.WriteHeader(http.StatusNoContent)
 }

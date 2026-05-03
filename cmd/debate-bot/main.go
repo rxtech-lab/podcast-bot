@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,6 +50,11 @@ usage:
   debate-bot run    --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr 127.0.0.1:0]
   debate-bot server --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr :3000]
 
+  --topic accepts a single .md path OR a glob (e.g. "topics/*.md"). When the
+  glob matches multiple files the topics are queued and run sequentially —
+  the audio livestream and HLS video are reused across topics; the title
+  swaps when each new topic starts.
+
   run     starts the TUI and an embedded HTTP server; the TUI consumes the
           server over loopback. Audio plays via local ffplay.
   server  starts only the HTTP server (no TUI, no local audio playback) so the
@@ -60,26 +68,81 @@ env (loaded from .env if present):
   OUT_DIR (optional, default ./out)`)
 }
 
-// runtime bundles everything bootstrap() prepares for the two subcommands.
+// loadedTopic is one resolved entry in the multi-topic queue.
+type loadedTopic struct {
+	id    string
+	path  string
+	title string
+	topic *config.Topic
+}
+
+// runtime bundles the shared infrastructure that every queued topic reuses.
 type runtime struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	log    *slog.Logger
 	closer interface{ Close() error }
 
-	env     *config.Env
-	bus     *eventbus.Bus
-	live    *audio.LiveStream
-	enc     *video.Encoder // may be nil if encoder failed to start
-	orch    *debate.Orchestrator
-	srv     *server.Server
-	addr    string
-	stopSig chan os.Signal
+	env      *config.Env
+	mcpCfg   *config.MCPConfig
+	bus      *eventbus.Bus
+	live     *audio.LiveStream
+	enc      *video.Encoder // may be nil if encoder failed to start
+	srv      *server.Server
+	sessions *server.SessionRegistry
+	topics   []loadedTopic
+	addr     string
+	stopSig  chan os.Signal
 }
 
-// bootstrap loads config, sets up the event bus, livestream, orchestrator and
-// HTTP server. Shared by runCmd and serverCmd.
-func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
+// resolveTopics expands a literal path or glob into one or more topic files
+// (deduped, sorted). Each resulting Topic gets a URL-safe id derived from its
+// filename; collisions are suffixed with -2, -3, ...
+func resolveTopics(spec string) ([]loadedTopic, error) {
+	matches, err := filepath.Glob(spec)
+	if err != nil {
+		return nil, fmt.Errorf("topic glob %q: %w", spec, err)
+	}
+	if len(matches) == 0 {
+		// Fall back to a literal path so users get a clearer error from
+		// LoadTopic when the file simply doesn't exist.
+		matches = []string{spec}
+	}
+	sort.Strings(matches)
+
+	used := map[string]int{}
+	out := make([]loadedTopic, 0, len(matches))
+	for _, p := range matches {
+		t, err := config.LoadTopic(p)
+		if err != nil {
+			return nil, fmt.Errorf("topic %s: %w", p, err)
+		}
+		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+		id := slugify(base)
+		if id == "" {
+			id = "topic"
+		}
+		used[id]++
+		if used[id] > 1 {
+			id = fmt.Sprintf("%s-%d", id, used[id])
+		}
+		out = append(out, loadedTopic{id: id, path: p, title: t.Title, topic: t})
+	}
+	return out, nil
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+func slugify(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = slugRe.ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
+}
+
+// bootstrap loads config, sets up the event bus, livestream, video encoder
+// and HTTP server. It does NOT build any orchestrators — those are built
+// per-topic by runQueue.
+func bootstrap(topicSpec, mcpPath, outOverride, addr string) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
@@ -99,13 +162,19 @@ func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
 		fmt.Fprintln(os.Stderr, "out dir:", err)
 		return nil, 1
 	}
-	fmt.Fprintln(os.Stderr, "session output:", env.OutDir)
+	fmt.Fprintln(os.Stdout, "session output:", env.OutDir)
 
-	topic, err := config.LoadTopic(topicPath)
+	topics, err := resolveTopics(topicSpec)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "topic:", err)
 		return nil, 1
 	}
+	fmt.Fprintf(os.Stdout, "found %d topic(s) matching %q:\n", len(topics), topicSpec)
+	for i, t := range topics {
+		fmt.Fprintf(os.Stdout, "  [%d/%d] %s  (%s)  — %s\n",
+			i+1, len(topics), t.id, t.path, t.title)
+	}
+
 	mcpCfg, err := config.LoadMCPConfig(mcpPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
@@ -115,6 +184,17 @@ func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
 	log, closer, err := util.NewFileLogger(env.OutDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "logger init warning:", err)
+	}
+
+	log.Info("topic queue resolved", "spec", topicSpec, "count", len(topics))
+	for i, t := range topics {
+		log.Info("queued topic",
+			"index", i+1,
+			"of", len(topics),
+			"id", t.id,
+			"path", t.path,
+			"title", t.title,
+		)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -134,19 +214,12 @@ func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
 
 	bus := eventbus.New(log)
 
-	orch, err := debate.New(env, topic, mcpCfg, bus.Publish, log, live)
-	if err != nil {
-		cancel()
-		fmt.Fprintln(os.Stderr, "orchestrator:", err)
-		return nil, 1
-	}
-
-	// Video encoder: optional. On failure (no font, ffmpeg missing the libx264
-	// build, etc.) we log and continue without video — the chat-only UI still
-	// works.
+	// Video encoder + Stage live for the whole session and span topics. The
+	// Stage subscribes to TopicMsg events to swap title and rosters between
+	// runs.
 	var (
-		enc      *video.Encoder
-		hlsDir   string
+		enc    *video.Encoder
+		hlsDir string
 	)
 	enc, err = video.New(ctx, env.OutDir, log)
 	if err != nil {
@@ -155,30 +228,29 @@ func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
 	} else {
 		hlsDir = enc.HLSDir()
 		enc.AttachAudio(ctx, live)
-		affNames := make([]string, len(topic.Affirmative))
-		for i, s := range topic.Affirmative {
-			affNames[i] = s.Name
-		}
-		negNames := make([]string, len(topic.Negative))
-		for i, s := range topic.Negative {
-			negNames[i] = s.Name
-		}
-		stage := video.NewStage(enc, topic.Title, affNames, negNames)
+		stage := video.NewStage(enc)
 		go stage.Run(ctx, bus)
 	}
+
+	// Seed the session registry with the topic queue.
+	seed := make([]server.Session, len(topics))
+	for i, t := range topics {
+		seed[i] = server.Session{ID: t.id, Title: t.title, Status: server.StatusPending}
+	}
+	sessions := server.NewSessionRegistry(seed)
 
 	srv := server.New(server.Deps{
 		Bus:         bus,
 		LiveStream:  live,
-		Transcript:  orch.Transcript,
-		PushUser:    orch.PushUserMessage,
+		Sessions:    sessions,
 		Log:         log,
 		VideoHLSDir: hlsDir,
 	})
 
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
-		env: env, bus: bus, live: live, enc: enc, orch: orch, srv: srv,
+		env: env, mcpCfg: mcpCfg, bus: bus, live: live, enc: enc, srv: srv,
+		sessions: sessions, topics: topics,
 		addr: addr, stopSig: stopSig,
 	}
 	return rt, 0
@@ -200,10 +272,90 @@ func (r *runtime) shutdown() {
 	}
 }
 
+// runQueue plays each queued topic to completion in order. The shared bus,
+// livestream, encoder and server stay up across topics; only the
+// orchestrator (and its OutDir, agents, transcript) is rebuilt per topic.
+func (r *runtime) runQueue() error {
+	for i, lt := range r.topics {
+		if r.ctx.Err() != nil {
+			return r.ctx.Err()
+		}
+
+		topicEnv := *r.env
+		topicEnv.OutDir = filepath.Join(r.env.OutDir, lt.id)
+		if err := debate.EnsureOutDir(topicEnv.OutDir); err != nil {
+			r.log.Error("topic out dir", "id", lt.id, "err", err)
+			r.sessions.SetStatus(lt.id, server.StatusError)
+			continue
+		}
+
+		orch, err := debate.New(&topicEnv, lt.topic, r.mcpCfg, r.bus.Publish, r.log, r.live)
+		if err != nil {
+			r.log.Error("orchestrator build", "id", lt.id, "err", err)
+			r.sessions.SetStatus(lt.id, server.StatusError)
+			continue
+		}
+
+		r.sessions.SetStatus(lt.id, server.StatusRunning)
+		r.sessions.SetCurrent(orch)
+
+		r.log.Info("starting topic",
+			"index", i+1,
+			"of", len(r.topics),
+			"id", lt.id,
+			"title", lt.title,
+			"out_dir", topicEnv.OutDir,
+		)
+		fmt.Fprintf(os.Stdout, "▶ starting topic %d/%d [%s] %s\n",
+			i+1, len(r.topics), lt.id, lt.title)
+
+		// Announce the new topic so the Stage updates the encoder title +
+		// side panels and the web UI clears its transcript view.
+		affNames := agentNames(lt.topic.Affirmative)
+		negNames := agentNames(lt.topic.Negative)
+		r.bus.Publish(debate.TopicMsg{
+			ID:       lt.id,
+			Title:    lt.title,
+			Index:    i,
+			Total:    len(r.topics),
+			AffNames: affNames,
+			NegNames: negNames,
+		})
+
+		err = orch.Run(r.ctx)
+		orch.Shutdown()
+		r.sessions.SetCurrent(nil)
+		if err != nil {
+			r.log.Error("orchestrator finished with error", "id", lt.id, "err", err)
+			r.sessions.SetStatus(lt.id, server.StatusError)
+			if r.ctx.Err() != nil {
+				return err
+			}
+			continue
+		}
+		r.sessions.SetStatus(lt.id, server.StatusDone)
+		r.sessions.SetOutputs(lt.id,
+			filepath.Join(topicEnv.OutDir, "transcript.txt"),
+			filepath.Join(topicEnv.OutDir, "debate.mp3"),
+		)
+		fmt.Fprintf(os.Stdout, "✓ finished topic %d/%d [%s]\n",
+			i+1, len(r.topics), lt.id)
+	}
+	return nil
+}
+
+func agentNames(specs []config.AgentSpec) []string {
+	out := make([]string, len(specs))
+	for i, s := range specs {
+		out[i] = s.Name
+	}
+	return out
+}
+
 // runCmd: TUI + embedded server (loopback).
 func runCmd(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	topicPath := fs.String("topic", "", "path to topic.md (required)")
+	topicPath := fs.String("topic", "", "path or glob to topic .md file(s) (required)")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", "127.0.0.1:0", "loopback HTTP listen address")
@@ -231,18 +383,17 @@ func runCmd(args []string) int {
 
 	bound := <-addrCh
 	baseURL := fmt.Sprintf("http://%s", bound.String())
-	fmt.Fprintln(os.Stderr, "server listening at", baseURL)
+	fmt.Fprintln(os.Stdout, "server listening at", baseURL)
 
-	orchDone := make(chan error, 1)
+	queueDone := make(chan error, 1)
 	go func() {
-		orchDone <- rt.orch.Run(rt.ctx)
+		queueDone <- rt.runQueue()
 	}()
 
 	cliErr := runTUIClient(rt.ctx, rt.log, baseURL)
 	rt.cancel()
-	rt.orch.Shutdown()
-	if err := <-orchDone; err != nil {
-		rt.log.Error("orchestrator finished with error", "err", err)
+	if err := <-queueDone; err != nil {
+		rt.log.Error("topic queue error", "err", err)
 	}
 	<-srvErrCh
 	if cliErr != nil {
@@ -254,7 +405,7 @@ func runCmd(args []string) int {
 // serverCmd: headless HTTP server only (no TUI, no local audio playback).
 func serverCmd(args []string) int {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	topicPath := fs.String("topic", "", "path to topic.md (required)")
+	topicPath := fs.String("topic", "", "path or glob to topic .md file(s) (required)")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", ":3000", "HTTP listen address")
@@ -275,19 +426,19 @@ func serverCmd(args []string) int {
 	srvErrCh := make(chan error, 1)
 	go func() {
 		srvErrCh <- rt.srv.ListenAndServe(rt.ctx, rt.addr, func(a *net.TCPAddr) {
-			fmt.Fprintln(os.Stderr, "server listening at http://"+a.String())
+			fmt.Fprintln(os.Stdout, "server listening at http://"+a.String())
 		})
 	}()
 
-	orchDone := make(chan error, 1)
+	queueDone := make(chan error, 1)
 	go func() {
-		orchDone <- rt.orch.Run(rt.ctx)
+		queueDone <- rt.runQueue()
 	}()
 
 	select {
-	case err := <-orchDone:
+	case err := <-queueDone:
 		if err != nil {
-			rt.log.Error("orchestrator finished with error", "err", err)
+			rt.log.Error("topic queue error", "err", err)
 		}
 		// Give the server a moment to flush pending writes (final EndedMsg, last
 		// audio bytes), then shut down.
@@ -295,7 +446,6 @@ func serverCmd(args []string) int {
 	case <-rt.ctx.Done():
 	}
 	rt.cancel()
-	rt.orch.Shutdown()
 	<-srvErrCh
 	return 0
 }

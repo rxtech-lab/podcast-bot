@@ -38,3 +38,16 @@ type EndedMsg struct {
 	TranscriptPath string
 	AudioPath      string
 }
+
+// TopicMsg announces that the active debate topic has changed (sequential
+// multi-topic runs). The Stage uses it to reset the encoder title + side
+// panels; the web UI uses it to clear the live transcript and refresh the
+// topic list.
+type TopicMsg struct {
+	ID          string
+	Title       string
+	Index       int // 0-based position in the queue
+	Total       int // total topics in the queue
+	AffNames    []string
+	NegNames    []string
+}

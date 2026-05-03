@@ -450,10 +450,10 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	fg color.RGBA,
 ) {
 	const (
-		pad        = 26
-		gapTagBody = 18
-		lineGap    = 10
-		maxLines   = 6
+		pad         = 26
+		gapTagBody  = 18
+		lineGap     = 10
+		maxLinesCap = 6
 	)
 
 	areaW := areaRight - areaLeft
@@ -466,6 +466,23 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	if tagText != "" {
 		d := &font.Drawer{Face: tagFace}
 		tagW = d.MeasureString(tagText).Ceil() + 48 // pill internal padding
+	}
+
+	bodyMetrics := bodyFace.Metrics()
+	lineH := bodyMetrics.Height.Ceil() + lineGap
+	tagH := tagFace.Metrics().Ascent.Ceil() + tagFace.Metrics().Descent.Ceil() + 24
+
+	// Cap visible body lines to whatever physically fits between the tag and
+	// the bottom of the area — otherwise the bounded box clamps to areaH while
+	// the text keeps drawing past it (overflow under the green outline).
+	maxLines := maxLinesCap
+	if avail := areaH - 2*pad - tagH - gapTagBody; avail > 0 && lineH > 0 {
+		if fit := avail / lineH; fit < maxLines {
+			maxLines = fit
+		}
+	}
+	if maxLines < 1 {
+		maxLines = 1
 	}
 
 	lines := wrapLines(bodyFace, body, innerW)
@@ -487,9 +504,6 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		boxW = min(420, maxBoxW)
 	}
 
-	bodyMetrics := bodyFace.Metrics()
-	lineH := bodyMetrics.Height.Ceil() + lineGap
-	tagH := tagFace.Metrics().Ascent.Ceil() + tagFace.Metrics().Descent.Ceil() + 24
 	bodyH := 0
 	if len(lines) > 0 {
 		bodyH = len(lines)*lineH + gapTagBody

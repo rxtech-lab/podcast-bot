@@ -1,9 +1,12 @@
 import { useEffect, useReducer } from 'react'
+import { loadHistory, loadTopics } from './api'
 import type {
   ChatLine,
   PhaseEvent,
+  Session,
   StatusEvent,
   TickEvent,
+  TopicEvent,
   TranscriptEvent,
 } from './types'
 
@@ -13,6 +16,10 @@ export interface DebateState {
   elapsedMs: number
   remainingMs: number
   status: string
+  topics: Session[]
+  currentTopicId: string | null
+  currentTopicIndex: number
+  totalTopics: number
 }
 
 type Action =
@@ -21,6 +28,13 @@ type Action =
   | { kind: 'phase'; phase: string }
   | { kind: 'tick'; elapsedMs: number; remainingMs: number }
   | { kind: 'status'; text: string }
+  | { kind: 'topics'; topics: Session[] }
+  | {
+      kind: 'topic-switch'
+      id: string
+      index: number
+      total: number
+    }
 
 const initialState: DebateState = {
   history: [],
@@ -28,6 +42,10 @@ const initialState: DebateState = {
   elapsedMs: 0,
   remainingMs: 0,
   status: '',
+  topics: [],
+  currentTopicId: null,
+  currentTopicIndex: 0,
+  totalTopics: 0,
 }
 
 function reducer(state: DebateState, action: Action): DebateState {
@@ -46,6 +64,20 @@ function reducer(state: DebateState, action: Action): DebateState {
       }
     case 'status':
       return { ...state, status: action.text }
+    case 'topics':
+      return { ...state, topics: action.topics, totalTopics: action.topics.length }
+    case 'topic-switch':
+      return {
+        ...state,
+        history: [],
+        phase: 'setup',
+        elapsedMs: 0,
+        remainingMs: 0,
+        status: '',
+        currentTopicId: action.id,
+        currentTopicIndex: action.index,
+        totalTopics: action.total || state.totalTopics,
+      }
   }
 }
 
@@ -66,6 +98,14 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
   useEffect(() => {
     dispatch({ kind: 'history', lines: initialHistory })
   }, [initialHistory])
+
+  // Initial fetch + refresh on every topic switch so the queue list (status:
+  // pending/running/done) stays in sync without per-topic polling.
+  useEffect(() => {
+    loadTopics()
+      .then((topics) => dispatch({ kind: 'topics', topics }))
+      .catch(() => {})
+  }, [state.currentTopicId])
 
   useEffect(() => {
     const es = new EventSource('/api/events')
@@ -136,6 +176,33 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
 
     es.addEventListener('ended', () => {
       dispatch({ kind: 'status', text: 'ended' })
+    })
+
+    es.addEventListener('topic', (ev) => {
+      const m = JSON.parse((ev as MessageEvent).data) as TopicEvent
+      inFlight = null
+      dispatch({
+        kind: 'topic-switch',
+        id: m.id,
+        index: m.index,
+        total: m.total,
+      })
+      // Refetch the persisted transcript snapshot — the orchestrator may
+      // have already pushed lines (e.g. host opening) before this event
+      // arrives in the browser.
+      loadHistory()
+        .then((lines) =>
+          dispatch({
+            kind: 'history',
+            lines: lines.map((l) => ({
+              speaker: l.speaker,
+              role: l.role,
+              side: l.side,
+              text: l.text,
+            })),
+          }),
+        )
+        .catch(() => {})
     })
 
     es.onerror = () => {

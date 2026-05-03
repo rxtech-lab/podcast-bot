@@ -108,6 +108,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case debate.EndedMsg:
 		m.ended = true
 		m.status = fmt.Sprintf("ended — transcript=%s audio=%s (press ctrl+c to quit)", v.TranscriptPath, v.AudioPath)
+	case debate.TopicMsg:
+		// New topic in the queue: clear any in-flight line and announce it.
+		m.lines = nil
+		m.current = renderedLine{}
+		m.refreshViewport()
+		if v.Total > 1 {
+			m.status = fmt.Sprintf("topic %d/%d — %s", v.Index+1, v.Total, v.Title)
+		} else {
+			m.status = v.Title
+		}
 	}
 
 	var vpCmd tea.Cmd

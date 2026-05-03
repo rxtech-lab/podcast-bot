@@ -28,11 +28,10 @@ type Stage struct {
 	body       strings.Builder
 }
 
-// NewStage creates a Stage bound to enc and primes the topic title plus the
-// affirmative / negative roster panels on the left and right of the frame.
-func NewStage(enc *Encoder, topicTitle string, affNames, negNames []string) *Stage {
-	enc.SetTopic(topicTitle)
-	enc.SetSides(affNames, negNames)
+// NewStage creates a Stage bound to enc. The topic title and side panels are
+// installed dynamically when the orchestrator publishes a TopicMsg, so the
+// same Stage/Encoder pair is reused across sequential topics.
+func NewStage(enc *Encoder) *Stage {
 	return &Stage{enc: enc}
 }
 
@@ -56,9 +55,22 @@ func (s *Stage) Run(ctx context.Context, bus *eventbus.Bus) {
 				s.enc.SetPhase(m.Phase.String())
 			case debate.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
+			case debate.TopicMsg:
+				s.handleTopic(m)
 			}
 		}
 	}
+}
+
+func (s *Stage) handleTopic(m debate.TopicMsg) {
+	s.enc.SetTopic(m.Title)
+	s.enc.SetSides(m.AffNames, m.NegNames)
+	s.mu.Lock()
+	s.curSpeaker, s.curRole, s.curSide = "", "", ""
+	s.body.Reset()
+	s.mu.Unlock()
+	s.enc.SetSpeaker("", "", "")
+	s.enc.SetBody("")
 }
 
 func (s *Stage) handleTranscript(m debate.TranscriptMsg) {
