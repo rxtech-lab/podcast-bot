@@ -58,6 +58,12 @@ func (b *Base) Side() string         { return b.role.Side() }
 func (b *Base) Voice() tts.Voice     { return b.voice }
 func (b *Base) SetVoice(v tts.Voice) { b.voice = v }
 func (b *Base) LLM() *llm.Client     { return b.llmC }
+func (b *Base) Model() string {
+	if b.llmC == nil {
+		return ""
+	}
+	return b.llmC.Model()
+}
 func (b *Base) Tools() *tools.Registry {
 	return b.reg
 }
@@ -124,11 +130,15 @@ func (b *Base) Compress(ctx context.Context) error {
 
 // runStream is the shared streaming helper used by every concrete Speak method.
 // It supplies system prompt + recent transcript + memory + directive, and
-// returns the underlying llm.Stream for the orchestrator to consume.
+// returns the underlying llm.Stream for the orchestrator to consume. When the
+// speaker has a side (affirmative/negative), the most recent line from the
+// opposing side is highlighted as a dedicated "rebut this" block so the LLM
+// has the exact claim to counter rather than picking through transcript noise.
 func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*llm.Stream, error) {
 	mem := strings.TrimSpace(p.Memory)
 	transcript := formatRecent(p.Recent)
-	user := strings.Join([]string{
+
+	parts := []string{
 		"# Topic",
 		p.TopicTitle,
 		"",
@@ -137,15 +147,65 @@ func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*ll
 		"",
 		"# Recent transcript",
 		fallback(transcript, "(none yet)"),
-		"",
+	}
+
+	if opp := latestOpposingLine(p.Recent, p.Side); opp != nil {
+		parts = append(parts, "",
+			"# Opponent's most recent claim — REBUT THIS DIRECTLY",
+			fmt.Sprintf("Speaker: %s (%s side)", opp.Speaker, opp.Side),
+			"Claim: "+oneLine(opp.Text),
+			"Open your turn by naming "+opp.Speaker+" and quoting or tightly paraphrasing this claim, then dismantle it with concrete counter-evidence before advancing your own point.",
+		)
+	}
+
+	if u := latestUserLine(p.Recent); u != nil {
+		parts = append(parts, "",
+			"# Audience steering — weave this angle into your speech",
+			"The live audience just asked: "+oneLine(u.Text),
+			"Acknowledge this angle naturally as you build your argument — do not ignore it, but do not abandon your side's position to chase it either. Use it as fresh framing for your existing points.",
+		)
+	}
+
+	parts = append(parts, "",
 		"# Directive from host",
 		fallback(p.Instructions, "(speak naturally)"),
 		"",
 		fmt.Sprintf("Time budget for this turn: about %d seconds. Reply in %s. Speak naturally — full sentences only, no stage directions, no markdown.",
 			p.SecondsBudget, p.TopicLanguage),
-	}, "\n")
+	)
+	user := strings.Join(parts, "\n")
 	hist := []llm.Message{{Role: llm.RoleUser, Content: user}}
 	return b.llmC.Stream(ctx, system, hist, nil)
+}
+
+// latestOpposingLine scans recent transcript backwards for the most recent
+// line spoken by the OPPOSING side. Returns nil if speaker has no side
+// (host/judge/viewer) or no opposing line has been said yet.
+func latestOpposingLine(recent []TranscriptLine, mySide string) *TranscriptLine {
+	if mySide == "" {
+		return nil
+	}
+	for i := len(recent) - 1; i >= 0; i-- {
+		l := recent[i]
+		if l.Side != "" && l.Side != mySide {
+			return &l
+		}
+	}
+	return nil
+}
+
+// latestUserLine scans recent transcript backwards for the most recent line
+// from the live audience (Role == "user"). Returns nil if none. Used to
+// surface audience steering ("talk about X") into every candidate/viewer
+// prompt so the whole panel — not just the host — incorporates the request.
+func latestUserLine(recent []TranscriptLine) *TranscriptLine {
+	for i := len(recent) - 1; i >= 0; i-- {
+		l := recent[i]
+		if l.Role == "user" {
+			return &l
+		}
+	}
+	return nil
 }
 
 func formatRecent(lines []TranscriptLine) string {

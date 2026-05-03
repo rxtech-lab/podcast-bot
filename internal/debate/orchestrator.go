@@ -114,7 +114,11 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	}
 	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log)
 	for _, a := range o.Registry.All() {
-		o.Log.Info("agent ready", "name", a.Name(), "role", string(a.Role()), "voice", a.Voice().ShortName)
+		o.Log.Info("agent ready",
+			"name", a.Name(),
+			"role", string(a.Role()),
+			"model", a.Model(),
+			"voice", a.Voice().ShortName)
 	}
 	// Clear the setup-phase status text so the TUI status bar stops showing
 	// "starting MCP servers..." once the pipeline takes over.
@@ -176,7 +180,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	if err := o.Setup(ctx); err != nil {
 		return err
 	}
-	planner := NewPlanner(o.Topic, o.Tracker, o.Registry, o.Queue)
+	planner := NewPlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
 	pipe := NewPipeline(Deps{
 		Planner: planner, Tracker: o.Tracker, Registry: o.Registry,
 		TTS: o.TTS, OutDir: o.Env.OutDir,

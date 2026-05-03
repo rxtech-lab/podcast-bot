@@ -37,10 +37,11 @@ func (q *userQueue) drain() ([]string, bool) {
 
 // Planner decides what turn happens next.
 type Planner struct {
-	topic    *config.Topic
-	tracker  *Tracker
-	registry *agent.Registry
-	queue    *userQueue
+	topic      *config.Topic
+	tracker    *Tracker
+	registry   *agent.Registry
+	queue      *userQueue
+	transcript *Transcript
 
 	state plannerState
 	turnN int
@@ -59,13 +60,14 @@ type plannerState struct {
 }
 
 // NewPlanner constructs the planner; the queue is kept by the orchestrator.
-func NewPlanner(topic *config.Topic, tracker *Tracker, reg *agent.Registry, q *userQueue) *Planner {
+func NewPlanner(topic *config.Topic, tracker *Tracker, reg *agent.Registry, q *userQueue, tr *Transcript) *Planner {
 	return &Planner{
-		topic:    topic,
-		tracker:  tracker,
-		registry: reg,
-		queue:    q,
-		state:    plannerState{phase: agent.PhaseOpening},
+		topic:      topic,
+		tracker:    tracker,
+		registry:   reg,
+		queue:      q,
+		transcript: tr,
+		state:      plannerState{phase: agent.PhaseOpening},
 	}
 }
 
@@ -181,8 +183,9 @@ func (p *Planner) planFreeSpeech(ctx context.Context) (*Turn, bool) {
 	if p.tracker.Used(pick.Name()) > share+30*time.Second {
 		return p.makeTurn(p.registry.Host, "warn-time:"+pick.Name(), p.budgetSeconds(10)), true
 	}
-	directive := "rebut:opponent"
-	return p.makeTurn(pick, directive, p.segmentSeconds()), true
+	// "rebut" (no who) — the opponent's actual last claim is auto-injected
+	// into the user prompt by base.runStream so the LLM gets the verbatim text.
+	return p.makeTurn(pick, "rebut", p.segmentSeconds()), true
 }
 
 func (p *Planner) askAnyViewer(ctx context.Context) (agent.Agent, string) {
@@ -203,7 +206,11 @@ func (p *Planner) askAnyViewer(ctx context.Context) (agent.Agent, string) {
 		wg.Add(1)
 		go func(v *agent.Viewer) {
 			defer wg.Done()
-			d, err := v.WantsToAsk(probeCtx, []agent.TranscriptLine{}) // recent injected by orchestrator if needed
+			var recent []agent.TranscriptLine
+			if p.transcript != nil {
+				recent = p.transcript.RecentN(20)
+			}
+			d, err := v.WantsToAsk(probeCtx, recent)
 			if err == nil && d.Ask && strings.TrimSpace(d.Question) != "" {
 				ch <- result{v: v, q: d.Question, t: d.Target}
 			}

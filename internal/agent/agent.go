@@ -91,6 +91,7 @@ type Agent interface {
 	SafeName() string
 	Role() Role
 	Side() string
+	Model() string
 	Voice() tts.Voice
 	SetVoice(v tts.Voice)
 	Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, error)

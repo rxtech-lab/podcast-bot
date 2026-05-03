@@ -47,7 +47,7 @@ var (
 	negStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	judgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 	viewStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("177"))
-	userStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	userStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("60")).Bold(true)
 	statusBar  = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("231")).Padding(0, 1)
 )
 
@@ -55,7 +55,7 @@ var (
 // user input back to the orchestrator.
 func NewModel(userOut chan<- string) *Model {
 	ti := textinput.New()
-	ti.Placeholder = "type a question, or /end to wrap up..."
+	ti.Placeholder = "type a question, /end to wrap up, ↑/↓ or PgUp/PgDn to scroll..."
 	ti.Focus()
 	ti.CharLimit = 500
 	vp := viewport.New(80, 20)
@@ -118,7 +118,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) applyTranscript(t debate.TranscriptMsg) {
 	if t.Done {
-		// Promote current to the lines slice (if it has any text).
+		// A different speaker arriving complete (e.g. user typing "hi" while
+		// Bob is mid-stream) must NOT be merged into Bob's line. Flush Bob's
+		// in-progress line first, then add the new speaker as its own line.
+		if t.Text != "" && t.Speaker != "" && m.current.speaker != "" && m.current.speaker != t.Speaker {
+			m.lines = append(m.lines, m.current)
+			m.lines = append(m.lines, renderedLine{
+				speaker: t.Speaker, role: t.Role, side: t.Side, text: t.Text,
+			})
+			m.current = renderedLine{}
+			m.refreshViewport()
+			return
+		}
+		// Same-speaker (or no current) Done: promote current + any final text.
 		if m.current.text != "" || t.Text != "" {
 			line := m.current
 			if t.Text != "" {
@@ -165,6 +177,10 @@ func (m *Model) layout() {
 }
 
 func (m *Model) refreshViewport() {
+	// Only auto-scroll to the bottom if the user was already there. If they've
+	// scrolled up to read history, leave their scroll position alone.
+	wasAtBottom := m.vp.AtBottom()
+
 	all := make([]renderedLine, 0, len(m.lines)+1)
 	all = append(all, m.lines...)
 	if m.current.text != "" || m.current.speaker != "" {
@@ -176,7 +192,9 @@ func (m *Model) refreshViewport() {
 		b.WriteByte('\n')
 	}
 	m.vp.SetContent(strings.TrimRight(b.String(), "\n"))
-	m.vp.GotoBottom()
+	if wasAtBottom {
+		m.vp.GotoBottom()
+	}
 }
 
 func formatLine(l renderedLine, width int) string {
@@ -202,6 +220,17 @@ func formatLine(l renderedLine, width int) string {
 		prefix = l.speaker
 		style = userStyle
 	}
+	// User lines get the full line styled (bg + fg) so they're visually
+	// distinct from agent turns where only the speaker tag is coloured.
+	if l.role != agent.RoleHost && l.role != agent.RoleAffirmative &&
+		l.role != agent.RoleNegative && l.role != agent.RoleJudge && l.role != agent.RoleViewer {
+		s := style
+		if width > 0 {
+			s = s.Width(width)
+		}
+		return s.Render(prefix + ": " + l.text)
+	}
+
 	tag := style.Render(prefix + ":")
 	line := tag + " " + l.text
 	if width <= 0 {

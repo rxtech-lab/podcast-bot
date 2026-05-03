@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -73,10 +75,15 @@ func runCmd(args []string) int {
 	if *outDir != "" {
 		env.OutDir = *outDir
 	}
+	// Each run lands in its own timestamped sub-folder so previous runs'
+	// transcripts, audio, and per-agent memory are not overwritten or mixed.
+	sessionStamp := time.Now().Format("2006-01-02_15-04-05")
+	env.OutDir = filepath.Join(env.OutDir, "session-"+sessionStamp)
 	if err := debate.EnsureOutDir(env.OutDir); err != nil {
 		fmt.Fprintln(os.Stderr, "out dir:", err)
 		return 1
 	}
+	fmt.Fprintln(os.Stderr, "session output:", env.OutDir)
 
 	topic, err := config.LoadTopic(*topicPath)
 	if err != nil {
