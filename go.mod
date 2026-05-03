@@ -10,6 +10,7 @@ require (
 	github.com/mark3labs/mcp-go v0.50.0
 	github.com/openai/openai-go v1.12.0
 	github.com/pkoukk/tiktoken-go v0.1.8
+	golang.org/x/image v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -44,5 +45,5 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 )

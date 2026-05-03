@@ -3,3 +3,6 @@ bin
 mcp.json
 out
 .DS_Store
+frontend/node_modules
+frontend/dist
+internal/server/web-dist

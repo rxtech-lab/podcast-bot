@@ -6,13 +6,15 @@ import (
 	"net/http"
 )
 
-//go:embed web/*
+//go:embed all:web-dist
 var webFS embed.FS
 
-// staticHandler serves the embedded web UI from /. The web/ directory contains
-// index.html, app.js, style.css.
+// staticHandler serves the embedded SPA built by the Vite frontend
+// (see frontend/vite.config.ts → build.outDir = ../internal/server/web-dist).
+// Run `make build` (or `cd frontend && bun run build`) to regenerate web-dist
+// before `go build`.
 func staticHandler() http.Handler {
-	sub, err := fs.Sub(webFS, "web")
+	sub, err := fs.Sub(webFS, "web-dist")
 	if err != nil {
 		panic(err)
 	}

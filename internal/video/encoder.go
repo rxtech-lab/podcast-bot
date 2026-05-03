@@ -1,6 +1,10 @@
 // Package video runs a long-lived ffmpeg encoder that bakes the live debate
 // transcript onto a video stream and muxes it with the TTS audio. Output is
 // HLS (m3u8 + .ts segments) served by the HTTP server.
+//
+// Frames are rendered in Go using golang.org/x/image so we don't depend on
+// ffmpeg's drawtext filter (which requires --enable-libfreetype, missing from
+// many distro/brew default builds). ffmpeg only encodes + muxes.
 package video
 
 import (
@@ -11,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,60 +24,65 @@ import (
 const (
 	videoWidth    = 1280
 	videoHeight   = 720
-	videoFPS      = 15 // text-only frames; low rate keeps CPU light
+	videoFPS      = 15
 	hlsSegmentSec = 2
 	hlsListSize   = 6
 )
 
-// Encoder owns the ffmpeg process, the live drawtext source files, and the
+// Encoder owns the ffmpeg process, the in-process frame compositor, and the
 // HLS output directory.
 type Encoder struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	hlsDir string
+	cmd       *exec.Cmd
+	videoIn   io.WriteCloser // raw rgba pipe:0 → ffmpeg
+	audioIn   *os.File       // mp3 pipe:3 → ffmpeg (write side)
+	audioPair *os.File       // read side; closed in parent after Start
+	hlsDir    string
 
-	tagPath  string
-	bodyPath string
+	rend *Renderer
 
 	writeMu sync.Mutex
 	closed  bool
 
 	log  *slog.Logger
 	done chan struct{}
+
+	stateMu     sync.Mutex
+	curSpeaker  string
+	curRole     string
+	curSide     string
+	curTagText  string
+	curBodyText string
 }
 
-// New starts the encoder. sessionDir is where text source files and HLS
-// segments are written. Audio is attached via AttachAudio.
+// New starts the encoder. sessionDir is where HLS segments + the ffmpeg
+// stderr log are written. Audio is attached separately via AttachAudio.
 func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, error) {
 	hlsDir := filepath.Join(sessionDir, "hls")
 	if err := os.MkdirAll(hlsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("hls dir: %w", err)
 	}
 
-	tagPath := filepath.Join(sessionDir, "stage_tag.txt")
-	bodyPath := filepath.Join(sessionDir, "stage_body.txt")
-	// drawtext init fails on empty/missing textfile, so seed with a single
-	// non-empty character.
-	if err := os.WriteFile(tagPath, []byte(" "), 0o644); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(bodyPath, []byte(" "), 0o644); err != nil {
-		return nil, err
-	}
-
-	font, err := findFont()
+	rend, err := newRenderer(videoWidth, videoHeight)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("renderer: %w", err)
 	}
 
-	filter := buildFilter(font, tagPath, bodyPath)
+	// Audio rides on an extra file descriptor (pipe:3 inside ffmpeg) so we can
+	// keep stdin (pipe:0) reserved for raw video frames.
+	audioR, audioW, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("audio pipe: %w", err)
+	}
+
 	args := []string{
 		"-loglevel", "warning",
-		"-f", "lavfi", "-i", fmt.Sprintf("color=c=0x0e0e10:s=%dx%d:r=%d", videoWidth, videoHeight, videoFPS),
-		"-f", "mp3", "-i", "pipe:0",
-		"-filter_complex", filter,
-		"-map", "[v]",
-		"-map", "1:a",
+		"-f", "rawvideo",
+		"-pix_fmt", "rgba",
+		"-s", fmt.Sprintf("%dx%d", videoWidth, videoHeight),
+		"-r", fmt.Sprintf("%d", videoFPS),
+		"-i", "pipe:0",
+		"-f", "mp3",
+		"-i", "pipe:3",
 		"-c:v", "libx264",
 		"-preset", "veryfast",
 		"-tune", "zerolatency",
@@ -93,39 +101,81 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	stdin, err := cmd.StdinPipe()
+	cmd.ExtraFiles = []*os.File{audioR}
+	videoIn, err := cmd.StdinPipe()
 	if err != nil {
+		audioR.Close()
+		audioW.Close()
 		return nil, fmt.Errorf("ffmpeg stdin: %w", err)
 	}
-	// Inherit stderr only at warning level; ffmpeg logs go to the user's
-	// terminal which is noisy. Discard for now; pipeline logs cover progress.
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+
+	stderrPath := filepath.Join(sessionDir, "ffmpeg-encoder.log")
+	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		audioR.Close()
+		audioW.Close()
+		return nil, fmt.Errorf("open ffmpeg log: %w", err)
+	}
+	tail := newTailWriter(64 * 1024)
+	cmd.Stderr = io.MultiWriter(stderrFile, tail)
 
 	if err := cmd.Start(); err != nil {
+		stderrFile.Close()
+		audioR.Close()
+		audioW.Close()
 		return nil, fmt.Errorf("start ffmpeg encoder: %w", err)
+	}
+	// ffmpeg has dup'd the read side; parent doesn't need it open anymore.
+	// Closing here means EOF will propagate when audioW is closed during shutdown.
+	_ = audioR.Close()
+
+	if log != nil {
+		log.Info("video encoder started",
+			"pid", cmd.Process.Pid,
+			"hls_dir", hlsDir,
+			"stderr_log", stderrPath,
+		)
 	}
 
 	e := &Encoder{
-		cmd:      cmd,
-		stdin:    stdin,
-		hlsDir:   hlsDir,
-		tagPath:  tagPath,
-		bodyPath: bodyPath,
-		log:      log,
-		done:     make(chan struct{}),
+		cmd:       cmd,
+		videoIn:   videoIn,
+		audioIn:   audioW,
+		audioPair: audioR, // already closed; kept only for documentation
+		hlsDir:    hlsDir,
+		rend:      rend,
+		log:       log,
+		done:      make(chan struct{}),
 	}
+
+	go e.frameLoop(ctx)
 	go func() {
-		_ = cmd.Wait()
+		err := cmd.Wait()
+		stderrFile.Close()
+		tailStr := tail.String()
+		if log != nil {
+			log.Warn("video encoder exited",
+				"err", err,
+				"stderr_tail", tailStr,
+				"stderr_log", stderrPath,
+			)
+		}
+		if !e.closingByUs() {
+			fmt.Fprintf(os.Stderr,
+				"\n[video encoder exited unexpectedly] %v\nffmpeg stderr (last %d bytes from %s):\n%s\n",
+				err, len(tailStr), stderrPath, tailStr)
+		}
 		close(e.done)
 	}()
+
 	return e, nil
 }
 
-// HLSDir returns the directory holding stream.m3u8 and segment files.
+// HLSDir returns the directory holding stream.m3u8 + segments.
 func (e *Encoder) HLSDir() string { return e.hlsDir }
 
-// AttachAudio subscribes to live and pipes mp3 chunks into ffmpeg stdin.
+// AttachAudio subscribes to live and pipes mp3 chunks into ffmpeg's audio fd.
 // Runs until ctx is cancelled or the LiveStream / encoder closes.
 func (e *Encoder) AttachAudio(ctx context.Context, live *audio.LiveStream) {
 	ch, cancel := live.Subscribe(256)
@@ -146,11 +196,11 @@ func (e *Encoder) AttachAudio(ctx context.Context, live *audio.LiveStream) {
 					e.writeMu.Unlock()
 					return
 				}
-				_, err := e.stdin.Write(chunk)
+				_, err := e.audioIn.Write(chunk)
 				e.writeMu.Unlock()
 				if err != nil {
 					if e.log != nil {
-						e.log.Warn("encoder stdin write", "err", err)
+						e.log.Warn("encoder audio write", "err", err)
 					}
 					return
 				}
@@ -159,24 +209,75 @@ func (e *Encoder) AttachAudio(ctx context.Context, live *audio.LiveStream) {
 	}()
 }
 
-// UpdateTag writes the speaker label that appears in the top badge.
+// UpdateTag updates the speaker label rendered in the top pill. Kept for API
+// compatibility with the previous drawtext-based encoder.
 func (e *Encoder) UpdateTag(s string) error {
-	if strings.TrimSpace(s) == "" {
-		s = " "
-	}
-	return atomicWrite(e.tagPath, s)
+	e.stateMu.Lock()
+	e.curTagText = s
+	e.stateMu.Unlock()
+	e.syncRenderer()
+	return nil
 }
 
-// UpdateBody writes the live transcript text rendered in the main panel.
-// Newlines are honoured; callers should pre-wrap to width.
+// UpdateBody updates the body text rendered in the main panel.
 func (e *Encoder) UpdateBody(s string) error {
-	if s == "" {
-		s = " "
-	}
-	return atomicWrite(e.bodyPath, s)
+	e.stateMu.Lock()
+	e.curBodyText = s
+	e.stateMu.Unlock()
+	e.syncRenderer()
+	return nil
 }
 
-// Close flushes audio, waits up to 2s for ffmpeg to exit, then SIGKILLs.
+// SetSpeaker is the richer state update used by Stage. role values match
+// agent.Role string values ("host", "affirmative", etc).
+func (e *Encoder) SetSpeaker(speaker, role, side string) {
+	e.stateMu.Lock()
+	e.curSpeaker = speaker
+	e.curRole = role
+	e.curSide = side
+	e.stateMu.Unlock()
+	e.syncRenderer()
+}
+
+func (e *Encoder) syncRenderer() {
+	e.stateMu.Lock()
+	speaker, role, side, body := e.curSpeaker, e.curRole, e.curSide, e.curBodyText
+	e.stateMu.Unlock()
+	e.rend.SetState(speaker, role, side, body)
+}
+
+// frameLoop pushes one rendered frame per video tick into ffmpeg's stdin.
+// Any write error (typically caused by ffmpeg exiting) terminates the loop.
+func (e *Encoder) frameLoop(ctx context.Context) {
+	interval := time.Second / time.Duration(videoFPS)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-e.done:
+			return
+		case <-t.C:
+			frame := e.rend.Frame()
+			e.writeMu.Lock()
+			if e.closed {
+				e.writeMu.Unlock()
+				return
+			}
+			_, err := e.videoIn.Write(frame)
+			e.writeMu.Unlock()
+			if err != nil {
+				if e.log != nil && !e.closingByUs() {
+					e.log.Warn("encoder video write", "err", err)
+				}
+				return
+			}
+		}
+	}
+}
+
+// Close flushes audio + video, waits up to 2s for ffmpeg to exit, then SIGKILLs.
 func (e *Encoder) Close() error {
 	e.writeMu.Lock()
 	if e.closed {
@@ -184,7 +285,8 @@ func (e *Encoder) Close() error {
 		return nil
 	}
 	e.closed = true
-	_ = e.stdin.Close()
+	_ = e.videoIn.Close()
+	_ = e.audioIn.Close()
 	e.writeMu.Unlock()
 
 	select {
@@ -197,36 +299,8 @@ func (e *Encoder) Close() error {
 	return nil
 }
 
-// buildFilter assembles the drawtext filter chain. Two overlays:
-//   - speaker tag in a colored box near the top
-//   - body text below
-//
-// reload=1 makes drawtext re-read the textfile on every frame.
-func buildFilter(font, tagPath, bodyPath string) string {
-	esc := func(s string) string {
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `:`, `\:`)
-		s = strings.ReplaceAll(s, `'`, `\'`)
-		return s
-	}
-	font = esc(font)
-	tag := esc(tagPath)
-	body := esc(bodyPath)
-	tagFilter := fmt.Sprintf(
-		"drawtext=fontfile=%s:textfile=%s:reload=1:fontcolor=white:fontsize=40:x=80:y=70:box=1:boxcolor=0x9147ff@0.85:boxborderw=20",
-		font, tag,
-	)
-	bodyFilter := fmt.Sprintf(
-		"drawtext=fontfile=%s:textfile=%s:reload=1:fontcolor=white:fontsize=34:x=80:y=200:line_spacing=14",
-		font, body,
-	)
-	return fmt.Sprintf("[0:v]%s,%s[v]", tagFilter, bodyFilter)
-}
-
-func atomicWrite(path, content string) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+func (e *Encoder) closingByUs() bool {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+	return e.closed
 }
