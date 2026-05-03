@@ -1,15 +1,15 @@
 package debate
 
 import (
-	"io"
 	"sync"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
 )
 
-// Turn is the unit of work that flows through the pipeline. The orchestrator
-// fills the streaming fields (TextOut, AudioReader) as it produces audio.
+// Turn is the unit of work that flows through the pipeline. The producer
+// streams sentences via TextOut and writes audio bytes into the shared
+// LiveStream + per-turn file in Deps.
 type Turn struct {
 	ID        int
 	Phase     agent.Phase
@@ -18,11 +18,10 @@ type Turn struct {
 	Budget    time.Duration
 
 	// Filled by the producer. TextOut emits sentence-level text for the TUI.
-	TextOut     chan string
-	AudioPath   string
-	audioReader io.Reader
+	TextOut   chan string
+	AudioPath string
 
-	// Played sets to true after the player has fully drained it; protected by mu.
+	// Played sets to true after the producer finishes; protected by mu.
 	mu     sync.Mutex
 	played bool
 	err    error

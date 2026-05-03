@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,14 +24,15 @@ type Deps struct {
 	Registry   *agent.Registry
 	TTS        *tts.Client
 	OutDir     string
-	Send       func(any) // tea.Program.Send wrapper, takes any tea.Msg
+	Send       func(any) // event-bus publish wrapper
 	Log        *slog.Logger
 	Topic      string
 	Language   string
 	Transcript *Transcript
+	LiveStream *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
 }
 
-// Pipeline owns the goroutines for produce/play/memory stages.
+// Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
 }
@@ -43,9 +45,8 @@ func NewPipeline(d Deps) *Pipeline { return &Pipeline{d: d} }
 func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	turnCh := make(chan *Turn, 2)
 	producedCh := make(chan *Turn, 1)
-	playedCh := make(chan *Turn)
 
-	// Tick goroutine — sends elapsed/remaining to TUI every 1s.
+	// Tick goroutine — publishes elapsed/remaining once a second.
 	tickCtx, tickCancel := context.WithCancel(ctx)
 	go p.tickLoop(tickCtx)
 	defer tickCancel()
@@ -66,37 +67,26 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		}
 	}()
 
-	// Producer goroutine — single producer is enough because we need to keep
-	// turn ordering deterministic; pipeline parallelism comes from producedCh
-	// having buffer 1 and the player overlapping with the next produce.
+	// Producer goroutine — single producer keeps turn ordering deterministic
+	// while writing into the shared LiveStream which paces playback at realtime.
+	var files []string
+	var filesMu sync.Mutex
+	// Track phase transitions so subscribers see PhaseMsg as the planner moves
+	// from opening → free-speech → closing → verdict → conclusion → ended.
+	// (Without this the UI is stuck on whatever phase Setup announced.)
+	lastPhase := agent.PhaseSetup
 	go func() {
 		defer close(producedCh)
 		for t := range turnCh {
+			if t.Phase != lastPhase {
+				p.d.Send(PhaseMsg{Phase: t.Phase})
+				lastPhase = t.Phase
+			}
+			start := time.Now()
 			if err := p.produce(ctx, t); err != nil {
 				p.d.Log.Warn("produce error", "turn", t.ID, "err", err)
 				t.SetErr(err)
-				close(t.TextOut)
 				p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d produce: %w", t.ID, err)})
-				continue
-			}
-			select {
-			case producedCh <- t:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Player goroutine.
-	var files []string
-	var filesMu sync.Mutex
-	go func() {
-		defer close(playedCh)
-		for t := range producedCh {
-			start := time.Now()
-			if err := p.play(ctx, t); err != nil {
-				p.d.Log.Warn("play error", "turn", t.ID, "err", err)
-				t.SetErr(err)
 			}
 			p.d.Tracker.AddSpeaking(t.Speaker.Name(), time.Since(start))
 			t.MarkPlayed()
@@ -106,7 +96,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 				filesMu.Unlock()
 			}
 			select {
-			case playedCh <- t:
+			case producedCh <- t:
 			case <-ctx.Done():
 				return
 			}
@@ -114,7 +104,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	}()
 
 	// Memory updater (consumer).
-	for t := range playedCh {
+	for t := range producedCh {
 		p.updateMemories(ctx, t)
 	}
 
@@ -139,9 +129,17 @@ func (p *Pipeline) tickLoop(ctx context.Context) {
 	}
 }
 
-// produce runs the LLM stream and pipes sentence-level TTS into a per-turn
-// io.Pipe. The pipe reader is stashed on the turn for the player.
+// produce runs the LLM stream sentence-by-sentence and synthesizes each
+// sentence to MP3, writing every chunk to the shared LiveStream broadcaster
+// AND a per-turn file (so the end-of-run ConcatToMP3 keeps working).
 func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
+	// When the host is about to address a user question, unhide the pending
+	// user line so subsequent agent prompts (built later in this pipeline)
+	// can see and respond to it. Until this point the line stays hidden so
+	// already-buffered candidate turns don't preempt the host.
+	if strings.HasPrefix(t.Directive, "address-user:") {
+		p.d.Transcript.AcknowledgeUserLines()
+	}
 	prompt := agent.SpeakPrompt{
 		Phase:         t.Phase,
 		SegmentNo:     t.ID,
@@ -152,11 +150,8 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		Instructions:  t.Directive,
 		Side:          t.Speaker.Side(),
 	}
-	mem, _ := t.Speaker.(memReader); _ = mem // accessor type; not all agents expose memory
 	if mr, ok := t.Speaker.(interface{ MemoryRead() string }); ok {
 		prompt.Memory = mr.MemoryRead()
-	} else if br, ok := t.Speaker.(interface{ Memory() interface{ Read() (string, error) } }); ok {
-		_ = br
 	}
 
 	stream, err := t.Speaker.Speak(ctx, prompt)
@@ -164,52 +159,70 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		return err
 	}
 
-	// Per-turn audio pipe: we write MP3 chunks for every sentence, the player
-	// reads from the read end and tees to file + ffplay stdin.
-	pr, pw := io.Pipe()
-	t.AudioPath = filepath.Join(p.d.OutDir, fmt.Sprintf("turn_%03d.mp3", t.ID))
-	t.audioReader = pr
+	turnPath := filepath.Join(p.d.OutDir, fmt.Sprintf("turn_%03d.mp3", t.ID))
+	t.AudioPath = turnPath
 
-	go func() {
-		defer pw.Close()
-		defer close(t.TextOut)
-		splitter := &audio.SentenceSplitter{}
-		for d := range stream.Deltas() {
-			if d.Done {
-				break
-			}
-			if d.TextChunk == "" {
-				continue
-			}
-			for _, sent := range splitter.Push(d.TextChunk) {
-				if err := p.synthSentence(ctx, t, sent, pw); err != nil {
-					p.d.Log.Warn("tts error", "turn", t.ID, "err", err)
-				}
-			}
+	turnFile, err := os.Create(turnPath)
+	if err != nil {
+		return fmt.Errorf("create turn file: %w", err)
+	}
+	defer turnFile.Close()
+
+	// Audio sink: tee to the shared livestream (paced via ffmpeg -re) and the
+	// per-turn file. Writes are serialized within this goroutine, so a plain
+	// MultiWriter is safe.
+	sink := io.MultiWriter(turnFile, p.d.LiveStream)
+	wroteAny := false
+
+	splitter := &audio.SentenceSplitter{}
+	defer close(t.TextOut)
+	for d := range stream.Deltas() {
+		if d.Done {
+			break
 		}
-		for _, sent := range splitter.Flush() {
-			if err := p.synthSentence(ctx, t, sent, pw); err != nil {
+		if d.TextChunk == "" {
+			continue
+		}
+		for _, sent := range splitter.Push(d.TextChunk) {
+			n, err := p.synthSentence(ctx, t, sent, sink)
+			if err != nil {
 				p.d.Log.Warn("tts error", "turn", t.ID, "err", err)
 			}
+			if n > 0 {
+				wroteAny = true
+			}
 		}
-		if err := stream.Err(); err != nil {
-			p.d.Log.Warn("llm stream error", "turn", t.ID, "speaker", t.Speaker.Name(), "err", err)
-			t.SetErr(err)
-			p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d %s: %w", t.ID, t.Speaker.Name(), err)})
+	}
+	for _, sent := range splitter.Flush() {
+		n, err := p.synthSentence(ctx, t, sent, sink)
+		if err != nil {
+			p.d.Log.Warn("tts error", "turn", t.ID, "err", err)
 		}
-	}()
+		if n > 0 {
+			wroteAny = true
+		}
+	}
+	if err := stream.Err(); err != nil {
+		p.d.Log.Warn("llm stream error", "turn", t.ID, "speaker", t.Speaker.Name(), "err", err)
+		t.SetErr(err)
+		p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d %s: %w", t.ID, t.Speaker.Name(), err)})
+	}
+
+	if !wroteAny {
+		// Don't keep an empty-stream artefact, and don't include it in concat.
+		_ = turnFile.Close()
+		_ = os.Remove(turnPath)
+		t.AudioPath = ""
+	}
 
 	return nil
 }
 
-// memReader is an unused marker type; kept to document intent.
-type memReader interface{ MemoryRead() string }
-
-func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, pw io.Writer) error {
+func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink io.Writer) (int64, error) {
 	if sent == "" {
-		return nil
+		return 0, nil
 	}
-	// Push transcript chunk to TUI as soon as we have it.
+	// Push transcript chunk to TUI / web subscribers as soon as we have it.
 	select {
 	case t.TextOut <- sent:
 	default:
@@ -220,28 +233,10 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, pw i
 	})
 	body, err := p.d.TTS.SynthesizeStream(ctx, t.Speaker.Voice().ShortName, sent, p.d.Language)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer body.Close()
-	_, err = io.Copy(pw, body)
-	return err
-}
-
-// play streams the per-turn audio reader to ffplay and the on-disk MP3 file.
-// If the upstream reader yields zero bytes (e.g. the LLM call failed before
-// any audio was produced), no file is written and t.AudioPath is cleared so
-// the empty turn drops out of the final ffmpeg concat list.
-func (p *Pipeline) play(ctx context.Context, t *Turn) error {
-	if t.audioReader == nil || t.AudioPath == "" {
-		return nil
-	}
-	n, err := audio.PlayStream(ctx, t.AudioPath, t.audioReader)
-	if n == 0 {
-		// Don't keep an empty-stream artefact, and don't include it in concat.
-		_ = os.Remove(t.AudioPath)
-		t.AudioPath = ""
-	}
-	return err
+	return io.Copy(sink, body)
 }
 
 // updateMemories pushes the played turn into the transcript log AND into every
@@ -254,7 +249,7 @@ func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 		}
 		_ = a.Listen(ctx, full)
 	}
-	// Final transcript event (completes the running line in the TUI).
+	// Final transcript event (completes the running line in the TUI / web).
 	p.d.Send(TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
 		Side: t.Speaker.Side(), Text: "", Done: true,

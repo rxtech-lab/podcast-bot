@@ -64,12 +64,16 @@ func (p Phase) String() string {
 }
 
 // TranscriptLine is one entry in the running debate transcript.
+// Pending marks audience lines that the host has not yet acknowledged on-air;
+// such lines are kept out of agent prompts so candidates don't pre-empt the
+// host's introduction of the question.
 type TranscriptLine struct {
 	Speaker string
 	Role    Role
 	Side    string
 	Text    string
 	At      time.Time
+	Pending bool
 }
 
 // SpeakPrompt is the orchestrator's request to an Agent for one segment.

@@ -35,11 +35,13 @@ type Orchestrator struct {
 	Queue      *userQueue
 	Send       func(any)
 	Log        *slog.Logger
+	LiveStream *audio.LiveStream
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.
+// liveStream is the shared mp3 broadcaster the pipeline writes audio into.
 func New(env *config.Env, topic *config.Topic, mcpCfg *config.MCPConfig,
-	send func(any), log *slog.Logger,
+	send func(any), log *slog.Logger, liveStream *audio.LiveStream,
 ) (*Orchestrator, error) {
 	memStore, err := memory.NewStore(filepath.Join(env.OutDir, "memory"))
 	if err != nil {
@@ -64,6 +66,7 @@ func New(env *config.Env, topic *config.Topic, mcpCfg *config.MCPConfig,
 		Queue:      &userQueue{},
 		Send:       send,
 		Log:        log,
+		LiveStream: liveStream,
 	}
 	return o, nil
 }
@@ -186,6 +189,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		TTS: o.TTS, OutDir: o.Env.OutDir,
 		Send: o.Send, Log: o.Log,
 		Topic: o.Topic.Title, Language: o.Topic.Language, Transcript: o.Transcript,
+		LiveStream: o.LiveStream,
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

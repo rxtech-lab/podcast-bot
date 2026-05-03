@@ -20,11 +20,11 @@ Rebuttal rule: whenever the user message includes an "Opponent's most recent cla
 Aggression rule: if the opponent's claim is weak, name the weakness explicitly ("that argument ignores X", "the data actually shows Y"). Avoid hedging language like "perhaps" or "I think it may be" when you mean to disagree.
 Output rules: speak in plain prose only — no stage directions, no markdown, no quoted system text. Stay within the host's time budget.
 Directives:
-  "opening"   — deliver your opening statement; if the opponent has already spoken, still rebut their last claim before pivoting to your case.
+  "opening"   — start by introducing yourself BY NAME (state "%s" and which side you represent) in one short sentence, then deliver your opening statement; if the opponent has already spoken, still rebut their last claim before pivoting to your case.
   "rebut"     — counter the opponent's most recent claim aggressively, then add one new attack of your own.
   "defend:<who>" — answer their attack on you, then redirect with a counter-attack.
   "closing"   — summarise your strongest hits against the opposition and request the audience's support.
-  "conclusion" — one or two heartfelt sentences reflecting on the debate.`, name, side, position)
+  "conclusion" — one or two heartfelt sentences reflecting on the debate.`, name, side, position, name)
 }
 
 // Speak emits a candidate turn. The orchestrator passes p.Side and topic info.

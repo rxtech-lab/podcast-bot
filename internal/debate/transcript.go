@@ -67,18 +67,37 @@ func (t *Transcript) AppendFromTurn(tn *Turn) agent.TranscriptLine {
 }
 
 // AppendUser inserts a synthetic user line so the user's input shows up
-// alongside agent turns in the transcript.
+// alongside agent turns in the transcript. Marked Pending until the host
+// addresses it on-air, which keeps it out of agent prompts in the meantime
+// (so already-buffered candidate turns don't prematurely respond to it).
 func (t *Transcript) AppendUser(text string) agent.TranscriptLine {
 	line := agent.TranscriptLine{
 		Speaker: "user",
 		Role:    "user",
 		Text:    text,
 		At:      time.Now(),
+		Pending: true,
 	}
 	t.mu.Lock()
 	t.lines = append(t.lines, line)
 	t.mu.Unlock()
 	return line
+}
+
+// AcknowledgeUserLines clears the Pending flag on every audience line, making
+// them visible to subsequent agent prompts. Called when the host's
+// address-user turn begins producing.
+func (t *Transcript) AcknowledgeUserLines() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for i := range t.lines {
+		if t.lines[i].Role == "user" && t.lines[i].Pending {
+			t.lines[i].Pending = false
+			n++
+		}
+	}
+	return n
 }
 
 // Save writes the transcript to disk in `name: text` format.
