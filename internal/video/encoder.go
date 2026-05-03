@@ -1,6 +1,14 @@
 // Package video runs a long-lived ffmpeg encoder that bakes the live debate
-// transcript onto a video stream and muxes it with the TTS audio. Output is
-// HLS (m3u8 + .ts segments) served by the HTTP server.
+// transcript onto a video stream. Output is HLS (m3u8 + .ts segments) served
+// by the HTTP server.
+//
+// HLS here is video-only on purpose: muxing TTS audio into the same stream
+// requires bridging multi-second gaps between turns, and ffmpeg's HLS muxer
+// will not emit any segment until both inputs have a packet, so an idle audio
+// FD blocks the entire stream. Audio is served separately at /api/audio/stream
+// and the frontend renders an <audio> element alongside <video>; the ±2s drift
+// between the two playback elements is acceptable since the transcript overlay
+// is the only synced visual.
 //
 // Frames are rendered in Go using golang.org/x/image so we don't depend on
 // ffmpeg's drawtext filter (which requires --enable-libfreetype, missing from
@@ -15,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -32,11 +41,9 @@ const (
 // Encoder owns the ffmpeg process, the in-process frame compositor, and the
 // HLS output directory.
 type Encoder struct {
-	cmd       *exec.Cmd
-	videoIn   io.WriteCloser // raw rgba pipe:0 → ffmpeg
-	audioIn   *os.File       // mp3 pipe:3 → ffmpeg (write side)
-	audioPair *os.File       // read side; closed in parent after Start
-	hlsDir    string
+	cmd     *exec.Cmd
+	videoIn io.WriteCloser // raw rgba pipe:0 → ffmpeg
+	hlsDir  string
 
 	rend *Renderer
 
@@ -50,12 +57,11 @@ type Encoder struct {
 	curSpeaker  string
 	curRole     string
 	curSide     string
-	curTagText  string
 	curBodyText string
 }
 
 // New starts the encoder. sessionDir is where HLS segments + the ffmpeg
-// stderr log are written. Audio is attached separately via AttachAudio.
+// stderr log are written.
 func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, error) {
 	hlsDir := filepath.Join(sessionDir, "hls")
 	if err := os.MkdirAll(hlsDir, 0o755); err != nil {
@@ -67,12 +73,7 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 		return nil, fmt.Errorf("renderer: %w", err)
 	}
 
-	// Audio rides on an extra file descriptor (pipe:3 inside ffmpeg) so we can
-	// keep stdin (pipe:0) reserved for raw video frames.
-	audioR, audioW, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("audio pipe: %w", err)
-	}
+	codecArgs, codecName := videoCodecArgs()
 
 	args := []string{
 		"-loglevel", "warning",
@@ -81,16 +82,12 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 		"-s", fmt.Sprintf("%dx%d", videoWidth, videoHeight),
 		"-r", fmt.Sprintf("%d", videoFPS),
 		"-i", "pipe:0",
-		"-f", "mp3",
-		"-i", "pipe:3",
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
+		"-an",
+	}
+	args = append(args, codecArgs...)
+	args = append(args,
 		"-pix_fmt", "yuv420p",
 		"-g", fmt.Sprintf("%d", videoFPS*hlsSegmentSec),
-		"-c:a", "aac",
-		"-b:a", "96k",
-		"-ar", "44100",
 		"-f", "hls",
 		"-hls_time", fmt.Sprintf("%d", hlsSegmentSec),
 		"-hls_list_size", fmt.Sprintf("%d", hlsListSize),
@@ -98,14 +95,11 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 		"-hls_segment_type", "mpegts",
 		"-hls_segment_filename", filepath.Join(hlsDir, "seg_%03d.ts"),
 		filepath.Join(hlsDir, "stream.m3u8"),
-	}
+	)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	cmd.ExtraFiles = []*os.File{audioR}
 	videoIn, err := cmd.StdinPipe()
 	if err != nil {
-		audioR.Close()
-		audioW.Close()
 		return nil, fmt.Errorf("ffmpeg stdin: %w", err)
 	}
 	cmd.Stdout = io.Discard
@@ -113,8 +107,6 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 	stderrPath := filepath.Join(sessionDir, "ffmpeg-encoder.log")
 	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		audioR.Close()
-		audioW.Close()
 		return nil, fmt.Errorf("open ffmpeg log: %w", err)
 	}
 	tail := newTailWriter(64 * 1024)
@@ -122,31 +114,25 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 
 	if err := cmd.Start(); err != nil {
 		stderrFile.Close()
-		audioR.Close()
-		audioW.Close()
 		return nil, fmt.Errorf("start ffmpeg encoder: %w", err)
 	}
-	// ffmpeg has dup'd the read side; parent doesn't need it open anymore.
-	// Closing here means EOF will propagate when audioW is closed during shutdown.
-	_ = audioR.Close()
 
 	if log != nil {
 		log.Info("video encoder started",
 			"pid", cmd.Process.Pid,
+			"codec", codecName,
 			"hls_dir", hlsDir,
 			"stderr_log", stderrPath,
 		)
 	}
 
 	e := &Encoder{
-		cmd:       cmd,
-		videoIn:   videoIn,
-		audioIn:   audioW,
-		audioPair: audioR, // already closed; kept only for documentation
-		hlsDir:    hlsDir,
-		rend:      rend,
-		log:       log,
-		done:      make(chan struct{}),
+		cmd:     cmd,
+		videoIn: videoIn,
+		hlsDir:  hlsDir,
+		rend:    rend,
+		log:     log,
+		done:    make(chan struct{}),
 	}
 
 	go e.frameLoop(ctx)
@@ -175,75 +161,46 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 // HLSDir returns the directory holding stream.m3u8 + segments.
 func (e *Encoder) HLSDir() string { return e.hlsDir }
 
-// AttachAudio subscribes to live and pipes mp3 chunks into ffmpeg's audio fd.
-// Runs until ctx is cancelled or the LiveStream / encoder closes.
-func (e *Encoder) AttachAudio(ctx context.Context, live *audio.LiveStream) {
-	ch, cancel := live.Subscribe(256)
-	go func() {
-		defer cancel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-e.done:
-				return
-			case chunk, ok := <-ch:
-				if !ok {
-					return
-				}
-				e.writeMu.Lock()
-				if e.closed {
-					e.writeMu.Unlock()
-					return
-				}
-				_, err := e.audioIn.Write(chunk)
-				e.writeMu.Unlock()
-				if err != nil {
-					if e.log != nil {
-						e.log.Warn("encoder audio write", "err", err)
-					}
-					return
-				}
-			}
-		}
-	}()
-}
+// AttachAudio is a no-op kept for callers that previously muxed TTS audio
+// into the HLS stream. The encoder now produces video-only HLS; TTS audio is
+// served separately at /api/audio/stream and the frontend plays both.
+func (e *Encoder) AttachAudio(_ context.Context, _ *audio.LiveStream) {}
 
-// UpdateTag updates the speaker label rendered in the top pill. Kept for API
-// compatibility with the previous drawtext-based encoder.
-func (e *Encoder) UpdateTag(s string) error {
-	e.stateMu.Lock()
-	e.curTagText = s
-	e.stateMu.Unlock()
-	e.syncRenderer()
-	return nil
-}
+// SetTopic shows the topic title at the top of the video.
+func (e *Encoder) SetTopic(s string) { e.rend.SetTopic(s) }
 
-// UpdateBody updates the body text rendered in the main panel.
-func (e *Encoder) UpdateBody(s string) error {
-	e.stateMu.Lock()
-	e.curBodyText = s
-	e.stateMu.Unlock()
-	e.syncRenderer()
-	return nil
-}
+// SetPhase updates the phase status line under the topic title.
+func (e *Encoder) SetPhase(s string) { e.rend.SetPhase(s) }
 
-// SetSpeaker is the richer state update used by Stage. role values match
-// agent.Role string values ("host", "affirmative", etc).
+// SetSpeaker activates the centered subtitle box for the given speaker. role
+// values match agent.Role string values ("host", "affirmative", etc).
+// Calling with empty speaker hides the subtitle (idle state).
 func (e *Encoder) SetSpeaker(speaker, role, side string) {
 	e.stateMu.Lock()
 	e.curSpeaker = speaker
 	e.curRole = role
 	e.curSide = side
-	e.stateMu.Unlock()
-	e.syncRenderer()
-}
-
-func (e *Encoder) syncRenderer() {
-	e.stateMu.Lock()
-	speaker, role, side, body := e.curSpeaker, e.curRole, e.curSide, e.curBodyText
+	body := e.curBodyText
 	e.stateMu.Unlock()
 	e.rend.SetState(speaker, role, side, body)
+}
+
+// SetBody updates the spoken text shown inside the subtitle box.
+func (e *Encoder) SetBody(s string) {
+	e.stateMu.Lock()
+	e.curBodyText = s
+	speaker, role, side := e.curSpeaker, e.curRole, e.curSide
+	e.stateMu.Unlock()
+	e.rend.SetState(speaker, role, side, s)
+}
+
+// userMsgTTL is how long a chat overlay stays on screen before vanishing.
+const userMsgTTL = 5 * time.Second
+
+// ShowUserMessage flashes a chat/viewer message on the video for a few
+// seconds without disturbing the active speaker subtitle.
+func (e *Encoder) ShowUserMessage(text string) {
+	e.rend.ShowUserMessage(text, userMsgTTL)
 }
 
 // frameLoop pushes one rendered frame per video tick into ffmpeg's stdin.
@@ -277,7 +234,7 @@ func (e *Encoder) frameLoop(ctx context.Context) {
 	}
 }
 
-// Close flushes audio + video, waits up to 2s for ffmpeg to exit, then SIGKILLs.
+// Close flushes video, waits up to 2s for ffmpeg to exit, then SIGKILLs.
 func (e *Encoder) Close() error {
 	e.writeMu.Lock()
 	if e.closed {
@@ -286,7 +243,6 @@ func (e *Encoder) Close() error {
 	}
 	e.closed = true
 	_ = e.videoIn.Close()
-	_ = e.audioIn.Close()
 	e.writeMu.Unlock()
 
 	select {
@@ -303,4 +259,40 @@ func (e *Encoder) closingByUs() bool {
 	e.writeMu.Lock()
 	defer e.writeMu.Unlock()
 	return e.closed
+}
+
+// videoCodecArgs picks the H.264 encoder ffmpeg should use. Default on macOS
+// is h264_videotoolbox (Apple's hardware encoder — runs on the media block,
+// near-zero CPU); everywhere else, libx264. Override with
+// DEBATE_BOT_VIDEO_CODEC=libx264|h264_videotoolbox if you want to force one.
+//
+// VideoToolbox doesn't accept libx264's -preset / -tune — we use -realtime 1
+// for low latency and a fixed bitrate target instead. -allow_sw 1 lets ffmpeg
+// fall back to software encoding inside videotoolbox if the GPU path fails
+// (e.g. running under Rosetta or in a constrained sandbox).
+func videoCodecArgs() (args []string, name string) {
+	choice := os.Getenv("DEBATE_BOT_VIDEO_CODEC")
+	if choice == "" {
+		if runtime.GOOS == "darwin" {
+			choice = "h264_videotoolbox"
+		} else {
+			choice = "libx264"
+		}
+	}
+	switch choice {
+	case "h264_videotoolbox":
+		return []string{
+			"-c:v", "h264_videotoolbox",
+			"-realtime", "1",
+			"-allow_sw", "1",
+			"-b:v", "2M",
+			"-profile:v", "high",
+		}, "h264_videotoolbox"
+	default:
+		return []string{
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-tune", "zerolatency",
+		}, "libx264"
+	}
 }

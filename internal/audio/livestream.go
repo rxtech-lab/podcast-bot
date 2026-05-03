@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,14 @@ import (
 	"sync"
 	"sync/atomic"
 )
+
+// inputBufferBytes is how many bytes of mp3 we let the producer race ahead of
+// realtime playback before its writes block. Azure TTS audio is 48 kbps mono,
+// so 90 KB ≈ 15 s of audio. The OS pipe alone is only ~16 KB on macOS, which
+// is too thin to absorb the LLM time-to-first-token + TTS first-byte latency
+// at turn boundaries; a 15 s headroom hides typical 1–2 s gaps without
+// pushing the chat-input echo delay too far out.
+const inputBufferBytes = 90 * 1024
 
 // LiveStream is a single-writer, many-reader MP3 broadcaster.
 //
@@ -26,12 +35,25 @@ type LiveStream struct {
 	stdout io.ReadCloser
 	log    *slog.Logger
 
+	inBuf *bufferedPipe // writer-side buffer in front of ffmpeg's stdin
+
+	// Byte counters used to align text overlays with audio playback. Producer
+	// writes can race ~15s ahead of realtime via inBuf; text events keyed off
+	// bytesWritten can be delayed by (bytesWritten-bytesPlayed)/audioBytesPerSec.
+	bytesWritten atomic.Uint64
+	bytesPlayed  atomic.Uint64
+
 	mu     sync.RWMutex
 	subs   map[uint64]*lsSub
 	nextID atomic.Uint64
 	closed atomic.Bool
 	done   chan struct{}
 }
+
+// AudioBytesPerSec is the constant byte rate of the LiveStream output. Azure
+// TTS sends audio-24khz-48kbitrate-mono-mp3 — 48 kbit/s = 6000 bytes/s — and
+// ffmpeg's `-c copy` preserves that rate.
+const AudioBytesPerSec = 6000
 
 type lsSub struct {
 	ch      chan []byte
@@ -69,26 +91,47 @@ func NewLiveStream(ctx context.Context, log *slog.Logger) (*LiveStream, error) {
 		subs:   map[uint64]*lsSub{},
 		done:   make(chan struct{}),
 	}
+	ls.inBuf = newBufferedPipe(stdin, inputBufferBytes)
 	go ls.pump()
 	return ls, nil
 }
 
-// Write forwards mp3 bytes to ffmpeg stdin. Safe for concurrent calls only if
-// the caller serialises writes (the pipeline uses a single producer goroutine).
+// Write forwards mp3 bytes to ffmpeg stdin via the in-process buffer. Safe
+// for concurrent calls only if the caller serialises writes (the pipeline
+// uses a single producer goroutine). Blocks once the buffer is full so the
+// producer can never race more than ~inputBufferBytes ahead of playback.
 func (l *LiveStream) Write(p []byte) (int, error) {
 	if l.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
-	return l.stdin.Write(p)
+	n, err := l.inBuf.Write(p)
+	if n > 0 {
+		l.bytesWritten.Add(uint64(n))
+	}
+	return n, err
 }
 
-// CloseInput signals end-of-stream to ffmpeg. The pump drains remaining bytes
-// then closes subscriber channels. Call once when the orchestrator finishes.
+// BytesAhead returns how many bytes the producer is ahead of playback. Used
+// by the pipeline to delay text-event publishing so subtitles align with the
+// audio the listener actually hears.
+func (l *LiveStream) BytesAhead() int64 {
+	w := l.bytesWritten.Load()
+	p := l.bytesPlayed.Load()
+	if w <= p {
+		return 0
+	}
+	return int64(w - p)
+}
+
+// CloseInput signals end-of-stream. The buffered pipe drains remaining bytes
+// to ffmpeg's stdin, then closes it; the pump drains ffmpeg's output and
+// closes subscriber channels. Call once when the orchestrator finishes.
 func (l *LiveStream) CloseInput() error {
 	if l.closed.Swap(true) {
 		return nil
 	}
-	return l.stdin.Close()
+	l.inBuf.Close()
+	return nil
 }
 
 // Subscribe returns a chunk channel and a cancel func. bufChunks is the number
@@ -117,6 +160,97 @@ func (l *LiveStream) Subscribe(bufChunks int) (<-chan []byte, func()) {
 // Done returns a channel closed when the pump exits (ffmpeg ended).
 func (l *LiveStream) Done() <-chan struct{} { return l.done }
 
+// bufferedPipe sits between the writer (debate pipeline) and the underlying
+// ffmpeg stdin pipe. It owns a bounded byte buffer; Write blocks when the
+// buffer is full, and a goroutine drains the buffer into the OS pipe (which
+// itself is paced by ffmpeg's `-re` realtime input clock). The point is to
+// give the producer enough headroom to fully synthesize the next turn while
+// the previous turn's audio is still draining, hiding LLM/TTS startup
+// latency that would otherwise be audible as silence between speakers.
+type bufferedPipe struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	buf    bytes.Buffer
+	maxLen int
+	closed bool
+	target io.WriteCloser
+	done   chan struct{}
+}
+
+func newBufferedPipe(target io.WriteCloser, maxLen int) *bufferedPipe {
+	bp := &bufferedPipe{maxLen: maxLen, target: target, done: make(chan struct{})}
+	bp.cond = sync.NewCond(&bp.mu)
+	go bp.drain()
+	return bp
+}
+
+// Write copies p into the bounded buffer. If the buffer is full, the call
+// blocks until the drainer makes space or Close is invoked.
+func (b *bufferedPipe) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	written := 0
+	for len(p) > 0 {
+		if b.closed {
+			return written, io.ErrClosedPipe
+		}
+		avail := b.maxLen - b.buf.Len()
+		if avail == 0 {
+			b.cond.Wait()
+			continue
+		}
+		n := min(len(p), avail)
+		_, _ = b.buf.Write(p[:n])
+		p = p[n:]
+		written += n
+		b.cond.Broadcast()
+	}
+	return written, nil
+}
+
+// Close marks the pipe closed; the drainer flushes any remaining bytes and
+// then closes the underlying target. Returns immediately; use the done
+// channel if you need to wait for the flush to finish.
+func (b *bufferedPipe) Close() {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	b.cond.Broadcast()
+	b.mu.Unlock()
+}
+
+func (b *bufferedPipe) drain() {
+	defer close(b.done)
+	defer func() { _ = b.target.Close() }()
+	chunk := make([]byte, 4096)
+	for {
+		b.mu.Lock()
+		for b.buf.Len() == 0 && !b.closed {
+			b.cond.Wait()
+		}
+		if b.buf.Len() == 0 && b.closed {
+			b.mu.Unlock()
+			return
+		}
+		n, _ := b.buf.Read(chunk)
+		b.cond.Broadcast()
+		b.mu.Unlock()
+		if n == 0 {
+			continue
+		}
+		if _, err := b.target.Write(chunk[:n]); err != nil {
+			b.mu.Lock()
+			b.closed = true
+			b.cond.Broadcast()
+			b.mu.Unlock()
+			return
+		}
+	}
+}
+
 // pump reads ffmpeg stdout and fans bytes out to every subscriber. Per-call
 // allocations are unavoidable (each sub gets its own slice) so subscribers
 // can drain independently without aliasing.
@@ -135,6 +269,7 @@ func (l *LiveStream) pump() {
 	for {
 		n, err := l.stdout.Read(buf)
 		if n > 0 {
+			l.bytesPlayed.Add(uint64(n))
 			l.mu.RLock()
 			for id, s := range l.subs {
 				chunk := make([]byte, n)

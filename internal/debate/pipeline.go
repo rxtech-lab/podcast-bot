@@ -222,15 +222,31 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if sent == "" {
 		return 0, nil
 	}
-	// Push transcript chunk to TUI / web subscribers as soon as we have it.
+	// Push transcript chunk to per-turn channel synchronously (used to build
+	// the persisted transcript line in updateMemories — order matters there).
 	select {
 	case t.TextOut <- sent:
 	default:
 	}
-	p.d.Send(TranscriptMsg{
+
+	// Bus event drives the live UI subtitle. The producer races up to the
+	// LiveStream's input buffer ahead of realtime playback; emitting the bus
+	// event synchronously makes the subtitle race ahead of the audio. Delay
+	// the publish by however far ahead this sentence's first audio byte will
+	// land — bytesAhead at this moment is exactly the playback offset of the
+	// next byte we're about to write.
+	msg := TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
 		Side: t.Speaker.Side(), Text: sent,
-	})
+	}
+	bytesAhead := p.d.LiveStream.BytesAhead()
+	delay := time.Duration(float64(bytesAhead) / float64(audio.AudioBytesPerSec) * float64(time.Second))
+	if delay <= 50*time.Millisecond {
+		p.d.Send(msg)
+	} else {
+		time.AfterFunc(delay, func() { p.d.Send(msg) })
+	}
+
 	body, err := p.d.TTS.SynthesizeStream(ctx, t.Speaker.Voice().ShortName, sent, p.d.Language)
 	if err != nil {
 		return 0, err

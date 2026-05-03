@@ -6,3 +6,5 @@ out
 frontend/node_modules
 frontend/dist
 internal/server/web-dist
+*.png
+.playwright-mcp

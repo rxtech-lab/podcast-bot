@@ -45,7 +45,7 @@ func usage() {
 
 usage:
   debate-bot run    --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr 127.0.0.1:0]
-  debate-bot server --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr :8080]
+  debate-bot server --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr :3000]
 
   run     starts the TUI and an embedded HTTP server; the TUI consumes the
           server over loopback. Audio plays via local ffplay.
@@ -154,7 +154,7 @@ func bootstrap(topicPath, mcpPath, outOverride, addr string) (*runtime, int) {
 	} else {
 		hlsDir = enc.HLSDir()
 		enc.AttachAudio(ctx, live)
-		stage := video.NewStage(enc)
+		stage := video.NewStage(enc, topic.Title)
 		go stage.Run(ctx, bus)
 	}
 
@@ -248,7 +248,7 @@ func serverCmd(args []string) int {
 	topicPath := fs.String("topic", "", "path to topic.md (required)")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
-	addr := fs.String("addr", ":8080", "HTTP listen address")
+	addr := fs.String("addr", ":3000", "HTTP listen address")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

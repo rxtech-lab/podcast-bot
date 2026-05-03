@@ -18,12 +18,12 @@ interface StatusBarProps {
 export function StatusBar({ phase, elapsedMs, remainingMs, status }: StatusBarProps) {
   const total = elapsedMs + remainingMs
   return (
-    <header className="flex items-center gap-6 px-4 py-2 bg-card border-b border-border text-xs text-muted-foreground">
-      <span>phase: {phase}</span>
-      <span>
+    <header className="flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-6 px-3 sm:px-4 py-2 bg-card border-b border-border text-xs text-muted-foreground">
+      <span className="truncate">phase: {phase}</span>
+      <span className="tabular-nums">
         {fmtMs(elapsedMs)} / {fmtMs(total)}
       </span>
-      <span className="ml-auto italic">{status}</span>
+      <span className="ml-auto italic truncate max-w-full sm:max-w-[40%]">{status}</span>
     </header>
   )
 }

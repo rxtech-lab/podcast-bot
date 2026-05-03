@@ -27,7 +27,7 @@ export function Chat({ history }: { history: ChatLine[] }) {
   }
 
   return (
-    <aside className="w-[360px] flex flex-col bg-card border-l border-border min-h-0">
+    <aside className="w-full md:w-[360px] md:flex-shrink-0 flex-1 md:flex-none flex flex-col bg-card border-t md:border-t-0 md:border-l border-border min-h-0">
       <h2 className="m-0 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground border-b border-border">
         chat
       </h2>

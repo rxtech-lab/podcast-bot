@@ -9,8 +9,13 @@ import (
 	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
-// Stage subscribes to the event bus and updates the encoder's renderer state
+// Stage subscribes to the event bus and drives the encoder's renderer state
 // so the live debate text shows up baked into the video stream.
+//
+// It owns three pieces of UI state:
+//   - the topic title (set once at construction)
+//   - the current phase (updated from PhaseMsg)
+//   - the active-speaker subtitle (built from TranscriptMsg)
 //
 // One Stage per Encoder. Cheap to construct; Run blocks until ctx is done.
 type Stage struct {
@@ -23,11 +28,15 @@ type Stage struct {
 	body       strings.Builder
 }
 
-// NewStage creates a Stage bound to enc.
-func NewStage(enc *Encoder) *Stage { return &Stage{enc: enc} }
+// NewStage creates a Stage bound to enc and primes the topic title shown at
+// the top of the video.
+func NewStage(enc *Encoder, topicTitle string) *Stage {
+	enc.SetTopic(topicTitle)
+	return &Stage{enc: enc}
+}
 
-// Run subscribes to bus and dispatches transcript events. Returns when ctx is
-// cancelled or the bus closes.
+// Run subscribes to bus and dispatches transcript + phase events. Returns
+// when ctx is cancelled or the bus closes.
 func (s *Stage) Run(ctx context.Context, bus *eventbus.Bus) {
 	ch, cancel := bus.Subscribe(128)
 	defer cancel()
@@ -39,14 +48,27 @@ func (s *Stage) Run(ctx context.Context, bus *eventbus.Bus) {
 			if !ok {
 				return
 			}
-			if m, ok := v.(debate.TranscriptMsg); ok {
+			switch m := v.(type) {
+			case debate.TranscriptMsg:
 				s.handleTranscript(m)
+			case debate.PhaseMsg:
+				s.enc.SetPhase(m.Phase.String())
 			}
 		}
 	}
 }
 
 func (s *Stage) handleTranscript(m debate.TranscriptMsg) {
+	// Chat lines from the user role are routed to the transient overlay so
+	// they appear briefly without replacing the speaker subtitle. The
+	// orchestrator emits them via PushUserMessage with Role="user".
+	if string(m.Role) == "user" {
+		if m.Text != "" {
+			s.enc.ShowUserMessage(m.Text)
+		}
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -61,14 +83,71 @@ func (s *Stage) handleTranscript(m debate.TranscriptMsg) {
 		s.curSide = m.Side
 		s.body.Reset()
 		s.enc.SetSpeaker(m.Speaker, string(m.Role), m.Side)
-		_ = s.enc.UpdateBody("")
+		s.enc.SetBody("")
 	}
 
 	if m.Text != "" {
-		if s.body.Len() > 0 {
+		// CJK text comes in without spaces between sentences; only inject a
+		// separator when the existing buffer ends in non-CJK content.
+		if s.body.Len() > 0 && needsSeparator(s.body.String(), m.Text) {
 			s.body.WriteByte(' ')
 		}
 		s.body.WriteString(m.Text)
-		_ = s.enc.UpdateBody(s.body.String())
+		s.enc.SetBody(s.body.String())
 	}
+}
+
+// needsSeparator decides whether to insert a space between two transcript
+// fragments. Latin sentences need a space; CJK runs do not.
+func needsSeparator(prev, next string) bool {
+	if prev == "" || next == "" {
+		return false
+	}
+	last := lastRune(prev)
+	first := firstRune(next)
+	if isCJKRune(last) || isCJKRune(first) {
+		return false
+	}
+	return true
+}
+
+func lastRune(s string) rune {
+	if s == "" {
+		return 0
+	}
+	r, _ := decodeLastRune(s)
+	return r
+}
+
+func firstRune(s string) rune {
+	for _, r := range s {
+		return r
+	}
+	return 0
+}
+
+func decodeLastRune(s string) (rune, int) {
+	for i := len(s) - 1; i >= 0; i-- {
+		if (s[i] & 0xc0) != 0x80 {
+			r := []rune(s[i:])
+			if len(r) == 0 {
+				return 0, 0
+			}
+			return r[0], len(s) - i
+		}
+	}
+	return 0, 0
+}
+
+func isCJKRune(r rune) bool {
+	switch {
+	case r >= 0x3000 && r <= 0x303f,
+		r >= 0x3400 && r <= 0x4dbf,
+		r >= 0x4e00 && r <= 0x9fff,
+		r >= 0xff00 && r <= 0xffef,
+		r >= 0x3040 && r <= 0x30ff,
+		r >= 0xac00 && r <= 0xd7af:
+		return true
+	}
+	return false
 }

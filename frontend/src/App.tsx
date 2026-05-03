@@ -26,7 +26,7 @@ function App() {
         remainingMs={remainingMs}
         status={status}
       />
-      <main className="flex-1 flex min-h-0">
+      <main className="flex-1 flex flex-col md:flex-row min-h-0">
         <VideoStage />
         <Chat history={history} />
       </main>
