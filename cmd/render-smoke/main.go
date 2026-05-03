@@ -34,6 +34,11 @@ func main() {
 		userMsg  string
 		elapsed  time.Duration
 		total    time.Duration
+		// stageElapsed simulates time since the most recent idle↔active
+		// transition. <0 leaves the renderer's modeStart untouched (pre-
+		// transition idle); 0 means transition just began (will look idle for
+		// active states); >= stageTransitionDuration means fully settled.
+		stageElapsed time.Duration
 	}{
 		{
 			name:  "01-idle",
@@ -54,7 +59,7 @@ func main() {
 		{
 			name:    "03-negative-zh-long",
 			topic:   "AI 是否會取代程序員",
-			phase:   "free-speech",
+			phase:   "free-debate",
 			speaker: "Linda",
 			role:    "negative",
 			side:    "negative",
@@ -82,7 +87,7 @@ func main() {
 		{
 			name:    "06-user-overlay-zh",
 			topic:   "AI 是否會取代程序員",
-			phase:   "free-speech",
+			phase:   "free-debate",
 			speaker: "Carol",
 			role:    "affirmative",
 			side:    "affirmative",
@@ -97,11 +102,51 @@ func main() {
 			phase:   "opening",
 			userMsg: "Hello panel — can you address the impact on entry-level hiring?",
 		},
+		// 08, 09, 10 — three samples along the idle→active transition curve so
+		// we can eyeball the magic-move + crossfade.
+		{
+			name:         "08-transition-25",
+			topic:        "AI 是否會取代程序員",
+			phase:        "opening",
+			speaker:      "Alice",
+			role:         "affirmative",
+			side:         "affirmative",
+			body:         "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
+			stageElapsed: 150 * time.Millisecond,
+		},
+		{
+			name:         "09-transition-50",
+			topic:        "AI 是否會取代程序員",
+			phase:        "opening",
+			speaker:      "Alice",
+			role:         "affirmative",
+			side:         "affirmative",
+			body:         "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
+			stageElapsed: 300 * time.Millisecond,
+		},
+		{
+			name:         "10-transition-75",
+			topic:        "AI 是否會取代程序員",
+			phase:        "opening",
+			speaker:      "Alice",
+			role:         "affirmative",
+			side:         "affirmative",
+			body:         "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
+			stageElapsed: 450 * time.Millisecond,
+		},
 	}
 
+	// Default smoke frames render the settled end-state of any transition
+	// they trigger. Cases that explicitly set stageElapsed override this.
+	const settledStage = 2 * time.Second
+
 	for _, c := range cases {
+		stage := c.stageElapsed
+		if stage == 0 {
+			stage = settledStage
+		}
 		path := fmt.Sprintf("%s/%s.png", *out, c.name)
-		if err := writeFrame(path, c.topic, c.phase, c.speaker, c.role, c.side, c.body, c.userMsg, c.elapsed, c.total); err != nil {
+		if err := writeFrame(path, c.topic, c.phase, c.speaker, c.role, c.side, c.body, c.userMsg, c.elapsed, c.total, stage); err != nil {
 			fmt.Fprintln(os.Stderr, c.name, err)
 			os.Exit(1)
 		}
@@ -109,7 +154,7 @@ func main() {
 	}
 }
 
-func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string, elapsed, total time.Duration) error {
+func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string, elapsed, total, stageElapsed time.Duration) error {
 	rend, err := video.NewRendererForTest(1280, 720)
 	if err != nil {
 		return err
@@ -126,6 +171,15 @@ func writeFrame(path, topic, phase, speaker, role, side, body, userMsg string, e
 	}
 	if userMsg != "" {
 		rend.ShowUserMessage(userMsg, 30*time.Second)
+		// Backdate the start so the smoke frame catches the ticker mid-scroll
+		// — at t=0 the text would still be off the right edge.
+		rend.AdvanceUserMessageForTest(5 * time.Second)
+	}
+	// Walk the renderer forward through the stage transition by the requested
+	// amount so the frame captures either the settled state (default) or a
+	// specific point along the easing curve.
+	if stageElapsed > 0 {
+		rend.AdvanceStageForTest(stageElapsed)
 	}
 
 	pix := rend.Frame()

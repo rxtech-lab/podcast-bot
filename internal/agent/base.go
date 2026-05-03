@@ -69,6 +69,22 @@ func (b *Base) Tools() *tools.Registry {
 }
 func (b *Base) Memory() *memory.Memory { return b.mem }
 
+// MemoryRead returns the agent's memory.md contents for inclusion in the next
+// SpeakPrompt. Read errors are swallowed (returning "") because a missing or
+// unreadable memory file should not abort a turn — the prompt simply falls
+// back to "(empty)". The pipeline calls this through an interface assertion
+// (interface{ MemoryRead() string }), so the signature must stay exactly this.
+func (b *Base) MemoryRead() string {
+	if b.mem == nil {
+		return ""
+	}
+	s, err := b.mem.Read()
+	if err != nil {
+		return ""
+	}
+	return s
+}
+
 // AgentName implements tools.AgentContext (called from Tool implementations).
 func (b *Base) AgentName() string { return b.name }
 

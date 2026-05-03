@@ -4,7 +4,7 @@ FRONTEND  := frontend
 EMBED_DIR := internal/server/web-dist
 BIN_DIR   := bin
 
-.PHONY: all build frontend backend run dev clean tidy
+.PHONY: all build frontend backend run dev clean tidy gen-assets
 
 all: build
 
@@ -35,6 +35,12 @@ dev:
 tidy:
 	go mod tidy
 	cd $(FRONTEND) && bun install
+
+# Regenerate the embedded TV-studio plates via the Vercel AI Gateway image
+# endpoint. Reads OPENAI_API_KEY (vck_…) from .env. Run when you want a fresh
+# look — the resulting PNGs are committed under internal/video/assets/.
+gen-assets:
+	go run ./cmd/gen-assets
 
 clean:
 	rm -rf $(BIN_DIR) $(EMBED_DIR) $(FRONTEND)/dist $(FRONTEND)/node_modules

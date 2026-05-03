@@ -24,6 +24,15 @@ const (
 	TTSProviderEleven = "eleven"
 )
 
+// Output resolutions selectable from topic.md `resolution:` field. The renderer
+// always composites at 1280×720; ffmpeg upscales to the chosen size with a
+// Lanczos filter so streams can target higher-resolution clients.
+const (
+	Resolution720p  = "720p"
+	Resolution1080p = "1080p"
+	Resolution4K    = "4k"
+)
+
 // Topic is the full topic.md content: YAML frontmatter + named markdown sections.
 type Topic struct {
 	Title             string      `yaml:"title"`
@@ -31,6 +40,7 @@ type Topic struct {
 	TotalMinutes      int         `yaml:"total_minutes"`
 	SegmentMaxSeconds int         `yaml:"segment_max_seconds"`
 	TTSProvider       string      `yaml:"tts_provider,omitempty"`
+	Resolution        string      `yaml:"resolution,omitempty"`
 	Affirmative       []AgentSpec `yaml:"affirmative"`
 	Negative          []AgentSpec `yaml:"negative"`
 	Judge             AgentSpec   `yaml:"judge"`
@@ -72,6 +82,9 @@ func LoadTopic(path string) (*Topic, error) {
 	}
 	if t.TTSProvider == "" {
 		t.TTSProvider = TTSProviderAzure
+	}
+	if t.Resolution == "" {
+		t.Resolution = Resolution720p
 	}
 	return &t, nil
 }
@@ -144,6 +157,12 @@ func validateTopic(t *Topic) error {
 	default:
 		return fmt.Errorf("tts_provider must be %q or %q (got %q)",
 			TTSProviderAzure, TTSProviderEleven, t.TTSProvider)
+	}
+	switch t.Resolution {
+	case "", Resolution720p, Resolution1080p, Resolution4K:
+	default:
+		return fmt.Errorf("resolution must be one of %q, %q, %q (got %q)",
+			Resolution720p, Resolution1080p, Resolution4K, t.Resolution)
 	}
 	if len(t.Affirmative) == 0 {
 		return fmt.Errorf("at least one affirmative candidate required")

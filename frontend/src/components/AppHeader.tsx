@@ -15,7 +15,7 @@ function fmtMs(ms: number): string {
 const phaseLabel: Record<string, string> = {
   setup: 'setting up',
   opening: 'opening statements',
-  'free-speech': 'free discussion',
+  'free-debate': 'free debate',
   closing: 'closing statements',
   verdict: "judge's verdict",
   conclusion: 'conclusion',
@@ -27,7 +27,7 @@ const phaseStyle: Record<string, string> = {
     'bg-muted/60 text-muted-foreground ring-border',
   opening:
     'bg-sky-500/15 text-sky-300 ring-sky-500/30',
-  'free-speech':
+  'free-debate':
     'bg-violet-500/15 text-violet-300 ring-violet-500/30',
   closing:
     'bg-amber-500/15 text-amber-300 ring-amber-500/30',

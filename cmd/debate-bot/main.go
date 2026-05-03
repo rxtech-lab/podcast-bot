@@ -273,7 +273,19 @@ func bootstrap(topicSpecs []string, mcpPath, outOverride, addr string) (*runtime
 		enc    *video.Encoder
 		hlsDir string
 	)
-	enc, err = video.New(ctx, env.OutDir, log)
+	// All queued topics share the same encoder, so pick the resolution from
+	// the first topic. Mixed resolutions in a queue aren't supported — flag
+	// any divergence so it's obvious why later topics didn't change the size.
+	res := video.Resolution(topics[0].topic.Resolution)
+	for _, t := range topics[1:] {
+		if t.topic.Resolution != topics[0].topic.Resolution {
+			log.Warn("topic resolution mismatch — using first topic's value",
+				"using", topics[0].topic.Resolution,
+				"ignored", t.topic.Resolution,
+				"topic", t.id)
+		}
+	}
+	enc, err = video.New(ctx, env.OutDir, res, log)
 	if err != nil {
 		log.Warn("video encoder disabled", "err", err)
 		fmt.Fprintln(os.Stderr, "video disabled:", err)

@@ -71,12 +71,25 @@ export function VideoStage({ phase }: VideoStageProps) {
     let hls: Hls | null = null
     let cancelled = false
 
+    // Browsers block autoplay-with-audio until there's a user gesture, so the
+    // initial play() call frequently rejects on cold load. Register a one-shot
+    // global listener that retries play() the first time the user presses any
+    // key or clicks anywhere — typing "Enter" in the chat counts.
+    const tryPlay = () => player.play().catch(() => {})
+    const onFirstGesture = () => {
+      tryPlay()
+      window.removeEventListener('keydown', onFirstGesture)
+      window.removeEventListener('pointerdown', onFirstGesture)
+    }
+    window.addEventListener('keydown', onFirstGesture)
+    window.addEventListener('pointerdown', onFirstGesture)
+
     if (Hls.isSupported()) {
       hls = new Hls({ liveSyncDurationCount: 3, enableWorker: true })
       hls.loadSource(HLS_URL)
       hls.attachMedia(player)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (!cancelled) player.play().catch(() => {})
+        if (!cancelled) tryPlay()
       })
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data.fatal) {
@@ -89,7 +102,7 @@ export function VideoStage({ phase }: VideoStageProps) {
       })
     } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
       player.src = HLS_URL
-      player.play().catch(() => {})
+      tryPlay()
     } else {
       setDegraded(true)
       setMode('audio-fallback')
@@ -97,6 +110,8 @@ export function VideoStage({ phase }: VideoStageProps) {
 
     return () => {
       cancelled = true
+      window.removeEventListener('keydown', onFirstGesture)
+      window.removeEventListener('pointerdown', onFirstGesture)
       if (hls) hls.destroy()
     }
   }, [mode])

@@ -102,67 +102,16 @@ func (s *Stage) handleTranscript(m debate.TranscriptMsg) {
 	}
 
 	if m.Text != "" {
-		// CJK text comes in without spaces between sentences; only inject a
-		// separator when the existing buffer ends in non-CJK content.
-		if s.body.Len() > 0 && needsSeparator(s.body.String(), m.Text) {
-			s.body.WriteByte(' ')
-		}
+		// Each TranscriptMsg is scheduled by the producer (pipeline.synthSentence)
+		// to fire when this sentence's first audio byte is about to play, so the
+		// subtitle follows the audio if we REPLACE the visible body each time
+		// instead of appending. With the renderer's page-based subtitle, this
+		// means viewers see exactly the sentence they're currently hearing.
+		// (The cumulative transcript that gets persisted to disk is built from
+		// t.TextOut in updateMemories — independent of what we display here.)
+		s.body.Reset()
 		s.body.WriteString(m.Text)
 		s.enc.SetBody(s.body.String())
 	}
 }
 
-// needsSeparator decides whether to insert a space between two transcript
-// fragments. Latin sentences need a space; CJK runs do not.
-func needsSeparator(prev, next string) bool {
-	if prev == "" || next == "" {
-		return false
-	}
-	last := lastRune(prev)
-	first := firstRune(next)
-	if isCJKRune(last) || isCJKRune(first) {
-		return false
-	}
-	return true
-}
-
-func lastRune(s string) rune {
-	if s == "" {
-		return 0
-	}
-	r, _ := decodeLastRune(s)
-	return r
-}
-
-func firstRune(s string) rune {
-	for _, r := range s {
-		return r
-	}
-	return 0
-}
-
-func decodeLastRune(s string) (rune, int) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if (s[i] & 0xc0) != 0x80 {
-			r := []rune(s[i:])
-			if len(r) == 0 {
-				return 0, 0
-			}
-			return r[0], len(s) - i
-		}
-	}
-	return 0, 0
-}
-
-func isCJKRune(r rune) bool {
-	switch {
-	case r >= 0x3000 && r <= 0x303f,
-		r >= 0x3400 && r <= 0x4dbf,
-		r >= 0x4e00 && r <= 0x9fff,
-		r >= 0xff00 && r <= 0xffef,
-		r >= 0x3040 && r <= 0x30ff,
-		r >= 0xac00 && r <= 0xd7af:
-		return true
-	}
-	return false
-}

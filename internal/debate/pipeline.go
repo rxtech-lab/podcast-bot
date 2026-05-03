@@ -32,6 +32,16 @@ type Deps struct {
 	LiveStream *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
 }
 
+// subtitleClientLatency compensates for buffering that happens after the
+// LiveStream's stdout — primarily the browser MediaSource source buffer
+// (~1.5s on Chromium for low-bitrate MP3) and any OS audio buffering. The
+// renderer's TranscriptMsg dispatch is delayed by bytesAhead/rate +
+// subtitleClientLatency so the subtitle change lands when the listener
+// actually starts hearing the new sentence.
+//
+// Tune up if subtitles still beat the audio; tune down if subtitles lag.
+const subtitleClientLatency = 1500 * time.Millisecond
+
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
@@ -72,7 +82,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	var files []string
 	var filesMu sync.Mutex
 	// Track phase transitions so subscribers see PhaseMsg as the planner moves
-	// from opening → free-speech → closing → verdict → conclusion → ended.
+	// from opening → free-debate → closing → verdict → conclusion → ended.
 	// (Without this the UI is stuck on whatever phase Setup announced.)
 	lastPhase := agent.PhaseSetup
 	go func() {
@@ -234,13 +244,18 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// event synchronously makes the subtitle race ahead of the audio. Delay
 	// the publish by however far ahead this sentence's first audio byte will
 	// land — bytesAhead at this moment is exactly the playback offset of the
-	// next byte we're about to write.
+	// *next* byte we're about to write at the ffmpeg-stdout boundary.
+	//
+	// We also add subtitleClientLatency to account for buffering downstream of
+	// ffmpeg (browser MediaSource source buffer, ffplay decode pipeline, OS
+	// audio buffer). Without it the subtitle still beats the audio by
+	// roughly that amount because BytesAhead can't see past stdout.
 	msg := TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
 		Side: t.Speaker.Side(), Text: sent,
 	}
 	bytesAhead := p.d.LiveStream.BytesAhead()
-	delay := time.Duration(float64(bytesAhead) / float64(audio.AudioBytesPerSec) * float64(time.Second))
+	delay := time.Duration(float64(bytesAhead)/float64(audio.AudioBytesPerSec)*float64(time.Second)) + subtitleClientLatency
 	if delay <= 50*time.Millisecond {
 		p.d.Send(msg)
 	} else {

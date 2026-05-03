@@ -50,7 +50,7 @@ func (p Phase) String() string {
 	case PhaseOpening:
 		return "opening"
 	case PhaseFreeSpeech:
-		return "free-speech"
+		return "free-debate"
 	case PhaseClosing:
 		return "closing"
 	case PhaseVerdict:

@@ -9,3 +9,5 @@ internal/server/web-dist
 *.png
 .playwright-mcp
 topics/*.md
+!internal/video/assets/*.png
+gen-assets

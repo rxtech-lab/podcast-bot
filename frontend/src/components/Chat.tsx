@@ -1,22 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChatCircleDots, PaperPlaneTilt } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { ChatMessage } from '@/components/ChatMessage'
 import { sendMessage } from '@/lib/api'
 import type { ChatLine } from '@/lib/types'
 
+// Soft cap on the textarea height: about 6 lines of body text. Anything
+// longer scrolls within the textarea instead of pushing the chat list
+// off-screen.
+const TEXTAREA_MAX_HEIGHT_PX = 160
+
 export function Chat({ history }: { history: ChatLine[] }) {
   const [draft, setDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [history.length])
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  // Auto-grow the textarea as the user types newlines (and shrink back when
+  // the draft is cleared). Cap the height; the textarea's own scrollbar
+  // takes over past that.
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, TEXTAREA_MAX_HEIGHT_PX)}px`
+  }, [draft])
+
+  const submit = async () => {
     const text = draft.trim()
     if (!text) return
     setDraft('')
@@ -25,6 +39,19 @@ export function Chat({ history }: { history: ChatLine[] }) {
     } catch (err) {
       console.warn('send failed', err)
     }
+  }
+
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    void submit()
+  }
+
+  // Enter sends; Shift+Enter inserts a newline. IME composition (e.g. Chinese
+  // input) suppresses the send so the user can still confirm candidates.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+    e.preventDefault()
+    void submit()
   }
 
   return (
@@ -75,15 +102,18 @@ export function Chat({ history }: { history: ChatLine[] }) {
 
       <form
         onSubmit={onSubmit}
-        className="flex items-center gap-2 p-3 border-t border-border/40 bg-card/40"
+        className="flex items-end gap-2 p-3 border-t border-border/40 bg-card/40"
       >
-        <Input
+        <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
           maxLength={500}
+          rows={1}
           autoComplete="off"
-          placeholder="say something… (/end to wrap up)"
-          className="flex-1"
+          placeholder="say something… (Shift+Enter for newline · /end to wrap up)"
+          className="flex-1 min-h-9 resize-none rounded-2xl border border-input bg-input/30 px-3 py-2 text-base leading-snug outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm"
         />
         <Button
           type="submit"

@@ -226,7 +226,7 @@ func parsePhase(s string) agent.Phase {
 		return agent.PhaseSetup
 	case "opening":
 		return agent.PhaseOpening
-	case "free-speech":
+	case "free-debate":
 		return agent.PhaseFreeSpeech
 	case "closing":
 		return agent.PhaseClosing

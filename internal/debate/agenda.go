@@ -11,6 +11,13 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 )
 
+// userDebounceWindow is how long the planner waits after seeing a queued user
+// message before pulling the rest of the queue. It exists so a user firing off
+// several short messages in a row triggers one combined host address-user turn
+// (followed by a single rebuttal exchange) rather than a separate host+candidate
+// ping-pong per message.
+const userDebounceWindow = 1500 * time.Millisecond
+
 // userQueue is a thread-safe FIFO of user input strings (and the `/end` sentinel).
 type userQueue struct {
 	mu  sync.Mutex
@@ -51,7 +58,7 @@ type plannerState struct {
 	phase          agent.Phase
 	openingIdx     int  // 0..(maxSide*2-1) — alternating
 	openingSent    bool // whether host intro has been emitted
-	freeSpeechIdx  int  // counter for who speaks next in free speech
+	freeDebateIdx  int  // counter for who speaks next in free debate
 	affRRIdx       int  // round-robin cursor inside the affirmative side
 	negRRIdx       int  // round-robin cursor inside the negative side
 	closingIdx     int
@@ -89,6 +96,19 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 
 	// User questions take priority; weave in via host.
 	if len(queued) > 0 && !p.state.endRequested {
+		// Debounce: wait briefly and drain again so messages typed in rapid
+		// succession collapse into a single host address-user turn instead of
+		// kicking off a separate host+aff+host+neg ping-pong for each one.
+		debounceCtx, cancel := context.WithTimeout(ctx, userDebounceWindow)
+		<-debounceCtx.Done()
+		cancel()
+		more, e := p.queue.drain()
+		if len(more) > 0 {
+			queued = append(queued, more...)
+		}
+		if e {
+			p.state.endRequested = true
+		}
 		text := strings.Join(queued, " | ")
 		return p.makeTurn(p.registry.Host, "address-user:"+text, p.budgetSeconds(20)), true
 	}
@@ -101,7 +121,7 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 			p.state.phase = agent.PhaseClosing
 			return p.makeTurn(p.registry.Host, "transition:closing-statements", p.budgetSeconds(15)), true
 		}
-		return p.planFreeSpeech(ctx)
+		return p.planFreeDebate(ctx)
 	case agent.PhaseClosing:
 		return p.planClosing()
 	case agent.PhaseVerdict:
@@ -128,7 +148,7 @@ func (p *Planner) planOpening() (*Turn, bool) {
 	total := len(p.topic.Affirmative) + len(p.topic.Negative)
 	if p.state.openingIdx >= total {
 		p.state.phase = agent.PhaseFreeSpeech
-		return p.makeTurn(p.registry.Host, "transition:free-speech", p.budgetSeconds(15)), true
+		return p.makeTurn(p.registry.Host, "transition:free-debate", p.budgetSeconds(15)), true
 	}
 	idx := p.state.openingIdx
 	p.state.openingIdx++
@@ -141,10 +161,10 @@ func (p *Planner) planOpening() (*Turn, bool) {
 	return p.makeTurn(ag, "opening", p.segmentSeconds()), true
 }
 
-// planFreeSpeech alternates sides, occasionally letting a viewer interject.
-func (p *Planner) planFreeSpeech(ctx context.Context) (*Turn, bool) {
-	idx := p.state.freeSpeechIdx
-	p.state.freeSpeechIdx++
+// planFreeDebate alternates sides, occasionally letting a viewer interject.
+func (p *Planner) planFreeDebate(ctx context.Context) (*Turn, bool) {
+	idx := p.state.freeDebateIdx
+	p.state.freeDebateIdx++
 
 	// Every 3rd inter-segment slot, probe viewers in parallel.
 	if idx > 0 && idx%3 == 0 && len(p.registry.Viewers) > 0 {

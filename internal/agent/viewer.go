@@ -34,7 +34,7 @@ type AskDecision struct {
 }
 
 // WantsToAsk asks the viewer's LLM whether it wants to interject right now.
-// Used by the agenda planner during free speech.
+// Used by the agenda planner during free debate.
 func (v *Viewer) WantsToAsk(ctx context.Context, recent []TranscriptLine) (AskDecision, error) {
 	system := fmt.Sprintf(`You are %s, an audience member at a debate. Decide whether to raise your hand for a brief question.
 Reply STRICTLY as JSON: {"ask": bool, "question": "<short question, empty if ask=false>", "target": "<candidate name or empty>"}.

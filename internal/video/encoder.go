@@ -29,12 +29,38 @@ import (
 )
 
 const (
+	// Internal compositing resolution. The Go renderer always paints into a
+	// 1280×720 RGBA buffer; ffmpeg's scale filter resamples to the encoder's
+	// chosen output size (see Resolution / outputDims).
 	videoWidth    = 1280
 	videoHeight   = 720
 	videoFPS      = 15
 	hlsSegmentSec = 2
 	hlsListSize   = 6
 )
+
+// Resolution is the encoder's output resolution. The renderer composites at
+// 1280×720 regardless; ffmpeg upscales to outputDims().
+type Resolution string
+
+const (
+	Resolution720p  Resolution = "720p"
+	Resolution1080p Resolution = "1080p"
+	Resolution4K    Resolution = "4k"
+)
+
+// outputDims returns the (width, height) the encoder should emit for the
+// requested resolution. Unknown / empty values fall back to 720p.
+func outputDims(r Resolution) (int, int) {
+	switch r {
+	case Resolution1080p:
+		return 1920, 1080
+	case Resolution4K:
+		return 3840, 2160
+	default:
+		return videoWidth, videoHeight
+	}
+}
 
 // Encoder owns the ffmpeg process, the in-process frame compositor, and the
 // HLS output directory.
@@ -62,8 +88,10 @@ type Encoder struct {
 }
 
 // New starts the encoder. sessionDir is where HLS segments + the ffmpeg
-// stderr log are written.
-func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, error) {
+// stderr log are written. res selects the output resolution; the renderer
+// always composites at 1280×720 and ffmpeg's scale filter upsamples.
+func New(ctx context.Context, sessionDir string, res Resolution, log *slog.Logger) (*Encoder, error) {
+	outW, outH := outputDims(res)
 	hlsDir := filepath.Join(sessionDir, "hls")
 	if err := os.MkdirAll(hlsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("hls dir: %w", err)
@@ -102,6 +130,12 @@ func New(ctx context.Context, sessionDir string, log *slog.Logger) (*Encoder, er
 		"-i", "pipe:3",
 	}
 	args = append(args, codecArgs...)
+	if outW != videoWidth || outH != videoHeight {
+		// Upscale the 1280×720 composite to the requested output resolution.
+		// Lanczos preserves text edges noticeably better than the default
+		// bicubic at 1.5×/3× upscales.
+		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=lanczos", outW, outH))
+	}
 	args = append(args,
 		"-pix_fmt", "yuv420p",
 		"-g", fmt.Sprintf("%d", videoFPS*hlsSegmentSec),
