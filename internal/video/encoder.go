@@ -34,7 +34,7 @@ const (
 	// chosen output size (see Resolution / outputDims).
 	videoWidth    = 1280
 	videoHeight   = 720
-	videoFPS      = 15
+	videoFPS      = 30
 	hlsSegmentSec = 2
 	hlsListSize   = 6
 )
