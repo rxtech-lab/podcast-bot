@@ -35,12 +35,12 @@ func (r *Renderer) framePuzzle(
 var hboGold = color.RGBA{0xc8, 0xa4, 0x5a, 0xff}
 
 // puzzleSubtitleMaxLines caps the visible row count of the puzzle
-// subtitle quote card. 1–2-line bodies get a card sized snugly to the
-// wrapped text and don't scroll; bodies that wrap to more rows clip to
-// this cap and auto-scroll vertically the way drawSubtitle does for the
-// debate layout. Two lines is the sweet spot for HBO-style cinematic
-// subtitles — readable in a glance, no third row competing for the eye.
-const puzzleSubtitleMaxLines = 2
+// subtitle quote card to a single row — single-line cinematic captions
+// with the speaker plate stacked above. Bodies that wrap to more rows
+// clip to one row visually and auto-scroll vertically via
+// drawHBOSubtitleBody so the rest of the passage glides through that
+// single line without ever growing the chrome.
+const puzzleSubtitleMaxLines = 1
 
 // drawPuzzleOverlay paints the HBO reality-show layout on top of the
 // scene bg already in img:
@@ -100,45 +100,52 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 		blitWithGlobalAlphaAt(img, pill, 0, letterboxH+12, 1)
 	}
 
-	// HBO lower-third name plate + quote card. Both anchored above the
-	// bottom letterbox bar so the chrome reads as one stacked block.
+	// HBO lower-third name plate + quote card. Stacked above the bottom
+	// letterbox bar with the name plate ON TOP of the subtitle card so a
+	// viewer sees "who's talking" before the words land. The card only
+	// renders when there's actual body text — otherwise the lower-third
+	// floats alone above the letterbox so the bottom of the frame doesn't
+	// carry an empty slab during inter-sentence gaps.
 	const (
 		ltMarginX = 80
 		ltW       = 420
 		ltH       = 86
 		ltGoldW   = 6 // vertical gold flag width
+		ltGap     = 14
 	)
 	bottomBarTop := r.height - letterboxH
-	ltTop := bottomBarTop - 18 - ltH
 	ltLeft := ltMarginX
 
-	// Quote card spans the full content width — the speaker name is in
-	// the lower-third below, so the card only carries the spoken line.
 	qcLeft := ltMarginX
 	qcRight := r.width - ltMarginX
-	qcBot := ltTop - 22
 
 	switch {
 	case speaker != "":
-		// Auto-fit the card to the wrapped body height so a one-line
-		// "是。但更精确地说……" doesn't sit inside an oversized slab. Cap
-		// at puzzleSubtitleMaxLines rows so longer passages clip to a
-		// 2-line card and rely on drawHBOSubtitleBody's vertical scroll
-		// for overflow.
-		cardH := subtitleCardHeight(r.bodyFace, body, qcLeft, qcRight)
-		qcTop := qcBot - cardH
+		hasBody := strings.TrimSpace(body) != ""
 
-		// Quote card chrome: solid black slab + thin gold top rule.
-		drawHBOQuoteCard(img, qcLeft, qcTop, qcRight, qcBot)
-		// Body text fills the full chrome rect (no tag-pill reservation,
-		// no centered inner box) so wrapping uses the available width and
-		// 4+ lines fit before scroll kicks in.
-		drawHBOSubtitleBody(img, r.bodyFace, body,
-			qcLeft, qcTop, qcRight, qcBot,
-			bodyFG, bodyStart, bodyDur)
+		var ltTop int
+		if hasBody {
+			// Auto-fit the card to the wrapped body height so a one-line
+			// "是。但更精確地說……" doesn't sit inside an oversized slab.
+			// Card anchors at the bottom (just above the letterbox); the
+			// lower-third floats above it with a small gap.
+			cardH := subtitleCardHeight(r.bodyFace, body, qcLeft, qcRight)
+			qcBot := bottomBarTop - 18
+			qcTop := qcBot - cardH
 
-		// Lower-third name plate (HBO-style "name + role" with a gold
-		// flag accent on the left).
+			drawHBOQuoteCard(img, qcLeft, qcTop, qcRight, qcBot)
+			drawHBOSubtitleBody(img, r.bodyFace, body,
+				qcLeft, qcTop, qcRight, qcBot,
+				bodyFG, bodyStart, bodyDur)
+
+			ltTop = qcTop - ltGap - ltH
+		} else {
+			// No body → no chrome. Park the name plate where the card's
+			// bottom edge would have been so the speaker label stays at
+			// roughly the same eye-line and doesn't pop on every gap.
+			ltTop = bottomBarTop - 18 - ltH
+		}
+
 		drawHBOLowerThird(img, ltLeft, ltTop, ltLeft+ltW, ltTop+ltH,
 			ltGoldW, speaker, hboPuzzleRoleLabel(role),
 			r.tagFace, r.panelPosFace)
@@ -256,9 +263,11 @@ func drawHBOQuoteCard(dst *image.RGBA, x0, y0, x1, y1 int) {
 // drawHBOSubtitleBody paints wrapped body text inside the puzzle's quote
 // card. Unlike drawSubtitle (which auto-sizes a small inner content box
 // and reserves space for a role pill), this fills the full chrome rect
-// with body text, top-anchored. Long passages auto-scroll vertically the
-// same way the debate subtitle does — scroll start is aligned with the
-// audio duration so motion lands in the second half of playback.
+// with body text, top-anchored. Long passages auto-scroll vertically with
+// stepped jumps: with n wrapped lines and maxLines visible at once, the
+// audio duration is split into (n - maxLines) equal slots, and each slot
+// boundary advances the scroll by one line so each line dwells for
+// audioDuration/(n - maxLines).
 func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	x0, y0, x1, y1 int, fg color.RGBA,
 	bodyStart time.Time, bodyAudioDuration time.Duration,
@@ -267,11 +276,9 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 		return
 	}
 	const (
-		padX           = 32
-		padY           = 22
-		lineGap        = 10
-		scrollDuration = 2500 * time.Millisecond
-		fallbackDwell  = 500 * time.Millisecond
+		padX    = 32
+		padY    = 22
+		lineGap = 10
 	)
 
 	innerL := x0 + padX
@@ -302,26 +309,24 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	lines := wrapLines(face, body, innerW)
 	overflow := len(lines) > maxLines
 
-	// Vertical scroll alignment: start at audioDuration/2 + 1s so the
-	// top of the passage stays readable through roughly the first half
-	// of playback before the scroll begins carrying viewers to the rest.
-	scrollDwellStart := fallbackDwell
-	if bodyAudioDuration > 0 {
-		scrollDwellStart = bodyAudioDuration/2 + time.Second
-	}
-
+	// Stepped vertical scroll. With n wrapped lines and maxLines visible,
+	// there are (n - maxLines) line-by-line jumps to walk the passage end
+	// to end. Splitting bodyAudioDuration evenly into that many slots gives
+	// each line a dwell of audioDuration/(n - maxLines), and the scroll
+	// position snaps one lineH forward at every slot boundary.
 	scrollPx := 0
-	if overflow && !bodyStart.IsZero() {
-		overflowPx := (len(lines) - maxLines) * lineH
-		elapsed := time.Since(bodyStart)
-		if elapsed > scrollDwellStart {
-			scrollElapsed := elapsed - scrollDwellStart
-			if scrollElapsed >= scrollDuration {
-				scrollPx = overflowPx
-			} else {
-				scrollPx = int(float64(overflowPx) *
-					float64(scrollElapsed) / float64(scrollDuration))
+	if overflow && !bodyStart.IsZero() && bodyAudioDuration > 0 {
+		overflowSlots := len(lines) - maxLines
+		slotDuration := bodyAudioDuration / time.Duration(overflowSlots)
+		if slotDuration > 0 {
+			step := int(time.Since(bodyStart) / slotDuration)
+			if step < 0 {
+				step = 0
 			}
+			if step > overflowSlots {
+				step = overflowSlots
+			}
+			scrollPx = step * lineH
 		}
 	}
 

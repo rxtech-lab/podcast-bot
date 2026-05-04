@@ -233,11 +233,14 @@ func latestOpposingLine(recent []TranscriptLine, mySide string) *TranscriptLine 
 // from the live audience (Role == "user"). Returns nil if none. Used to
 // surface audience steering ("talk about X") into every candidate/viewer
 // prompt so the whole panel — not just the host — incorporates the request.
-// Pending lines (not yet acknowledged by the host on-air) are skipped.
+// Pending lines (not yet acknowledged by the host on-air) are skipped, as
+// are Addressed lines (already answered on-air): without the Addressed
+// guard the steering block re-fires on every subsequent turn and players
+// keep parroting "since the audience asked..." indefinitely.
 func latestUserLine(recent []TranscriptLine) *TranscriptLine {
 	for i := len(recent) - 1; i >= 0; i-- {
 		l := recent[i]
-		if l.Role == "user" && !l.Pending {
+		if l.Role == "user" && !l.Pending && !l.Addressed {
 			return &l
 		}
 	}

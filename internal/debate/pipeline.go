@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,31 @@ type Deps struct {
 // predecessor turn's text is final.
 func directiveWantsPrevText(directive string) bool {
 	return directive == "answer:" || directive == "evaluate-solution:"
+}
+
+// sceneMarkerRe matches the scene-switch token the puzzle host emits during
+// the surface (湯面) narration to flag a scene-image swap point. The
+// canonical form is `<scene/>` but the regex tolerates LLM drift —
+// case-insensitive, optional whitespace before the slash, optional `<scene>
+// </scene>` paired form, and the bracketed `[scene]` variant some models
+// prefer. Anything that matches is stripped from the spoken text and the
+// subtitle BEFORE TTS sees it, so the synthesizer never voices the cue.
+var sceneMarkerRe = regexp.MustCompile(`(?i)<\s*/?\s*scene\s*/?\s*>|\[\s*scene\s*\]`)
+
+// stripSceneMarkers returns sent with every scene-marker occurrence removed
+// and the count of removed markers. A non-zero count means the producer
+// should publish that many SceneAdvanceMsg events synced with this
+// sentence's audio start. The cleaned text is what flows downstream into
+// TTS, the on-air subtitle, the transcript log, and the persisted history —
+// markers must NEVER leak into any of those surfaces.
+func stripSceneMarkers(sent string) (clean string, count int) {
+	matches := sceneMarkerRe.FindAllStringIndex(sent, -1)
+	if len(matches) == 0 {
+		return sent, 0
+	}
+	clean = sceneMarkerRe.ReplaceAllString(sent, "")
+	clean = strings.TrimSpace(clean)
+	return clean, len(matches)
 }
 
 // subtitleClientLatency compensates for buffering that happens after the
@@ -264,11 +290,15 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		}
 	}
 
+	// Bumped 20 → 40 so puzzle players see deeper Q&A history and stop
+	// re-asking questions a teammate already covered. 40 lines comfortably
+	// fits a full puzzle round (surface + ~15 Q&A pairs + a couple of
+	// audience interjections) without blowing the prompt budget.
 	prompt := agent.SpeakPrompt{
 		Phase:         t.Phase,
 		SegmentNo:     t.ID,
 		SecondsBudget: int(t.Budget / time.Second),
-		Recent:        p.d.Transcript.RecentN(20),
+		Recent:        p.d.Transcript.RecentN(40),
 		TopicTitle:    p.d.Topic,
 		TopicLanguage: p.d.Language,
 		Instructions:  t.Directive,
@@ -356,6 +386,16 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		t.AudioPath = ""
 	}
 
+	// Once a turn whose directive answered the audience has finished
+	// streaming, retire the user line so the audience-steering block in
+	// runStream doesn't keep nagging every subsequent agent to acknowledge
+	// the same question. Covers both the puzzle host (address-user answers
+	// directly) and the debate flow (host paraphrases, candidate answers).
+	if wroteAny && (strings.HasPrefix(t.Directive, "address-user:") ||
+		strings.HasPrefix(t.Directive, "answer-user:")) {
+		p.d.Transcript.MarkUserLinesAddressed()
+	}
+
 	return nil
 }
 
@@ -363,6 +403,21 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if sent == "" {
 		return 0, nil
 	}
+	// Strip any scene-switch markers the speaker emitted at the start of this
+	// sentence. The marker count drives one SceneAdvanceMsg per occurrence,
+	// scheduled to fire at the same target time as this sentence's
+	// TranscriptMsg so the on-screen image cuts in lockstep with the audio.
+	cleaned, advances := stripSceneMarkers(sent)
+	if cleaned == "" {
+		// Marker-only sentence (rare — usually only the surface narration's
+		// final paragraph break). Fire the advance immediately and bail out
+		// of TTS — there's nothing to speak.
+		for i := 0; i < advances; i++ {
+			p.d.Send(SceneAdvanceMsg{})
+		}
+		return 0, nil
+	}
+	sent = cleaned
 	// Capture the sentence on the turn itself so a downstream turn whose
 	// directive references this one (Turn.PrevTurn) can read the verbatim
 	// rendered text via FullText() once produce() returns. Distinct from the
@@ -416,10 +471,19 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		Side: t.Speaker.Side(), Text: sent,
 		AudioDuration: audioDuration,
 	}
+	send := p.d.Send
 	if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
-		p.d.Send(msg)
+		send(msg)
+		for i := 0; i < advances; i++ {
+			send(SceneAdvanceMsg{})
+		}
 	} else {
-		time.AfterFunc(remaining, func() { p.d.Send(msg) })
+		time.AfterFunc(remaining, func() {
+			send(msg)
+			for i := 0; i < advances; i++ {
+				send(SceneAdvanceMsg{})
+			}
+		})
 	}
 	return n, nil
 }

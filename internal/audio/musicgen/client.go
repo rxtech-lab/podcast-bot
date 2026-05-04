@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,7 +64,71 @@ type Request struct {
 // Generate POSTs the request and returns mp3 bytes. The response shape
 // follows the standard generateContent contract: `inline_data.data` of
 // the first audio part holds the base64 payload.
+//
+// Transport failures (mid-flight EOF / connection reset / DNS) and
+// 429/5xx responses retry with the same linear-exponential backoff as
+// imagegen — Lyria's endpoint resets the TCP connection often enough
+// that a single attempt was losing entire sessions to a transient blip
+// (run.log 2026-05-05_01-57-22 lost both surface + reveal music to one
+// such EOF). Auth, parse, and other 4xx failures fail fast.
 func (c *Client) Generate(ctx context.Context, req Request) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(retryBackoff(attempt)):
+			}
+		}
+		raw, err := c.generateOnce(ctx, req)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if !isRetryable(err) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("after %d attempts: %w", maxRetryAttempts, lastErr)
+}
+
+// maxRetryAttempts caps how many Lyria calls we make per phase. Matches
+// imagegen's setting; sustained Lyria outages would still surface as a
+// "music gen partial" log, which the orchestrator already handles by
+// degrading to dry TTS.
+const maxRetryAttempts = 4
+
+// retryBackoff: 750 ms, 1.5 s, 3 s before attempts 2, 3, 4. Same schedule
+// as imagegen so logs read consistently across both gen subsystems.
+func retryBackoff(attempt int) time.Duration {
+	base := 750 * time.Millisecond
+	mult := time.Duration(1) << (attempt - 1)
+	return base * mult
+}
+
+type retryableError struct{ err error }
+
+func (e *retryableError) Error() string { return e.err.Error() }
+func (e *retryableError) Unwrap() error { return e.err }
+
+func retryable(err error) error { return &retryableError{err: err} }
+
+func isRetryable(err error) bool {
+	var r *retryableError
+	return errors.As(err, &r)
+}
+
+// isTransientStatus mirrors imagegen — 429 (rate-limit) and 5xx (server
+// outage / bad gateway) are worth retrying; all other 4xx are permanent.
+func isTransientStatus(code int) bool {
+	if code == http.StatusTooManyRequests {
+		return true
+	}
+	return code/100 == 5
+}
+
+func (c *Client) generateOnce(ctx context.Context, req Request) ([]byte, error) {
 	// Lyria 3 Pro returns mp3 by default. Specifying responseMimeType at all
 	// (even "audio/mp3") trips INVALID_ARGUMENT — that field on
 	// generateContent only accepts text MIME types (text/plain,
@@ -95,13 +160,22 @@ func (c *Client) Generate(ctx context.Context, req Request) ([]byte, error) {
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, retryable(err)
 	}
 	defer resp.Body.Close()
 
-	rawResp, _ := io.ReadAll(resp.Body)
+	rawResp, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		// Body cut mid-stream after headers — same upstream-flake class
+		// as a Do() error; retry rather than failing the phase outright.
+		return nil, retryable(fmt.Errorf("read lyria body: %w", readErr))
+	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("lyria %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		statusErr := fmt.Errorf("lyria %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		if isTransientStatus(resp.StatusCode) {
+			return nil, retryable(statusErr)
+		}
+		return nil, statusErr
 	}
 
 	var parsed struct {

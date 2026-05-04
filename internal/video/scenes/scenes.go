@@ -149,14 +149,43 @@ func (s *PuzzleScenes) VariantCount(name string) int {
 // callers should rely on per-field nil checks. The returned error joins all
 // per-job failures so callers can log them and still proceed with whatever
 // images succeeded.
+//
+// To split surface and conclusion timing, see GeneratePhase.
 func Generate(ctx context.Context, client *imagegen.Client, topic *config.DebateTopic, cacheDir string) (*PuzzleScenes, error) {
+	return GenerateWithPlan(ctx, client, topic, nil, cacheDir, "")
+}
+
+// GenerateWithPlan is Generate with an optional ScenePlan that overrides the
+// per-phase variant count and direction. A nil plan keeps the static
+// SurfaceVariantCount / ConclusionVariantCount and the built-in
+// surfaceVariantDirections / conclusionVariantDirections. A non-nil plan
+// uses len(plan.Surface) / len(plan.Conclusion) and folds each entry's
+// directional sentence into the variant prompt.
+//
+// phases, when non-empty, restricts generation to the listed scene names
+// (any subset of SceneSurface / SceneQA / SceneReveal / SceneConclusion).
+// Empty means "every phase" — used by Generate. Restricting lets the caller
+// stage generation: surface + qa + reveal first (so the podcast can start),
+// then conclusion in the background.
+func GenerateWithPlan(ctx context.Context, client *imagegen.Client, topic *config.DebateTopic,
+	plan *ScenePlan, cacheDir string, phases ...string,
+) (*PuzzleScenes, error) {
 	if cacheDir != "" {
 		_ = os.MkdirAll(cacheDir, 0o755)
 	}
 
+	surfaceN := SurfaceVariantCount
+	if n := plan.SurfaceCount(); n > 0 {
+		surfaceN = n
+	}
+	conclusionN := ConclusionVariantCount
+	if n := plan.ConclusionCount(); n > 0 {
+		conclusionN = n
+	}
+
 	out := &PuzzleScenes{
-		Surface:    make([]*image.RGBA, SurfaceVariantCount),
-		Conclusion: make([]*image.RGBA, ConclusionVariantCount),
+		Surface:    make([]*image.RGBA, surfaceN),
+		Conclusion: make([]*image.RGBA, conclusionN),
 	}
 
 	type job struct {
@@ -165,34 +194,53 @@ func Generate(ctx context.Context, client *imagegen.Client, topic *config.Debate
 		cacheName string
 		assign    func(*image.RGBA)
 	}
+	wantPhase := func(name string) bool {
+		if len(phases) == 0 {
+			return true
+		}
+		for _, p := range phases {
+			if p == name {
+				return true
+			}
+		}
+		return false
+	}
 	var jobs []job
-	for i := 0; i < SurfaceVariantCount; i++ {
-		i := i
+	if wantPhase(SceneSurface) {
+		for i := 0; i < surfaceN; i++ {
+			i := i
+			jobs = append(jobs, job{
+				name:      SceneSurface,
+				variant:   i,
+				cacheName: fmt.Sprintf("%s-v%d", SceneSurface, i),
+				assign:    func(img *image.RGBA) { out.Surface[i] = img },
+			})
+		}
+	}
+	if wantPhase(SceneQA) {
 		jobs = append(jobs, job{
-			name:      SceneSurface,
-			variant:   i,
-			cacheName: fmt.Sprintf("%s-v%d", SceneSurface, i),
-			assign:    func(img *image.RGBA) { out.Surface[i] = img },
+			name:      SceneQA,
+			cacheName: SceneQA,
+			assign:    func(img *image.RGBA) { out.QA = img },
 		})
 	}
-	jobs = append(jobs, job{
-		name:      SceneQA,
-		cacheName: SceneQA,
-		assign:    func(img *image.RGBA) { out.QA = img },
-	})
-	jobs = append(jobs, job{
-		name:      SceneReveal,
-		cacheName: SceneReveal,
-		assign:    func(img *image.RGBA) { out.Reveal = img },
-	})
-	for i := 0; i < ConclusionVariantCount; i++ {
-		i := i
+	if wantPhase(SceneReveal) {
 		jobs = append(jobs, job{
-			name:      SceneConclusion,
-			variant:   i,
-			cacheName: fmt.Sprintf("%s-v%d", SceneConclusion, i),
-			assign:    func(img *image.RGBA) { out.Conclusion[i] = img },
+			name:      SceneReveal,
+			cacheName: SceneReveal,
+			assign:    func(img *image.RGBA) { out.Reveal = img },
 		})
+	}
+	if wantPhase(SceneConclusion) {
+		for i := 0; i < conclusionN; i++ {
+			i := i
+			jobs = append(jobs, job{
+				name:      SceneConclusion,
+				variant:   i,
+				cacheName: fmt.Sprintf("%s-v%d", SceneConclusion, i),
+				assign:    func(img *image.RGBA) { out.Conclusion[i] = img },
+			})
+		}
 	}
 
 	var (
@@ -204,7 +252,7 @@ func Generate(ctx context.Context, client *imagegen.Client, topic *config.Debate
 		wg.Add(1)
 		go func(j job) {
 			defer wg.Done()
-			prompt := buildPromptVariant(j.name, topic, j.variant)
+			prompt := buildPromptVariantWithPlan(j.name, topic, j.variant, plan)
 			img, err := loadOrGenerate(ctx, client, j.cacheName, prompt, cacheDir)
 			if err != nil {
 				errsMu.Lock()
@@ -304,6 +352,73 @@ func BuildPrompt(name string, topic *config.DebateTopic) string {
 // for QA and Reveal the variant index is ignored.
 func BuildPromptVariant(name string, topic *config.DebateTopic, variant int) string {
 	return buildPromptVariant(name, topic, variant)
+}
+
+// buildPromptVariantWithPlan dispatches to the plan-driven prompt builder
+// when a ScenePlan provides a custom direction for the requested variant,
+// and falls back to the static-direction builder otherwise. Empty / out-of-
+// range plan entries trigger the fallback.
+func buildPromptVariantWithPlan(name string, topic *config.DebateTopic, variant int, plan *ScenePlan) string {
+	if plan != nil {
+		var directions []string
+		switch name {
+		case SceneSurface:
+			directions = plan.Surface
+		case SceneConclusion:
+			directions = plan.Conclusion
+		}
+		if variant >= 0 && variant < len(directions) && strings.TrimSpace(directions[variant]) != "" {
+			return buildPromptWithDirection(name, topic, directions[variant])
+		}
+	}
+	return buildPromptVariant(name, topic, variant)
+}
+
+// buildPromptWithDirection constructs the per-frame prompt using a
+// caller-provided direction sentence (from a ScenePlan) instead of the
+// static rotation in surfaceVariantDirections / conclusionVariantDirections.
+// Style + safety boilerplate matches buildPromptVariant exactly so the two
+// paths produce visually consistent images.
+func buildPromptWithDirection(name string, topic *config.DebateTopic, direction string) string {
+	surface := strings.TrimSpace(topic.Surface)
+	const styleSuffix = `
+Style: ANIME cinematic illustration. Hand-drawn, soft cell-shading,
+expressive lighting and color, in the sensibility of Makoto Shinkai /
+Studio Ghibli / Kyoto Animation. Painterly skies, delicate linework,
+atmospheric mood. NOT photoreal, NOT 3D-rendered, NOT realistic photo.
+No text, no letters, no captions, no subtitles, no logos, no UI overlays.
+No faces speaking close-up. Wide cinematic 16:9 framing.`
+
+	switch name {
+	case SceneSurface:
+		return strings.TrimSpace(fmt.Sprintf(`
+Anime cinematic illustration for this scenario:
+
+%s
+
+Per-frame direction (this is one of several frames cut together — make this
+specific variant visually distinct from the others):
+%s
+
+Moody, evocative, atmospheric. Capture the situation as a frozen tableau
+— the viewer should sense the mystery without being told the answer.
+%s`, surface, direction, styleSuffix))
+
+	case SceneConclusion:
+		return strings.TrimSpace(fmt.Sprintf(`
+Anime quiet, contemplative aftermath scene reflecting on this situation:
+
+%s
+
+Per-frame direction (this is one of several frames cut together — make this
+specific variant visually distinct from the others):
+%s
+
+Soft warm golden-hour light, gentle stillness, sense of closure. The
+mystery has been revealed and the moment lingers.
+%s`, surface, direction, styleSuffix))
+	}
+	return buildPromptVariant(name, topic, 0)
 }
 
 // surfaceVariantDirections steers each Surface variant toward a different

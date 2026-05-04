@@ -2,6 +2,7 @@ package video
 
 import (
 	"context"
+	"image"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,8 @@ func (s *PuzzleStage) Run(ctx context.Context, bus *eventbus.Bus) {
 				s.setSceneFor(phaseToScene(m.Phase))
 			case debate.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
+			case debate.SceneAdvanceMsg:
+				s.advanceScene()
 			}
 		}
 	}
@@ -176,6 +179,28 @@ func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
 	}
 }
 
+// AttachConclusion fills in the conclusion variant slice on a previously-
+// attached PuzzleScenes. Called by cmd/debate-bot when the deferred
+// conclusion-image generation finishes — the podcast can already be in
+// flight at that point because surface assets unblock the run. If the stage
+// is currently in the conclusion phase, applies the new image immediately
+// and starts the timer rotation.
+func (s *PuzzleStage) AttachConclusion(imgs []*image.RGBA) {
+	s.mu.Lock()
+	if s.sceneScenes == nil {
+		s.sceneScenes = &scenes.PuzzleScenes{}
+	}
+	s.sceneScenes.Conclusion = imgs
+	active := s.active
+	cur := s.curScene
+	s.mu.Unlock()
+	if !active || cur != scenes.SceneConclusion {
+		return
+	}
+	s.applyScene(scenes.SceneConclusion, 0)
+	s.maybeStartSceneRotation(scenes.SceneConclusion)
+}
+
 // setSceneFor applies the scene image keyed by name to the encoder if
 // scenes are loaded. Records the name so AttachScenes called later can
 // pick the right one even if PhaseMsg arrived before generation finished.
@@ -199,6 +224,31 @@ func (s *PuzzleStage) setSceneFor(name string) {
 	s.maybeStartSceneRotation(name)
 }
 
+// advanceScene swaps to the next variant of the currently-active multi-variant
+// scene. Single-image scenes (qa, reveal) ignore the call. Driven by the
+// producer's scene-switch markers (today: emitted by the puzzle host inside
+// the surface narration so images cut on paragraph beats instead of on a
+// fixed timer). Wraps the variant index modulo the available count so a
+// generous marker stream loops the same set rather than running off the end.
+func (s *PuzzleStage) advanceScene() {
+	s.mu.Lock()
+	sc := s.sceneScenes
+	name := s.curScene
+	s.mu.Unlock()
+	if sc == nil || name == "" {
+		return
+	}
+	count := sc.VariantCount(name)
+	if count <= 1 {
+		return
+	}
+	s.mu.Lock()
+	s.curSceneIdx = (s.curSceneIdx + 1) % count
+	idx := s.curSceneIdx
+	s.mu.Unlock()
+	s.applyScene(name, idx)
+}
+
 // applyScene blits the indexed variant of the named scene through the
 // encoder. Silently no-ops if scenes haven't been attached yet or the
 // variant slot is empty.
@@ -219,9 +269,15 @@ func (s *PuzzleStage) applyScene(name string, idx int) {
 // maybeStartSceneRotation kicks off a goroutine that swaps to the next
 // variant of name every sceneRotationInterval, but only if the scene has
 // more than one variant. Scenes with a single image (qa, reveal) skip
-// rotation entirely. Caller is responsible for having called
-// stopSceneRotation first if a different scene was previously active.
+// rotation entirely. The surface scene also skips: its variant rotation
+// is driven by scene-switch markers in the host's narration (see
+// advanceScene) so the cuts land on paragraph beats rather than a wall
+// clock. Caller is responsible for having called stopSceneRotation first
+// if a different scene was previously active.
 func (s *PuzzleStage) maybeStartSceneRotation(name string) {
+	if name == scenes.SceneSurface {
+		return
+	}
 	s.mu.Lock()
 	sc := s.sceneScenes
 	s.mu.Unlock()

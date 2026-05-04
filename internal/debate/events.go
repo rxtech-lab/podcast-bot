@@ -143,6 +143,16 @@ type TopicMsg struct {
 // regardless of which channel they're tuned to.
 type TopicsChangedMsg struct{}
 
+// SceneAdvanceMsg asks any active visual stage to swap to the next scene
+// variant for the current phase. Emitted by the producer when the speaker's
+// streamed text contains a scene-switch marker (today: the puzzle host's
+// surface narration uses `<scene/>` between paragraphs so images follow the
+// audio beats instead of a fixed timer). Stages without a multi-variant scene
+// active treat it as a no-op.
+type SceneAdvanceMsg struct {
+	ChannelID string
+}
+
 // MsgChannelID extracts the channel id from any debate event message. Returns
 // "" for unknown types (which are treated as broadcast by per-channel filters).
 func MsgChannelID(v any) string {
@@ -163,6 +173,8 @@ func MsgChannelID(v any) string {
 		return m.ChannelID
 	case TopicsChangedMsg:
 		return ""
+	case SceneAdvanceMsg:
+		return m.ChannelID
 	}
 	return ""
 }
@@ -196,6 +208,9 @@ func StampChannelID(v any, id string) any {
 		m.ChannelID = id
 		return m
 	case TopicsChangedMsg:
+		return m
+	case SceneAdvanceMsg:
+		m.ChannelID = id
 		return m
 	}
 	return v

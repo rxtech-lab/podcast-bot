@@ -21,6 +21,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/debate"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/util"
 	"github.com/sirily11/debate-bot/internal/video"
@@ -747,18 +748,20 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		// staring at a stale frame from the previous topic.
 		send(buildTopicMsg(d, i, total))
 
-		// Situation-puzzle: BLOCK on asset generation before starting
-		// the orchestrator (so the host doesn't start narrating before the
-		// surface scene is on screen and the music bed is ready). Renderer
-		// shows the puzzle idle layout during the wait. Cached runs hit
-		// disk in <100ms so this is only painful on first generation.
-		// Scenes (Gemini image) and music (Lyria) generate in parallel.
+		// Situation-puzzle: BLOCK on the assets the host needs to start
+		// narrating — surface + qa + reveal scenes plus the music bed —
+		// then kick off the conclusion-image generation in the background.
+		// The conclusion only paints at the end of the show, so deferring
+		// it shaves up to ~30s off the start-of-podcast wait on a first
+		// run. Cached runs hit disk in <100ms so even the conclusion lands
+		// before the user notices.
 		if d.topic.Type == config.ContentTypeSituationPuzzle && ch.puzzleStage != nil {
 			scenesCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-bgs")
 			musicCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-music")
-			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] generating puzzle scene bgs + music (this can take ~90s on first run)\n",
+			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] planning + generating surface scenes + music (this can take ~60s on first run; conclusion runs in background)\n",
 				ch.def.Number, ch.def.ID)
-			music := generatePuzzleAssets(r.ctx, r.log, ch.puzzleStage, d.topic,
+			plan := planPuzzleScenes(r.ctx, r.log, &debateEnv, d.topic)
+			music := generatePuzzleAssets(r.ctx, r.log, ch.puzzleStage, d.topic, plan,
 				scenesCacheDir, musicCacheDir)
 			if music != nil {
 				m := map[string]string{}
@@ -770,6 +773,7 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 				}
 				orch.SetPuzzleMusic(m)
 			}
+			go generatePuzzleConclusion(r.ctx, r.log, ch.puzzleStage, d.topic, plan, scenesCacheDir)
 		}
 
 		runErr := orch.Run(r.ctx)
@@ -966,17 +970,25 @@ func agentNames(specs []config.AgentSpec) []string {
 	return out
 }
 
-// generatePuzzleAssets builds the four scene backgrounds AND the two
-// music beds for a single puzzle topic in parallel, then hands the
-// scenes to the channel's PuzzleStage and returns the music paths to
-// the caller (which forwards them into orch.SetPuzzleMusic).
+// generatePuzzleAssets builds the surface/qa/reveal scene backgrounds AND
+// the music beds for a single puzzle topic in parallel, then hands the
+// scenes to the channel's PuzzleStage and returns the music paths to the
+// caller (which forwards them into orch.SetPuzzleMusic).
+//
+// Conclusion images are deliberately deferred: they only paint at the very
+// end of the show, so we kick off their generation in a background
+// goroutine and return immediately once surface assets are ready. The
+// PuzzleStage.AttachConclusion call lands later, possibly mid-show, and
+// the stage swaps to those images when the conclusion phase actually
+// begins. This shaves up to ~30s off the start-of-podcast wait on the
+// first run of a topic.
 //
 // Logs but never propagates errors — missing scenes leave the renderer
 // on its default bg, missing music leaves the surface/reveal turns on
 // dry TTS. A returned nil *PuzzleMusic means caller should not bother
 // forwarding music to the orchestrator at all.
 func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
-	ps *video.PuzzleStage, topic *config.DebateTopic,
+	ps *video.PuzzleStage, topic *config.DebateTopic, plan *scenes.ScenePlan,
 	scenesCacheDir, musicCacheDir string) *musicgen.PuzzleMusic {
 
 	var (
@@ -993,7 +1005,14 @@ func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
 			return
 		}
 		t0 := time.Now()
-		sc, err := scenes.Generate(ctx, client, topic, scenesCacheDir)
+		// Phase 1 (blocking): only the assets the host needs to start
+		// narrating — surface (the long opening), qa (the question
+		// loop), and reveal (the truth). Conclusion images are generated
+		// in a separate background goroutine and attached when ready;
+		// they only paint at the very end of the show, so the podcast can
+		// start before they finish.
+		sc, err := scenes.GenerateWithPlan(ctx, client, topic, plan, scenesCacheDir,
+			scenes.SceneSurface, scenes.SceneQA, scenes.SceneReveal)
 		if err != nil {
 			log.Warn("puzzle scene gen partial",
 				"title", topic.Title,
@@ -1034,6 +1053,65 @@ func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
 
 	wg.Wait()
 	return musicOut
+}
+
+// planPuzzleScenes asks the host LLM to design the variant-direction list
+// for the surface and conclusion image phases — see scenes.Plan. Returns
+// nil on any failure, in which case the downstream generators fall back to
+// the static SurfaceVariantCount / ConclusionVariantCount and the built-in
+// rotation directions. Reuses the host model + endpoint so we don't need a
+// separate API key wired through env.
+func planPuzzleScenes(ctx context.Context, log *slog.Logger, env *config.Env, topic *config.DebateTopic) *scenes.ScenePlan {
+	if env == nil || env.OpenAIBaseURL == "" || env.OpenAIKey == "" || env.HostModel == "" {
+		return nil
+	}
+	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, env.HostModel)
+	t0 := time.Now()
+	plan := scenes.Plan(ctx, client, topic)
+	if plan == nil {
+		log.Warn("scene plan unavailable, falling back to static variant counts",
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+		return nil
+	}
+	log.Info("scene plan ready",
+		"title", topic.Title,
+		"surface_frames", plan.SurfaceCount(),
+		"conclusion_frames", plan.ConclusionCount(),
+		"elapsed", time.Since(t0).Round(time.Millisecond))
+	return plan
+}
+
+// generatePuzzleConclusion runs the conclusion image generation that
+// generatePuzzleAssets deliberately deferred. Called from a background
+// goroutine after the podcast has started; on completion the rendered
+// images are handed to the channel's PuzzleStage via AttachConclusion so
+// the conclusion phase paints with fresh frames if/when the show reaches
+// it. Errors are logged but never bubbled up — the conclusion phase
+// gracefully falls back to the renderer's default bg.
+func generatePuzzleConclusion(ctx context.Context, log *slog.Logger,
+	ps *video.PuzzleStage, topic *config.DebateTopic, plan *scenes.ScenePlan,
+	scenesCacheDir string) {
+	client, err := imagegen.New("")
+	if err != nil {
+		log.Warn("puzzle conclusion gen disabled", "err", err)
+		return
+	}
+	t0 := time.Now()
+	sc, err := scenes.GenerateWithPlan(ctx, client, topic, plan, scenesCacheDir, scenes.SceneConclusion)
+	if err != nil {
+		log.Warn("puzzle conclusion gen partial",
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond),
+			"err", err)
+	} else {
+		log.Info("puzzle conclusion ready",
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+	}
+	if sc != nil {
+		ps.AttachConclusion(sc.Conclusion)
+	}
 }
 
 // buildTopicMsg shapes the per-content-type TopicMsg the video stage consumes.

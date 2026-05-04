@@ -135,6 +135,25 @@ func (t *Transcript) AcknowledgeUserLines() int {
 	return n
 }
 
+// MarkUserLinesAddressed flips Addressed=true on every non-pending audience
+// line. Called after a turn whose directive answered the audience finishes
+// (host's address-user, candidate's answer-user, puzzle host's address-user).
+// Without this, latestUserLine keeps returning the same audience line on
+// every subsequent prompt and the audience-steering block makes each
+// player open with "since the audience asked..." for the rest of the round.
+func (t *Transcript) MarkUserLinesAddressed() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for i := range t.lines {
+		if t.lines[i].Role == "user" && !t.lines[i].Pending && !t.lines[i].Addressed {
+			t.lines[i].Addressed = true
+			n++
+		}
+	}
+	return n
+}
+
 // Save writes the transcript to disk in `name: text` format.
 func (t *Transcript) Save(path string) error {
 	t.mu.RLock()
