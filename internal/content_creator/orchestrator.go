@@ -1,4 +1,4 @@
-package debate
+package contentcreator
 
 import (
 	"context"
@@ -43,6 +43,16 @@ type Orchestrator struct {
 	// host's TTS. Populated by the caller via SetPuzzleMusic before Run.
 	// Empty when music generation failed or for non-puzzle topics.
 	puzzleMusic map[string]string
+
+	// surfaceFrames is how many surface scene images the visual planner
+	// generated for this puzzle. The puzzle host's system prompt uses
+	// surfaceFrames-1 as the exact number of `<scene/>` markers to emit
+	// during the surface narration so each marker advances the on-screen
+	// image to the next planned beat (no repeats, no overshoot). The
+	// pipeline also caps SceneAdvanceMsg events at surfaceFrames-1 as a
+	// belt-and-braces safeguard if the LLM misses the count.
+	// 0 means "host falls back to a guidance range, pipeline doesn't cap".
+	surfaceFrames int
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.
@@ -153,97 +163,72 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	return nil
 }
 
-func (o *Orchestrator) buildAgents() error {
-	o.Registry = &agent.Registry{}
-
-	mk := func(spec config.AgentSpec, role agent.Role, defaultModel string) agent.Agent {
-		baseURL := spec.BaseURL
-		if baseURL == "" {
-			baseURL = o.Env.OpenAIBaseURL
-		}
-		key := spec.APIKey
-		if key == "" {
-			key = o.Env.OpenAIKey
-		}
-		model := spec.Model
-		if model == "" {
-			model = defaultModel
-		}
-		client := llm.New(baseURL, key, model)
-		mem := o.MemStore.For(spec.Name)
-		base := agent.NewBase(spec.Name, role, client, mem, o.Compressor, o.Tools, o.Transcript)
-		switch role {
-		case agent.RoleHost:
-			return agent.NewHost(base)
-		case agent.RoleAffirmative, agent.RoleNegative:
-			return agent.NewCandidate(base)
-		case agent.RoleJudge:
-			return agent.NewJudge(base)
-		case agent.RoleViewer:
-			return agent.NewViewer(base)
-		case agent.RolePlayer:
-			return agent.NewPlayer(base)
-		case agent.RolePuzzleHost:
-			return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth)
-		}
-		return nil
+// makeAgent constructs one role-typed agent from a config.AgentSpec, falling
+// back to env-level defaults for any blank fields. Shared between the per-
+// format buildAgents methods (see debate_orchestrator.go and
+// situation_puzzle_orchestrator.go) — every role recognised by the registry
+// is wired up here so a new format only needs to call this with its specs.
+func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, defaultModel string) agent.Agent {
+	baseURL := spec.BaseURL
+	if baseURL == "" {
+		baseURL = o.Env.OpenAIBaseURL
 	}
-
-	for _, s := range o.Topic.Viewers {
-		o.Registry.Viewers = append(o.Registry.Viewers, mk(s, agent.RoleViewer, ""))
+	key := spec.APIKey
+	if key == "" {
+		key = o.Env.OpenAIKey
 	}
-
-	switch o.Topic.Type {
-	case config.ContentTypeSituationPuzzle:
-		hostName := o.Topic.PuzzleHost.Name
-		if hostName == "" {
-			hostName = "Host"
-		}
-		o.Registry.PuzzleHost = mk(config.AgentSpec{
-			Name:    hostName,
-			Model:   o.Topic.PuzzleHost.Model,
-			BaseURL: o.Topic.PuzzleHost.BaseURL,
-			APIKey:  o.Topic.PuzzleHost.APIKey,
-		}, agent.RolePuzzleHost, o.Env.HostModel)
-		for _, s := range o.Topic.Players {
-			o.Registry.Players = append(o.Registry.Players, mk(s, agent.RolePlayer, ""))
-		}
-	default:
-		// debate (also the implicit fallback if a future content type is added
-		// before its branch lands here — config validation prevents this in
-		// practice).
-		o.Registry.Host = mk(config.AgentSpec{Name: "Host", Model: o.Env.HostModel}, agent.RoleHost, o.Env.HostModel)
-		o.Registry.Judge = mk(config.AgentSpec{Name: "Judge", Model: o.Topic.Judge.Model,
-			BaseURL: o.Topic.Judge.BaseURL, APIKey: o.Topic.Judge.APIKey}, agent.RoleJudge, o.Env.HostModel)
-		for _, s := range o.Topic.Affirmative {
-			o.Registry.Affirmatve = append(o.Registry.Affirmatve, mk(s, agent.RoleAffirmative, ""))
-		}
-		for _, s := range o.Topic.Negative {
-			o.Registry.Negative = append(o.Registry.Negative, mk(s, agent.RoleNegative, ""))
-		}
+	model := spec.Model
+	if model == "" {
+		model = defaultModel
+	}
+	client := llm.New(baseURL, key, model)
+	mem := o.MemStore.For(spec.Name)
+	base := agent.NewBase(spec.Name, role, client, mem, o.Compressor, o.Tools, o.Transcript)
+	switch role {
+	case agent.RoleHost:
+		return agent.NewHost(base)
+	case agent.RoleAffirmative, agent.RoleNegative:
+		return agent.NewCandidate(base)
+	case agent.RoleJudge:
+		return agent.NewJudge(base)
+	case agent.RoleViewer:
+		return agent.NewViewer(base)
+	case agent.RolePlayer:
+		return agent.NewPlayer(base)
+	case agent.RolePuzzleHost:
+		return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth, o.surfaceFrames)
 	}
 	return nil
 }
 
-// newPlanner picks the per-content-type planner. Today: debate vs situation-
-// puzzle. Adding a third content type means adding a branch here.
-func (o *Orchestrator) newPlanner() Planner {
-	if o.Topic.Type == config.ContentTypeSituationPuzzle {
-		return NewPuzzlePlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
+// buildAgents wires up the registry. Viewers are shared by every content
+// type so they're populated here; the format-specific roster (host, judge,
+// candidates / puzzle host, players) is built by the per-format method this
+// dispatches to.
+func (o *Orchestrator) buildAgents() error {
+	o.Registry = &agent.Registry{}
+	for _, s := range o.Topic.Viewers {
+		o.Registry.Viewers = append(o.Registry.Viewers, o.makeAgent(s, agent.RoleViewer, ""))
 	}
-	return NewDebatePlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
+	switch o.Topic.Type {
+	case config.ContentTypeSituationPuzzle:
+		return o.buildPuzzleAgents()
+	default:
+		// Debate is also the implicit fallback if a future content type is
+		// added before its branch lands here; config validation rejects
+		// unknown types in practice.
+		return o.buildDebateAgents()
+	}
 }
 
-// SetPuzzleMusic installs the per-directive music file map for the
-// upcoming pipeline run. Caller (cmd/debate-bot) populates this after
-// musicgen.Generate finishes so the surface and reveal turns mix the
-// generated bed under the host's TTS. No-op if music is empty or nil.
-// Must be called before Run.
-func (o *Orchestrator) SetPuzzleMusic(music map[string]string) {
-	if len(music) == 0 {
-		return
+// newPlanner picks the per-content-type planner. Today: debate vs situation-
+// puzzle. Adding a third content type means adding a branch here AND a
+// matching newXPlanner method in its own file.
+func (o *Orchestrator) newPlanner() Planner {
+	if o.Topic.Type == config.ContentTypeSituationPuzzle {
+		return o.newPuzzlePlanner()
 	}
-	o.puzzleMusic = music
+	return o.newDebatePlanner()
 }
 
 // Run executes Setup then drives the pipeline. Blocks until the planner finishes.
@@ -257,10 +242,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		TTS: o.TTS, OutDir: o.Env.OutDir,
 		Send: o.Send, Log: o.Log,
 		Topic: o.Topic.Title, Language: o.Topic.Language,
-		ContentType: o.Topic.Type,
-		Transcript:  o.Transcript,
-		LiveStream:  o.LiveStream,
-		MusicPaths:  o.puzzleMusic,
+		ContentType:   o.Topic.Type,
+		Transcript:    o.Transcript,
+		LiveStream:    o.LiveStream,
+		MusicPaths:    o.puzzleMusic,
+		SurfaceFrames: o.surfaceFrames,
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

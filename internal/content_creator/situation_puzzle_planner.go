@@ -1,4 +1,4 @@
-package debate
+package contentcreator
 
 import (
 	"context"

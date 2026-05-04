@@ -1,4 +1,4 @@
-package debate
+package contentcreator
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -45,40 +44,14 @@ type Deps struct {
 	// the bare directive or its prefix before any ":") and routes that
 	// turn's TTS through musicmixer.New. Empty/missing key → dry TTS.
 	MusicPaths map[string]string
-}
 
-// directiveWantsPrevText reports whether a directive's payload should be
-// filled in from t.PrevTurn.FullText() at production time. Today only the
-// puzzle host's answer / evaluate-solution directives use this — both are
-// emitted with a trailing ":" by the planner and resolved here once the
-// predecessor turn's text is final.
-func directiveWantsPrevText(directive string) bool {
-	return directive == "answer:" || directive == "evaluate-solution:"
-}
-
-// sceneMarkerRe matches the scene-switch token the puzzle host emits during
-// the surface (湯面) narration to flag a scene-image swap point. The
-// canonical form is `<scene/>` but the regex tolerates LLM drift —
-// case-insensitive, optional whitespace before the slash, optional `<scene>
-// </scene>` paired form, and the bracketed `[scene]` variant some models
-// prefer. Anything that matches is stripped from the spoken text and the
-// subtitle BEFORE TTS sees it, so the synthesizer never voices the cue.
-var sceneMarkerRe = regexp.MustCompile(`(?i)<\s*/?\s*scene\s*/?\s*>|\[\s*scene\s*\]`)
-
-// stripSceneMarkers returns sent with every scene-marker occurrence removed
-// and the count of removed markers. A non-zero count means the producer
-// should publish that many SceneAdvanceMsg events synced with this
-// sentence's audio start. The cleaned text is what flows downstream into
-// TTS, the on-air subtitle, the transcript log, and the persisted history —
-// markers must NEVER leak into any of those surfaces.
-func stripSceneMarkers(sent string) (clean string, count int) {
-	matches := sceneMarkerRe.FindAllStringIndex(sent, -1)
-	if len(matches) == 0 {
-		return sent, 0
-	}
-	clean = sceneMarkerRe.ReplaceAllString(sent, "")
-	clean = strings.TrimSpace(clean)
-	return clean, len(matches)
+	// SurfaceFrames is the visual director's surface-frame count for the
+	// current puzzle. The pipeline caps SceneAdvanceMsg events emitted
+	// from the surface narration at SurfaceFrames-1 so excess markers
+	// from the host LLM don't wrap the rotation back to frame 0 mid-show.
+	// 0 disables the cap (no plan available, accept whatever the host
+	// emits).
+	SurfaceFrames int
 }
 
 // subtitleClientLatency compensates for buffering that happens after the
@@ -408,6 +381,11 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// scheduled to fire at the same target time as this sentence's
 	// TranscriptMsg so the on-screen image cuts in lockstep with the audio.
 	cleaned, advances := stripSceneMarkers(sent)
+	// Clamp advances to the per-turn cap so an over-eager host can't
+	// wrap the surface rotation back to frame 0. capRemaining returns the
+	// number we're still allowed to emit on this turn (cap minus already-
+	// emitted), or -1 when no cap applies.
+	advances = p.clampAdvances(t, advances)
 	if cleaned == "" {
 		// Marker-only sentence (rare — usually only the surface narration's
 		// final paragraph break). Fire the advance immediately and bail out
@@ -415,6 +393,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		for i := 0; i < advances; i++ {
 			p.d.Send(SceneAdvanceMsg{})
 		}
+		t.sceneAdvances += advances
 		return 0, nil
 	}
 	sent = cleaned
@@ -485,7 +464,36 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			}
 		})
 	}
+	t.sceneAdvances += advances
 	return n, nil
+}
+
+// clampAdvances limits how many `<scene/>` markers we will emit for this
+// turn so excess host markers don't wrap the surface rotation back to
+// frame 0. The cap is Deps.SurfaceFrames-1 (the visual director generated
+// SurfaceFrames distinct beats; the first paints at topic admission, so
+// the host walks frames 1..SurfaceFrames-1 with one marker each). A cap
+// of 0 (no plan) means "accept whatever the host emits" — return raw.
+func (p *Pipeline) clampAdvances(t *Turn, raw int) int {
+	if raw <= 0 || p.d.SurfaceFrames <= 0 {
+		return raw
+	}
+	// Markers are only meaningful for the surface directive; other
+	// directives (answer, evaluate-solution, …) shouldn't be cutting
+	// scenes anyway, but a defensive prefix check keeps us from capping
+	// the wrong stream if a future directive starts emitting markers.
+	if !strings.HasPrefix(t.Directive, "surface") {
+		return raw
+	}
+	cap := p.d.SurfaceFrames - 1
+	remaining := cap - t.sceneAdvances
+	if remaining <= 0 {
+		return 0
+	}
+	if raw > remaining {
+		return remaining
+	}
+	return raw
 }
 
 // updateMemories pushes the played turn into the transcript log AND into every

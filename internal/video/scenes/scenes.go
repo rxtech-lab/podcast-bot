@@ -31,13 +31,15 @@ const (
 	SceneConclusion = "conclusion"
 )
 
-// SurfaceVariantCount and ConclusionVariantCount control how many distinct
-// images are generated for the two long phases. The renderer rotates through
-// them on a timer so the briefing/conclusion don't sit on a single static
-// frame for minutes at a time. Four is the floor that makes the rotation feel
-// like a documentary cut sequence rather than a slideshow.
+// SurfaceVariantCount and ConclusionVariantCount are the static-fallback
+// frame counts used when scenes.Plan returns no plan AND the heuristic
+// fallback can't produce one either. Surface aligns with planner.go's
+// minSurfaceFrames so the static path doesn't downgrade the floor that
+// the dynamic path enforces. Conclusion's 4 stays — it's only rotated by
+// a 30s timer, so the count just bounds how long before the loop visibly
+// repeats.
 const (
-	SurfaceVariantCount    = 4
+	SurfaceVariantCount    = 6
 	ConclusionVariantCount = 4
 )
 

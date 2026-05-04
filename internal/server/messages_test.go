@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
-	"github.com/sirily11/debate-bot/internal/debate"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
@@ -24,7 +24,7 @@ import (
 type testEnv struct {
 	ts       *httptest.Server
 	bus      *eventbus.Bus
-	orch     *debate.Orchestrator
+	orch     *contentcreator.Orchestrator
 	sessions *SessionRegistry
 	dbPath   string
 }
@@ -42,16 +42,16 @@ func newTestServer(t *testing.T) *testEnv {
 
 	const channelID = "tech"
 	send := func(v any) {
-		bus.Publish(debate.StampChannelID(v, channelID))
+		bus.Publish(contentcreator.StampChannelID(v, channelID))
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "session.db")
-	store, err := debate.OpenStore(dbPath, nil)
+	store, err := contentcreator.OpenStore(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	orch := debate.NewForTest(send, store)
+	orch := contentcreator.NewForTest(send, store)
 
 	// hlsDir non-empty so the channel is *not* off-air; LiveStream stays nil
 	// because /api/audio is not exercised here.
@@ -528,8 +528,8 @@ func TestSSEFiltersOtherChannels(t *testing.T) {
 	go func() {
 		// Give the subscriber a tick to be ready.
 		time.Sleep(50 * time.Millisecond)
-		bus.Publish(debate.StampChannelID(
-			debate.TranscriptMsg{Speaker: "ghost", Role: "user", Text: "wrong-channel", Done: true},
+		bus.Publish(contentcreator.StampChannelID(
+			contentcreator.TranscriptMsg{Speaker: "ghost", Role: "user", Text: "wrong-channel", Done: true},
 			"tech"))
 	}()
 

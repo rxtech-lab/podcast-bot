@@ -1,4 +1,4 @@
-package debate
+package contentcreator
 
 // NewForTest builds a minimal Orchestrator suitable for tests that only
 // exercise the user-message queue and transcript emission. The send callback

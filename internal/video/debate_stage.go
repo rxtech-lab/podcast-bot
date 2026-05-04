@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/sirily11/debate-bot/internal/config"
-	"github.com/sirily11/debate-bot/internal/debate"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
@@ -69,7 +69,7 @@ func (s *DebateStage) Run(ctx context.Context, bus *eventbus.Bus) {
 			}
 			// TopicMsg flips activation regardless of current state — a debate
 			// topic activates us; any other type idles us.
-			if m, ok := v.(debate.TopicMsg); ok {
+			if m, ok := v.(contentcreator.TopicMsg); ok {
 				if isDebateType(m.Type) {
 					s.activate()
 					s.handleTopic(m)
@@ -82,11 +82,11 @@ func (s *DebateStage) Run(ctx context.Context, bus *eventbus.Bus) {
 				continue
 			}
 			switch m := v.(type) {
-			case debate.TranscriptMsg:
+			case contentcreator.TranscriptMsg:
 				s.handleTranscript(m)
-			case debate.PhaseMsg:
+			case contentcreator.PhaseMsg:
 				s.enc.SetPhase(phaseChipText(m))
-			case debate.TickMsg:
+			case contentcreator.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
 			}
 		}
@@ -127,12 +127,12 @@ func (s *DebateStage) accepts(v any) bool {
 	if s.channelID == "" {
 		return true
 	}
-	id := debate.MsgChannelID(v)
+	id := contentcreator.MsgChannelID(v)
 	// id=="" means broadcast — keep so global StatusMsgs still show up.
 	return id == "" || id == s.channelID
 }
 
-func (s *DebateStage) handleTopic(m debate.TopicMsg) {
+func (s *DebateStage) handleTopic(m contentcreator.TopicMsg) {
 	s.enc.SetTopic(m.Title)
 	s.enc.SetSides(m.AffNames, m.NegNames)
 	s.enc.SetPositions(m.AffPosition, m.NegPosition)
@@ -144,7 +144,7 @@ func (s *DebateStage) handleTopic(m debate.TopicMsg) {
 	s.enc.SetBody("", 0)
 }
 
-func (s *DebateStage) handleTranscript(m debate.TranscriptMsg) {
+func (s *DebateStage) handleTranscript(m contentcreator.TranscriptMsg) {
 	// Chat lines from the user role are routed to the transient overlay so
 	// they appear briefly without replacing the speaker subtitle. The
 	// orchestrator emits them via PushUserMessage with Role="user".

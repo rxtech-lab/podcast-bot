@@ -1,4 +1,4 @@
-package debate
+package contentcreator
 
 import (
 	"strings"
@@ -37,6 +37,15 @@ type Turn struct {
 	// AppendFromTurn into the transcript) so the two consumers don't fight.
 	textMu   sync.Mutex
 	fullText strings.Builder
+
+	// sceneAdvances counts how many SceneAdvanceMsg events the producer
+	// has already emitted for this turn (driven by `<scene/>` markers in
+	// the host's surface narration). Mutated only inside the producer
+	// goroutine which serializes synthSentence calls per turn, so no
+	// mutex is needed. Used by Pipeline.synthSentence to cap excess
+	// markers at SurfaceFrames-1 — the visual director generated exactly
+	// SurfaceFrames beats and we don't want the rotation to wrap.
+	sceneAdvances int
 
 	// Played sets to true after the producer finishes; protected by mu.
 	mu     sync.Mutex

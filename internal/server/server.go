@@ -35,7 +35,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/audio"
-	"github.com/sirily11/debate-bot/internal/debate"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
@@ -170,7 +170,7 @@ func (s *Server) handleTopics(w http.ResponseWriter, r *http.Request) {
 // orchForRequest returns the orchestrator the request targets via
 // ?channel=<id>. Returns nil when the channel is unknown or has no live
 // orchestrator (off-air, between debates).
-func (s *Server) orchForRequest(r *http.Request) *debate.Orchestrator {
+func (s *Server) orchForRequest(r *http.Request) *contentcreator.Orchestrator {
 	id := r.URL.Query().Get("channel")
 	if id == "" {
 		return nil
@@ -195,7 +195,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	// sqlite file so a viewer who reloads after the debate ends still sees
 	// the chat history.
 	if path := s.dbPathForRequest(r); path != "" {
-		lines, err := debate.LoadSnapshot(path)
+		lines, err := contentcreator.LoadSnapshot(path)
 		if err != nil {
 			s.d.Log.Warn("transcript disk load failed", "path", path, "err", err)
 			writeTranscript(w, nil)
@@ -240,19 +240,19 @@ type eventEnvelope struct {
 
 func envelope(v any) (eventEnvelope, bool) {
 	switch m := v.(type) {
-	case debate.TranscriptMsg:
+	case contentcreator.TranscriptMsg:
 		return eventEnvelope{"transcript", map[string]any{
 			"channel_id": m.ChannelID,
 			"speaker":    m.Speaker, "role": string(m.Role), "side": m.Side,
 			"text": m.Text, "done": m.Done,
 		}}, true
-	case debate.TickMsg:
+	case contentcreator.TickMsg:
 		return eventEnvelope{"tick", map[string]any{
 			"channel_id":   m.ChannelID,
 			"elapsed_ms":   m.Elapsed.Milliseconds(),
 			"remaining_ms": m.Remaining.Milliseconds(),
 		}}, true
-	case debate.PhaseMsg:
+	case contentcreator.PhaseMsg:
 		// label is the human-readable text the orchestrator stamped at
 		// emit time, content-type aware ("問答" for puzzle Q&A vs
 		// "自由辯論" for debate free-speech). Frontend should display
@@ -263,12 +263,12 @@ func envelope(v any) (eventEnvelope, bool) {
 			"label":      m.Label,
 			"type":       m.Type,
 		}}, true
-	case debate.StatusMsg:
+	case contentcreator.StatusMsg:
 		return eventEnvelope{"status", map[string]any{
 			"channel_id": m.ChannelID,
 			"text":       m.Text,
 		}}, true
-	case debate.ErrorMsg:
+	case contentcreator.ErrorMsg:
 		text := ""
 		if m.Err != nil {
 			text = m.Err.Error()
@@ -277,13 +277,13 @@ func envelope(v any) (eventEnvelope, bool) {
 			"channel_id": m.ChannelID,
 			"text":       text,
 		}}, true
-	case debate.EndedMsg:
+	case contentcreator.EndedMsg:
 		return eventEnvelope{"ended", map[string]any{
 			"channel_id":      m.ChannelID,
 			"transcript_path": m.TranscriptPath,
 			"audio_path":      m.AudioPath,
 		}}, true
-	case debate.TopicMsg:
+	case contentcreator.TopicMsg:
 		return eventEnvelope{"topic", map[string]any{
 			"channel_id": m.ChannelID,
 			"id":         m.ID,
@@ -292,7 +292,7 @@ func envelope(v any) (eventEnvelope, bool) {
 			"index":      m.Index,
 			"total":      m.Total,
 		}}, true
-	case debate.TopicsChangedMsg:
+	case contentcreator.TopicsChangedMsg:
 		_ = m
 		// Empty payload — clients re-fetch /api/topics on receipt.
 		return eventEnvelope{"topics_changed", map[string]any{}}, true
@@ -329,7 +329,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			// In parallel mode each event is stamped with its channel id; an
 			// empty filter means "send everything" (sequential mode default).
 			if channelFilter != "" {
-				eid := debate.MsgChannelID(v)
+				eid := contentcreator.MsgChannelID(v)
 				if eid != "" && eid != channelFilter {
 					continue
 				}

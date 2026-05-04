@@ -264,10 +264,12 @@ func drawHBOQuoteCard(dst *image.RGBA, x0, y0, x1, y1 int) {
 // card. Unlike drawSubtitle (which auto-sizes a small inner content box
 // and reserves space for a role pill), this fills the full chrome rect
 // with body text, top-anchored. Long passages auto-scroll vertically with
-// stepped jumps: with n wrapped lines and maxLines visible at once, the
-// audio duration is split into (n - maxLines) equal slots, and each slot
-// boundary advances the scroll by one line so each line dwells for
-// audioDuration/(n - maxLines).
+// stepped jumps: with n wrapped lines and maxLines visible at once, there
+// are (n - maxLines + 1) distinct visible window positions (line 0, 1, …,
+// n - maxLines). The audio duration is split evenly across those
+// positions so each position dwells for audioDuration/(n - maxLines + 1)
+// — including the final position, which would otherwise only appear at
+// t = audioDuration the moment the next sentence replaces the body.
 func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	x0, y0, x1, y1 int, fg color.RGBA,
 	bodyStart time.Time, bodyAudioDuration time.Duration,
@@ -310,14 +312,18 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	overflow := len(lines) > maxLines
 
 	// Stepped vertical scroll. With n wrapped lines and maxLines visible,
-	// there are (n - maxLines) line-by-line jumps to walk the passage end
-	// to end. Splitting bodyAudioDuration evenly into that many slots gives
-	// each line a dwell of audioDuration/(n - maxLines), and the scroll
-	// position snaps one lineH forward at every slot boundary.
+	// there are (n - maxLines + 1) distinct visible window positions
+	// (line 0 at the top through line n - maxLines at the top). Splitting
+	// bodyAudioDuration evenly across those positions gives each one a
+	// dwell of audioDuration/(n - maxLines + 1), and the scroll position
+	// snaps one lineH forward at every slot boundary. The final position
+	// is reached at t = audioDuration * (n - maxLines)/(n - maxLines + 1)
+	// so the last line is read for one full slot, not just the moment
+	// before the next sentence lands.
 	scrollPx := 0
 	if overflow && !bodyStart.IsZero() && bodyAudioDuration > 0 {
 		overflowSlots := len(lines) - maxLines
-		slotDuration := bodyAudioDuration / time.Duration(overflowSlots)
+		slotDuration := bodyAudioDuration / time.Duration(overflowSlots+1)
 		if slotDuration > 0 {
 			step := int(time.Since(bodyStart) / slotDuration)
 			if step < 0 {

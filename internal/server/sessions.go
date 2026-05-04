@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/sirily11/debate-bot/internal/audio"
-	"github.com/sirily11/debate-bot/internal/debate"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 )
 
 // SessionStatus enumerates the lifecycle of one debate within its channel's
@@ -59,7 +59,7 @@ type channelState struct {
 	mu       sync.RWMutex
 	debates  []Session
 	currentI int                  // -1 when no debate is airing
-	orch     *debate.Orchestrator // current orch; nil between debates
+	orch     *contentcreator.Orchestrator // current orch; nil between debates
 	// dbPath stays set after orch is cleared so /api/transcript can keep
 	// serving the most-recently-aired debate's history from disk.
 	dbPath string
@@ -73,7 +73,7 @@ type channelState struct {
 // becomes nil, the path stays so the server can keep serving the transcript
 // from disk.
 type ChannelResources struct {
-	Orch          *debate.Orchestrator
+	Orch          *contentcreator.Orchestrator
 	HLSDir        string
 	LiveStream    *audio.LiveStream
 	CurrentDBPath string
@@ -259,7 +259,7 @@ func (r *SessionRegistry) SetDebateOutputs(channelID, debateID, transcriptPath, 
 // "" + nil to clear between debates. When orch is non-nil we also latch its
 // per-debate sqlite path so the server can keep serving /api/transcript from
 // disk after the orchestrator exits.
-func (r *SessionRegistry) SetCurrentOrch(channelID, debateID string, orch *debate.Orchestrator) {
+func (r *SessionRegistry) SetCurrentOrch(channelID, debateID string, orch *contentcreator.Orchestrator) {
 	r.mu.RLock()
 	st := r.channels[channelID]
 	r.mu.RUnlock()

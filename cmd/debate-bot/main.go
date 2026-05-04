@@ -19,7 +19,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/audio/musicgen"
 	"github.com/sirily11/debate-bot/internal/config"
-	"github.com/sirily11/debate-bot/internal/debate"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/server"
@@ -442,7 +442,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 	}
 	sessionStamp := time.Now().Format("2006-01-02_15-04-05")
 	env.OutDir = filepath.Join(env.OutDir, "session-"+sessionStamp)
-	if err := debate.EnsureOutDir(env.OutDir); err != nil {
+	if err := contentcreator.EnsureOutDir(env.OutDir); err != nil {
 		fmt.Fprintln(os.Stderr, "out dir:", err)
 		return nil, 1
 	}
@@ -553,7 +553,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		cr := &channelRuntime{def: ch, queue: newDebateQueue()}
 
 		channelOutDir := filepath.Join(env.OutDir, ch.ID)
-		if err := debate.EnsureOutDir(channelOutDir); err != nil {
+		if err := contentcreator.EnsureOutDir(channelOutDir); err != nil {
 			cancel()
 			fmt.Fprintln(os.Stderr, "channel out dir:", err)
 			return nil, 1
@@ -667,7 +667,7 @@ func (r *runtime) shutdown() {
 // orchestrator are stamped with the channel id before they hit the bus.
 func (r *runtime) channelSend(channelID string) func(any) {
 	return func(v any) {
-		r.bus.Publish(debate.StampChannelID(v, channelID))
+		r.bus.Publish(contentcreator.StampChannelID(v, channelID))
 	}
 }
 
@@ -718,13 +718,13 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 
 		debateEnv := *r.env
 		debateEnv.OutDir = filepath.Join(r.env.OutDir, ch.def.ID, d.id)
-		if err := debate.EnsureOutDir(debateEnv.OutDir); err != nil {
+		if err := contentcreator.EnsureOutDir(debateEnv.OutDir); err != nil {
 			r.log.Error("debate out dir", "channel", ch.def.ID, "id", d.id, "err", err)
 			r.sessions.SetDebateStatus(ch.def.ID, d.id, server.StatusError)
 			continue
 		}
 
-		orch, err := debate.New(&debateEnv, d.topic, r.mcpCfg, send, r.log, ch.live)
+		orch, err := contentcreator.New(&debateEnv, d.topic, r.mcpCfg, send, r.log, ch.live)
 		if err != nil {
 			r.log.Error("orchestrator build", "channel", ch.def.ID, "id", d.id, "err", err)
 			r.sessions.SetDebateStatus(ch.def.ID, d.id, server.StatusError)
@@ -761,6 +761,13 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] planning + generating surface scenes + music (this can take ~60s on first run; conclusion runs in background)\n",
 				ch.def.Number, ch.def.ID)
 			plan := planPuzzleScenes(r.ctx, r.log, &debateEnv, d.topic)
+			// Tell the host (via system prompt) and the pipeline (via
+			// advance cap) how many surface beats the visual director
+			// allocated. Must be set before orch.Run, which constructs the
+			// host agent in Setup. No-op when plan is nil.
+			if plan != nil {
+				orch.SetSurfaceFrames(plan.SurfaceCount())
+			}
 			music := generatePuzzleAssets(r.ctx, r.log, ch.puzzleStage, d.topic, plan,
 				scenesCacheDir, musicCacheDir)
 			if music != nil {
@@ -886,7 +893,7 @@ func (r *runtime) onWatchedFile(path string) {
 
 	// Tell every connected SSE client the channel list changed so the web
 	// UI re-renders the queue without the viewer having to refresh.
-	r.bus.Publish(debate.TopicsChangedMsg{})
+	r.bus.Publish(contentcreator.TopicsChangedMsg{})
 }
 
 // onRemovedFile drops a pending debate when its underlying .md file
@@ -959,7 +966,7 @@ func (r *runtime) onRemovedFile(path string) {
 	fmt.Fprintf(os.Stdout, "- ch %d [%s] removed pending debate — %s\n",
 		cr.def.Number, cr.def.ID, ref.debateID)
 
-	r.bus.Publish(debate.TopicsChangedMsg{})
+	r.bus.Publish(contentcreator.TopicsChangedMsg{})
 }
 
 func agentNames(specs []config.AgentSpec) []string {
@@ -1063,15 +1070,32 @@ func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
 // separate API key wired through env.
 func planPuzzleScenes(ctx context.Context, log *slog.Logger, env *config.Env, topic *config.DebateTopic) *scenes.ScenePlan {
 	if env == nil || env.OpenAIBaseURL == "" || env.OpenAIKey == "" || env.HostModel == "" {
+		// No LLM creds → skip the LLM path entirely and use the heuristic
+		// fallback so the surface still gets story-ordered chunks.
+		if fb := scenes.FallbackPlan(topic); fb != nil {
+			log.Info("scene plan fallback ready (no LLM creds)",
+				"title", topic.Title,
+				"surface_frames", fb.SurfaceCount(),
+				"conclusion_frames", fb.ConclusionCount())
+			return fb
+		}
 		return nil
 	}
 	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, env.HostModel)
 	t0 := time.Now()
-	plan := scenes.Plan(ctx, client, topic)
-	if plan == nil {
-		log.Warn("scene plan unavailable, falling back to static variant counts",
+	plan, err := scenes.Plan(ctx, client, topic)
+	if err != nil || plan == nil {
+		log.Warn("scene plan llm call failed, using heuristic fallback",
 			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond))
+			"elapsed", time.Since(t0).Round(time.Millisecond),
+			"err", err)
+		if fb := scenes.FallbackPlan(topic); fb != nil {
+			log.Info("scene plan fallback ready",
+				"title", topic.Title,
+				"surface_frames", fb.SurfaceCount(),
+				"conclusion_frames", fb.ConclusionCount())
+			return fb
+		}
 		return nil
 	}
 	log.Info("scene plan ready",
@@ -1121,8 +1145,8 @@ func generatePuzzleConclusion(ctx context.Context, log *slog.Logger,
 // as the left-panel position text so on-screen viewers see the puzzle prompt
 // while the host is reading it. Truth (湯底) is intentionally NOT sent — that
 // would defeat the game.
-func buildTopicMsg(d loadedDebate, index, total int) debate.TopicMsg {
-	msg := debate.TopicMsg{
+func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
+	msg := contentcreator.TopicMsg{
 		ID:    d.id,
 		Title: d.title,
 		Type:  d.topic.Type,

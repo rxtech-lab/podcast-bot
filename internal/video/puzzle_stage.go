@@ -9,7 +9,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
-	"github.com/sirily11/debate-bot/internal/debate"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/video/scenes"
 )
@@ -91,7 +91,7 @@ func (s *PuzzleStage) Run(ctx context.Context, bus *eventbus.Bus) {
 			if !s.accepts(v) {
 				continue
 			}
-			if m, ok := v.(debate.TopicMsg); ok {
+			if m, ok := v.(contentcreator.TopicMsg); ok {
 				if isPuzzleType(m.Type) {
 					s.activate()
 					s.handleTopic(m)
@@ -104,14 +104,14 @@ func (s *PuzzleStage) Run(ctx context.Context, bus *eventbus.Bus) {
 				continue
 			}
 			switch m := v.(type) {
-			case debate.TranscriptMsg:
+			case contentcreator.TranscriptMsg:
 				s.handleTranscript(m)
-			case debate.PhaseMsg:
+			case contentcreator.PhaseMsg:
 				s.enc.SetPhase(phaseChipText(m))
 				s.setSceneFor(phaseToScene(m.Phase))
-			case debate.TickMsg:
+			case contentcreator.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
-			case debate.SceneAdvanceMsg:
+			case contentcreator.SceneAdvanceMsg:
 				s.advanceScene()
 			}
 		}
@@ -127,7 +127,7 @@ func isPuzzleType(t string) bool {
 // the SSE phase event always agree. Falls back to the raw phase id for
 // the (rare) case of an unstamped event — the renderer's phaseLabel()
 // will translate a raw id into Chinese on the way out.
-func phaseChipText(m debate.PhaseMsg) string {
+func phaseChipText(m contentcreator.PhaseMsg) string {
 	if m.Label != "" {
 		return m.Label
 	}
@@ -368,7 +368,7 @@ func (s *PuzzleStage) accepts(v any) bool {
 	if s.channelID == "" {
 		return true
 	}
-	id := debate.MsgChannelID(v)
+	id := contentcreator.MsgChannelID(v)
 	return id == "" || id == s.channelID
 }
 
@@ -377,7 +377,7 @@ func (s *PuzzleStage) accepts(v any) bool {
 // right); AffPosition carries the soup-surface (湯面) so viewers can read the
 // scenario the whole round. We deliberately do NOT pass the truth (湯底) to
 // any rendering surface — only the puzzle host's LLM prompt sees it.
-func (s *PuzzleStage) handleTopic(m debate.TopicMsg) {
+func (s *PuzzleStage) handleTopic(m contentcreator.TopicMsg) {
 	s.enc.SetTopic(m.Title)
 	s.enc.SetSides(m.AffNames, m.NegNames)
 	s.enc.SetPositions(m.AffPosition, m.NegPosition)
@@ -397,7 +397,7 @@ func (s *PuzzleStage) handleTopic(m debate.TopicMsg) {
 // and let the renderer fall through to the role-color path. The puzzle host's
 // 是/不是/與此無關 utterances arrive as ordinary transcript fragments — they
 // flow through unchanged.
-func (s *PuzzleStage) handleTranscript(m debate.TranscriptMsg) {
+func (s *PuzzleStage) handleTranscript(m contentcreator.TranscriptMsg) {
 	if string(m.Role) == "user" {
 		if m.Text != "" {
 			username := m.Speaker
