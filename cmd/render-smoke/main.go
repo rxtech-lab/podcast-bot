@@ -497,11 +497,18 @@ func buildPuzzleScenes(topic *config.DebateTopic, cacheDir string) *scenes.Puzzl
 }
 
 // fillMissing replaces nil scene fields with procedural placeholders so
-// every smoke case always renders some bg.
+// every smoke case always renders some bg. Surface/Conclusion are slices of
+// variants so we fill any nil slot inside them.
 func fillMissing(sc *scenes.PuzzleScenes) {
 	proc := proceduralScenes()
-	if sc.Surface == nil {
+	if len(sc.Surface) == 0 {
 		sc.Surface = proc.Surface
+	} else {
+		for i, img := range sc.Surface {
+			if img == nil {
+				sc.Surface[i] = proc.Surface[i%len(proc.Surface)]
+			}
+		}
 	}
 	if sc.QA == nil {
 		sc.QA = proc.QA
@@ -509,21 +516,44 @@ func fillMissing(sc *scenes.PuzzleScenes) {
 	if sc.Reveal == nil {
 		sc.Reveal = proc.Reveal
 	}
-	if sc.Conclusion == nil {
+	if len(sc.Conclusion) == 0 {
 		sc.Conclusion = proc.Conclusion
+	} else {
+		for i, img := range sc.Conclusion {
+			if img == nil {
+				sc.Conclusion[i] = proc.Conclusion[i%len(proc.Conclusion)]
+			}
+		}
 	}
 }
 
-// proceduralScenes synthesises four distinguishable bg plates without any
+// proceduralScenes synthesises distinguishable bg plates without any
 // network. Each one is a different color palette + soft noise so the smoke
-// test reviewer can still tell scenes apart.
+// test reviewer can still tell scenes apart. Surface/Conclusion get the
+// same variant counts as the real generator so fillMissing can index into
+// them by variant index.
 func proceduralScenes() *scenes.PuzzleScenes {
-	return &scenes.PuzzleScenes{
-		Surface:    proceduralBg(color.RGBA{0x12, 0x1c, 0x36, 0xff}, color.RGBA{0x05, 0x08, 0x14, 0xff}, 1),
-		QA:         proceduralBg(color.RGBA{0x1a, 0x22, 0x2c, 0xff}, color.RGBA{0x06, 0x0a, 0x10, 0xff}, 2),
-		Reveal:     proceduralBg(color.RGBA{0x3a, 0x10, 0x12, 0xff}, color.RGBA{0x08, 0x02, 0x05, 0xff}, 3),
-		Conclusion: proceduralBg(color.RGBA{0x2c, 0x24, 0x18, 0xff}, color.RGBA{0x0c, 0x09, 0x05, 0xff}, 4),
+	out := &scenes.PuzzleScenes{
+		QA:     proceduralBg(color.RGBA{0x1a, 0x22, 0x2c, 0xff}, color.RGBA{0x06, 0x0a, 0x10, 0xff}, 2),
+		Reveal: proceduralBg(color.RGBA{0x3a, 0x10, 0x12, 0xff}, color.RGBA{0x08, 0x02, 0x05, 0xff}, 3),
 	}
+	for i := 0; i < scenes.SurfaceVariantCount; i++ {
+		// Step the seed and tilt the palette per variant so each procedural
+		// surface frame looks distinct mid-rotation.
+		out.Surface = append(out.Surface, proceduralBg(
+			color.RGBA{uint8(0x12 + i*0x06), uint8(0x1c + i*0x04), uint8(0x36 - i*0x04), 0xff},
+			color.RGBA{0x05, 0x08, 0x14, 0xff},
+			int64(100+i),
+		))
+	}
+	for i := 0; i < scenes.ConclusionVariantCount; i++ {
+		out.Conclusion = append(out.Conclusion, proceduralBg(
+			color.RGBA{uint8(0x2c + i*0x06), uint8(0x24 - i*0x03), uint8(0x18 + i*0x05), 0xff},
+			color.RGBA{0x0c, 0x09, 0x05, 0xff},
+			int64(200+i),
+		))
+	}
+	return out
 }
 
 func proceduralBg(top, bot color.RGBA, seed int64) *image.RGBA {

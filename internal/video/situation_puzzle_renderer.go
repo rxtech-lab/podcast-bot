@@ -34,11 +34,13 @@ func (r *Renderer) framePuzzle(
 // to read as "premium documentary" against any scene image.
 var hboGold = color.RGBA{0xc8, 0xa4, 0x5a, 0xff}
 
-// puzzleQuoteCardH is the visible height of the subtitle quote card.
-// Tuned so 4 wrapped body lines at the standard bodyFace size fit
-// without clipping; longer passages auto-scroll vertically the way
-// drawSubtitle does for the debate layout.
-const puzzleQuoteCardH = 230
+// puzzleSubtitleMaxLines caps the visible row count of the puzzle
+// subtitle quote card. 1–2-line bodies get a card sized snugly to the
+// wrapped text and don't scroll; bodies that wrap to more rows clip to
+// this cap and auto-scroll vertically the way drawSubtitle does for the
+// debate layout. Two lines is the sweet spot for HBO-style cinematic
+// subtitles — readable in a glance, no third row competing for the eye.
+const puzzleSubtitleMaxLines = 2
 
 // drawPuzzleOverlay paints the HBO reality-show layout on top of the
 // scene bg already in img:
@@ -119,11 +121,11 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 	switch {
 	case speaker != "":
 		// Auto-fit the card to the wrapped body height so a one-line
-		// "是。但更精确地说……" doesn't sit inside a 230px slab. Cap at
-		// puzzleQuoteCardH so very long passages still cap and rely on
-		// drawHBOSubtitleBody's vertical scroll for overflow.
-		cardH := subtitleCardHeight(r.bodyFace, body,
-			qcLeft, qcRight, puzzleQuoteCardH)
+		// "是。但更精确地说……" doesn't sit inside an oversized slab. Cap
+		// at puzzleSubtitleMaxLines rows so longer passages clip to a
+		// 2-line card and rely on drawHBOSubtitleBody's vertical scroll
+		// for overflow.
+		cardH := subtitleCardHeight(r.bodyFace, body, qcLeft, qcRight)
 		qcTop := qcBot - cardH
 
 		// Quote card chrome: solid black slab + thin gold top rule.
@@ -200,9 +202,10 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 // subtitleCardHeight returns the snug height of the speaker-mode quote
 // card given the wrapped body, mirroring the padding/line-metric math
 // inside drawHBOSubtitleBody so the chrome wraps the text instead of
-// floating inside an oversized 230px slab. Caps at maxH so very long
-// passages still get the scroll behaviour the body renderer provides.
-func subtitleCardHeight(face font.Face, body string, x0, x1, maxH int) int {
+// floating inside an oversized slab. Caps the visible rows at
+// puzzleSubtitleMaxLines so longer passages clip to that height and
+// rely on drawHBOSubtitleBody's vertical scroll for overflow.
+func subtitleCardHeight(face font.Face, body string, x0, x1 int) int {
 	const (
 		padX    = 32
 		padY    = 22
@@ -226,12 +229,16 @@ func subtitleCardHeight(face font.Face, body string, x0, x1, maxH int) int {
 	if lineH <= 0 {
 		lineH = asc + desc + lineGap
 	}
-	h := 2*padY + asc + desc + (len(lines)-1)*lineH
+	n := len(lines)
+	if n > puzzleSubtitleMaxLines {
+		n = puzzleSubtitleMaxLines
+	}
+	// Match the innerH budget drawHBOSubtitleBody computes maxLines from
+	// (innerH / lineH), so a 2-line wrap always satisfies maxLines >= 2
+	// and doesn't trigger scroll prematurely.
+	h := 2*padY + n*lineH
 	if h < minH {
 		h = minH
-	}
-	if h > maxH {
-		h = maxH
 	}
 	return h
 }
@@ -287,6 +294,9 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	maxLines := innerH / lineH
 	if maxLines < 1 {
 		maxLines = 1
+	}
+	if maxLines > puzzleSubtitleMaxLines {
+		maxLines = puzzleSubtitleMaxLines
 	}
 
 	lines := wrapLines(face, body, innerW)

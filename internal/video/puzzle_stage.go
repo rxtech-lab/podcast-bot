@@ -13,6 +13,12 @@ import (
 	"github.com/sirily11/debate-bot/internal/video/scenes"
 )
 
+// sceneRotationInterval is how long each variant of a multi-variant scene
+// (surface / conclusion) stays on screen before the stage swaps to the next
+// one. Tuned so a 240s briefing turn cycles through all four surface frames
+// roughly twice and shorter conclusion sequences still see at least one swap.
+const sceneRotationInterval = 30 * time.Second
+
 // PuzzleStage drives the encoder for content of type "situation-puzzle"
 // (海龜湯). Layout-wise it shares the Encoder/Renderer with DebateStage but
 // remaps the panels: the puzzle host (出題者) sits alone on the left side, the
@@ -37,11 +43,6 @@ type PuzzleStage struct {
 	curSpeaker string
 	curRole    string
 	body       strings.Builder
-	// bodyDuration is the cumulative TTS audio length of every sentence
-	// dispatched for the current speaker. Passed to the renderer so its
-	// scroll-clock alignment uses the full turn's playback length, not
-	// just the latest sentence. Reset whenever the speaker changes.
-	bodyDuration time.Duration
 
 	// Scene backgrounds for the active puzzle topic. Generated async by
 	// the caller (cmd/debate-bot) via internal/video/scenes and handed
@@ -50,6 +51,15 @@ type PuzzleStage struct {
 	// generation completes.
 	sceneScenes *scenes.PuzzleScenes
 	curScene    string
+	curSceneIdx int
+
+	// rotateCancel stops the goroutine that swaps multi-variant scenes
+	// (surface, conclusion) on a timer. nil when no rotation is active.
+	// rotateGen is bumped on every (re)start so a stale goroutine that
+	// loses the cancel race notices its generation no longer matches and
+	// exits without applying a stale image.
+	rotateCancel context.CancelFunc
+	rotateGen    int
 }
 
 // NewPuzzleStage creates a sequential-mode PuzzleStage (no channel filter).
@@ -129,12 +139,13 @@ func (s *PuzzleStage) activate() {
 }
 
 func (s *PuzzleStage) idle() {
+	s.stopSceneRotation()
 	s.mu.Lock()
 	s.active = false
 	s.curSpeaker, s.curRole = "", ""
 	s.curScene = ""
+	s.curSceneIdx = 0
 	s.body.Reset()
-	s.bodyDuration = 0
 	s.mu.Unlock()
 	// Reset puzzle layout so a subsequent debate topic on the same encoder
 	// renders with the standard CNN chrome.
@@ -160,13 +171,17 @@ func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
 		if name == "" {
 			name = scenes.SceneSurface
 		}
-		s.applySceneByName(name)
+		s.applyScene(name, 0)
+		s.maybeStartSceneRotation(name)
 	}
 }
 
 // setSceneFor applies the scene image keyed by name to the encoder if
 // scenes are loaded. Records the name so AttachScenes called later can
 // pick the right one even if PhaseMsg arrived before generation finished.
+// On a real scene change (different name from the current one) the variant
+// counter resets to 0 and any prior rotation is stopped — the new phase
+// gets its own rotation if it's a multi-variant one.
 func (s *PuzzleStage) setSceneFor(name string) {
 	if name == "" {
 		return
@@ -177,22 +192,98 @@ func (s *PuzzleStage) setSceneFor(name string) {
 		return
 	}
 	s.curScene = name
+	s.curSceneIdx = 0
 	s.mu.Unlock()
-	s.applySceneByName(name)
+	s.stopSceneRotation()
+	s.applyScene(name, 0)
+	s.maybeStartSceneRotation(name)
 }
 
-func (s *PuzzleStage) applySceneByName(name string) {
+// applyScene blits the indexed variant of the named scene through the
+// encoder. Silently no-ops if scenes haven't been attached yet or the
+// variant slot is empty.
+func (s *PuzzleStage) applyScene(name string, idx int) {
 	s.mu.Lock()
 	sc := s.sceneScenes
 	s.mu.Unlock()
 	if sc == nil {
 		return
 	}
-	img := sc.ByName(name)
+	img := sc.ByNameIdx(name, idx)
 	if img == nil {
 		return
 	}
 	s.enc.SetSceneBackground(img)
+}
+
+// maybeStartSceneRotation kicks off a goroutine that swaps to the next
+// variant of name every sceneRotationInterval, but only if the scene has
+// more than one variant. Scenes with a single image (qa, reveal) skip
+// rotation entirely. Caller is responsible for having called
+// stopSceneRotation first if a different scene was previously active.
+func (s *PuzzleStage) maybeStartSceneRotation(name string) {
+	s.mu.Lock()
+	sc := s.sceneScenes
+	s.mu.Unlock()
+	if sc == nil {
+		return
+	}
+	count := sc.VariantCount(name)
+	if count <= 1 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	if s.rotateCancel != nil {
+		s.rotateCancel()
+	}
+	s.rotateCancel = cancel
+	s.rotateGen++
+	gen := s.rotateGen
+	s.mu.Unlock()
+	go s.rotateSceneLoop(ctx, gen, name, count)
+}
+
+// stopSceneRotation halts any active rotation goroutine. Idempotent. The
+// generation counter on the stage is what makes a stale goroutine that
+// already read its tick channel exit on its next pass — cancel is just
+// the fast path.
+func (s *PuzzleStage) stopSceneRotation() {
+	s.mu.Lock()
+	cancel := s.rotateCancel
+	s.rotateCancel = nil
+	s.rotateGen++
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// rotateSceneLoop is the goroutine body started by maybeStartSceneRotation.
+// On every tick it advances the variant index by one (mod count) and
+// applies it. The gen check guards against a race where stopSceneRotation
+// fires between the tick and the apply; without it the new scene's first
+// frame could be clobbered by the previous scene's stale tick.
+func (s *PuzzleStage) rotateSceneLoop(ctx context.Context, gen int, name string, count int) {
+	t := time.NewTicker(sceneRotationInterval)
+	defer t.Stop()
+	idx := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			idx = (idx + 1) % count
+			s.mu.Lock()
+			if s.rotateGen != gen || s.curScene != name {
+				s.mu.Unlock()
+				return
+			}
+			s.curSceneIdx = idx
+			s.mu.Unlock()
+			s.applyScene(name, idx)
+		}
+	}
 }
 
 // phaseToScene maps planner phases to scene names. Mirrors the four
@@ -237,7 +328,6 @@ func (s *PuzzleStage) handleTopic(m debate.TopicMsg) {
 	s.mu.Lock()
 	s.curSpeaker, s.curRole = "", ""
 	s.body.Reset()
-	s.bodyDuration = 0
 	s.mu.Unlock()
 	s.enc.SetSpeaker("", "", "")
 	s.enc.SetBody("", 0)
@@ -273,26 +363,20 @@ func (s *PuzzleStage) handleTranscript(m debate.TranscriptMsg) {
 		s.curSpeaker = m.Speaker
 		s.curRole = string(m.Role)
 		s.body.Reset()
-		s.bodyDuration = 0
 		s.enc.SetSpeaker(m.Speaker, string(m.Role), "")
 		s.enc.SetBody("", 0)
 	}
 
 	if m.Text != "" {
-		// Accumulate within a turn. Each TranscriptMsg is scheduled by
-		// the producer to fire when its sentence's first audio byte
-		// reaches the listener; appending (instead of replacing) keeps
-		// the prior sentence visible while its audio finishes playing
-		// and pulls the new sentence in alongside it. The renderer's
-		// multi-line scroll handles overflow once the body grows past
-		// the quote card. bodyDuration tracks cumulative audio so the
-		// scroll dwell aligns with the full turn, not just the latest
-		// sentence.
-		if s.body.Len() > 0 {
-			s.body.WriteString(" ")
-		}
+		// Each TranscriptMsg is scheduled by the producer to fire when
+		// this sentence's first audio byte reaches the listener (see
+		// pipeline.synthSentence's playhead). Replacing the body each
+		// time keeps the visible subtitle showing exactly the sentence
+		// currently being spoken — the splitter's MinChars=6 guard
+		// prevents single-character flicker for the puzzle host's
+		// "是。"/"不是。" prefix.
+		s.body.Reset()
 		s.body.WriteString(m.Text)
-		s.bodyDuration += m.AudioDuration
-		s.enc.SetBody(s.body.String(), s.bodyDuration)
+		s.enc.SetBody(s.body.String(), m.AudioDuration)
 	}
 }
