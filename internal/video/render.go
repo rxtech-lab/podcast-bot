@@ -48,6 +48,7 @@ type Renderer struct {
 	panelHdrFace   font.Face // side-panel section header ("正方")
 	panelNameFace  font.Face // side-panel speaker name (idle)
 	panelActFace   font.Face // side-panel speaker name (active)
+	panelPosFace   font.Face // side-panel position footer (very small)
 
 	mu       sync.RWMutex
 	topic    string
@@ -58,6 +59,8 @@ type Renderer struct {
 	body     string
 	affNames []string
 	negNames []string
+	affPos   string
+	negPos   string
 
 	// bodyStartedAt is the wall-clock moment the current `body` value first
 	// became active. Reset on every body change (including the empty body that
@@ -66,6 +69,12 @@ type Renderer struct {
 	// resetting on each new sentence means scrolling always begins from the
 	// top of that sentence so viewers don't miss the opening words.
 	bodyStartedAt time.Time
+
+	// bodyAudioDuration is the wall-clock length of the synthesized audio for
+	// the current body. Captured on each body change. drawSubtitle uses it to
+	// delay scroll start until t/2 - 3s into the audio, so the scroll lands
+	// in the second half of playback rather than at a fixed offset.
+	bodyAudioDuration time.Duration
 
 	// Wall-clock display fed by the pipeline's once-per-second TickMsg.
 	clockElapsed time.Duration
@@ -199,6 +208,10 @@ func newRenderer(width, height int) (*Renderer, error) {
 	if err != nil {
 		return nil, err
 	}
+	panelPosFace, err := mk(srcBody, 13)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Renderer{
 		width: width, height: height,
@@ -216,6 +229,7 @@ func newRenderer(width, height int) (*Renderer, error) {
 		panelHdrFace:    panelHdrFace,
 		panelNameFace:   panelNameFace,
 		panelActFace:    panelActFace,
+		panelPosFace:    panelPosFace,
 	}, nil
 }
 
@@ -353,7 +367,9 @@ func (r *Renderer) SetClock(elapsed, total time.Duration) {
 // SetState updates the active-speaker subtitle. Empty speaker clears it and
 // transitions the renderer back to its idle layout (centered title only,
 // other elements faded out). Non-empty speaker triggers the active layout.
-func (r *Renderer) SetState(speaker, role, side, body string) {
+// audioDuration is the synthesized-audio length of body (0 when unknown);
+// drawSubtitle uses it to align scroll start with the audio.
+func (r *Renderer) SetState(speaker, role, side, body string, audioDuration time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.speaker = speaker
@@ -364,6 +380,7 @@ func (r *Renderer) SetState(speaker, role, side, body string) {
 		// the scroll clock so a long passage begins at line 0 rather than
 		// wherever the previous body had scrolled to.
 		r.bodyStartedAt = time.Now()
+		r.bodyAudioDuration = audioDuration
 	}
 	r.body = body
 
@@ -384,6 +401,16 @@ func (r *Renderer) SetSides(aff, neg []string) {
 	r.mu.Lock()
 	r.affNames = append(r.affNames[:0], aff...)
 	r.negNames = append(r.negNames[:0], neg...)
+	r.mu.Unlock()
+}
+
+// SetPositions sets each side's position statement, drawn as small footer
+// text inside the matching side panel so viewers can see what each side is
+// arguing for. Empty strings hide the footer.
+func (r *Renderer) SetPositions(aff, neg string) {
+	r.mu.Lock()
+	r.affPos = aff
+	r.negPos = neg
 	r.mu.Unlock()
 }
 
@@ -552,6 +579,7 @@ func (r *Renderer) Frame() []byte {
 	clockE, clockT := r.clockElapsed, r.clockTotal
 	affNames := append([]string(nil), r.affNames...)
 	negNames := append([]string(nil), r.negNames...)
+	affPos, negPos := r.affPos, r.negPos
 	var userName, userMsg string
 	var userStart, userExpiry time.Time
 	if len(r.userQueue) > 0 {
@@ -562,6 +590,7 @@ func (r *Renderer) Frame() []byte {
 	mode := r.stageMode
 	modeStart := r.stageModeStart
 	bodyStart := r.bodyStartedAt
+	bodyDur := r.bodyAudioDuration
 	r.mu.Unlock()
 
 	// activeFrac is 0 when fully idle, 1 when fully active, with a smooth
@@ -594,8 +623,8 @@ func (r *Renderer) Frame() []byte {
 	if activeFrac > 0 {
 		overlay := image.NewRGBA(image.Rect(0, 0, r.width, r.height))
 		r.drawActiveOverlay(overlay,
-			topic, phase, speaker, role, body, bodyStart,
-			affNames, negNames,
+			topic, phase, speaker, role, body, bodyStart, bodyDur,
+			affNames, negNames, affPos, negPos,
 			clockE, clockT,
 			userName, userMsg, userStart, userExpiry)
 		blitWithGlobalAlpha(img, overlay, activeFrac)
@@ -678,8 +707,10 @@ func (r *Renderer) drawBackground(img *image.RGBA) {
 // the frame with a global alpha so the whole supporting cast fades in/out
 // together.
 func (r *Renderer) drawActiveOverlay(img *image.RGBA,
-	topic, phase, speaker, role, body string, bodyStart time.Time,
+	topic, phase, speaker, role, body string,
+	bodyStart time.Time, bodyDur time.Duration,
 	affNames, negNames []string,
+	affPos, negPos string,
 	clockE, clockT time.Duration,
 	userName, userMsg string, userStart, userExpiry time.Time,
 ) {
@@ -726,17 +757,17 @@ func (r *Renderer) drawActiveOverlay(img *image.RGBA,
 	rightX := r.width - panelMargin - panelW
 
 	drawSidePanel(img,
-		r.panelHdrFace, r.panelNameFace, r.panelActFace,
+		r.panelHdrFace, r.panelNameFace, r.panelActFace, r.panelPosFace,
 		leftX, panelTop, panelW, panelBot-panelTop,
-		"正方", "AFFIRMATIVE", affNames,
+		"正方", "AFFIRMATIVE", affNames, affPos,
 		speaker, role, "affirmative",
 		roleColor("affirmative"),
 		r.panelAffPlate)
 
 	drawSidePanel(img,
-		r.panelHdrFace, r.panelNameFace, r.panelActFace,
+		r.panelHdrFace, r.panelNameFace, r.panelActFace, r.panelPosFace,
 		rightX, panelTop, panelW, panelBot-panelTop,
-		"反方", "NEGATIVE", negNames,
+		"反方", "NEGATIVE", negNames, negPos,
 		speaker, role, "negative",
 		roleColor("negative"),
 		r.panelNegPlate)
@@ -755,7 +786,7 @@ func (r *Renderer) drawActiveOverlay(img *image.RGBA,
 		drawSubtitle(img, r.tagFace, r.bodyFace,
 			speaker, role, body,
 			subLeft, panelTop+8, subRight, panelBot-8,
-			bodyFG, r.subtitleBgPlate != nil, bodyStart)
+			bodyFG, r.subtitleBgPlate != nil, bodyStart, bodyDur)
 	} else {
 		drawCenteredText(img, r.bodyFace, "等待辯手發言…",
 			(subLeft+subRight)/2, (panelTop+panelBot)/2, hintFG)
@@ -970,12 +1001,16 @@ func drawChatTicker(dst *image.RGBA,
 // see the entire sentence rather than only the most recent fragment.
 // bodyStart is when the current body became active — the renderer resets it
 // on every body change so each new sentence begins its scroll from the top.
+// bodyAudioDuration is the synthesized-audio length of body; when known
+// (>0) the scroll is delayed to start at audioDuration/2 - 3s so motion
+// lands in the second half of playback. Zero falls back to a fixed dwell.
 func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	speaker, role, body string,
 	areaLeft, areaTop, areaRight, areaBot int,
 	fg color.RGBA,
 	hasChrome bool,
 	bodyStart time.Time,
+	bodyAudioDuration time.Duration,
 ) {
 	const (
 		pad         = 26
@@ -983,13 +1018,25 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		lineGap     = 10
 		maxLinesCap = 6
 
-		// Scroll tuning — only used when the wrapped body has more lines than
-		// fit in the card. dwellStart gives viewers time to read the opening
-		// before motion begins; scrollSpeedPxPerSec is set to feel like a
-		// confident teleprompter (≈110 wpm at the body face's line height).
-		scrollDwellStart    = 1500 * time.Millisecond
-		scrollSpeedPxPerSec = 25
+		// scrollDuration is the wall-clock window for the scroll itself once
+		// it begins. Independent of overflow size, so longer passages scroll
+		// faster instead of taking proportionally longer to finish.
+		scrollDuration = 2500 * time.Millisecond
+
+		// fallbackDwell is used when bodyAudioDuration is unknown (==0) — keeps
+		// the legacy behaviour for callers that don't supply audio timing.
+		fallbackDwell = 500 * time.Millisecond
 	)
+
+	// scrollDwellStart aligns scroll start with the audio: t/2 - 3s. Negative
+	// results clamp to 0 so very short clips scroll immediately.
+	scrollDwellStart := fallbackDwell
+	if bodyAudioDuration > 0 {
+		scrollDwellStart = bodyAudioDuration/2 - 3*time.Second
+		if scrollDwellStart < 0 {
+			scrollDwellStart = 0
+		}
+	}
 
 	areaW := areaRight - areaLeft
 	areaH := areaBot - areaTop
@@ -1089,12 +1136,13 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		overflowPx := (len(lines) - maxLines) * lineH
 		elapsed := time.Since(bodyStart)
 		if elapsed > scrollDwellStart {
-			offset := int(float64(elapsed-scrollDwellStart) /
-				float64(time.Second) * float64(scrollSpeedPxPerSec))
-			if offset > overflowPx {
-				offset = overflowPx
+			scrollElapsed := elapsed - scrollDwellStart
+			if scrollElapsed >= scrollDuration {
+				scrollPx = overflowPx
+			} else {
+				scrollPx = int(float64(overflowPx) *
+					float64(scrollElapsed) / float64(scrollDuration))
 			}
-			scrollPx = offset
 		}
 	}
 
@@ -1131,12 +1179,15 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 // drawSidePanel paints one of the two roster panels (affirmative/negative).
 // activeSpeaker + activeRole are the current speaker; if their role matches
 // panelSide, the matching name is highlighted. accent is the role color used
-// for the header text and the active row's marker.
+// for the header text and the active row's marker. position, when non-empty,
+// is rendered as wrapped small text in a footer band so viewers can read each
+// side's stance.
 func drawSidePanel(dst *image.RGBA,
-	hdrFace, nameFace, activeFace font.Face,
+	hdrFace, nameFace, activeFace, posFace font.Face,
 	x, y, w, h int,
 	zh, en string,
 	names []string,
+	position string,
 	activeSpeaker, activeRole, panelSide string,
 	accent color.RGBA,
 	chrome *image.RGBA,
@@ -1237,6 +1288,72 @@ func drawSidePanel(dst *image.RGBA,
 		nd.Dot = fixed.P(nx, rowCy)
 		nd.DrawString(name)
 	}
+
+	// Position footer: very small wrapped text along the bottom of the panel
+	// so viewers can read each side's stance at a glance. Anchored to the
+	// bottom edge so it sits below the names list regardless of roster size,
+	// with a thin divider above it.
+	if strings.TrimSpace(position) != "" {
+		const (
+			footerInset = 12
+			footerPad   = 10
+			lineGap     = 3
+			maxLines    = 4
+		)
+		innerW := w - 2*(footerInset+footerPad)
+		if innerW < 40 {
+			innerW = 40
+		}
+		posLines := wrapLines(posFace, position, innerW)
+		if len(posLines) > maxLines {
+			posLines = posLines[:maxLines]
+			// Ellipsis on the last visible line so truncation reads as
+			// intentional rather than a clip.
+			last := posLines[len(posLines)-1]
+			posLines[len(posLines)-1] = trimToWidth(posFace, last+"…", innerW)
+		}
+		pm := posFace.Metrics()
+		lineH := pm.Height.Ceil() + lineGap
+		footerH := footerPad*2 + len(posLines)*lineH
+		footerBox := image.Rect(
+			x+footerInset, y+h-footerInset-footerH,
+			x+w-footerInset, y+h-footerInset,
+		)
+		// Subtle accent-tinted plate so the footer reads as part of the panel
+		// rather than floating text. Outline echoes the side's color.
+		draw.Draw(dst, footerBox,
+			&image.Uniform{withAlpha(accent, 0x1f)}, image.Point{}, draw.Over)
+		drawRectOutline(dst, footerBox, 1, withAlpha(accent, 0x55))
+
+		posFG := color.RGBA{0xd4, 0xd9, 0xe6, 0xff}
+		pd := &font.Drawer{Dst: dst, Src: image.NewUniform(posFG), Face: posFace}
+		textTop := footerBox.Min.Y + footerPad + pm.Ascent.Ceil()
+		for i, ln := range posLines {
+			lw := pd.MeasureString(ln).Ceil()
+			lx := footerBox.Min.X + (footerBox.Dx()-lw)/2
+			pd.Dot = fixed.P(lx, textTop+i*lineH)
+			pd.DrawString(ln)
+		}
+	}
+}
+
+// trimToWidth measures s and progressively drops trailing runes until it fits
+// within maxWidth pixels under face. Used to keep ellipsised footer lines
+// inside the panel.
+func trimToWidth(face font.Face, s string, maxWidth int) string {
+	d := &font.Drawer{Face: face}
+	if d.MeasureString(s).Ceil() <= maxWidth {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 1 {
+		runes = runes[:len(runes)-1]
+		candidate := string(runes) + "…"
+		if d.MeasureString(candidate).Ceil() <= maxWidth {
+			return candidate
+		}
+	}
+	return string(runes)
 }
 
 // drawGradientBackground paints a vertical gradient from top to bottom.

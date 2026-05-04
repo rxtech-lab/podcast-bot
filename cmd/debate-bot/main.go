@@ -46,30 +46,37 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `debate-bot — multi-agent debate podcast (TV-channel mode)
+	fmt.Fprintln(os.Stderr, `debate-bot — multi-agent live show podcast (TV-channel mode)
 
 usage:
-  debate-bot server --channel ./channels.json --debate "./topics/*.md" \
+  debate-bot server --channel ./channels.json --content "./topics/*.md" \
                     [--mcp ./mcp.json] [--out ./out] [--addr :3000]
 
   --channel  path to channels.json — array of {id, number, title} channel
-             definitions. Each debate.md frontmatter must declare a `+"`channel`"+`
+             definitions. Each topic.md frontmatter must declare a `+"`channel`"+`
              field whose value matches one of these ids.
-  --debate   path or glob to debate .md file(s) — repeatable; consecutive
-             paths after one --debate are also accepted. The directory each
+  --content  path or glob to topic .md file(s) — repeatable; consecutive
+             paths after one --content are also accepted. The directory each
              spec points at is automatically watched for new .md files at
-             runtime (drop a new debate.md into the folder and it is loaded,
+             runtime (drop a new topic.md into the folder and it is loaded,
              validated against channels.json, appended to the matching
              channel's queue, and surfaced on the web UI without restart).
 
-  Channels run in parallel as independent video + audio streams. Multiple
-  debates assigned to the same channel are queued and play sequentially
-  inside that channel. Every channel defined in channels.json pre-
-  initialises its encoder so a freshly-dropped debate can start airing
-  immediately, even if the channel started with no initial debates.
+  Each topic.md must declare a `+"`type`"+` in its frontmatter — one of:
+    - debate            multi-agent affirmative-vs-negative debate
+    - situation-puzzle  海龜湯 / lateral-thinking puzzle (host knows the
+                        hidden truth; players ask yes/no questions)
+  Unknown types abort startup with a clear error.
 
-  --topic is a deprecated alias for --debate (still works, prints a warning).
-  `+"`run`"+` is kept as an alias for `+"`server`"+` for backwards compatibility.
+  Channels run in parallel as independent video + audio streams. Multiple
+  topics assigned to the same channel are queued and play sequentially
+  inside that channel. Every channel defined in channels.json pre-
+  initialises its encoder so a freshly-dropped topic can start airing
+  immediately, even if the channel started with no initial topics.
+
+  --debate and --topic are deprecated aliases for --content (still work,
+  print a warning). `+"`run`"+` is kept as an alias for `+"`server`"+` for backwards
+  compatibility.
 
 env (loaded from .env if present):
   OPENAI_BASE_URL   OPENAI_API_KEY   HOST_MODEL
@@ -330,46 +337,67 @@ func (r *runtime) loadDebateLocked(path string) (loadedDebate, error) {
 	return loadedDebate{id: id, path: path, title: t.Title, topic: t}, nil
 }
 
-// stringSlice satisfies flag.Value so --debate / --watch can be supplied
+// stringSlice satisfies flag.Value so --content / --watch can be supplied
 // multiple times.
 type stringSlice []string
 
 func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
 func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 
-// extractDebateArgs hoists every --debate (and the deprecated --topic alias)
-// occurrence out of args so the stdlib flag parser doesn't trip on the trailing
-// values an unquoted shell glob produces.
-func extractDebateArgs(args []string) (debates []string, rest []string, usedDeprecated bool) {
+// deprecationWarning records which legacy flag (if any) the user passed so
+// serverCmd can emit a single warning per run.
+type deprecationWarning struct {
+	debate bool // --debate was used
+	topic  bool // --topic was used
+}
+
+// extractContentArgs hoists every --content (and the deprecated --debate /
+// --topic aliases) occurrence out of args so the stdlib flag parser doesn't
+// trip on the trailing values an unquoted shell glob produces.
+func extractContentArgs(args []string) (specs []string, rest []string, deprecated deprecationWarning) {
 	rest = make([]string, 0, len(args))
+	collect := func(i int) ([]string, int) {
+		var out []string
+		i++
+		for i < len(args) && !strings.HasPrefix(args[i], "-") {
+			out = append(out, args[i])
+			i++
+		}
+		return out, i - 1
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--content" || a == "-content":
+			vs, j := collect(i)
+			specs = append(specs, vs...)
+			i = j
+		case strings.HasPrefix(a, "--content="):
+			specs = append(specs, strings.TrimPrefix(a, "--content="))
+		case strings.HasPrefix(a, "-content="):
+			specs = append(specs, strings.TrimPrefix(a, "-content="))
 		case a == "--debate" || a == "-debate":
-			i++
-			for i < len(args) && !strings.HasPrefix(args[i], "-") {
-				debates = append(debates, args[i])
-				i++
-			}
-			i--
+			deprecated.debate = true
+			vs, j := collect(i)
+			specs = append(specs, vs...)
+			i = j
 		case strings.HasPrefix(a, "--debate="):
-			debates = append(debates, strings.TrimPrefix(a, "--debate="))
+			deprecated.debate = true
+			specs = append(specs, strings.TrimPrefix(a, "--debate="))
 		case strings.HasPrefix(a, "-debate="):
-			debates = append(debates, strings.TrimPrefix(a, "-debate="))
+			deprecated.debate = true
+			specs = append(specs, strings.TrimPrefix(a, "-debate="))
 		case a == "--topic" || a == "-topic":
-			usedDeprecated = true
-			i++
-			for i < len(args) && !strings.HasPrefix(args[i], "-") {
-				debates = append(debates, args[i])
-				i++
-			}
-			i--
+			deprecated.topic = true
+			vs, j := collect(i)
+			specs = append(specs, vs...)
+			i = j
 		case strings.HasPrefix(a, "--topic="):
-			usedDeprecated = true
-			debates = append(debates, strings.TrimPrefix(a, "--topic="))
+			deprecated.topic = true
+			specs = append(specs, strings.TrimPrefix(a, "--topic="))
 		case strings.HasPrefix(a, "-topic="):
-			usedDeprecated = true
-			debates = append(debates, strings.TrimPrefix(a, "-topic="))
+			deprecated.topic = true
+			specs = append(specs, strings.TrimPrefix(a, "-topic="))
 		default:
 			rest = append(rest, a)
 		}
@@ -557,8 +585,14 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 			cr.enc = enc
 			hlsDir = enc.HLSDir()
 			enc.AttachAudio(ctx, live)
-			stage := video.NewChannelStage(enc, ch.ID)
-			go stage.Run(ctx, bus)
+			// Each channel runs both stages concurrently — they self-gate on
+			// TopicMsg.Type so only the one matching the active content drives
+			// the encoder. Adding a third content type means dropping in a
+			// third stage here without disturbing the existing two.
+			debateStage := video.NewDebateChannelStage(enc, ch.ID)
+			puzzleStage := video.NewPuzzleChannelStage(enc, ch.ID)
+			go debateStage.Run(ctx, bus)
+			go puzzleStage.Run(ctx, bus)
 		}
 
 		rt.channels = append(rt.channels, cr)
@@ -700,14 +734,7 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		fmt.Fprintf(os.Stdout, "▶ ch %d [%s] starting debate %d/%d — %s\n",
 			ch.def.Number, ch.def.ID, i+1, total, d.title)
 
-		send(debate.TopicMsg{
-			ID:       d.id,
-			Title:    d.title,
-			Index:    i,
-			Total:    total,
-			AffNames: agentNames(d.topic.Affirmative),
-			NegNames: agentNames(d.topic.Negative),
-		})
+		send(buildTopicMsg(d, i, total))
 
 		runErr := orch.Run(r.ctx)
 		orch.Shutdown()
@@ -903,14 +930,50 @@ func agentNames(specs []config.AgentSpec) []string {
 	return out
 }
 
+// buildTopicMsg shapes the per-content-type TopicMsg the video stage consumes.
+// Debate fills aff/neg roster + position statements as today. Situation-puzzle
+// repurposes the same panels: the puzzle host appears alone on the left
+// (AffNames), players on the right (NegNames), and the surface story doubles
+// as the left-panel position text so on-screen viewers see the puzzle prompt
+// while the host is reading it. Truth (湯底) is intentionally NOT sent — that
+// would defeat the game.
+func buildTopicMsg(d loadedDebate, index, total int) debate.TopicMsg {
+	msg := debate.TopicMsg{
+		ID:    d.id,
+		Title: d.title,
+		Type:  d.topic.Type,
+		Index: index,
+		Total: total,
+	}
+	if d.topic.Type == config.ContentTypeSituationPuzzle {
+		hostName := d.topic.PuzzleHost.Name
+		if hostName == "" {
+			hostName = "Host"
+		}
+		msg.AffNames = []string{hostName}
+		msg.NegNames = agentNames(d.topic.Players)
+		msg.AffPosition = d.topic.Surface
+		msg.NegPosition = ""
+		return msg
+	}
+	msg.AffNames = agentNames(d.topic.Affirmative)
+	msg.NegNames = agentNames(d.topic.Negative)
+	msg.AffPosition = d.topic.AffirmativePos
+	msg.NegPosition = d.topic.NegativePos
+	return msg
+}
+
 // serverCmd: HTTP server hosting the web UI + per-channel HLS video + audio.
 func serverCmd(args []string) int {
-	specs, rest, deprecated := extractDebateArgs(args)
-	if deprecated {
-		fmt.Fprintln(os.Stderr, "warning: --topic is deprecated, use --debate")
+	specs, rest, deprecated := extractContentArgs(args)
+	if deprecated.debate {
+		fmt.Fprintln(os.Stderr, "warning: --debate is deprecated, use --content")
+	}
+	if deprecated.topic {
+		fmt.Fprintln(os.Stderr, "warning: --topic is deprecated, use --content")
 	}
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	fs.Var((*stringSlice)(&specs), "debate", "path or glob to debate .md file(s) — repeatable; consecutive paths after one --debate are also accepted")
+	fs.Var((*stringSlice)(&specs), "content", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --content are also accepted")
 	channelsPath := fs.String("channel", "./channels.json", "path to channels.json — array of {id, number, title} channel definitions")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
@@ -919,7 +982,7 @@ func serverCmd(args []string) int {
 		return 2
 	}
 	if len(specs) == 0 {
-		fmt.Fprintln(os.Stderr, "missing --debate")
+		fmt.Fprintln(os.Stderr, "missing --content")
 		return 2
 	}
 

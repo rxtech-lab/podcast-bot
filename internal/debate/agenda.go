@@ -51,8 +51,15 @@ func (q *userQueue) drain() ([]userMessage, bool) {
 	return out, q.end
 }
 
-// Planner decides what turn happens next.
-type Planner struct {
+// Planner is the per-content-type next-turn scheduler. The pipeline only calls
+// Next; concrete implementations (DebatePlanner, PuzzlePlanner, ...) own their
+// own state machines.
+type Planner interface {
+	Next(ctx context.Context) (*Turn, bool)
+}
+
+// DebatePlanner drives the affirmative-vs-negative debate format.
+type DebatePlanner struct {
 	topic      *config.DebateTopic
 	tracker    *Tracker
 	registry   *agent.Registry
@@ -84,9 +91,10 @@ type plannerState struct {
 	pendingAnswerUserText string
 }
 
-// NewPlanner constructs the planner; the queue is kept by the orchestrator.
-func NewPlanner(topic *config.DebateTopic, tracker *Tracker, reg *agent.Registry, q *userQueue, tr *Transcript) *Planner {
-	return &Planner{
+// NewDebatePlanner constructs the debate-format planner; the queue is kept by
+// the orchestrator.
+func NewDebatePlanner(topic *config.DebateTopic, tracker *Tracker, reg *agent.Registry, q *userQueue, tr *Transcript) *DebatePlanner {
+	return &DebatePlanner{
 		topic:      topic,
 		tracker:    tracker,
 		registry:   reg,
@@ -98,7 +106,7 @@ func NewPlanner(topic *config.DebateTopic, tracker *Tracker, reg *agent.Registry
 
 // Next produces the next Turn, or returns false to end the debate.
 // It is single-threaded — the pipeline calls it from one goroutine.
-func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
+func (p *DebatePlanner) Next(ctx context.Context) (*Turn, bool) {
 	if ctx.Err() != nil {
 		return nil, false
 	}
@@ -194,7 +202,7 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 }
 
 // planOpening alternates affirmative / negative candidates with host transitions.
-func (p *Planner) planOpening() (*Turn, bool) {
+func (p *DebatePlanner) planOpening() (*Turn, bool) {
 	if !p.state.openingSent {
 		p.state.openingSent = true
 		return p.makeTurn(p.registry.Host, "intro", p.budgetSeconds(30)), true
@@ -216,7 +224,7 @@ func (p *Planner) planOpening() (*Turn, bool) {
 }
 
 // planFreeDebate alternates sides, occasionally letting a viewer interject.
-func (p *Planner) planFreeDebate(ctx context.Context) (*Turn, bool) {
+func (p *DebatePlanner) planFreeDebate(ctx context.Context) (*Turn, bool) {
 	// Every 3rd inter-segment slot, probe viewers in parallel.
 	if p.state.freeDebateIdx > 0 && p.state.freeDebateIdx%3 == 0 && len(p.registry.Viewers) > 0 {
 		if v, q := p.askAnyViewer(ctx); v != nil {
@@ -251,7 +259,7 @@ func (p *Planner) planFreeDebate(ctx context.Context) (*Turn, bool) {
 // updates after a turn finishes playing, so the same speaker would be re-picked
 // while their previous turn is still being synthesised — which produced two
 // same-side answers in a row.
-func (p *Planner) pickFreeDebateCandidate() agent.Agent {
+func (p *DebatePlanner) pickFreeDebateCandidate() agent.Agent {
 	idx := p.state.freeDebateIdx
 	p.state.freeDebateIdx++
 	var candidates []agent.Agent
@@ -281,7 +289,7 @@ func (p *Planner) pickFreeDebateCandidate() agent.Agent {
 	return pick
 }
 
-func (p *Planner) askAnyViewer(ctx context.Context) (agent.Agent, string) {
+func (p *DebatePlanner) askAnyViewer(ctx context.Context) (agent.Agent, string) {
 	probeCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	type result struct {
@@ -318,7 +326,7 @@ func (p *Planner) askAnyViewer(ctx context.Context) (agent.Agent, string) {
 	return nil, ""
 }
 
-func (p *Planner) planClosing() (*Turn, bool) {
+func (p *DebatePlanner) planClosing() (*Turn, bool) {
 	total := len(p.topic.Affirmative) + len(p.topic.Negative)
 	if p.state.closingIdx >= total {
 		p.state.phase = agent.PhaseVerdict
@@ -335,7 +343,7 @@ func (p *Planner) planClosing() (*Turn, bool) {
 	return p.makeTurn(ag, "closing", p.budgetSeconds(45)), true
 }
 
-func (p *Planner) makeTurn(ag agent.Agent, directive string, budget time.Duration) *Turn {
+func (p *DebatePlanner) makeTurn(ag agent.Agent, directive string, budget time.Duration) *Turn {
 	p.turnN++
 	return &Turn{
 		ID:        p.turnN,
@@ -347,13 +355,13 @@ func (p *Planner) makeTurn(ag agent.Agent, directive string, budget time.Duratio
 	}
 }
 
-func (p *Planner) segmentSeconds() time.Duration {
+func (p *DebatePlanner) segmentSeconds() time.Duration {
 	if p.topic.SegmentMaxSeconds <= 0 {
 		return 60 * time.Second
 	}
 	return time.Duration(p.topic.SegmentMaxSeconds) * time.Second
 }
 
-func (p *Planner) budgetSeconds(n int) time.Duration {
+func (p *DebatePlanner) budgetSeconds(n int) time.Duration {
 	return time.Duration(n) * time.Second
 }

@@ -15,13 +15,20 @@ import (
 // treat empty as a match so today's behavior is preserved.
 
 // TranscriptMsg is one sentence (or fragment) of one turn.
+//
+// AudioDuration is the wall-clock length of the synthesized audio for Text,
+// measured from the bytes the TTS provider produced. Subscribers that drive
+// time-based UI (subtitle scrolling) use it to align motion with the audio.
+// Zero means "unknown" — emitters that don't have measured audio (e.g. the
+// final Done=true marker) leave it unset.
 type TranscriptMsg struct {
-	ChannelID string
-	Speaker   string
-	Role      agent.Role
-	Side      string
-	Text      string
-	Done      bool
+	ChannelID     string
+	Speaker       string
+	Role          agent.Role
+	Side          string
+	Text          string
+	Done          bool
+	AudioDuration time.Duration
 }
 
 // TickMsg updates the elapsed/remaining clock display.
@@ -65,10 +72,22 @@ type TopicMsg struct {
 	ChannelID string
 	ID        string
 	Title     string
-	Index     int // 0-based position in the queue
-	Total     int // total topics in the queue
-	AffNames  []string
-	NegNames  []string
+	// Type carries the content-type discriminator (config.ContentTypeDebate /
+	// config.ContentTypeSituationPuzzle). Stage subscribers gate on it so each
+	// content kind has its own video-generation flow.
+	Type     string
+	Index    int // 0-based position in the queue
+	Total    int // total topics in the queue
+	AffNames []string
+	NegNames []string
+
+	// Position statements rendered as small footer text inside each side
+	// panel so viewers can see what each side argues. For debate, these are
+	// the affirmative / negative position summaries. For situation-puzzle,
+	// AffPosition holds the soup-surface (湯面); NegPosition stays empty.
+	// May be empty when the topic .md omits the section.
+	AffPosition string
+	NegPosition string
 }
 
 // TopicsChangedMsg signals that the channel/debate list has changed (e.g. a

@@ -175,24 +175,57 @@ func (o *Orchestrator) buildAgents() error {
 			return agent.NewJudge(base)
 		case agent.RoleViewer:
 			return agent.NewViewer(base)
+		case agent.RolePlayer:
+			return agent.NewPlayer(base)
+		case agent.RolePuzzleHost:
+			return agent.NewPuzzleHost(base, o.Topic.Truth)
 		}
 		return nil
 	}
 
-	o.Registry.Host = mk(config.AgentSpec{Name: "Host", Model: o.Env.HostModel}, agent.RoleHost, o.Env.HostModel)
-	o.Registry.Judge = mk(config.AgentSpec{Name: "Judge", Model: o.Topic.Judge.Model,
-		BaseURL: o.Topic.Judge.BaseURL, APIKey: o.Topic.Judge.APIKey}, agent.RoleJudge, o.Env.HostModel)
-
-	for _, s := range o.Topic.Affirmative {
-		o.Registry.Affirmatve = append(o.Registry.Affirmatve, mk(s, agent.RoleAffirmative, ""))
-	}
-	for _, s := range o.Topic.Negative {
-		o.Registry.Negative = append(o.Registry.Negative, mk(s, agent.RoleNegative, ""))
-	}
 	for _, s := range o.Topic.Viewers {
 		o.Registry.Viewers = append(o.Registry.Viewers, mk(s, agent.RoleViewer, ""))
 	}
+
+	switch o.Topic.Type {
+	case config.ContentTypeSituationPuzzle:
+		hostName := o.Topic.PuzzleHost.Name
+		if hostName == "" {
+			hostName = "Host"
+		}
+		o.Registry.PuzzleHost = mk(config.AgentSpec{
+			Name:    hostName,
+			Model:   o.Topic.PuzzleHost.Model,
+			BaseURL: o.Topic.PuzzleHost.BaseURL,
+			APIKey:  o.Topic.PuzzleHost.APIKey,
+		}, agent.RolePuzzleHost, o.Env.HostModel)
+		for _, s := range o.Topic.Players {
+			o.Registry.Players = append(o.Registry.Players, mk(s, agent.RolePlayer, ""))
+		}
+	default:
+		// debate (also the implicit fallback if a future content type is added
+		// before its branch lands here — config validation prevents this in
+		// practice).
+		o.Registry.Host = mk(config.AgentSpec{Name: "Host", Model: o.Env.HostModel}, agent.RoleHost, o.Env.HostModel)
+		o.Registry.Judge = mk(config.AgentSpec{Name: "Judge", Model: o.Topic.Judge.Model,
+			BaseURL: o.Topic.Judge.BaseURL, APIKey: o.Topic.Judge.APIKey}, agent.RoleJudge, o.Env.HostModel)
+		for _, s := range o.Topic.Affirmative {
+			o.Registry.Affirmatve = append(o.Registry.Affirmatve, mk(s, agent.RoleAffirmative, ""))
+		}
+		for _, s := range o.Topic.Negative {
+			o.Registry.Negative = append(o.Registry.Negative, mk(s, agent.RoleNegative, ""))
+		}
+	}
 	return nil
+}
+
+// newPlanner picks the per-content-type planner. Today: debate vs situation-
+// puzzle. Adding a third content type means adding a branch here.
+func (o *Orchestrator) newPlanner() Planner {
+	if o.Topic.Type == config.ContentTypeSituationPuzzle {
+		return NewPuzzlePlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
+	}
+	return NewDebatePlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
 }
 
 // Run executes Setup then drives the pipeline. Blocks until the planner finishes.
@@ -200,7 +233,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	if err := o.Setup(ctx); err != nil {
 		return err
 	}
-	planner := NewPlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
+	planner := o.newPlanner()
 	pipe := NewPipeline(Deps{
 		Planner: planner, Tracker: o.Tracker, Registry: o.Registry,
 		TTS: o.TTS, OutDir: o.Env.OutDir,

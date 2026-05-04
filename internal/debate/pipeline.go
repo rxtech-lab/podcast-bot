@@ -19,7 +19,7 @@ import (
 
 // Deps are everything the pipeline needs to run.
 type Deps struct {
-	Planner    *Planner
+	Planner    Planner
 	Tracker    *Tracker
 	Registry   *agent.Registry
 	TTS        tts.Provider
@@ -241,33 +241,42 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 
 	// Bus event drives the live UI subtitle. The producer races up to the
 	// LiveStream's input buffer ahead of realtime playback; emitting the bus
-	// event synchronously makes the subtitle race ahead of the audio. Delay
-	// the publish by however far ahead this sentence's first audio byte will
-	// land — bytesAhead at this moment is exactly the playback offset of the
-	// *next* byte we're about to write at the ffmpeg-stdout boundary.
+	// event synchronously makes the subtitle race ahead of the audio. Capture
+	// the target wall-clock send moment now (bytesAhead is the playback offset
+	// of the *next* byte we're about to write), then synthesize so we can
+	// stamp the message with the resulting audio duration before dispatch.
 	//
 	// We also add subtitleClientLatency to account for buffering downstream of
 	// ffmpeg (browser MediaSource source buffer, ffplay decode pipeline, OS
 	// audio buffer). Without it the subtitle still beats the audio by
 	// roughly that amount because BytesAhead can't see past stdout.
-	msg := TranscriptMsg{
-		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
-		Side: t.Speaker.Side(), Text: sent,
-	}
 	bytesAhead := p.d.LiveStream.BytesAhead()
-	delay := time.Duration(float64(bytesAhead)/float64(audio.AudioBytesPerSec)*float64(time.Second)) + subtitleClientLatency
-	if delay <= 50*time.Millisecond {
-		p.d.Send(msg)
-	} else {
-		time.AfterFunc(delay, func() { p.d.Send(msg) })
-	}
+	targetSend := time.Now().Add(
+		time.Duration(float64(bytesAhead)/float64(audio.AudioBytesPerSec)*float64(time.Second)) +
+			subtitleClientLatency)
 
 	body, err := p.d.TTS.SynthesizeStream(ctx, t.Speaker.Voice().ShortName, sent, p.d.Language)
 	if err != nil {
 		return 0, err
 	}
 	defer body.Close()
-	return io.Copy(sink, body)
+	n, err := io.Copy(sink, body)
+	if err != nil {
+		return n, err
+	}
+
+	msg := TranscriptMsg{
+		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
+		Side: t.Speaker.Side(), Text: sent,
+		AudioDuration: time.Duration(float64(n) /
+			float64(audio.AudioBytesPerSec) * float64(time.Second)),
+	}
+	if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
+		p.d.Send(msg)
+	} else {
+		time.AfterFunc(remaining, func() { p.d.Send(msg) })
+	}
+	return n, nil
 }
 
 // updateMemories pushes the played turn into the transcript log AND into every

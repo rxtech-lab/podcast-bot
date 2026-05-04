@@ -80,11 +80,12 @@ type Encoder struct {
 	log  *slog.Logger
 	done chan struct{}
 
-	stateMu     sync.Mutex
-	curSpeaker  string
-	curRole     string
-	curSide     string
-	curBodyText string
+	stateMu         sync.Mutex
+	curSpeaker      string
+	curRole         string
+	curSide         string
+	curBodyText     string
+	curBodyDuration time.Duration
 }
 
 // New starts the encoder. sessionDir is where HLS segments + the ffmpeg
@@ -257,6 +258,10 @@ func (e *Encoder) SetClock(elapsed, total time.Duration) { e.rend.SetClock(elaps
 // panels rendered on the left and right of the stage.
 func (e *Encoder) SetSides(aff, neg []string) { e.rend.SetSides(aff, neg) }
 
+// SetPositions sets each side's position statement (the stance they argue
+// for), drawn as small footer text inside the side panels.
+func (e *Encoder) SetPositions(aff, neg string) { e.rend.SetPositions(aff, neg) }
+
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).
 // Calling with empty speaker hides the subtitle (idle state).
@@ -266,17 +271,21 @@ func (e *Encoder) SetSpeaker(speaker, role, side string) {
 	e.curRole = role
 	e.curSide = side
 	body := e.curBodyText
+	dur := e.curBodyDuration
 	e.stateMu.Unlock()
-	e.rend.SetState(speaker, role, side, body)
+	e.rend.SetState(speaker, role, side, body, dur)
 }
 
 // SetBody updates the spoken text shown inside the subtitle box.
-func (e *Encoder) SetBody(s string) {
+// audioDuration is the wall-clock length of the synthesized audio for s and
+// drives time-based subtitle motion (scroll start). Pass 0 when unknown.
+func (e *Encoder) SetBody(s string, audioDuration time.Duration) {
 	e.stateMu.Lock()
 	e.curBodyText = s
+	e.curBodyDuration = audioDuration
 	speaker, role, side := e.curSpeaker, e.curRole, e.curSide
 	e.stateMu.Unlock()
-	e.rend.SetState(speaker, role, side, s)
+	e.rend.SetState(speaker, role, side, s, audioDuration)
 }
 
 // userMsgTTL is how long a chat overlay stays on screen before vanishing.

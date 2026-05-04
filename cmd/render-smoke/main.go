@@ -200,7 +200,11 @@ func writeFrame(path, topic, phase, speaker, role, side, body, userMsg, userName
 		[]string{"Alice", "Carol"},
 		[]string{"Linda", "Bob"},
 	)
-	rend.SetState(speaker, role, side, body)
+	rend.SetPositions(
+		"AI 是程序員的放大器：它讓人類更有產能，但設計、判斷、責任仍由工程師承擔。",
+		"AI 將取代大量初階程序員：寫代碼可被自動化，行業必須面對結構性收縮。",
+	)
+	rend.SetState(speaker, role, side, body, 0)
 	if elapsed > 0 || total > 0 {
 		rend.SetClock(elapsed, total)
 	}

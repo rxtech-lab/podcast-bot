@@ -33,9 +33,19 @@ const (
 	Resolution4K    = "4k"
 )
 
-// DebateTopic is the full debate.md content: YAML frontmatter + named markdown sections.
+// Content types selectable via the `type:` field in topic.md frontmatter. The
+// orchestrator picks an agent set + planner based on this value.
+const (
+	ContentTypeDebate          = "debate"
+	ContentTypeSituationPuzzle = "situation-puzzle"
+)
+
+// DebateTopic is the full topic.md content: YAML frontmatter + named markdown
+// sections. Despite the name, it now covers every supported content type
+// (debate + situation-puzzle); the active subset of fields depends on Type.
 type DebateTopic struct {
 	Title             string `yaml:"title"`
+	Type              string `yaml:"type"`
 	Language          string `yaml:"language"`
 	TotalMinutes      int    `yaml:"total_minutes"`
 	SegmentMaxSeconds int    `yaml:"segment_max_seconds"`
@@ -46,17 +56,31 @@ type DebateTopic struct {
 	// channel id are queued and play sequentially within that channel; debates
 	// on different channels run in parallel as independent video streams.
 	// Required — startup fails if the id isn't defined in channels.json.
-	Channel     string      `yaml:"channel"`
-	Affirmative []AgentSpec `yaml:"affirmative"`
-	Negative    []AgentSpec `yaml:"negative"`
-	Judge       AgentSpec   `yaml:"judge"`
-	Viewers     []AgentSpec `yaml:"viewers"`
+	Channel string `yaml:"channel"`
+
+	// Debate-only roster.
+	Affirmative []AgentSpec `yaml:"affirmative,omitempty"`
+	Negative    []AgentSpec `yaml:"negative,omitempty"`
+	Judge       AgentSpec   `yaml:"judge,omitempty"`
+
+	// Situation-puzzle-only roster. PuzzleHost is the 出題者 who knows the
+	// hidden truth and answers player questions with 是/不是/與此無關.
+	// Players are 解題者 trying to deduce the truth.
+	PuzzleHost AgentSpec   `yaml:"puzzle_host,omitempty"`
+	Players    []AgentSpec `yaml:"players,omitempty"`
+
+	// Shared across both content types.
+	Viewers []AgentSpec `yaml:"viewers,omitempty"`
 
 	// Body sections, populated from markdown after frontmatter.
+	// Debate sections:
 	Background     string `yaml:"-"`
 	AffirmativePos string `yaml:"-"`
 	NegativePos    string `yaml:"-"`
 	Rules          string `yaml:"-"`
+	// Situation-puzzle sections:
+	Surface string `yaml:"-"` // 湯面 — visible to everyone
+	Truth   string `yaml:"-"` // 湯底 — only the puzzle host's prompt sees it
 }
 
 // LoadTopic parses a debate.md file with YAML frontmatter and markdown body.
@@ -125,10 +149,12 @@ func splitFrontmatter(s string) (front, body string, err error) {
 
 func parseSections(body string, t *DebateTopic) {
 	sections := map[string]*string{
-		"background":          &t.Background,
+		"background":           &t.Background,
 		"affirmative position": &t.AffirmativePos,
 		"negative position":    &t.NegativePos,
 		"rules":                &t.Rules,
+		"surface":              &t.Surface,
+		"truth":                &t.Truth,
 	}
 	var current *string
 	var buf strings.Builder
@@ -161,6 +187,12 @@ func validateTopic(t *DebateTopic) error {
 	if t.Channel == "" {
 		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
+	switch t.Type {
+	case ContentTypeDebate, ContentTypeSituationPuzzle:
+	default:
+		return fmt.Errorf("type must be one of %q, %q (got %q)",
+			ContentTypeDebate, ContentTypeSituationPuzzle, t.Type)
+	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:
 	default:
@@ -172,6 +204,24 @@ func validateTopic(t *DebateTopic) error {
 	default:
 		return fmt.Errorf("resolution must be one of %q, %q, %q (got %q)",
 			Resolution720p, Resolution1080p, Resolution4K, t.Resolution)
+	}
+	for _, v := range t.Viewers {
+		if v.Name == "" || v.Model == "" {
+			return fmt.Errorf("viewer entry needs name and model")
+		}
+	}
+	switch t.Type {
+	case ContentTypeDebate:
+		return validateDebate(t)
+	case ContentTypeSituationPuzzle:
+		return validateSituationPuzzle(t)
+	}
+	return nil
+}
+
+func validateDebate(t *DebateTopic) error {
+	if t.PuzzleHost.Model != "" || len(t.Players) > 0 {
+		return fmt.Errorf("type=debate must not declare puzzle_host or players")
 	}
 	if len(t.Affirmative) == 0 {
 		return fmt.Errorf("at least one affirmative candidate required")
@@ -192,10 +242,29 @@ func validateTopic(t *DebateTopic) error {
 			return fmt.Errorf("negative entry needs name and model")
 		}
 	}
-	for _, v := range t.Viewers {
-		if v.Name == "" || v.Model == "" {
-			return fmt.Errorf("viewer entry needs name and model")
+	return nil
+}
+
+func validateSituationPuzzle(t *DebateTopic) error {
+	if len(t.Affirmative) > 0 || len(t.Negative) > 0 || t.Judge.Model != "" {
+		return fmt.Errorf("type=situation-puzzle must not declare affirmative/negative/judge — use puzzle_host and players instead")
+	}
+	if t.PuzzleHost.Model == "" {
+		return fmt.Errorf("puzzle_host.model is required for type=situation-puzzle")
+	}
+	if len(t.Players) == 0 {
+		return fmt.Errorf("at least one player required for type=situation-puzzle")
+	}
+	for _, p := range t.Players {
+		if p.Name == "" || p.Model == "" {
+			return fmt.Errorf("player entry needs name and model")
 		}
+	}
+	if strings.TrimSpace(t.Surface) == "" {
+		return fmt.Errorf("type=situation-puzzle requires a `## Surface` section (湯面)")
+	}
+	if strings.TrimSpace(t.Truth) == "" {
+		return fmt.Errorf("type=situation-puzzle requires a `## Truth` section (湯底)")
 	}
 	return nil
 }

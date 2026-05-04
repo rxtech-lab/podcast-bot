@@ -17,6 +17,8 @@ const (
 	RoleNegative    Role = "negative"
 	RoleJudge       Role = "judge"
 	RoleViewer      Role = "viewer"
+	RolePuzzleHost  Role = "puzzle-host"
+	RolePlayer      Role = "player"
 )
 
 // Side returns "affirmative" or "negative" for candidate roles, otherwise "".
@@ -103,26 +105,36 @@ type Agent interface {
 	Compress(ctx context.Context) error
 }
 
-// Registry holds every agent constructed for a debate run.
+// Registry holds every agent constructed for one content run. Debate-mode
+// content uses Host/Judge/Affirmatve/Negative; situation-puzzle content uses
+// PuzzleHost/Players. Viewers are shared across both formats.
 type Registry struct {
 	Host       Agent
 	Judge      Agent
 	Affirmatve []Agent
 	Negative   []Agent
-	Viewers    []Agent
+
+	PuzzleHost Agent
+	Players    []Agent
+
+	Viewers []Agent
 }
 
 // All returns every agent in a deterministic order.
 func (r *Registry) All() []Agent {
-	out := make([]Agent, 0, 2+len(r.Affirmatve)+len(r.Negative)+len(r.Viewers))
+	out := make([]Agent, 0, 4+len(r.Affirmatve)+len(r.Negative)+len(r.Players)+len(r.Viewers))
 	if r.Host != nil {
 		out = append(out, r.Host)
 	}
 	if r.Judge != nil {
 		out = append(out, r.Judge)
 	}
+	if r.PuzzleHost != nil {
+		out = append(out, r.PuzzleHost)
+	}
 	out = append(out, r.Affirmatve...)
 	out = append(out, r.Negative...)
+	out = append(out, r.Players...)
 	out = append(out, r.Viewers...)
 	return out
 }

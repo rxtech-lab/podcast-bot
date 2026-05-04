@@ -1,5 +1,6 @@
 ---
 title: "AI 是否會取代程序員"
+type: debate
 language: zh-CN
 channel: default
 total_minutes: 30
