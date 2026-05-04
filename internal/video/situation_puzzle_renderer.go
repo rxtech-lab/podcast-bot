@@ -292,15 +292,12 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	lines := wrapLines(face, body, innerW)
 	overflow := len(lines) > maxLines
 
-	// Vertical scroll alignment: start at audioDuration/2 - 3s so the
-	// passage is fully visible at the start, then scrolls to the last
-	// lines roughly at the moment the audio reaches its halfway mark.
+	// Vertical scroll alignment: start at audioDuration/2 + 1s so the
+	// top of the passage stays readable through roughly the first half
+	// of playback before the scroll begins carrying viewers to the rest.
 	scrollDwellStart := fallbackDwell
 	if bodyAudioDuration > 0 {
-		scrollDwellStart = bodyAudioDuration/2 - 3*time.Second
-		if scrollDwellStart < 0 {
-			scrollDwellStart = 0
-		}
+		scrollDwellStart = bodyAudioDuration/2 + time.Second
 	}
 
 	scrollPx := 0

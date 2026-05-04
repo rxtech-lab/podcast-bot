@@ -46,6 +46,15 @@ type Deps struct {
 	MusicPaths map[string]string
 }
 
+// directiveWantsPrevText reports whether a directive's payload should be
+// filled in from t.PrevTurn.FullText() at production time. Today only the
+// puzzle host's answer / evaluate-solution directives use this — both are
+// emitted with a trailing ":" by the planner and resolved here once the
+// predecessor turn's text is final.
+func directiveWantsPrevText(directive string) bool {
+	return directive == "answer:" || directive == "evaluate-solution:"
+}
+
 // subtitleClientLatency compensates for buffering that happens after the
 // LiveStream's stdout — primarily the browser MediaSource source buffer
 // (~1.5–2s on Chromium for low-bitrate MP3) and any OS audio buffering.
@@ -64,6 +73,11 @@ const subtitleClientLatency = 3100 * time.Millisecond
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
+	// sessionMixer wraps LiveStream with a long-lived ffmpeg amix process
+	// that keeps a looped background music bed underneath every TTS turn.
+	// nil means no music is configured; produce() falls through to writing
+	// directly into LiveStream.
+	sessionMixer *musicmixer.Mixer
 }
 
 // NewPipeline creates a Pipeline.
@@ -74,6 +88,25 @@ func NewPipeline(d Deps) *Pipeline { return &Pipeline{d: d} }
 func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	turnCh := make(chan *Turn, 2)
 	producedCh := make(chan *Turn, 1)
+
+	// Session-wide music mixer. If a music file is configured, all turns
+	// route their TTS through this single mixer so the bed plays
+	// continuously across the whole run instead of restarting per turn.
+	if path := p.sessionMusicPath(); path != "" {
+		m, err := musicmixer.NewSession(path, p.d.LiveStream)
+		if err != nil {
+			p.d.Log.Warn("session music mixer disabled — falling back to dry TTS",
+				"music", path, "err", err)
+		} else {
+			p.sessionMixer = m
+			p.d.Log.Info("session music mixer attached", "music", path)
+			defer func() {
+				if cerr := p.sessionMixer.Close(); cerr != nil {
+					p.d.Log.Warn("session music mixer close", "err", cerr)
+				}
+			}()
+		}
+	}
 
 	// Tick goroutine — publishes elapsed/remaining once a second.
 	tickCtx, tickCancel := context.WithCancel(ctx)
@@ -162,25 +195,24 @@ func (p *Pipeline) tickLoop(ctx context.Context) {
 	}
 }
 
-// musicPathFor returns the on-disk mp3 path for the music bed that
-// should mix under this turn's TTS, or "" if no music applies.
-//
-// The lookup tries the full directive first, then the prefix before
-// any ":" — the puzzle planner emits bare "surface"/"reveal" today,
-// but if a future directive carries a payload (e.g. "reveal:short"),
-// the prefix match still finds the right music. Files that don't
-// exist on disk fall through to "" so a partial musicgen failure
-// degrades gracefully to dry TTS.
-func (p *Pipeline) musicPathFor(t *Turn) string {
+// sessionMusicPath picks the file to use as session-wide background
+// music. Prefers an explicit "session" key, falls back to "surface"
+// (calmer ambient bed, the safer default to play under Q&A and
+// conclusion turns too), then "reveal", then any first available
+// path. Files that don't exist on disk are skipped so a partial
+// musicgen failure degrades gracefully to dry TTS.
+func (p *Pipeline) sessionMusicPath() string {
 	if len(p.d.MusicPaths) == 0 {
 		return ""
 	}
-	candidates := []string{t.Directive}
-	if i := strings.Index(t.Directive, ":"); i > 0 {
-		candidates = append(candidates, t.Directive[:i])
+	for _, k := range []string{"session", "surface", "reveal"} {
+		if path := p.d.MusicPaths[k]; path != "" {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
 	}
-	for _, k := range candidates {
-		path := p.d.MusicPaths[k]
+	for _, path := range p.d.MusicPaths {
 		if path == "" {
 			continue
 		}
@@ -202,6 +234,21 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	if strings.HasPrefix(t.Directive, "address-user:") {
 		p.d.Transcript.AcknowledgeUserLines()
 	}
+
+	// Inline the predecessor's actual rendered text into directives whose
+	// payload is not known at planner time (today: the puzzle host's
+	// "answer:" / "evaluate-solution:" turns reference the player's just-
+	// asked question, but the planner runs ahead of the producer so a
+	// transcript-based lookup at planner time misses). The planner emits the
+	// directive with an empty payload and a PrevTurn pointer; by the time
+	// produce() runs for this turn, the predecessor's produce() has finished
+	// and PrevTurn.FullText() is final.
+	if t.PrevTurn != nil && directiveWantsPrevText(t.Directive) {
+		if prev := strings.TrimSpace(t.PrevTurn.FullText()); prev != "" {
+			t.Directive += prev
+		}
+	}
+
 	prompt := agent.SpeakPrompt{
 		Phase:         t.Phase,
 		SegmentNo:     t.ID,
@@ -230,37 +277,20 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	}
 	defer turnFile.Close()
 
-	// Audio sink: tee to the shared livestream (paced via ffmpeg -re) and the
-	// per-turn file. Writes are serialized within this goroutine, so a plain
-	// MultiWriter is safe.
+	// Audio sink: tee to the shared livestream (paced via ffmpeg -re) and
+	// the per-turn file. Writes are serialized within this goroutine, so a
+	// plain MultiWriter is safe.
 	//
-	// For situation-puzzle surface and reveal turns we additionally route
-	// the LiveStream side through an ffmpeg amix wrapper that mixes a
-	// pre-generated Lyria background bed underneath the TTS. The per-turn
-	// file always receives the dry TTS so end-of-run ConcatToMP3 produces
-	// an unmixed archive.
+	// When a session-wide music mixer is configured, the LiveStream side is
+	// routed through it so a looped Lyria-generated bed plays continuously
+	// underneath every turn's TTS. The per-turn file always receives the
+	// dry TTS so end-of-run ConcatToMP3 produces an unmixed archive. The
+	// mixer keeps the music flowing through inter-turn gaps via an in-graph
+	// lavfi silence input — no Go-side bracketing is needed.
 	liveSink := io.Writer(p.d.LiveStream)
-	var mixer *musicmixer.Mixer
-	if musicPath := p.musicPathFor(t); musicPath != "" {
-		m, mErr := musicmixer.New(musicPath, p.d.LiveStream)
-		if mErr != nil {
-			p.d.Log.Warn("music mixer disabled — falling back to dry TTS",
-				"turn", t.ID, "directive", t.Directive, "err", mErr)
-		} else {
-			mixer = m
-			liveSink = m
-			p.d.Log.Info("music mixer attached",
-				"turn", t.ID, "directive", t.Directive, "music", musicPath)
-		}
+	if p.sessionMixer != nil {
+		liveSink = p.sessionMixer
 	}
-	defer func() {
-		if mixer != nil {
-			if cerr := mixer.Close(); cerr != nil {
-				p.d.Log.Warn("music mixer close",
-					"turn", t.ID, "directive", t.Directive, "err", cerr)
-			}
-		}
-	}()
 	sink := io.MultiWriter(turnFile, liveSink)
 	wroteAny := false
 
@@ -312,6 +342,12 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if sent == "" {
 		return 0, nil
 	}
+	// Capture the sentence on the turn itself so a downstream turn whose
+	// directive references this one (Turn.PrevTurn) can read the verbatim
+	// rendered text via FullText() once produce() returns. Distinct from the
+	// TextOut channel, which AppendFromTurn drains into the transcript and
+	// has a bounded buffer that drops sentences when full.
+	t.AppendText(sent)
 	// Push transcript chunk to per-turn channel synchronously (used to build
 	// the persisted transcript line in updateMemories — order matters there).
 	select {

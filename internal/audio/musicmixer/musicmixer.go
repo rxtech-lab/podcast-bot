@@ -1,62 +1,112 @@
-// Package musicmixer wraps a per-turn ffmpeg process that mixes a
-// looping background music file underneath a stream of TTS mp3 bytes.
-// The output mp3 stream matches the LiveStream's expected format
-// (24 kHz mono 48 kbps mp3 — see audio.AudioBytesPerSec) so subscribers
-// don't need to renegotiate their decoder when a music-mixed turn
-// appears in the stream.
+// Package musicmixer streams a looping background music bed mixed
+// underneath a pipeline of TTS mp3 bytes for the WHOLE debate
+// session. The output mp3 stream matches the LiveStream's expected
+// format (24 kHz mono 48 kbps mp3 — see audio.AudioBytesPerSec) so
+// subscribers don't need to renegotiate their decoder partway
+// through.
 //
-// Lifecycle: New() spawns ffmpeg, Write() forwards TTS bytes into
-// stdin, Close() closes stdin and waits for ffmpeg to drain. Use one
-// Mixer per turn — at the end of the turn, Close() flushes the tail of
-// the mixed audio into the sink before the next dry-TTS turn begins
-// writing directly to the LiveStream again.
+// Why this is not a single ffmpeg amix process: ffmpeg's amix
+// consumes samples from every input in lockstep, so when the TTS
+// pipe goes idle (between turns / during LLM latency) amix blocks
+// waiting for the next packet and the music bed audibly freezes.
+// `dropout_transition` only triggers on EOF, not on a stalled pipe,
+// and adding a `lavfi anullsrc` as a third amix input doesn't help
+// either — amix still demands packets from input-0 in step with
+// the others. Writing silence frames into the same pipe as TTS
+// works as long as you accept the audible byproduct (silence frames
+// land between TTS frames in time order rather than mixed under
+// them).
+//
+// Instead this package mixes at the PCM level inside the Go process
+// so the music side has no dependency on the TTS side's liveness:
+//
+//   musicCmd:  -re -stream_loop -1 -i music.mp3   →  s16le PCM stdout
+//                  (always producing at exactly 1× realtime)
+//   ttsCmd:    -f mp3 -i pipe:0                   →  s16le PCM stdout
+//                  (decodes whatever TTS bytes the producer Writes)
+//   encCmd:    -f s16le -i pipe:0                 →  mp3 stdout → sink
+//
+// A mix goroutine reads music PCM at its realtime cadence and on
+// every chunk drains whatever TTS PCM is currently buffered (non-
+// blocking), additively mixes it onto the attenuated music, and
+// writes the result to the encoder. When TTS is idle the mix loop
+// just emits attenuated music — no silence frames, no stalls.
 package musicmixer
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"sync"
+	"syscall"
 )
 
-// musicVolume is the gain applied to the background bed before amix.
-// 0.22 sits comfortably under spoken word at typical TTS levels — the
-// host's voice stays clearly intelligible while the bed remains
-// audible. Tunable later via topic frontmatter; constant for now.
-const musicVolume = 0.22
+// musicVolume is the linear gain applied to the background bed
+// before TTS is summed in. 0.10 ≈ −20 dBFS, quiet enough to sit
+// under speech without competing with it.
+const musicVolume = 0.10
 
-// Mixer is the active ffmpeg subprocess for one music-mixed turn.
-// The zero value is not usable; construct via New.
+// pcmSampleRate / pcmChannels / pcmSampleBytes describe the PCM
+// format passed between the three ffmpeg processes and the Go
+// mixer. The output mp3 is re-encoded to the same sample rate
+// (audio.AudioBytesPerSec contract).
+const (
+	pcmSampleRate  = 24000
+	pcmChannels    = 1
+	pcmSampleBytes = 2 // s16le
+)
+
+// chunkDuration is how much PCM the mix loop processes per
+// iteration. 50 ms is a small enough window that a turn's first TTS
+// byte lands in audible output within ~one chunk, while large
+// enough to amortise per-iteration overhead.
+const chunkSamples = pcmSampleRate / 20 // 50 ms
+const chunkBytes = chunkSamples * pcmChannels * pcmSampleBytes
+
+// ttsBufferChunks bounds the in-Go TTS PCM backlog. TTS arrives
+// faster than realtime, so the decoder produces PCM bursts; this
+// channel queues them until the realtime-paced mix loop drains
+// them. ~5 s of headroom matches LiveStream.inputBufferBytes.
+const ttsBufferChunks = 100
+
+// Mixer wraps the three ffmpeg processes plus the Go mix goroutine.
+// The zero value is not usable; construct via NewSession.
 type Mixer struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
+	musicCmd *exec.Cmd
+	ttsCmd   *exec.Cmd
+	encCmd   *exec.Cmd
 
-	// pumpDone closes when the goroutine that copies ffmpeg's stdout
-	// into the caller's sink has fully drained. Close() waits on it
-	// so the tail of the mixed audio reaches the sink before the
-	// caller starts writing dry TTS into the same sink.
-	pumpDone chan struct{}
-	pumpErr  error
+	musicOut io.ReadCloser // music PCM (paced 1× realtime)
+	ttsIn    io.WriteCloser
+	ttsOut   io.ReadCloser // TTS PCM
+	encIn    io.WriteCloser
+	encOut   io.ReadCloser // mixed mp3
+
+	// ttsCh delivers TTS PCM chunks from the ttsReader goroutine to
+	// the mix loop. Buffered so a fast TTS burst doesn't block the
+	// reader; bounded so a runaway producer can't accumulate
+	// unbounded memory.
+	ttsCh chan []byte
+
+	pumpDone   chan struct{}
+	mixDone    chan struct{}
+	readerDone chan struct{}
+	pumpErr    error
+	mixErr     error
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
-// New spawns an ffmpeg process that:
-//   - reads TTS mp3 from stdin (`-i pipe:0`),
-//   - reads the background music file (`-i musicPath`),
-//   - applies volume + infinite loop to the music, then mixes both via
-//     amix with `duration=first` so the stream ends when the TTS ends,
-//   - re-encodes to 24 kHz mono 48 kbps mp3 (matches LiveStream's
-//     audio.AudioBytesPerSec contract) and writes to stdout.
-//
-// The stdout bytes are pumped into `sink` by a goroutine kicked off
-// before New returns. Caller writes TTS via Write; on turn end calls
-// Close which closes stdin, waits for ffmpeg + the pump, and returns
-// the first error encountered.
-func New(musicPath string, sink io.Writer) (*Mixer, error) {
+// NewSession spawns the three ffmpeg processes and the goroutines
+// that wire them together. Caller writes TTS mp3 bytes via Write
+// during a turn; on session end calls Close, which closes the TTS
+// stdin (signalling EOF to its decoder), waits for the mix loop to
+// drain the in-flight buffers, and tears the music + encoder
+// processes down.
+func NewSession(musicPath string, sink io.Writer) (*Mixer, error) {
 	if musicPath == "" {
 		return nil, errors.New("musicmixer: empty musicPath")
 	}
@@ -64,88 +114,253 @@ func New(musicPath string, sink io.Writer) (*Mixer, error) {
 		return nil, errors.New("musicmixer: nil sink")
 	}
 
-	filter := fmt.Sprintf(
-		"[1:a]volume=%.3f,aloop=loop=-1:size=2147483647[bg];"+
-			"[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[a]",
-		musicVolume,
-	)
-
-	cmd := exec.Command("ffmpeg",
+	// Music decoder: -re paces reads at realtime, -stream_loop -1
+	// loops the file forever so the bed never runs dry. Output is
+	// raw s16le PCM at the pipeline sample rate.
+	musicCmd := exec.Command("ffmpeg",
 		"-loglevel", "quiet",
-		"-f", "mp3", "-i", "pipe:0",
+		"-re",
+		"-stream_loop", "-1",
 		"-i", musicPath,
-		"-filter_complex", filter,
-		"-map", "[a]",
+		"-f", "s16le",
+		"-ar", fmt.Sprintf("%d", pcmSampleRate),
+		"-ac", fmt.Sprintf("%d", pcmChannels),
+		"pipe:1",
+	)
+	musicOut, err := musicCmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("music stdout: %w", err)
+	}
+
+	// TTS decoder: reads mp3 from stdin (the caller's Write feeds
+	// this), emits PCM at the pipeline sample rate. Independent
+	// from the music process so a stalled pipe here can't block
+	// music's realtime output.
+	ttsCmd := exec.Command("ffmpeg",
+		"-loglevel", "quiet",
+		"-f", "mp3",
+		"-i", "pipe:0",
+		"-f", "s16le",
+		"-ar", fmt.Sprintf("%d", pcmSampleRate),
+		"-ac", fmt.Sprintf("%d", pcmChannels),
+		"pipe:1",
+	)
+	ttsIn, err := ttsCmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("tts stdin: %w", err)
+	}
+	ttsOut, err := ttsCmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("tts stdout: %w", err)
+	}
+
+	// Encoder: PCM → mp3 at the LiveStream-expected format.
+	encCmd := exec.Command("ffmpeg",
+		"-loglevel", "quiet",
+		"-f", "s16le",
+		"-ar", fmt.Sprintf("%d", pcmSampleRate),
+		"-ac", fmt.Sprintf("%d", pcmChannels),
+		"-i", "pipe:0",
 		"-c:a", "libmp3lame",
 		"-b:a", "48k",
-		"-ar", "24000",
-		"-ac", "1",
 		"-f", "mp3",
 		"pipe:1",
 	)
-	stdin, err := cmd.StdinPipe()
+	encIn, err := encCmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("ffmpeg stdin: %w", err)
+		return nil, fmt.Errorf("enc stdin: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	encOut, err := encCmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("ffmpeg stdout: %w", err)
+		return nil, fmt.Errorf("enc stdout: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start ffmpeg: %w", err)
+
+	if err := musicCmd.Start(); err != nil {
+		return nil, fmt.Errorf("start music ffmpeg: %w", err)
+	}
+	if err := ttsCmd.Start(); err != nil {
+		_ = musicCmd.Process.Kill()
+		return nil, fmt.Errorf("start tts ffmpeg: %w", err)
+	}
+	if err := encCmd.Start(); err != nil {
+		_ = musicCmd.Process.Kill()
+		_ = ttsCmd.Process.Kill()
+		return nil, fmt.Errorf("start enc ffmpeg: %w", err)
 	}
 
 	m := &Mixer{
-		cmd:      cmd,
-		stdin:    stdin,
-		stdout:   stdout,
-		pumpDone: make(chan struct{}),
+		musicCmd:   musicCmd,
+		ttsCmd:     ttsCmd,
+		encCmd:     encCmd,
+		musicOut:   musicOut,
+		ttsIn:      ttsIn,
+		ttsOut:     ttsOut,
+		encIn:      encIn,
+		encOut:     encOut,
+		ttsCh:      make(chan []byte, ttsBufferChunks),
+		pumpDone:   make(chan struct{}),
+		mixDone:    make(chan struct{}),
+		readerDone: make(chan struct{}),
 	}
 	go m.pump(sink)
+	go m.ttsReader()
+	go m.mixLoop()
 	return m, nil
 }
 
-// Write forwards TTS bytes to ffmpeg's stdin. Returns the count
-// reported by stdin's underlying pipe — the caller (pipeline.produce)
-// already treats short writes as terminal.
+// Write forwards TTS mp3 bytes into the TTS decoder's stdin. The
+// decoder's PCM output is consumed asynchronously by the mix loop,
+// so a slow consumer eventually back-pressures the caller via the
+// underlying pipe — same behaviour as the previous single-ffmpeg
+// implementation.
 func (m *Mixer) Write(p []byte) (int, error) {
-	if m == nil || m.stdin == nil {
+	if m == nil || m.ttsIn == nil {
 		return 0, io.ErrClosedPipe
 	}
-	return m.stdin.Write(p)
+	return m.ttsIn.Write(p)
 }
 
-// Close finalises the turn: closes stdin, waits for ffmpeg to drain,
-// waits for the stdout pump goroutine, returns the first error. Safe
-// to call multiple times.
+// Close finalises the session: signals EOF to the TTS decoder so
+// its remaining PCM drains through the mix loop; closes the
+// encoder's stdin to flush its mp3 muxer trailer; SIGINTs the music
+// decoder (it would otherwise loop forever); and waits for the
+// goroutines + processes to exit. Safe to call multiple times.
 func (m *Mixer) Close() error {
 	m.closeOnce.Do(func() {
-		var err error
-		if m.stdin != nil {
-			if cerr := m.stdin.Close(); cerr != nil {
-				err = fmt.Errorf("close stdin: %w", cerr)
+		var firstErr error
+		// 1. EOF the TTS decoder. Its PCM stdout drains; the
+		//    ttsReader goroutine sees EOF and closes m.ttsCh.
+		if m.ttsIn != nil {
+			if cerr := m.ttsIn.Close(); cerr != nil {
+				firstErr = fmt.Errorf("close tts stdin: %w", cerr)
 			}
 		}
-		// Wait for the pump goroutine — without this, a fast caller
-		// could start writing dry TTS to the sink before the tail of
-		// the mixed audio has finished copying through.
+		<-m.readerDone
+
+		// 2. Stop the music decoder. -re/-stream_loop -1 means it
+		//    would otherwise run forever; SIGINT makes it exit
+		//    cleanly so the mix loop sees musicOut EOF and stops.
+		if m.musicCmd != nil && m.musicCmd.Process != nil {
+			_ = m.musicCmd.Process.Signal(syscall.SIGINT)
+		}
+		<-m.mixDone
+
+		// 3. Close the encoder's stdin so it writes the mp3 muxer
+		//    trailer; pump finishes copying the tail to the sink.
+		if m.encIn != nil {
+			_ = m.encIn.Close()
+		}
 		<-m.pumpDone
-		if werr := m.cmd.Wait(); werr != nil && err == nil {
-			err = fmt.Errorf("ffmpeg wait: %w", werr)
+
+		// 4. Reap subprocesses. Non-zero exits from SIGINT'd
+		//    music ffmpeg are expected and not surfaced.
+		_ = m.musicCmd.Wait()
+		_ = m.ttsCmd.Wait()
+		_ = m.encCmd.Wait()
+
+		if m.mixErr != nil && firstErr == nil {
+			firstErr = m.mixErr
 		}
-		if m.pumpErr != nil && err == nil {
-			err = m.pumpErr
+		if m.pumpErr != nil && firstErr == nil {
+			firstErr = m.pumpErr
 		}
-		m.closeErr = err
+		m.closeErr = firstErr
 	})
 	return m.closeErr
 }
 
+// ttsReader copies TTS PCM out of the decoder into a buffered
+// channel so the mix loop can drain it non-blockingly. Closes the
+// channel on EOF so the mix loop can detect a finished session.
+func (m *Mixer) ttsReader() {
+	defer close(m.readerDone)
+	defer close(m.ttsCh)
+	buf := make([]byte, chunkBytes)
+	for {
+		n, err := io.ReadFull(m.ttsOut, buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			m.ttsCh <- chunk
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// mixLoop is the heart of the mixer. It reads music PCM at the
+// rate the music ffmpeg emits it (1× realtime, paced by -re),
+// mixes any currently-buffered TTS PCM on top, and writes the
+// result to the encoder. Music alone flows through during gaps —
+// no silence frames, no amix stalls.
+func (m *Mixer) mixLoop() {
+	defer close(m.mixDone)
+	music := make([]byte, chunkBytes)
+	var residual []byte // TTS PCM left over from a previous chunk
+
+	for {
+		if _, err := io.ReadFull(m.musicOut, music); err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				m.mixErr = fmt.Errorf("read music: %w", err)
+			}
+			return
+		}
+
+		// Drain whatever TTS PCM is queued without blocking, so
+		// the music side never waits on TTS even briefly.
+		for len(residual) < len(music) {
+			select {
+			case chunk, ok := <-m.ttsCh:
+				if !ok {
+					m.ttsCh = nil // drained + closed; stop selecting
+					break
+				}
+				residual = append(residual, chunk...)
+				continue
+			default:
+			}
+			break
+		}
+
+		mixInto(music, residual, musicVolume)
+		if len(residual) >= len(music) {
+			residual = residual[len(music):]
+		} else {
+			residual = nil
+		}
+
+		if _, err := m.encIn.Write(music); err != nil {
+			m.mixErr = fmt.Errorf("write enc: %w", err)
+			return
+		}
+	}
+}
+
+// mixInto attenuates `music` by `volume` in place and additively
+// mixes the leading `len(music)` bytes of `tts` on top, clipping
+// to int16 range. Both buffers are s16le-encoded mono PCM at the
+// pipeline sample rate.
+func mixInto(music, tts []byte, volume float32) {
+	for i := 0; i+1 < len(music); i += 2 {
+		m := int16(binary.LittleEndian.Uint16(music[i:]))
+		mixed := int32(float32(m) * volume)
+		if i+1 < len(tts) {
+			t := int16(binary.LittleEndian.Uint16(tts[i:]))
+			mixed += int32(t)
+		}
+		if mixed > 32767 {
+			mixed = 32767
+		} else if mixed < -32768 {
+			mixed = -32768
+		}
+		binary.LittleEndian.PutUint16(music[i:], uint16(mixed))
+	}
+}
+
 func (m *Mixer) pump(sink io.Writer) {
 	defer close(m.pumpDone)
-	// io.Copy swallows EOF — any non-nil error here is a real failure
-	// (e.g. the sink rejected a write or ffmpeg crashed mid-stream).
-	if _, err := io.Copy(sink, m.stdout); err != nil {
+	if _, err := io.Copy(sink, m.encOut); err != nil {
 		m.pumpErr = err
 	}
 }

@@ -1,6 +1,7 @@
 package debate
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -17,14 +18,52 @@ type Turn struct {
 	Directive string
 	Budget    time.Duration
 
+	// PrevTurn, when non-nil, points to a previously-emitted turn whose
+	// produced text must be inlined into this turn's directive at production
+	// time. Used by the situation-puzzle planner: the host's "answer:"
+	// directive needs the player's actual rendered question, but the planner
+	// runs ahead of the producer (turnCh is buffered) so transcript-based
+	// lookup at planner time always misses. Storing a pointer lets produce()
+	// resolve the directive once the predecessor's full text is known.
+	PrevTurn *Turn
+
 	// Filled by the producer. TextOut emits sentence-level text for the TUI.
 	TextOut   chan string
 	AudioPath string
+
+	// fullText accumulates every sentence the LLM emits during produce(). A
+	// child turn reads it via FullText() to inline the predecessor's text
+	// into its own directive. Distinct from TextOut (which is drained by
+	// AppendFromTurn into the transcript) so the two consumers don't fight.
+	textMu   sync.Mutex
+	fullText strings.Builder
 
 	// Played sets to true after the producer finishes; protected by mu.
 	mu     sync.Mutex
 	played bool
 	err    error
+}
+
+// AppendText accumulates one sentence into the turn's full-text buffer.
+// Called by the producer for every sentence the LLM emits.
+func (t *Turn) AppendText(s string) {
+	if s == "" {
+		return
+	}
+	t.textMu.Lock()
+	defer t.textMu.Unlock()
+	if t.fullText.Len() > 0 {
+		t.fullText.WriteByte(' ')
+	}
+	t.fullText.WriteString(s)
+}
+
+// FullText returns everything AppendText has captured so far. Safe to call
+// after the producer finishes producing this turn.
+func (t *Turn) FullText() string {
+	t.textMu.Lock()
+	defer t.textMu.Unlock()
+	return t.fullText.String()
 }
 
 // SetErr records a terminal error for this turn.

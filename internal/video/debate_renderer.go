@@ -257,8 +257,9 @@ func stageActiveFrac(mode stageMode, modeStart time.Time) float64 {
 // bodyStart is when the current body became active — the renderer resets it
 // on every body change so each new sentence begins its scroll from the top.
 // bodyAudioDuration is the synthesized-audio length of body; when known
-// (>0) the scroll is delayed to start at audioDuration/2 - 3s so motion
-// lands in the second half of playback. Zero falls back to a fixed dwell.
+// (>0) the scroll is delayed to start at audioDuration/2 + 1s so the
+// passage stays fully readable through roughly the first half of playback
+// before motion begins. Zero falls back to a fixed dwell.
 func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	speaker, role, body string,
 	areaLeft, areaTop, areaRight, areaBot int,
@@ -283,14 +284,13 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		fallbackDwell = 500 * time.Millisecond
 	)
 
-	// scrollDwellStart aligns scroll start with the audio: t/2 - 3s. Negative
-	// results clamp to 0 so very short clips scroll immediately.
+	// scrollDwellStart aligns scroll start with the audio: t/2 + 1s.
+	// Holding still through the first half of playback lets viewers read
+	// the top of an overflowing passage before the scroll carries them
+	// to the rest.
 	scrollDwellStart := fallbackDwell
 	if bodyAudioDuration > 0 {
-		scrollDwellStart = bodyAudioDuration/2 - 3*time.Second
-		if scrollDwellStart < 0 {
-			scrollDwellStart = 0
-		}
+		scrollDwellStart = bodyAudioDuration/2 + time.Second
 	}
 
 	areaW := areaRight - areaLeft

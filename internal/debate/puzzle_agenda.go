@@ -53,6 +53,17 @@ type puzzleState struct {
 	// on every turn because the directive looked identical.
 	playerSpoken map[string]bool
 
+	// lastQuestionerTurn points at the most recent player or viewer turn the
+	// planner emitted. The next host answer/evaluate-solution turn carries
+	// this pointer in Turn.PrevTurn so produce() can inline the questioner's
+	// actual rendered text into the directive. We can't just read it from
+	// the transcript at planner time: the planner runs ahead of the producer
+	// (turnCh is buffered) so the questioner's turn is still mid-flight when
+	// the host answer is being scheduled, and the transcript won't have it
+	// yet. The Turn pointer is stable; produce() resolves the text later,
+	// once the predecessor turn's FullText is final.
+	lastQuestionerTurn *Turn
+
 	endRequested  bool
 	revealEmitted bool
 
@@ -143,20 +154,25 @@ func (p *PuzzlePlanner) planQA(ctx context.Context) (*Turn, bool) {
 		return p.planReveal()
 	}
 
-	// Host answers the player's most recent question. Embed the actual
-	// question text (pulled from the just-appended transcript line) into the
-	// directive so the host LLM doesn't have to hunt for it among recent
-	// transcript lines and mis-classify it as a meta question.
+	// Host answers the player's most recent question. We can't inline the
+	// actual question text into the directive here — the planner runs ahead
+	// of the producer, so the player's turn is still mid-stream and neither
+	// the transcript nor the player Turn's accumulated text contains the
+	// rendered question yet. Instead we emit the directive with an empty
+	// payload and stamp a pointer to the questioner's Turn into PrevTurn;
+	// pipeline.produce() resolves "answer:" → "answer:<rendered text>" at
+	// production time, when the predecessor's FullText is final.
 	if p.state.awaitingAnswer {
 		p.state.awaitingAnswer = false
-		question := p.lastPlayerOrViewerText()
-		directive := "answer:" + question
+		directive := "answer:"
 		if p.state.lastWasProposal {
-			directive = "evaluate-solution:" + question
+			directive = "evaluate-solution:"
 		}
 		p.state.lastWasProposal = false
 		p.state.qaCount++
-		return p.makeTurn(p.registry.PuzzleHost, directive, p.budgetSeconds(15)), true
+		t := p.makeTurn(p.registry.PuzzleHost, directive, p.budgetSeconds(15))
+		t.PrevTurn = p.state.lastQuestionerTurn
+		return t, true
 	}
 
 	// Periodic audience probe — gives a viewer a chance to inject a steering
@@ -165,7 +181,9 @@ func (p *PuzzlePlanner) planQA(ctx context.Context) (*Turn, bool) {
 	if p.state.qaCount > 0 && p.state.qaCount%askViewerEvery == 0 && len(p.registry.Viewers) > 0 {
 		if v, q := p.askAnyViewer(ctx); v != nil {
 			p.state.awaitingAnswer = true
-			return p.makeTurn(v, "ask:"+q, p.budgetSeconds(20)), true
+			t := p.makeTurn(v, "ask:"+q, p.budgetSeconds(20))
+			p.state.lastQuestionerTurn = t
+			return t, true
 		}
 	}
 
@@ -204,25 +222,9 @@ func (p *PuzzlePlanner) planQA(ctx context.Context) (*Turn, bool) {
 		p.state.lastWasProposal = true
 	}
 	p.state.awaitingAnswer = true
-	return p.makeTurn(pl, directive, p.segmentSeconds()), true
-}
-
-// lastPlayerOrViewerText returns the most recent player or viewer line in the
-// transcript — i.e. the question the host is being asked to answer. Falls back
-// to "" when no such line exists yet (the host's prompt then degrades to
-// scanning the recent-transcript block as before).
-func (p *PuzzlePlanner) lastPlayerOrViewerText() string {
-	if p.transcript == nil {
-		return ""
-	}
-	lines := p.transcript.RecentN(8)
-	for i := len(lines) - 1; i >= 0; i-- {
-		l := lines[i]
-		if l.Role == agent.RolePlayer || l.Role == agent.RoleViewer {
-			return strings.TrimSpace(l.Text)
-		}
-	}
-	return ""
+	t := p.makeTurn(pl, directive, p.segmentSeconds())
+	p.state.lastQuestionerTurn = t
+	return t, true
 }
 
 // planReveal emits one host turn that reveals the truth, then advances to the
