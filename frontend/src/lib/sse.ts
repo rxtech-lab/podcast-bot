@@ -107,7 +107,7 @@ function turnId(s: { role: string; speaker: string; side: string }): string {
   return `${s.role}|${s.speaker}|${s.side || ''}`
 }
 
-export function useDebateEvents(initialHistory: ChatLine[]) {
+export function useDebateEvents() {
   const [state, dispatch] = useReducer(reducer, initialState)
 
   // Refs let SSE event handlers (registered once per subscription) read the
@@ -116,9 +116,13 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
   const selectedRef = useRef(state.selectedChannelId)
   selectedRef.current = state.selectedChannelId
 
-  useEffect(() => {
-    dispatch({ kind: 'history', lines: initialHistory })
-  }, [initialHistory])
+  // (Initial chat history is now loaded inside selectChannel via loadHistory —
+  // there used to be a `useEffect(..., [initialHistory])` here that dispatched
+  // `{ kind: 'history', lines: initialHistory }`. Because callers passed `[]`
+  // inline, every parent render created a new array reference and the effect
+  // re-ran, wiping the SSE-appended history back to empty on every tick. The
+  // chat would briefly show messages, then visually reset to "no messages
+  // yet". Don't reintroduce that param — fetch history on channel-switch.)
 
   // Refresh the channels list on selection changes so debate statuses
   // (pending → running → done) stay in sync.
@@ -152,6 +156,13 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
     // events from other channels server-side so we don't waste bandwidth.
     const url = `/api/events?channel=${encodeURIComponent(state.selectedChannelId)}`
     const es = new EventSource(url)
+    // Diagnostic log: confirms the EventSource opens and which channel it's
+    // bound to. If you don't see this in the console after tuning to a
+    // channel, the useEffect isn't firing (selectedChannelId is null).
+    console.info('[debate] SSE subscribing', { url, channel: state.selectedChannelId })
+    es.addEventListener('open', () => {
+      console.info('[debate] SSE open', state.selectedChannelId)
+    })
     let inFlight: InFlight | null = null
 
     const accepts = (channelId: string | undefined): boolean => {
@@ -159,11 +170,19 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
       if (!sel) return false
       // Empty channel_id is broadcast (e.g. setup-phase status messages
       // before any TopicMsg is published); accept those.
-      return !channelId || channelId === sel
+      const ok = !channelId || channelId === sel
+      if (!ok) {
+        console.debug('[debate] SSE event filtered out', {
+          eventChannel: channelId,
+          selected: sel,
+        })
+      }
+      return ok
     }
 
     es.addEventListener('transcript', (ev) => {
       const m = JSON.parse((ev as MessageEvent).data) as TranscriptEvent
+      console.debug('[debate] transcript event', m)
       if (!accepts(m.channel_id)) return
       if (m.role === 'user' && m.done) {
         dispatch({
@@ -267,11 +286,13 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
         .catch(() => {})
     })
 
-    es.onerror = () => {
+    es.onerror = (e) => {
+      console.warn('[debate] SSE onerror', { readyState: es.readyState, err: e })
       dispatch({ kind: 'status', text: 'reconnecting…' })
     }
 
     return () => {
+      console.info('[debate] SSE closing', state.selectedChannelId)
       es.close()
     }
   }, [state.selectedChannelId])

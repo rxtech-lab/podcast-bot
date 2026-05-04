@@ -65,6 +65,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /api/messages", s.handleMessages)
 	s.mux.HandleFunc("GET /api/me", s.handleGetMe)
 	s.mux.HandleFunc("POST /api/me", s.handlePostMe)
+	s.mux.HandleFunc("GET /api/debug", s.handleDebug)
 	s.mux.Handle("/", staticHandler())
 	return s
 }
@@ -119,6 +120,44 @@ func toDTO(l agent.TranscriptLine) transcriptDTO {
 // current debate queue. The frontend renders the channel switcher from this.
 type topicsResponse struct {
 	Channels []ChannelInfo `json:"channels"`
+}
+
+// handleDebug returns a snapshot of every channel's runtime state so a
+// browser can see at a glance whether an orchestrator is actually airing.
+// Useful when /api/messages keeps returning 503 ("no active debate") and
+// you can't tell whether the channel is off-air, between debates, or stuck
+// in setup.
+func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
+	type chDebug struct {
+		ID            string `json:"id"`
+		Number        int    `json:"number"`
+		Title         string `json:"title"`
+		OffAir        bool   `json:"off_air"`
+		HasOrch       bool   `json:"has_orch"`
+		HasLiveStream bool   `json:"has_live_stream"`
+		HasHLSDir     bool   `json:"has_hls_dir"`
+		HasDBPath     bool   `json:"has_db_path"`
+		Debates       int    `json:"debates"`
+		Current       string `json:"current_debate_id,omitempty"`
+	}
+	out := make([]chDebug, 0)
+	for _, ch := range s.d.Sessions.List() {
+		res := s.d.Sessions.ChannelResources(ch.ID)
+		row := chDebug{
+			ID: ch.ID, Number: ch.Number, Title: ch.Title,
+			OffAir: ch.OffAir, Debates: len(ch.Debates),
+			Current: ch.CurrentDebateID,
+		}
+		if res != nil {
+			row.HasOrch = res.Orch != nil
+			row.HasLiveStream = res.LiveStream != nil
+			row.HasHLSDir = res.HLSDir != ""
+			row.HasDBPath = res.CurrentDBPath != ""
+		}
+		out = append(out, row)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) handleTopics(w http.ResponseWriter, r *http.Request) {

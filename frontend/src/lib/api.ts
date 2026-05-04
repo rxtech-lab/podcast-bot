@@ -17,13 +17,22 @@ export async function loadTopics(): Promise<TopicsResponse> {
 
 // sendMessage posts to the active channel's orchestrator. The viewer's
 // username travels via the `debate-bot-username` cookie that GET /api/me
-// installs on first load — no need to include it in the body.
+// installs on first load — `credentials: 'same-origin'` is explicit so the
+// cookie is included even when the global fetch default is `omit` (older
+// browsers, some webview embedders). Throws on any non-2xx so callers can
+// surface the failure (otherwise a 503 "no active debate" would silently
+// drop the user's message and the chat would mysteriously stay empty).
 export async function sendMessage(text: string, channelId?: string): Promise<void> {
-  await fetch(`/api/messages${channelQuery(channelId)}`, {
+  const resp = await fetch(`/api/messages${channelQuery(channelId)}`, {
     method: 'POST',
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
   })
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '')
+    throw new Error(`send failed (${resp.status}): ${body || resp.statusText}`)
+  }
 }
 
 export interface Me {

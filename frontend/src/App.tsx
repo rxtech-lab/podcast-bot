@@ -22,7 +22,7 @@ function App() {
     window.localStorage.setItem(CHANNELS_OPEN_KEY, channelsOpen ? '1' : '0')
   }, [channelsOpen])
 
-  const { state, selectChannel } = useDebateEvents([])
+  const { state, selectChannel } = useDebateEvents()
   const {
     history,
     phase,

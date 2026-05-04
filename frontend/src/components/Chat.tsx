@@ -25,6 +25,10 @@ export function Chat({ history, channelId }: ChatProps) {
   const [username, setUsername] = useState<string>('')
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
+  // sendError surfaces a transient banner when a POST /api/messages fails —
+  // without it, a 503 ("no active debate") silently dropped messages and made
+  // the chat look broken. Cleared automatically on the next successful send.
+  const [sendError, setSendError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -55,10 +59,19 @@ export function Chat({ history, channelId }: ChatProps) {
   const submit = async () => {
     const text = draft.trim()
     if (!text) return
+    if (!channelId) {
+      setSendError('no channel selected — pick one from the channels panel')
+      return
+    }
     setDraft('')
+    setSendError(null)
     try {
       await sendMessage(text, channelId)
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setSendError(msg)
+      // Restore the draft so the user can retry without retyping.
+      setDraft(text)
       console.warn('send failed', err)
     }
   }
@@ -169,6 +182,21 @@ export function Chat({ history, channelId }: ChatProps) {
         )}
       </div>
 
+      {sendError && (
+        <div className="mx-3 mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
+          <div className="flex items-start justify-between gap-2">
+            <span className="break-words">{sendError}</span>
+            <button
+              type="button"
+              onClick={() => setSendError(null)}
+              className="text-red-300/70 hover:text-red-200 leading-none"
+              aria-label="dismiss"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       <form
         onSubmit={onSubmit}
         className="flex items-end gap-2 p-3 border-t border-border/40 bg-card/40"
