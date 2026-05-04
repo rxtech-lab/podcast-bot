@@ -285,6 +285,10 @@ func envelope(v any) (eventEnvelope, bool) {
 			"index":      m.Index,
 			"total":      m.Total,
 		}}, true
+	case debate.TopicsChangedMsg:
+		_ = m
+		// Empty payload — clients re-fetch /api/topics on receipt.
+		return eventEnvelope{"topics_changed", map[string]any{}}, true
 	}
 	return eventEnvelope{}, false
 }

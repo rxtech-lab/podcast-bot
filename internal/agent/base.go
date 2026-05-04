@@ -135,6 +135,11 @@ func (b *Base) recordLine(line TranscriptLine) error {
 	if line.Side != "" {
 		tag = line.Side + " - " + line.Speaker
 	}
+	// Mark teammate lines explicitly so anti-repetition can avoid restating
+	// points an ally already made on the same side.
+	if mySide := b.Side(); mySide != "" && line.Side == mySide && line.Speaker != b.name {
+		tag = "TEAMMATE " + tag
+	}
 	if err := b.mem.Append(fmt.Sprintf("[%s] %s: %s",
 		line.At.Format("15:04:05"), tag, oneLine(line.Text))); err != nil {
 		return err

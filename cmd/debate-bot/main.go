@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/util"
 	"github.com/sirily11/debate-bot/internal/video"
+	"github.com/sirily11/debate-bot/internal/watcher"
 )
 
 func main() {
@@ -54,12 +56,17 @@ usage:
              definitions. Each debate.md frontmatter must declare a `+"`channel`"+`
              field whose value matches one of these ids.
   --debate   path or glob to debate .md file(s) — repeatable; consecutive
-             paths after one --debate are also accepted.
+             paths after one --debate are also accepted. The directory each
+             spec points at is automatically watched for new .md files at
+             runtime (drop a new debate.md into the folder and it is loaded,
+             validated against channels.json, appended to the matching
+             channel's queue, and surfaced on the web UI without restart).
 
   Channels run in parallel as independent video + audio streams. Multiple
   debates assigned to the same channel are queued and play sequentially
-  inside that channel. A channel defined in channels.json with no debates
-  is listed but renders as "off air" in the web UI.
+  inside that channel. Every channel defined in channels.json pre-
+  initialises its encoder so a freshly-dropped debate can start airing
+  immediately, even if the channel started with no initial debates.
 
   --topic is a deprecated alias for --debate (still works, prints a warning).
   `+"`run`"+` is kept as an alias for `+"`server`"+` for backwards compatibility.
@@ -80,13 +87,107 @@ type loadedDebate struct {
 	topic *config.DebateTopic
 }
 
+// debateQueue is a FIFO of debates feeding one channel's runChannel goroutine.
+// Push appends; Pop blocks until an item arrives, ctx cancels, or the queue is
+// closed (and drained). Used to support both the original "fixed initial
+// queue" mode (queue is closed after seeding) and the --watch mode (queue
+// stays open and accepts new debates discovered at runtime).
+type debateQueue struct {
+	mu     sync.Mutex
+	items  []loadedDebate
+	notify chan struct{}
+	closed bool
+}
+
+func newDebateQueue() *debateQueue {
+	return &debateQueue{notify: make(chan struct{}, 1)}
+}
+
+// Push appends d. Returns false if the queue is already closed.
+func (q *debateQueue) Push(d loadedDebate) bool {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return false
+	}
+	q.items = append(q.items, d)
+	q.mu.Unlock()
+	q.wake()
+	return true
+}
+
+// Close marks the queue as sealed. Subsequent Pop calls return ok=false once
+// the existing items are drained. No-op if already closed.
+func (q *debateQueue) Close() {
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	q.wake()
+}
+
+func (q *debateQueue) wake() {
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+// Remove drops the first queued debate matching id. Returns true if removed,
+// false if the id wasn't found (already started, never queued, or already
+// removed). Only affects pending items still sitting in the queue — a debate
+// that has already been Pop'd is the runChannel goroutine's problem now.
+func (q *debateQueue) Remove(id string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, item := range q.items {
+		if item.id == id {
+			q.items = append(q.items[:i], q.items[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// Pop returns the next item. ok=false on ctx cancellation, or when the queue
+// is closed AND empty.
+func (q *debateQueue) Pop(ctx context.Context) (loadedDebate, bool) {
+	for {
+		q.mu.Lock()
+		if len(q.items) > 0 {
+			d := q.items[0]
+			q.items = q.items[1:]
+			q.mu.Unlock()
+			return d, true
+		}
+		closed := q.closed
+		q.mu.Unlock()
+		if closed {
+			return loadedDebate{}, false
+		}
+		select {
+		case <-ctx.Done():
+			return loadedDebate{}, false
+		case <-q.notify:
+		}
+	}
+}
+
 // channelRuntime is the per-channel slice of audio/video infrastructure.
-// live and enc are nil for off-air channels (no debates assigned).
+// live and enc are nil for off-air channels (no debates queued AND no watcher
+// pre-initialised encoder).
 type channelRuntime struct {
-	def     config.Channel
-	debates []loadedDebate
-	live    *audio.LiveStream
-	enc     *video.Encoder
+	def   config.Channel
+	queue *debateQueue
+	live  *audio.LiveStream
+	enc   *video.Encoder
+
+	// counterMu protects total + started, which feed the live TopicMsg.Total
+	// and Index values. Both grow over the channel's lifetime: total
+	// increments on every Push, started increments when runChannel actually
+	// starts the next debate.
+	counterMu sync.Mutex
+	total     int
+	started   int
 }
 
 // runtime owns every cross-channel resource: the shared event bus, server,
@@ -97,65 +198,140 @@ type runtime struct {
 	log    *slog.Logger
 	closer interface{ Close() error }
 
-	env      *config.Env
-	mcpCfg   *config.MCPConfig
-	bus      *eventbus.Bus
-	srv      *server.Server
-	sessions *server.SessionRegistry
-	channels []*channelRuntime
-	addr     string
-	stopSig  chan os.Signal
+	env         *config.Env
+	mcpCfg      *config.MCPConfig
+	bus         *eventbus.Bus
+	srv         *server.Server
+	sessions    *server.SessionRegistry
+	channels    []*channelRuntime
+	channelByID map[string]*channelRuntime
+	addr        string
+	stopSig     chan os.Signal
+
+	// loadedDebates tracks every absolute debate.md path that has already
+	// been queued (initial --debate args + watcher discoveries). The stored
+	// ref lets a delete event find which channel + debate id to drop. A
+	// re-save of an already-loaded file is deduped via this map; a delete
+	// removes the entry so re-creating the same filename re-queues.
+	// Protected by loadedMu.
+	loadedMu      sync.Mutex
+	loadedDebates map[string]loadedRef
+	// usedIDs tracks slug → count for id-collision suffixes ("ai" → "ai-2").
+	// Shared across channels so two debates can never share an id.
+	usedIDs map[string]int
 }
 
-// resolveDebates expands a list of literal paths or globs into the queue of
-// debate files (deduped, sorted). Each resulting debate gets a URL-safe id
-// derived from its filename; collisions are suffixed with -2, -3, ...
-func resolveDebates(specs []string) ([]loadedDebate, error) {
+// loadedRef is what we remember per queued debate path: the channel id +
+// debate id needed to remove it from the queue / session registry when the
+// underlying file is deleted from the watched directory.
+type loadedRef struct {
+	channelID string
+	debateID  string
+}
+
+// resolveDebates expands a list of literal paths or globs into the set of
+// debate files (deduped, sorted). Files are NOT yet loaded into topics here;
+// the caller invokes loadDebate per path so the same code path runs for
+// initial seed + watcher discoveries. A glob that matches nothing is a
+// valid empty-match (the dir is still watched for files dropped later); a
+// non-glob spec falls through as a literal path so config.LoadTopic can
+// surface a clear "missing file" error to the user.
+func resolveDebates(specs []string) ([]string, error) {
 	if len(specs) == 0 {
-		return nil, fmt.Errorf("no debate paths provided")
+		return nil, nil
 	}
 	seen := map[string]bool{}
 	var matches []string
 	for _, spec := range specs {
+		isGlob := strings.ContainsAny(spec, "*?[")
 		ms, err := filepath.Glob(spec)
 		if err != nil {
 			return nil, fmt.Errorf("debate glob %q: %w", spec, err)
 		}
 		if len(ms) == 0 {
+			if isGlob {
+				continue
+			}
 			ms = []string{spec}
 		}
 		for _, m := range ms {
-			if seen[m] {
+			abs, err := filepath.Abs(m)
+			if err != nil {
+				return nil, fmt.Errorf("debate abs path %q: %w", m, err)
+			}
+			if seen[abs] {
 				continue
 			}
-			seen[m] = true
-			matches = append(matches, m)
+			seen[abs] = true
+			matches = append(matches, abs)
 		}
 	}
 	sort.Strings(matches)
-
-	used := map[string]int{}
-	out := make([]loadedDebate, 0, len(matches))
-	for _, p := range matches {
-		t, err := config.LoadTopic(p)
-		if err != nil {
-			return nil, fmt.Errorf("debate %s: %w", p, err)
-		}
-		base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
-		id := slugify(base)
-		if id == "" {
-			id = "debate"
-		}
-		used[id]++
-		if used[id] > 1 {
-			id = fmt.Sprintf("%s-%d", id, used[id])
-		}
-		out = append(out, loadedDebate{id: id, path: p, title: t.Title, topic: t})
-	}
-	return out, nil
+	return matches, nil
 }
 
-// stringSlice satisfies flag.Value so --debate can be supplied multiple times.
+// watchDirsFromSpecs returns the unique absolute directories implied by a
+// list of file paths or globs. The caller hands these to the fsnotify-backed
+// watcher so any .md file dropped into the directory gets auto-loaded at
+// runtime.
+//
+// Examples: "./topics/*.md" → "<cwd>/topics", "./debates/foo.md" →
+// "<cwd>/debates", "topic.md" → "<cwd>".
+//
+// Future flags that take file/glob specs (e.g. a future --story for a
+// different content type) should funnel their values through this helper
+// too — the auto-watch behaviour then comes for free without any extra
+// flag plumbing.
+func watchDirsFromSpecs(specs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, spec := range specs {
+		// Strip everything from the first glob metacharacter so
+		// filepath.Dir lands on a real directory ("./topics/*.md" →
+		// "./topics/").
+		if idx := strings.IndexAny(spec, "*?["); idx >= 0 {
+			spec = spec[:idx]
+		}
+		dir := filepath.Dir(spec)
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			out = append(out, abs)
+		}
+	}
+	return out
+}
+
+// loadDebate parses one debate.md and assigns it a globally-unique id by
+// slugifying the filename and appending -2, -3, ... on collision. Caller must
+// hold rt.loadedMu for the duration so the used-ids update is atomic.
+//
+// The caller is responsible for recording an entry in loadedDebates AFTER
+// channel-id validation — that way a topic referencing an unknown channel
+// doesn't leave a phantom entry behind, and a later delete event for the
+// same path won't try to remove something that was never queued.
+func (r *runtime) loadDebateLocked(path string) (loadedDebate, error) {
+	t, err := config.LoadTopic(path)
+	if err != nil {
+		return loadedDebate{}, fmt.Errorf("load %s: %w", path, err)
+	}
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	id := slugify(base)
+	if id == "" {
+		id = "debate"
+	}
+	r.usedIDs[id]++
+	if r.usedIDs[id] > 1 {
+		id = fmt.Sprintf("%s-%d", id, r.usedIDs[id])
+	}
+	return loadedDebate{id: id, path: path, title: t.Title, topic: t}, nil
+}
+
+// stringSlice satisfies flag.Value so --debate / --watch can be supplied
+// multiple times.
 type stringSlice []string
 
 func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
@@ -209,10 +385,12 @@ func slugify(s string) string {
 	return strings.Trim(s, "-")
 }
 
-// bootstrap loads env, channels.json, every debate.md, validates the channel
-// references, and stands up the per-channel infrastructure. Each
-// channel.json entry becomes a channelRuntime; channels with no debates
-// assigned get nil live/enc and are surfaced as "off air" in the UI.
+// bootstrap loads env, channels.json, every initial debate.md, validates the
+// channel references, and stands up the per-channel infrastructure. Each
+// channels.json entry becomes a channelRuntime with its encoder + livestream
+// pre-initialised — auto-watch is always on, so a debate.md dropped into the
+// watched directory at runtime can start airing on any channel without re-
+// bootstrapping.
 func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, addr string) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -241,27 +419,10 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		return nil, 1
 	}
 
-	debates, err := resolveDebates(debateSpecs)
+	debatePaths, err := resolveDebates(debateSpecs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "debate:", err)
 		return nil, 1
-	}
-
-	// Validate each debate's channel id against channels.json.
-	for _, d := range debates {
-		if channelsCfg.Find(d.topic.Channel) == nil {
-			fmt.Fprintf(os.Stderr,
-				"debate %s references unknown channel %q (channels.json defines: %s)\n",
-				d.path, d.topic.Channel, strings.Join(channelIDs(channelsCfg), ", "))
-			return nil, 1
-		}
-	}
-
-	// Group debates by channel id, preserving sorted-by-filename order within
-	// each group.
-	byChannel := map[string][]loadedDebate{}
-	for _, d := range debates {
-		byChannel[d.topic.Channel] = append(byChannel[d.topic.Channel], d)
 	}
 
 	mcpCfg, err := config.LoadMCPConfig(mcpPath)
@@ -273,26 +434,6 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 	log, closer, err := util.NewFileLogger(env.OutDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "logger init warning:", err)
-	}
-
-	fmt.Fprintf(os.Stdout, "loaded %d channel(s) and %d debate(s):\n",
-		len(channelsCfg.Channels), len(debates))
-	for _, ch := range channelsCfg.Channels {
-		queue := byChannel[ch.ID]
-		if len(queue) == 0 {
-			fmt.Fprintf(os.Stdout, "  ch %d [%s] %s — off air (no debates)\n",
-				ch.Number, ch.ID, ch.Title)
-			log.Info("channel off air", "id", ch.ID, "number", ch.Number, "title", ch.Title)
-			continue
-		}
-		fmt.Fprintf(os.Stdout, "  ch %d [%s] %s — %d debate(s)\n",
-			ch.Number, ch.ID, ch.Title, len(queue))
-		for i, d := range queue {
-			fmt.Fprintf(os.Stdout, "    %d. %s — %s\n", i+1, d.id, d.title)
-			log.Info("queued debate",
-				"channel", ch.ID, "index", i+1, "of", len(queue),
-				"id", d.id, "path", d.path, "title", d.title)
-		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -310,36 +451,93 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
 		env: env, mcpCfg: mcpCfg, bus: bus, sessions: sessions,
 		addr: addr, stopSig: stopSig,
+		channelByID:   map[string]*channelRuntime{},
+		loadedDebates: map[string]loadedRef{},
+		usedIDs:       map[string]int{},
 	}
 
-	// Build per-channel infrastructure. Channels without debates skip the
-	// LiveStream + Encoder so we don't burn an ffmpeg process for a stream no
-	// one will watch — they're still registered with the server (off-air) so
-	// the UI lists them.
+	// Resolve every initial debate path into a loaded topic. This happens
+	// before per-channel infra is built so we know each channel's first-debate
+	// resolution (encoder size).
+	initial := make([]loadedDebate, 0, len(debatePaths))
+	rt.loadedMu.Lock()
+	for _, p := range debatePaths {
+		d, err := rt.loadDebateLocked(p)
+		if err != nil {
+			rt.loadedMu.Unlock()
+			cancel()
+			fmt.Fprintln(os.Stderr, "debate:", err)
+			return nil, 1
+		}
+		if channelsCfg.Find(d.topic.Channel) == nil {
+			rt.loadedMu.Unlock()
+			cancel()
+			fmt.Fprintf(os.Stderr,
+				"debate %s references unknown channel %q (channels.json defines: %s)\n",
+				d.path, d.topic.Channel, strings.Join(channelIDs(channelsCfg), ", "))
+			return nil, 1
+		}
+		rt.loadedDebates[d.path] = loadedRef{channelID: d.topic.Channel, debateID: d.id}
+		initial = append(initial, d)
+	}
+	rt.loadedMu.Unlock()
+
+	// Group initial debates by channel id, preserving sorted-by-filename
+	// order within each group.
+	byChannel := map[string][]loadedDebate{}
+	for _, d := range initial {
+		byChannel[d.topic.Channel] = append(byChannel[d.topic.Channel], d)
+	}
+
+	fmt.Fprintf(os.Stdout, "loaded %d channel(s) and %d initial debate(s):\n",
+		len(channelsCfg.Channels), len(initial))
 	for _, ch := range channelsCfg.Channels {
 		queue := byChannel[ch.ID]
-		cr := &channelRuntime{def: ch, debates: queue}
+		if len(queue) == 0 {
+			fmt.Fprintf(os.Stdout, "  ch %d [%s] %s — waiting (no initial debates)\n",
+				ch.Number, ch.ID, ch.Title)
+			log.Info("channel idle", "id", ch.ID, "number", ch.Number, "title", ch.Title)
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "  ch %d [%s] %s — %d debate(s)\n",
+			ch.Number, ch.ID, ch.Title, len(queue))
+		for i, d := range queue {
+			fmt.Fprintf(os.Stdout, "    %d. %s — %s\n", i+1, d.id, d.title)
+			log.Info("queued debate",
+				"channel", ch.ID, "index", i+1, "of", len(queue),
+				"id", d.id, "path", d.path, "title", d.title)
+		}
+	}
 
-		var hlsDir string
+	// Build per-channel infrastructure. Every channel pre-initialises live +
+	// encoder (auto-watch is always on, so any channel may receive a
+	// dropped-in debate at runtime). The queue stays open across the whole
+	// process lifetime; runChannel blocks on Pop until a debate arrives.
+	for _, ch := range channelsCfg.Channels {
+		queue := byChannel[ch.ID]
+		cr := &channelRuntime{def: ch, queue: newDebateQueue()}
+
+		channelOutDir := filepath.Join(env.OutDir, ch.ID)
+		if err := debate.EnsureOutDir(channelOutDir); err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, "channel out dir:", err)
+			return nil, 1
+		}
+		live, err := audio.NewLiveStream(ctx, log)
+		if err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, "livestream:", err)
+			return nil, 1
+		}
+		cr.live = live
+
+		// Pick the encoder resolution from the first queued debate; fall
+		// back to 720p when no initial debates on this channel (a watcher-
+		// added debate with a different resolution later will log the same
+		// mismatch warning the multi-debate-on-one-channel path emits).
+		res := video.Resolution(config.Resolution720p)
 		if len(queue) > 0 {
-			channelOutDir := filepath.Join(env.OutDir, ch.ID)
-			if err := debate.EnsureOutDir(channelOutDir); err != nil {
-				cancel()
-				fmt.Fprintln(os.Stderr, "channel out dir:", err)
-				return nil, 1
-			}
-			live, err := audio.NewLiveStream(ctx, log)
-			if err != nil {
-				cancel()
-				fmt.Fprintln(os.Stderr, "livestream:", err)
-				return nil, 1
-			}
-			cr.live = live
-
-			// All debates on a channel share its encoder; pick the resolution
-			// from the first debate and warn on mismatches so it's obvious why
-			// later debates didn't change the size.
-			res := video.Resolution(queue[0].topic.Resolution)
+			res = video.Resolution(queue[0].topic.Resolution)
 			for _, d := range queue[1:] {
 				if d.topic.Resolution != queue[0].topic.Resolution {
 					log.Warn("debate resolution mismatch — using first debate's value",
@@ -349,27 +547,28 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 						"debate", d.id)
 				}
 			}
-			enc, err := video.New(ctx, channelOutDir, res, log)
-			if err != nil {
-				log.Warn("video encoder disabled for channel", "id", ch.ID, "err", err)
-				fmt.Fprintln(os.Stderr, "video disabled for", ch.ID, ":", err)
-			} else {
-				cr.enc = enc
-				hlsDir = enc.HLSDir()
-				enc.AttachAudio(ctx, live)
-				stage := video.NewChannelStage(enc, ch.ID)
-				go stage.Run(ctx, bus)
-			}
+		}
+		var hlsDir string
+		enc, err := video.New(ctx, channelOutDir, res, log)
+		if err != nil {
+			log.Warn("video encoder disabled for channel", "id", ch.ID, "err", err)
+			fmt.Fprintln(os.Stderr, "video disabled for", ch.ID, ":", err)
+		} else {
+			cr.enc = enc
+			hlsDir = enc.HLSDir()
+			enc.AttachAudio(ctx, live)
+			stage := video.NewChannelStage(enc, ch.ID)
+			go stage.Run(ctx, bus)
 		}
 
 		rt.channels = append(rt.channels, cr)
+		rt.channelByID[ch.ID] = cr
 		sessions.RegisterChannel(ch.ID, ch.Number, ch.Title, hlsDir, cr.live)
 
-		// Seed the per-channel queue (all pending). Status flips to running
-		// when each debate's orchestrator starts inside runChannels. DBPath
-		// is set up-front so the server can serve transcripts from disk
-		// even before that debate's orchestrator boots (the file is created
-		// lazily; an absent file is treated as "no transcript yet").
+		// Seed the per-channel queue (all pending). DBPath is set up-front so
+		// the server can serve transcripts from disk even before that
+		// debate's orchestrator boots; the file is created lazily, an absent
+		// file is treated as "no transcript yet".
 		seed := make([]server.Session, len(queue))
 		for i, d := range queue {
 			debateOut := filepath.Join(env.OutDir, ch.ID, d.id)
@@ -379,7 +578,11 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 				Status: server.StatusPending,
 				DBPath: filepath.Join(debateOut, "session.db"),
 			}
+			cr.queue.Push(d)
 		}
+		cr.counterMu.Lock()
+		cr.total = len(queue)
+		cr.counterMu.Unlock()
 		sessions.SeedChannelDebates(ch.ID, seed)
 	}
 
@@ -426,13 +629,17 @@ func (r *runtime) channelSend(channelID string) func(any) {
 	}
 }
 
-// run starts every channel's queue concurrently. Returns when every channel
-// has finished its queue (or the context is cancelled).
+// run starts every channel's queue concurrently. Returns when every channel's
+// goroutine exits — either because the queue drained (no --watch) or ctx
+// cancelled (--watch).
 func (r *runtime) run() error {
 	doneCh := make(chan struct{}, len(r.channels))
 	active := 0
 	for _, ch := range r.channels {
-		if len(ch.debates) == 0 || ch.live == nil {
+		// A channel can only run debates if it has a livestream. Off-air
+		// channels (no infra) don't start a goroutine — the queue is also
+		// closed for them so no work would be picked up anyway.
+		if ch.live == nil {
 			continue
 		}
 		active++
@@ -450,15 +657,22 @@ func (r *runtime) run() error {
 	return nil
 }
 
-// runChannel plays this channel's queue of debates sequentially. All channels
-// are driven by independent goroutines so they progress in parallel.
+// runChannel drives one channel's queue. Pops debates one at a time, plays
+// each through to completion, then loops. Exits when the queue is closed AND
+// drained (no --watch) or ctx cancels.
 func (r *runtime) runChannel(ch *channelRuntime) {
 	send := r.channelSend(ch.def.ID)
-	total := len(ch.debates)
-	for i, d := range ch.debates {
-		if r.ctx.Err() != nil {
+	for {
+		d, ok := ch.queue.Pop(r.ctx)
+		if !ok {
 			return
 		}
+
+		ch.counterMu.Lock()
+		i := ch.started
+		ch.started++
+		total := ch.total
+		ch.counterMu.Unlock()
 
 		debateEnv := *r.env
 		debateEnv.OutDir = filepath.Join(r.env.OutDir, ch.def.ID, d.id)
@@ -498,6 +712,14 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		runErr := orch.Run(r.ctx)
 		orch.Shutdown()
 		r.sessions.SetCurrentOrch(ch.def.ID, "", nil)
+		// Release the loadedDebates entry now that the debate has reached
+		// a terminal state (Done or Error). onRemovedFile keeps the entry
+		// alive for non-pending debates so a re-create-during-run is a
+		// dedupe (no duplicate -2 entry); once the debate ends we let the
+		// path be re-queued so the user can re-run via delete + add.
+		r.loadedMu.Lock()
+		delete(r.loadedDebates, d.path)
+		r.loadedMu.Unlock()
 
 		if runErr != nil {
 			r.log.Error("debate finished with error",
@@ -515,6 +737,162 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		fmt.Fprintf(os.Stdout, "✓ ch %d [%s] finished debate %d/%d — %s\n",
 			ch.def.Number, ch.def.ID, i+1, total, d.title)
 	}
+}
+
+// onWatchedFile is invoked by the directory watcher when a .md file has
+// settled in a watched directory. We load the topic, validate its channel
+// id, queue it, surface it on /api/topics, and broadcast TopicsChangedMsg
+// so connected browsers refresh the channel list.
+func (r *runtime) onWatchedFile(path string) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		r.log.Warn("watch: abs path", "path", path, "err", err)
+		return
+	}
+
+	r.loadedMu.Lock()
+	if _, dup := r.loadedDebates[abs]; dup {
+		r.loadedMu.Unlock()
+		return
+	}
+	d, err := r.loadDebateLocked(abs)
+	if err != nil {
+		r.loadedMu.Unlock()
+		r.log.Warn("watch: load failed", "path", abs, "err", err)
+		fmt.Fprintf(os.Stderr, "watch: failed to load %s: %v\n", abs, err)
+		return
+	}
+	r.loadedMu.Unlock()
+
+	cr := r.channelByID[d.topic.Channel]
+	if cr == nil {
+		r.log.Warn("watch: unknown channel — skipping",
+			"path", abs, "channel", d.topic.Channel)
+		fmt.Fprintf(os.Stderr,
+			"watch: %s references unknown channel %q — skipping\n",
+			abs, d.topic.Channel)
+		return
+	}
+	if cr.live == nil {
+		// Shouldn't happen: every configured channel pre-initialises infra
+		// at bootstrap. Bail out loudly so a misconfig is noticed.
+		r.log.Warn("watch: channel has no streaming infra — skipping",
+			"path", abs, "channel", d.topic.Channel)
+		fmt.Fprintf(os.Stderr,
+			"watch: channel %q has no streaming infra — skipping %s\n",
+			d.topic.Channel, abs)
+		return
+	}
+
+	debateOut := filepath.Join(r.env.OutDir, cr.def.ID, d.id)
+	sess := server.Session{
+		ID:     d.id,
+		Title:  d.title,
+		Status: server.StatusPending,
+		DBPath: filepath.Join(debateOut, "session.db"),
+	}
+	if !r.sessions.AppendChannelDebate(cr.def.ID, sess) {
+		r.log.Warn("watch: session already registered — skipping",
+			"channel", cr.def.ID, "id", d.id)
+		return
+	}
+	if !cr.queue.Push(d) {
+		r.log.Warn("watch: queue closed — skipping",
+			"channel", cr.def.ID, "id", d.id)
+		return
+	}
+	cr.counterMu.Lock()
+	cr.total++
+	cr.counterMu.Unlock()
+
+	// Record the ref AFTER successful queueing so onRemovedFile knows what
+	// to drop. Doing this before the registry append would orphan the entry
+	// if the append failed (id collision).
+	r.loadedMu.Lock()
+	r.loadedDebates[abs] = loadedRef{channelID: cr.def.ID, debateID: d.id}
+	r.loadedMu.Unlock()
+
+	r.log.Info("watch: queued new debate",
+		"channel", cr.def.ID, "id", d.id, "path", abs, "title", d.title)
+	fmt.Fprintf(os.Stdout, "+ ch %d [%s] queued new debate — %s (%s)\n",
+		cr.def.Number, cr.def.ID, d.title, d.id)
+
+	// Tell every connected SSE client the channel list changed so the web
+	// UI re-renders the queue without the viewer having to refresh.
+	r.bus.Publish(debate.TopicsChangedMsg{})
+}
+
+// onRemovedFile drops a pending debate when its underlying .md file
+// disappears from a watched directory. Only Pending entries are removable —
+// a Running debate keeps airing (yanking its metadata mid-stream would leave
+// the UI inconsistent), and Done/Error stay as history. The map entry is
+// always cleared so re-creating the same filename re-queues cleanly.
+func (r *runtime) onRemovedFile(path string) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		r.log.Warn("watch: abs path on remove", "path", path, "err", err)
+		return
+	}
+
+	r.loadedMu.Lock()
+	ref, ok := r.loadedDebates[abs]
+	if !ok {
+		r.loadedMu.Unlock()
+		// Surfaced at debug-only: the watcher fires OnRemove for every
+		// .md path that disappears from a watched dir, but we only act on
+		// paths that are actually queued. A miss here is normal (e.g.
+		// the user deleted a file that was never registered, or the
+		// matching debate already finished and runChannel released the
+		// path) — log it so it's visible if the user is troubleshooting
+		// "I deleted X but nothing happened".
+		r.log.Debug("watch: remove for unknown path — ignoring", "path", abs)
+		return
+	}
+	r.loadedMu.Unlock()
+
+	cr := r.channelByID[ref.channelID]
+	if cr == nil {
+		r.log.Warn("watch: removed file references unknown channel",
+			"path", abs, "channel", ref.channelID)
+		return
+	}
+
+	status, removed := r.sessions.RemoveChannelDebate(ref.channelID, ref.debateID)
+	if !removed {
+		// The debate is already airing (Running) or finished (Done/Error).
+		// Yanking the metadata mid-stream would leave the UI inconsistent,
+		// and rewriting history is wrong — so leave the entry in place.
+		// IMPORTANT: keep the loadedDebates entry too. If we cleared it
+		// here, a re-add of the same filename (e.g. the user removes the
+		// on-air file by accident and drops it back in) would dedup-miss
+		// and queue a *duplicate* with a -2 id. Keeping the entry makes
+		// the re-add a no-op until the running debate finishes and
+		// runChannel releases the path itself.
+		r.log.Info("watch: ignoring delete (debate not pending)",
+			"channel", ref.channelID, "id", ref.debateID, "status", string(status))
+		fmt.Fprintf(os.Stdout,
+			"- ch %d [%s] file deleted but debate is %s — leaving in place (%s)\n",
+			cr.def.Number, cr.def.ID, status, ref.debateID)
+		return
+	}
+	// Removal succeeded — drop the loadedDebates entry so re-creating the
+	// same filename queues a fresh debate (rather than getting deduped).
+	r.loadedMu.Lock()
+	delete(r.loadedDebates, abs)
+	r.loadedMu.Unlock()
+	cr.queue.Remove(ref.debateID)
+	cr.counterMu.Lock()
+	if cr.total > 0 {
+		cr.total--
+	}
+	cr.counterMu.Unlock()
+
+	r.log.Info("watch: removed pending debate",
+		"channel", ref.channelID, "id", ref.debateID, "path", abs)
+	fmt.Fprintf(os.Stdout, "- ch %d [%s] removed pending debate — %s\n",
+		cr.def.Number, cr.def.ID, ref.debateID)
+
+	r.bus.Publish(debate.TopicsChangedMsg{})
 }
 
 func agentNames(specs []config.AgentSpec) []string {
@@ -551,6 +929,42 @@ func serverCmd(args []string) int {
 	}
 	defer rt.shutdown()
 
+	// Auto-watch the directories implied by --debate. As more spec-bearing
+	// flags are added (e.g. a future --story for a different content type),
+	// concatenate watchDirsFromSpecs(...) of each one here so anything
+	// dropped into the same folder gets picked up automatically without
+	// new flag plumbing. Validation is fail-fast: a typo'd folder yields a
+	// clear startup error rather than a silently-disabled watcher.
+	dirs := watchDirsFromSpecs(specs)
+	validDirs := make([]string, 0, len(dirs))
+	for _, abs := range dirs {
+		info, err := os.Stat(abs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "watch:", err)
+			return 1
+		}
+		if !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "watch: %s is not a directory\n", abs)
+			return 1
+		}
+		validDirs = append(validDirs, abs)
+	}
+	if len(validDirs) > 0 {
+		w, err := watcher.New(validDirs, 250*time.Millisecond, rt.log, watcher.Callbacks{
+			OnReady:  rt.onWatchedFile,
+			OnRemove: rt.onRemovedFile,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "watch:", err)
+			return 1
+		}
+		go func() {
+			if err := w.Run(rt.ctx); err != nil && rt.ctx.Err() == nil {
+				rt.log.Warn("watcher exited", "err", err)
+			}
+		}()
+	}
+
 	srvErrCh := make(chan error, 1)
 	go func() {
 		srvErrCh <- rt.srv.ListenAndServe(rt.ctx, rt.addr, func(a *net.TCPAddr) {
@@ -558,21 +972,12 @@ func serverCmd(args []string) int {
 		})
 	}()
 
-	queueDone := make(chan error, 1)
-	go func() {
-		queueDone <- rt.run()
-	}()
-
-	select {
-	case err := <-queueDone:
-		if err != nil {
-			rt.log.Error("channels run error", "err", err)
-		}
-		// Give the server a moment to flush pending writes (final EndedMsg,
-		// last audio bytes), then shut down.
-		time.Sleep(500 * time.Millisecond)
-	case <-rt.ctx.Done():
-	}
+	// Channel goroutines never exit voluntarily (the queue stays open across
+	// the process lifetime so dropped-in debates can still be picked up
+	// after the initial seed drains). Wait on signal / ctx cancellation
+	// only, and let rt.run() unwind naturally during shutdown.
+	go func() { _ = rt.run() }()
+	<-rt.ctx.Done()
 	rt.cancel()
 	<-srvErrCh
 	return 0

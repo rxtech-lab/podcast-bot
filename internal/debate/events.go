@@ -71,6 +71,13 @@ type TopicMsg struct {
 	NegNames  []string
 }
 
+// TopicsChangedMsg signals that the channel/debate list has changed (e.g. a
+// new debate.md was discovered by the folder watcher and added to a channel's
+// queue). The frontend reacts by re-fetching /api/topics. Broadcast only —
+// ChannelID is intentionally empty so every connected SSE client gets it
+// regardless of which channel they're tuned to.
+type TopicsChangedMsg struct{}
+
 // MsgChannelID extracts the channel id from any debate event message. Returns
 // "" for unknown types (which are treated as broadcast by per-channel filters).
 func MsgChannelID(v any) string {
@@ -89,6 +96,8 @@ func MsgChannelID(v any) string {
 		return m.ChannelID
 	case TopicMsg:
 		return m.ChannelID
+	case TopicsChangedMsg:
+		return ""
 	}
 	return ""
 }
@@ -118,6 +127,8 @@ func StampChannelID(v any, id string) any {
 		return m
 	case TopicMsg:
 		m.ChannelID = id
+		return m
+	case TopicsChangedMsg:
 		return m
 	}
 	return v

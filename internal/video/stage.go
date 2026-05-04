@@ -107,7 +107,14 @@ func (s *Stage) handleTranscript(m debate.TranscriptMsg) {
 	// orchestrator emits them via PushUserMessage with Role="user".
 	if string(m.Role) == "user" {
 		if m.Text != "" {
-			s.enc.ShowUserMessage(m.Text)
+			// m.Speaker carries the viewer's chosen username (PushUserMessage
+			// falls back to "user" when blank). Pass it through so the ticker
+			// can label the message — empty stays empty for old payloads.
+			username := m.Speaker
+			if username == "user" {
+				username = ""
+			}
+			s.enc.ShowUserMessage(m.Text, username)
 		}
 		return
 	}

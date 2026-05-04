@@ -59,16 +59,34 @@ type Renderer struct {
 	affNames []string
 	negNames []string
 
+	// bodyStartedAt is the wall-clock moment the current `body` value first
+	// became active. Reset on every body change (including the empty body that
+	// fires between speakers). drawSubtitle reads it to compute the vertical
+	// scroll offset when the wrapped sentence overflows the visible card —
+	// resetting on each new sentence means scrolling always begins from the
+	// top of that sentence so viewers don't miss the opening words.
+	bodyStartedAt time.Time
+
 	// Wall-clock display fed by the pipeline's once-per-second TickMsg.
 	clockElapsed time.Duration
 	clockTotal   time.Duration
 
-	// Transient ticker for user/chat messages. Scrolls right-to-left along the
-	// bottom strip without disturbing the subtitle. userStart marks the moment
-	// ShowUserMessage was called so each Frame() can compute the scroll offset.
-	userMsg    string
-	userStart  time.Time
-	userExpiry time.Time
+	// Chat ticker state machine. Viewer messages are debounced into batches
+	// (so a burst of rapid sends becomes one ticker scroll instead of N
+	// clobbered ones), then played back through a queue that drains in order
+	// — if the queue keeps getting fed, the ticker keeps rolling.
+	//
+	// Layout: incoming ShowUserMessage calls land in userPending. After
+	// userMsgDebounceWindow of quiet, advanceUserTickerLocked() commits the
+	// pending batch as one queuedTicker into userQueue. userQueue[0] is the
+	// currently-scrolling head; userStart/userExpiry are its on-screen window.
+	// When the head expires the queue advances; the next head's window is
+	// recomputed from its own scrollDur.
+	userPending     []pendingUserMsg
+	userPendingLast time.Time
+	userQueue       []queuedTicker
+	userStart       time.Time
+	userExpiry      time.Time
 
 	// Stage animation state. The renderer auto-switches to stageActive the
 	// first time SetState is called with a non-empty speaker, and back to
@@ -79,6 +97,33 @@ type Renderer struct {
 	stageMode      stageMode
 	stageModeStart time.Time
 }
+
+// pendingUserMsg is one viewer message buffered during the debounce window.
+// The Renderer collects these as ShowUserMessage is called, then merges them
+// into a single queuedTicker once userMsgDebounceWindow elapses with no new
+// arrivals.
+type pendingUserMsg struct {
+	username string
+	text     string
+	ttl      time.Duration
+}
+
+// queuedTicker is one committed ticker entry waiting (or actively scrolling)
+// in the queue. Always pre-formatted: when every pending message in the batch
+// shared a username, that username sits in the accent slot and `text` is the
+// joined bodies; mixed-username batches embed the names inline in `text` and
+// leave `username` empty.
+type queuedTicker struct {
+	username string
+	text     string
+	duration time.Duration
+}
+
+// userMsgDebounceWindow is the quiet period after the last ShowUserMessage
+// before the pending batch flushes into the queue. Tuned to match the
+// orchestrator's planner debounce (internal/debate/agenda.go) so the visual
+// batching mirrors the AI-side batching.
+const userMsgDebounceWindow = 1500 * time.Millisecond
 
 // stageMode is a coarse layout selector with two values: idle (only the bg
 // and a centered title) and active (the full debate layout). The renderer
@@ -314,6 +359,12 @@ func (r *Renderer) SetState(speaker, role, side, body string) {
 	r.speaker = speaker
 	r.role = role
 	r.side = side
+	if body != r.body {
+		// New sentence (or speaker changeover that cleared the body) — restart
+		// the scroll clock so a long passage begins at line 0 rather than
+		// wherever the previous body had scrolled to.
+		r.bodyStartedAt = time.Now()
+	}
 	r.body = body
 
 	want := stageIdle
@@ -336,11 +387,14 @@ func (r *Renderer) SetSides(aff, neg []string) {
 	r.mu.Unlock()
 }
 
-// AdvanceUserMessageForTest backdates the ticker's start by d so the next
-// Frame() captures it partway through its scroll. Test-only — used by
-// cmd/render-smoke to produce a representative still.
+// AdvanceUserMessageForTest forces the pending batch to flush immediately
+// (so smoke tests don't have to wait for the debounce window) and then
+// backdates the active head's start by d so the next Frame() captures it
+// partway through its scroll. Test-only — used by cmd/render-smoke to
+// produce a representative still.
 func (r *Renderer) AdvanceUserMessageForTest(d time.Duration) {
 	r.mu.Lock()
+	r.flushPendingUserLocked()
 	r.userStart = r.userStart.Add(-d)
 	r.mu.Unlock()
 }
@@ -354,26 +408,123 @@ func (r *Renderer) AdvanceStageForTest(d time.Duration) {
 	r.mu.Unlock()
 }
 
-// ShowUserMessage announces a viewer/chat message as a scrolling ticker along
-// the bottom strip. ttl is a floor — if the caller's ttl is shorter than the
-// time the message needs to scroll fully off the left edge, the renderer
-// stretches it so the audience always sees the entire message pass through.
-func (r *Renderer) ShowUserMessage(text string, ttl time.Duration) {
+// AdvanceBodyForTest backdates the active body's start time by d so the next
+// Frame() captures the subtitle scrolled forward by that much. Test-only —
+// used by cmd/render-smoke to capture an overflowing subtitle mid-scroll
+// without having to call Frame() in real time.
+func (r *Renderer) AdvanceBodyForTest(d time.Duration) {
+	r.mu.Lock()
+	if !r.bodyStartedAt.IsZero() {
+		r.bodyStartedAt = r.bodyStartedAt.Add(-d)
+	}
+	r.mu.Unlock()
+}
+
+// ShowUserMessage queues a viewer/chat message for the scrolling ticker.
+// Messages are debounced into batches: rapid-fire sends collect in
+// userPending and only commit to the ticker queue once userMsgDebounceWindow
+// of quiet elapses (driven lazily by Frame() — no goroutine needed). username
+// is rendered ahead of text in the ticker's accent colour when every message
+// in the resulting batch shares it; pass "" to omit. ttl is a floor — if the
+// caller's ttl is shorter than the time the merged batch needs to scroll
+// fully off the left edge, the renderer stretches it so the audience always
+// sees the entire message pass through.
+func (r *Renderer) ShowUserMessage(text, username string, ttl time.Duration) {
+	if text == "" {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.userMsg = text
-	r.userStart = time.Now()
+	r.userPending = append(r.userPending, pendingUserMsg{username: username, text: text, ttl: ttl})
+	r.userPendingLast = time.Now()
+}
 
-	// Ticker travels (frameWidth + textWidth) pixels at tickerSpeedPxPerSec
-	// before its trailing edge crosses the left edge of the frame. Add a
-	// small tail so the very last glyph isn't on screen at the moment the
-	// ticker disappears.
-	textW := (&font.Drawer{Face: r.bodyFace}).MeasureString(text).Ceil()
-	scrollDur := time.Duration(float64(r.width+textW)/tickerSpeedPxPerSec*float64(time.Second)) + 500*time.Millisecond
-	if ttl < scrollDur {
-		ttl = scrollDur
+// flushPendingUserLocked merges userPending into one queuedTicker and pushes
+// it onto userQueue. Caller must hold r.mu.
+func (r *Renderer) flushPendingUserLocked() {
+	if len(r.userPending) == 0 {
+		return
 	}
-	r.userExpiry = time.Now().Add(ttl)
+	// Same-username batches keep that name in the accent slot and join just
+	// the bodies; mixed-username batches drop the accent slot and embed each
+	// "name: text" inline so every viewer is still attributed.
+	allSame := true
+	firstUser := r.userPending[0].username
+	for i := 1; i < len(r.userPending); i++ {
+		if r.userPending[i].username != firstUser {
+			allSame = false
+			break
+		}
+	}
+	var item queuedTicker
+	if allSame {
+		bodies := make([]string, len(r.userPending))
+		for i, p := range r.userPending {
+			bodies[i] = p.text
+		}
+		item.username = firstUser
+		item.text = strings.Join(bodies, " — ")
+	} else {
+		parts := make([]string, len(r.userPending))
+		for i, p := range r.userPending {
+			parts[i] = userTickerText(p.username, p.text)
+		}
+		item.text = strings.Join(parts, "  ·  ")
+	}
+	var maxTTL time.Duration
+	for _, p := range r.userPending {
+		if p.ttl > maxTTL {
+			maxTTL = p.ttl
+		}
+	}
+	combined := userTickerText(item.username, item.text)
+	textW := (&font.Drawer{Face: r.bodyFace}).MeasureString(combined).Ceil()
+	scrollDur := time.Duration(float64(r.width+textW)/tickerSpeedPxPerSec*float64(time.Second)) + 500*time.Millisecond
+	if maxTTL > scrollDur {
+		scrollDur = maxTTL
+	}
+	item.duration = scrollDur
+
+	wasIdle := len(r.userQueue) == 0
+	r.userQueue = append(r.userQueue, item)
+	r.userPending = r.userPending[:0]
+	if wasIdle {
+		now := time.Now()
+		r.userStart = now
+		r.userExpiry = now.Add(item.duration)
+	}
+}
+
+// advanceUserTickerLocked drives the ticker state machine forward by one
+// frame: flush the pending batch if the debounce window has elapsed, then
+// pop expired heads off the queue (advancing to the next entry, if any, so
+// the ticker keeps rolling as long as the queue keeps filling). Caller must
+// hold r.mu.
+func (r *Renderer) advanceUserTickerLocked() {
+	now := time.Now()
+	if len(r.userPending) > 0 && now.Sub(r.userPendingLast) >= userMsgDebounceWindow {
+		r.flushPendingUserLocked()
+	}
+	for len(r.userQueue) > 0 && now.After(r.userExpiry) {
+		r.userQueue = r.userQueue[1:]
+		if len(r.userQueue) > 0 {
+			r.userStart = now
+			r.userExpiry = now.Add(r.userQueue[0].duration)
+		}
+	}
+}
+
+// userTickerText is the exact glyph sequence drawChatTicker will lay out for
+// a (username, message) pair. Centralised so width measurements always match
+// the rendered string.
+func userTickerText(username, msg string) string {
+	if username == "" {
+		return msg
+	}
+	if msg == "" {
+		return username
+	}
+	return username + ": " + msg
 }
 
 // Frame renders one RGBA frame. Layout (1280×720):
@@ -391,18 +542,27 @@ func (r *Renderer) ShowUserMessage(text string, ttl time.Duration) {
 //	│                  [02:14 / 30:00]                       │  clock (y≈660)
 //	└────────────────────────────────────────────────────────┘
 func (r *Renderer) Frame() []byte {
-	r.mu.RLock()
+	// Lock (not RLock) because advanceUserTickerLocked may flush the pending
+	// batch and pop expired ticker heads. Ticker bookkeeping is the only
+	// per-frame mutation, so the brief exclusive section is acceptable.
+	r.mu.Lock()
+	r.advanceUserTickerLocked()
 	topic, phase := r.topic, r.phase
 	speaker, role, body := r.speaker, r.role, r.body
 	clockE, clockT := r.clockElapsed, r.clockTotal
 	affNames := append([]string(nil), r.affNames...)
 	negNames := append([]string(nil), r.negNames...)
-	userMsg := r.userMsg
-	userStart := r.userStart
-	userExpiry := r.userExpiry
+	var userName, userMsg string
+	var userStart, userExpiry time.Time
+	if len(r.userQueue) > 0 {
+		head := r.userQueue[0]
+		userName, userMsg = head.username, head.text
+		userStart, userExpiry = r.userStart, r.userExpiry
+	}
 	mode := r.stageMode
 	modeStart := r.stageModeStart
-	r.mu.RUnlock()
+	bodyStart := r.bodyStartedAt
+	r.mu.Unlock()
 
 	// activeFrac is 0 when fully idle, 1 when fully active, with a smooth
 	// ease-in-out cubic curve in between. The title's Y position lerps with
@@ -434,10 +594,10 @@ func (r *Renderer) Frame() []byte {
 	if activeFrac > 0 {
 		overlay := image.NewRGBA(image.Rect(0, 0, r.width, r.height))
 		r.drawActiveOverlay(overlay,
-			topic, phase, speaker, role, body,
+			topic, phase, speaker, role, body, bodyStart,
 			affNames, negNames,
 			clockE, clockT,
-			userMsg, userStart, userExpiry)
+			userName, userMsg, userStart, userExpiry)
 		blitWithGlobalAlpha(img, overlay, activeFrac)
 	}
 
@@ -518,10 +678,10 @@ func (r *Renderer) drawBackground(img *image.RGBA) {
 // the frame with a global alpha so the whole supporting cast fades in/out
 // together.
 func (r *Renderer) drawActiveOverlay(img *image.RGBA,
-	topic, phase, speaker, role, body string,
+	topic, phase, speaker, role, body string, bodyStart time.Time,
 	affNames, negNames []string,
 	clockE, clockT time.Duration,
-	userMsg string, userStart, userExpiry time.Time,
+	userName, userMsg string, userStart, userExpiry time.Time,
 ) {
 	titleFG := color.RGBA{0xff, 0xff, 0xff, 0xff}
 	phaseChipBG := color.RGBA{0xff, 0xff, 0xff, 0xff}
@@ -595,7 +755,7 @@ func (r *Renderer) drawActiveOverlay(img *image.RGBA,
 		drawSubtitle(img, r.tagFace, r.bodyFace,
 			speaker, role, body,
 			subLeft, panelTop+8, subRight, panelBot-8,
-			bodyFG, r.subtitleBgPlate != nil)
+			bodyFG, r.subtitleBgPlate != nil, bodyStart)
 	} else {
 		drawCenteredText(img, r.bodyFace, "等待辯手發言…",
 			(subLeft+subRight)/2, (panelTop+panelBot)/2, hintFG)
@@ -607,7 +767,7 @@ func (r *Renderer) drawActiveOverlay(img *image.RGBA,
 	}
 
 	if userMsg != "" && time.Now().Before(userExpiry) {
-		drawChatTicker(img, r.tagFace, r.bodyFace, userMsg,
+		drawChatTicker(img, r.tagFace, r.bodyFace, userName, userMsg,
 			0, r.height-tickerStripH, r.width, r.height,
 			userStart)
 	}
@@ -726,11 +886,13 @@ const tickerSpeedPxPerSec = 110
 // Geometry: a translucent dark strip with a thin accent rail along the top,
 // a short "FROM CHAT" pill anchored on the right (so it appears to lead the
 // scrolling text from the right), and the message body translated leftward
-// based on time elapsed since start. The function returns immediately once
-// the message has scrolled past the left edge, so the caller doesn't need to
-// special-case completion.
+// based on time elapsed since start. When username is non-empty it is drawn
+// in the accent colour ahead of the message body so viewers can tell who
+// sent each message; both glide together as one unit. The function returns
+// immediately once the message has scrolled past the left edge, so the caller
+// doesn't need to special-case completion.
 func drawChatTicker(dst *image.RGBA,
-	pillFace, bodyFace font.Face, msg string,
+	pillFace, bodyFace font.Face, username, msg string,
 	x0, y0, x1, y1 int,
 	start time.Time,
 ) {
@@ -740,7 +902,13 @@ func drawChatTicker(dst *image.RGBA,
 	stripW := x1 - x0
 
 	bodyD := &font.Drawer{Face: bodyFace}
-	textW := bodyD.MeasureString(msg).Ceil()
+	namePrefix := ""
+	if username != "" {
+		namePrefix = username + ": "
+	}
+	nameW := bodyD.MeasureString(namePrefix).Ceil()
+	bodyW := bodyD.MeasureString(msg).Ceil()
+	textW := nameW + bodyW
 
 	elapsed := time.Since(start).Seconds()
 	if elapsed < 0 {
@@ -768,10 +936,15 @@ func drawChatTicker(dst *image.RGBA,
 	bodyM := bodyFace.Metrics()
 	baseline := y0 + (y1-y0+bodyM.Ascent.Ceil()-bodyM.Descent.Ceil())/2
 
-	// Body text drawn first, then the pill on the right edge so it always sits
-	// on top of any text that scrolls underneath it.
+	// Username (accent) then body (foreground), drawn first so the pill on
+	// the right edge composites on top of any glyphs scrolling underneath it.
+	if namePrefix != "" {
+		nd := &font.Drawer{Dst: dst, Src: image.NewUniform(accent), Face: bodyFace}
+		nd.Dot = fixed.P(textX, baseline)
+		nd.DrawString(namePrefix)
+	}
 	bd := &font.Drawer{Dst: dst, Src: image.NewUniform(textFG), Face: bodyFace}
-	bd.Dot = fixed.P(textX, baseline)
+	bd.Dot = fixed.P(textX+nameW, baseline)
 	bd.DrawString(msg)
 
 	pillText := "FROM CHAT"
@@ -791,19 +964,31 @@ func drawChatTicker(dst *image.RGBA,
 
 // drawSubtitle paints the centered subtitle card inside the rectangle
 // (areaLeft,areaTop)-(areaRight,areaBot): a role-colored pill with the speaker
-// label, then the spoken text wrapped within a bounded box. Text is
-// right-trimmed to the most recent N lines so it always fits.
+// label, then the spoken text wrapped within a bounded box. When the wrapped
+// body overflows what physically fits, the text auto-scrolls vertically
+// (initial dwell → smooth scroll → final dwell at the last lines) so viewers
+// see the entire sentence rather than only the most recent fragment.
+// bodyStart is when the current body became active — the renderer resets it
+// on every body change so each new sentence begins its scroll from the top.
 func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	speaker, role, body string,
 	areaLeft, areaTop, areaRight, areaBot int,
 	fg color.RGBA,
 	hasChrome bool,
+	bodyStart time.Time,
 ) {
 	const (
 		pad         = 26
 		gapTagBody  = 18
 		lineGap     = 10
 		maxLinesCap = 6
+
+		// Scroll tuning — only used when the wrapped body has more lines than
+		// fit in the card. dwellStart gives viewers time to read the opening
+		// before motion begins; scrollSpeedPxPerSec is set to feel like a
+		// confident teleprompter (≈110 wpm at the body face's line height).
+		scrollDwellStart    = 1500 * time.Millisecond
+		scrollSpeedPxPerSec = 25
 	)
 
 	areaW := areaRight - areaLeft
@@ -835,15 +1020,20 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 		maxLines = 1
 	}
 
-	// Sliding-window subtitle: always show the most recent maxLines lines as
-	// the body grows. Page-based reveal was rejected because the final page of
-	// a long passage often contained only one or two lines, leaving the
-	// audience staring at a sliver of text while the audio kept playing.
 	lines := wrapLines(bodyFace, body, innerW)
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
+	overflow := len(lines) > maxLines
+
+	// Visible-line count drives the box height so the card stays a stable
+	// size whether the speaker has produced one short line or a long passage
+	// that's about to scroll.
+	visLineCount := len(lines)
+	if visLineCount > maxLines {
+		visLineCount = maxLines
 	}
 
+	// Box width fits the widest line across ALL wrapped lines (not just the
+	// visible window) so a longer line that's about to scroll into view
+	// doesn't get horizontally clipped when it arrives.
 	contentW := tagW
 	{
 		d := &font.Drawer{Face: bodyFace}
@@ -859,8 +1049,8 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	}
 
 	bodyH := 0
-	if len(lines) > 0 {
-		bodyH = len(lines)*lineH + gapTagBody
+	if visLineCount > 0 {
+		bodyH = visLineCount*lineH + gapTagBody
 	}
 	boxH := pad*2 + tagH + bodyH
 	if boxH < 200 {
@@ -892,13 +1082,47 @@ func drawSubtitle(dst *image.RGBA, tagFace, bodyFace font.Face,
 	drawCenteredPill(dst, tagFace, tagText, pillCx, pillCy,
 		outline, color.RGBA{0xff, 0xff, 0xff, 0xff})
 
-	// Body lines: centered horizontally, top-down below the pill.
+	// Vertical scroll offset. When the body fits, scroll stays at 0 and the
+	// renderer behaves exactly like the legacy fixed layout.
+	scrollPx := 0
+	if overflow && !bodyStart.IsZero() {
+		overflowPx := (len(lines) - maxLines) * lineH
+		elapsed := time.Since(bodyStart)
+		if elapsed > scrollDwellStart {
+			offset := int(float64(elapsed-scrollDwellStart) /
+				float64(time.Second) * float64(scrollSpeedPxPerSec))
+			if offset > overflowPx {
+				offset = overflowPx
+			}
+			scrollPx = offset
+		}
+	}
+
+	// Body lines: centered horizontally, top-down below the pill, drawn into
+	// a sub-image clipped to the body region so glyphs scrolling past the top
+	// or bottom edge don't bleed onto the pill or out of the card.
 	textTop := boxY + pad + tagH + gapTagBody + bodyMetrics.Ascent.Ceil()
-	d := &font.Drawer{Dst: dst, Src: image.NewUniform(fg), Face: bodyFace}
+	bodyClip := image.Rect(
+		boxX,
+		boxY+pad+tagH+gapTagBody,
+		boxX+boxW,
+		boxY+boxH-pad,
+	).Intersect(dst.Bounds())
+	clip, _ := dst.SubImage(bodyClip).(*image.RGBA)
+	if clip == nil {
+		clip = dst
+	}
+	d := &font.Drawer{Dst: clip, Src: image.NewUniform(fg), Face: bodyFace}
+	asc, desc := bodyMetrics.Ascent.Ceil(), bodyMetrics.Descent.Ceil()
 	for i, ln := range lines {
 		w := d.MeasureString(ln).Ceil()
 		x := boxX + (boxW-w)/2
-		y := textTop + i*lineH
+		y := textTop + i*lineH - scrollPx
+		// Skip lines fully outside the clip — saves a DrawString call per
+		// glyph that would otherwise be no-ops thanks to clipping.
+		if y+desc < bodyClip.Min.Y || y-asc > bodyClip.Max.Y {
+			continue
+		}
 		d.Dot = fixed.P(x, y)
 		d.DrawString(ln)
 	}

@@ -138,6 +138,84 @@ func (r *SessionRegistry) SeedChannelDebates(channelID string, debates []Session
 	st.debates = append(st.debates[:0], debates...)
 }
 
+// AppendChannelDebate adds a single debate to the end of a channel's queue.
+// Used by the folder watcher when a new debate.md is dropped into the watched
+// directory at runtime. Returns false if the channel is unknown or a debate
+// with the same id already exists in this channel's queue (callers should
+// generate a unique id before calling).
+func (r *SessionRegistry) AppendChannelDebate(channelID string, sess Session) bool {
+	r.mu.RLock()
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return false
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for i := range st.debates {
+		if st.debates[i].ID == sess.ID {
+			return false
+		}
+	}
+	st.debates = append(st.debates, sess)
+	return true
+}
+
+// RemoveChannelDebate drops a debate from the channel's queue. Only Pending
+// entries are removable — a Running debate is mid-flight (killing its
+// metadata while audio/video keep streaming would leave the UI inconsistent),
+// and Done/Error entries are kept as history. Returns the removed debate's
+// status and ok=true on success; ok=false when the debate isn't found or
+// isn't pending. The returned status lets callers log *why* a removal was
+// skipped (running vs unknown).
+func (r *SessionRegistry) RemoveChannelDebate(channelID, debateID string) (SessionStatus, bool) {
+	r.mu.RLock()
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return "", false
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for i := range st.debates {
+		if st.debates[i].ID != debateID {
+			continue
+		}
+		status := st.debates[i].Status
+		if status != StatusPending {
+			return status, false
+		}
+		st.debates = append(st.debates[:i], st.debates[i+1:]...)
+		// currentI tracks the airing slot's index. Removing a slot before
+		// it shifts every later slot down by one — adjust so the live
+		// pointer keeps pointing at the same debate.
+		if st.currentI > i {
+			st.currentI--
+		}
+		return StatusPending, true
+	}
+	return "", false
+}
+
+// HasDebate reports whether the named debate already exists on this channel.
+// Lets the watcher dedupe before generating ids / loading topic files twice.
+func (r *SessionRegistry) HasDebate(channelID, debateID string) bool {
+	r.mu.RLock()
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return false
+	}
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	for i := range st.debates {
+		if st.debates[i].ID == debateID {
+			return true
+		}
+	}
+	return false
+}
+
 // SetDebateStatus updates a single debate's lifecycle status within its
 // channel.
 func (r *SessionRegistry) SetDebateStatus(channelID, debateID string, status SessionStatus) {

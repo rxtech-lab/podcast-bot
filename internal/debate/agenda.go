@@ -71,10 +71,9 @@ type plannerState struct {
 	affRRIdx       int  // round-robin cursor inside the affirmative side
 	negRRIdx       int  // round-robin cursor inside the negative side
 	closingIdx     int
-	conclusionIdx  int
 	endRequested   bool
 	verdictEmitted bool
-	conclusionDone bool
+	signoffSent    bool
 
 	// pendingAnswerUser flags that the host just took an address-user turn and
 	// the very next turn MUST be a candidate answering that question. Without
@@ -177,10 +176,17 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 			p.state.verdictEmitted = true
 			return p.makeTurn(p.registry.Judge, "verdict", p.budgetSeconds(45)), true
 		}
-		p.state.phase = agent.PhaseConclusion
-		return p.makeTurn(p.registry.Host, "conclusion-intro", p.budgetSeconds(10)), true
-	case agent.PhaseConclusion:
-		return p.planConclusion()
+		// Brief host sign-off after the verdict, then the debate ends. The
+		// previous design ran a "conclusion" round here in which every
+		// candidate, every viewer, and the judge each gave another reflection
+		// turn — that confused viewers because it looped back through the
+		// roster after the winner had already been declared.
+		if !p.state.signoffSent {
+			p.state.signoffSent = true
+			p.state.phase = agent.PhaseEnded
+			return p.makeTurn(p.registry.Host, "closing", p.budgetSeconds(15)), true
+		}
+		return nil, false
 	case agent.PhaseEnded:
 		return nil, false
 	}
@@ -327,21 +333,6 @@ func (p *Planner) planClosing() (*Turn, bool) {
 		ag = p.registry.Negative[(idx/2)%len(p.registry.Negative)]
 	}
 	return p.makeTurn(ag, "closing", p.budgetSeconds(45)), true
-}
-
-func (p *Planner) planConclusion() (*Turn, bool) {
-	all := append([]agent.Agent{}, p.registry.Affirmatve...)
-	all = append(all, p.registry.Negative...)
-	all = append(all, p.registry.Viewers...)
-	all = append(all, p.registry.Judge)
-
-	if p.state.conclusionIdx >= len(all) {
-		p.state.phase = agent.PhaseEnded
-		return p.makeTurn(p.registry.Host, "closing", p.budgetSeconds(20)), true
-	}
-	idx := p.state.conclusionIdx
-	p.state.conclusionIdx++
-	return p.makeTurn(all[idx], "conclusion", p.budgetSeconds(20)), true
 }
 
 func (p *Planner) makeTurn(ag agent.Agent, directive string, budget time.Duration) *Turn {

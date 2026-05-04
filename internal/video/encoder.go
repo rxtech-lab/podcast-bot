@@ -283,9 +283,11 @@ func (e *Encoder) SetBody(s string) {
 const userMsgTTL = 5 * time.Second
 
 // ShowUserMessage flashes a chat/viewer message on the video for a few
-// seconds without disturbing the active speaker subtitle.
-func (e *Encoder) ShowUserMessage(text string) {
-	e.rend.ShowUserMessage(text, userMsgTTL)
+// seconds without disturbing the active speaker subtitle. username is the
+// viewer's handle and is rendered ahead of the message in the ticker's
+// accent colour; pass "" to suppress the prefix.
+func (e *Encoder) ShowUserMessage(text, username string) {
+	e.rend.ShowUserMessage(text, username, userMsgTTL)
 }
 
 // frameLoop pushes one rendered frame per video tick into ffmpeg's stdin.

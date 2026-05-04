@@ -286,6 +286,15 @@ export function useDebateEvents() {
         .catch(() => {})
     })
 
+    // The folder watcher discovered a new debate.md and queued it. Refetch
+    // /api/topics so the channel switcher shows the freshly-added entry
+    // without the viewer needing to reload the page or change channels.
+    es.addEventListener('topics_changed', () => {
+      loadTopics()
+        .then((resp) => dispatch({ kind: 'channels', channels: resp.channels }))
+        .catch(() => {})
+    })
+
     es.onerror = (e) => {
       console.warn('[debate] SSE onerror', { readyState: es.readyState, err: e })
       dispatch({ kind: 'status', text: 'reconnecting…' })
