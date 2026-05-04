@@ -44,20 +44,25 @@ type Orchestrator struct {
 	// Empty when music generation failed or for non-puzzle topics.
 	puzzleMusic map[string]string
 
-	// surfaceFrames is how many surface scene images the visual planner
-	// generated for this puzzle. The puzzle host's system prompt uses
-	// surfaceFrames-1 as the exact number of `<scene/>` markers to emit
-	// during the surface narration so each marker advances the on-screen
-	// image to the next planned beat (no repeats, no overshoot). The
-	// pipeline also caps SceneAdvanceMsg events at surfaceFrames-1 as a
-	// belt-and-braces safeguard if the LLM misses the count.
-	// 0 means "host falls back to a guidance range, pipeline doesn't cap".
-	surfaceFrames int
-	// conclusionFrames is the same idea for the conclusion phase. The
-	// conclusion now reads as a longer reflective epilogue (matching the
-	// surface's cinematic feel) and uses scene markers to advance through
-	// the planned aftermath beats instead of a wall-clock timer.
-	conclusionFrames int
+	// surfacePlan is the visual director's per-frame direction list for
+	// the surface narration (one short sentence per beat, in narration
+	// order). The puzzle host's system prompt enumerates each entry as
+	// "Beat N: <direction>" so the host knows what each cached image
+	// (surface-vN) depicts and emits "<scene N/>" markers locked to the
+	// planner's beats. nil means "no plan available — host falls back
+	// to soft guidance with unnumbered markers, pipeline doesn't clamp".
+	surfacePlan []string
+	// surfaceAnchors is parallel to surfacePlan: each entry is a short
+	// verbatim snippet from the surface text that begins beat i's
+	// narration. The host uses these as a string-match trigger so its
+	// markers land on the planner's beat boundaries instead of drifting
+	// off the planner's intent by counting paragraph breaks.
+	surfaceAnchors []string
+	// conclusionPlan is the same idea for the conclusion phase. The
+	// conclusion reads as a longer reflective epilogue with one image
+	// per planned beat; the host uses numbered markers to keep the
+	// rotation locked to the plan.
+	conclusionPlan []string
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.
@@ -202,7 +207,7 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 		return agent.NewPlayer(base)
 	case agent.RolePuzzleHost:
 		return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth,
-			o.surfaceFrames, o.conclusionFrames)
+			o.surfacePlan, o.surfaceAnchors, o.conclusionPlan)
 	}
 	return nil
 }
@@ -252,8 +257,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		Transcript:       o.Transcript,
 		LiveStream:       o.LiveStream,
 		MusicPaths:       o.puzzleMusic,
-		SurfaceFrames:    o.surfaceFrames,
-		ConclusionFrames: o.conclusionFrames,
+		SurfaceFrames:    len(o.surfacePlan),
+		ConclusionFrames: len(o.conclusionPlan),
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

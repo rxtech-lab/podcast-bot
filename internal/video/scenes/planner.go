@@ -15,9 +15,19 @@ import (
 // to Generate so it overrides the static SurfaceVariantCount /
 // ConclusionVariantCount defaults. A nil plan (or an empty Surface /
 // Conclusion slice) falls back to the defaults built into buildPromptVariant.
+//
+// SurfaceAnchors is parallel to Surface: anchors[i] is a short verbatim
+// snippet from the surface text that the host will narrate at the start
+// of beat i. The puzzle host's prompt uses these as a string-match
+// trigger — when its narration reaches anchors[i], it emits
+// "<scene i/>". This replaces the old "count paragraph breaks"
+// heuristic which drifted off the planner's intended beat boundaries.
+// Empty / shorter than Surface means "no anchor for that beat" — the
+// host falls back to its own judgement for that one beat.
 type ScenePlan struct {
-	Surface    []string
-	Conclusion []string
+	Surface        []string
+	SurfaceAnchors []string
+	Conclusion     []string
 }
 
 // SurfaceCount and ConclusionCount report how many variants the plan calls for.
@@ -42,7 +52,7 @@ func (p *ScenePlan) ConclusionCount() int {
 // long, music-driven monologue that benefits most from extra imagery.
 const (
 	minSurfaceFrames    = 6
-	maxSurfaceFrames    = 14
+	maxSurfaceFrames    = 100
 	minConclusionFrames = 3
 	maxConclusionFrames = 6
 )
@@ -80,6 +90,7 @@ imagery follows the storytelling.
 Output strict JSON with this shape:
 {
   "surface": ["...", "...", ...],
+  "surface_anchors": ["...", "...", ...],
   "conclusion": ["...", "...", ...]
 }
 
@@ -99,18 +110,35 @@ Rules:
   across consecutive entries (wide / mid / close / pure environment /
   silhouette / object detail) so the cuts feel like a documentary edit, but
   never at the cost of order.
+- "surface_anchors" is REQUIRED and MUST be a parallel array of EXACTLY the
+  same length as "surface". Entry anchors[i] is a SHORT VERBATIM SNIPPET
+  (8–25 CJK characters or 4–12 English words) copied directly from the
+  surface text — it is the FIRST sentence (or unmistakable opening phrase)
+  of the chunk of surface narration that beat i depicts. The host will
+  string-match this snippet against its narration to know exactly when to
+  switch to image i. Rules for anchors:
+    * Must appear VERBATIM in the surface text — do not paraphrase, do not
+      summarise, do not invent text that isn't there. Copy exactly.
+    * Must be UNIQUE within the surface — if a phrase repeats, pick a
+      longer span that disambiguates which occurrence you mean.
+    * Must be in narration order (anchor i appears after anchor i-1 in the
+      surface text) and non-overlapping.
+    * No leading whitespace, no quote marks, no markdown.
 - "conclusion" lists frames for the quiet aftermath after the truth has been
-  revealed. Same one-sentence format.
+  revealed. Same one-sentence format. The conclusion narration is composed
+  fresh by the host (not lifted from a source text), so it does NOT need
+  anchors.
 - DO NOT mention any character's face speaking or any text/UI — these are
   global constraints downstream.
 - DO NOT leak the surface story's hidden truth in any "surface" entry. The
   truth may inform the "conclusion" entries' emotional weight, but never the
   surface frames.
-- Surface count: between 6 and 14 frames, scaled to the surface text's length
+- Surface count: between 6 and 100 frames, scaled to the surface text's length
   and number of distinct beats (paragraph breaks, time/place shifts, new
-  figures, recurring objects). A short surface gets ~6, a long multi-scene
-  surface gets 10–14. Prefer the higher end for long multi-paragraph
-  narrations so each paragraph has its own image.
+  figures, recurring objects). A short surface gets ~6; a long multi-scene
+  surface should get one frame per distinct beat — do not cap arbitrarily.
+  Prefer one frame per paragraph or scene shift so the picture follows the
+  voice tightly.
 - Conclusion count: between 3 and 6 frames.
 - Plain prose only inside each entry. No markdown, no quotes, no bullet
   prefixes, no scene numbers.`
@@ -126,8 +154,9 @@ Rules:
 	raw = unwrapJSONFences(raw)
 
 	var parsed struct {
-		Surface    []string `json:"surface"`
-		Conclusion []string `json:"conclusion"`
+		Surface        []string `json:"surface"`
+		SurfaceAnchors []string `json:"surface_anchors"`
+		Conclusion     []string `json:"conclusion"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("unmarshal plan: %w (raw=%q)", err, truncateForLog(string(raw), 200))
@@ -138,7 +167,30 @@ Rules:
 		return nil, fmt.Errorf("plan empty after clamp (surface=%d, conclusion=%d)",
 			len(parsed.Surface), len(parsed.Conclusion))
 	}
-	return &ScenePlan{Surface: parsed.Surface, Conclusion: parsed.Conclusion}, nil
+	// Anchors are paired with surface entries; trim/pad to match length.
+	// Padding with "" leaves that beat anchorless — host falls back to
+	// its own judgement for that beat. Verifying the anchor actually
+	// appears in the surface is the host's responsibility (string match
+	// at narration time) rather than failing the plan here, so a stray
+	// hallucinated anchor degrades gracefully rather than aborting the
+	// whole puzzle.
+	parsed.SurfaceAnchors = matchAnchorLength(parsed.SurfaceAnchors, len(parsed.Surface))
+	return &ScenePlan{
+		Surface:        parsed.Surface,
+		SurfaceAnchors: parsed.SurfaceAnchors,
+		Conclusion:     parsed.Conclusion,
+	}, nil
+}
+
+// matchAnchorLength trims/pads the anchor slice to exactly n entries.
+// Each entry is trimmed of surrounding whitespace; longer slices are
+// truncated; shorter ones are padded with empty strings.
+func matchAnchorLength(anchors []string, n int) []string {
+	out := make([]string, n)
+	for i := 0; i < n && i < len(anchors); i++ {
+		out[i] = strings.TrimSpace(anchors[i])
+	}
+	return out
 }
 
 // truncateForLog clips s to n runes for log lines so a megabyte of LLM
@@ -199,8 +251,10 @@ func FallbackPlan(topic *config.DebateTopic) *ScenePlan {
 	}
 
 	surfaceDirs := make([]string, 0, len(chunks))
+	surfaceAnchors := make([]string, 0, len(chunks))
 	for i, c := range chunks {
 		surfaceDirs = append(surfaceDirs, fallbackSurfaceDirection(i, c))
+		surfaceAnchors = append(surfaceAnchors, fallbackAnchor(c))
 	}
 
 	conclusionDirs := make([]string, 0, minConclusionFrames)
@@ -209,10 +263,29 @@ func FallbackPlan(topic *config.DebateTopic) *ScenePlan {
 			conclusionVariantDirections[i%len(conclusionVariantDirections)])
 	}
 
+	clampedSurface := clampSlice(surfaceDirs, minSurfaceFrames, maxSurfaceFrames)
 	return &ScenePlan{
-		Surface:    clampSlice(surfaceDirs, minSurfaceFrames, maxSurfaceFrames),
-		Conclusion: clampSlice(conclusionDirs, minConclusionFrames, maxConclusionFrames),
+		Surface:        clampedSurface,
+		SurfaceAnchors: matchAnchorLength(surfaceAnchors, len(clampedSurface)),
+		Conclusion:     clampSlice(conclusionDirs, minConclusionFrames, maxConclusionFrames),
 	}
+}
+
+// fallbackAnchor extracts a short verbatim anchor (the first ~20 chars of
+// chunk c, trimmed at the first sentence terminator) for use as a string-
+// match trigger when no LLM-supplied anchor is available. Empty string for
+// trivially short chunks — the host falls back to its own judgement.
+func fallbackAnchor(c string) string {
+	c = strings.TrimSpace(c)
+	if c == "" {
+		return ""
+	}
+	const maxRunes = 20
+	runes := []rune(c)
+	if len(runes) > maxRunes {
+		runes = runes[:maxRunes]
+	}
+	return strings.TrimSpace(string(runes))
 }
 
 // splitSurfaceIntoChunks splits s into between min and max story-ordered

@@ -46,26 +46,42 @@ func (o *Orchestrator) SetPuzzleMusic(music map[string]string) {
 	o.puzzleMusic = music
 }
 
-// SetSurfaceFrames records the visual director's surface frame count for
-// the upcoming run so the puzzle host's system prompt can demand exactly
-// surfaceFrames-1 scene markers and the pipeline can cap excess
-// SceneAdvanceMsg events. Caller (cmd/debate-bot) sets this from
-// scenes.Plan / scenes.FallbackPlan output after planning completes and
-// before Run is called. No-op for n <= 0.
-func (o *Orchestrator) SetSurfaceFrames(n int) {
-	if n <= 0 {
+// SetSurfacePlan records the visual director's surface beat directions for
+// the upcoming run. Each entry is a one-sentence direction describing what
+// the matching cached image (surface-vN) depicts; the puzzle host's system
+// prompt enumerates them as "Beat N: <direction>" so the host can emit
+// "<scene N/>" markers locked to the planner's beats. Caller
+// (cmd/debate-bot) sets this from scenes.Plan / scenes.FallbackPlan output
+// after planning completes and before Run is called. No-op for empty plans.
+func (o *Orchestrator) SetSurfacePlan(plan []string) {
+	if len(plan) == 0 {
 		return
 	}
-	o.surfaceFrames = n
+	o.surfacePlan = append([]string(nil), plan...)
 }
 
-// SetConclusionFrames is the same as SetSurfaceFrames for the conclusion
-// phase. Conclusion now uses scene-marker advancement (not a wall-clock
-// timer) so the host needs to know how many markers to emit and the
-// pipeline needs to know how many to cap at.
-func (o *Orchestrator) SetConclusionFrames(n int) {
-	if n <= 0 {
+// SetSurfaceAnchors records the planner's per-beat verbatim anchor list
+// (parallel to SurfacePlan). The puzzle host's system prompt embeds each
+// anchor under its beat so the host can string-match its narration
+// position against the surface and drop "<scene N/>" markers exactly
+// at the planner's intended boundaries — replaces the old "count
+// paragraph breaks" heuristic that drifted in long narrations. No-op
+// when the slice is empty (host falls back to its own paragraph
+// judgement).
+func (o *Orchestrator) SetSurfaceAnchors(anchors []string) {
+	if len(anchors) == 0 {
 		return
 	}
-	o.conclusionFrames = n
+	o.surfaceAnchors = append([]string(nil), anchors...)
+}
+
+// SetConclusionPlan is the same as SetSurfacePlan for the conclusion phase.
+// Conclusion uses scene-marker advancement (not a wall-clock timer) so the
+// host needs to know what each numbered beat depicts to emit the right
+// markers in the right order.
+func (o *Orchestrator) SetConclusionPlan(plan []string) {
+	if len(plan) == 0 {
+		return
+	}
+	o.conclusionPlan = append([]string(nil), plan...)
 }

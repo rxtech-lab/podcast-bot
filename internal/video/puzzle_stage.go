@@ -112,7 +112,7 @@ func (s *PuzzleStage) Run(ctx context.Context, bus *eventbus.Bus) {
 			case contentcreator.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
 			case contentcreator.SceneAdvanceMsg:
-				s.advanceScene()
+				s.applySceneAdvance(m.Index)
 			}
 		}
 	}
@@ -247,13 +247,15 @@ func (s *PuzzleStage) setSceneFor(name string) {
 	s.maybeStartSceneRotation(name)
 }
 
-// advanceScene swaps to the next variant of the currently-active multi-variant
-// scene. Single-image scenes (qa, reveal) ignore the call. Driven by the
-// producer's scene-switch markers (today: emitted by the puzzle host inside
-// the surface narration so images cut on paragraph beats instead of on a
-// fixed timer). Wraps the variant index modulo the available count so a
-// generous marker stream loops the same set rather than running off the end.
-func (s *PuzzleStage) advanceScene() {
+// applySceneAdvance honours a SceneAdvanceMsg from the producer. When idx
+// >= 0 the stage jumps directly to that absolute variant index (clamped
+// into [0, count-1]) so numbered `<scene N/>` markers from the host land
+// on the planner-aligned frame even if the host skips, repeats, or
+// reorders beats. When idx < 0 (legacy unnumbered marker) the stage
+// falls back to incrementing the current variant by one — preserving
+// the original "advance by one" semantics. Single-image scenes (qa,
+// reveal) ignore the call.
+func (s *PuzzleStage) applySceneAdvance(idx int) {
 	s.mu.Lock()
 	sc := s.sceneScenes
 	name := s.curScene
@@ -266,10 +268,21 @@ func (s *PuzzleStage) advanceScene() {
 		return
 	}
 	s.mu.Lock()
-	s.curSceneIdx = (s.curSceneIdx + 1) % count
-	idx := s.curSceneIdx
+	switch {
+	case idx >= 0:
+		// Clamp into range so an LLM emitting `<scene 99/>` against a
+		// 14-frame plan doesn't crash — clamp to the last available
+		// frame instead.
+		if idx >= count {
+			idx = count - 1
+		}
+		s.curSceneIdx = idx
+	default:
+		s.curSceneIdx = (s.curSceneIdx + 1) % count
+	}
+	applyIdx := s.curSceneIdx
 	s.mu.Unlock()
-	s.applyScene(name, idx)
+	s.applyScene(name, applyIdx)
 }
 
 // applyScene blits the indexed variant of the named scene through the

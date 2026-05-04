@@ -44,12 +44,10 @@ const (
 )
 
 // surfaceBatchSize is the maximum number of surface frames generated in
-// parallel. With long story-ordered plans now reaching maxSurfaceFrames
-// (14), an unbounded fan-out hammered the gateway and tripped rate
-// limits. 13 keeps the busiest puzzle's surface gen within one batch
-// while leaving headroom for the qa + reveal jobs that share the same
-// gateway endpoint.
-const surfaceBatchSize = 13
+// parallel. Sized to maxSurfaceFrames so the busiest puzzle's surface
+// gen runs in a single fan-out — the gateway happily handles this batch
+// width and the wall-clock for first-paint drops accordingly.
+const surfaceBatchSize = maxSurfaceFrames
 
 // genSize is what we ask the gateway for. Gemini flash-image accepts
 // 1024×1024; we resample to the renderer's 1280×720 below. Picking square

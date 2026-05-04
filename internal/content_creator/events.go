@@ -143,14 +143,21 @@ type TopicMsg struct {
 // regardless of which channel they're tuned to.
 type TopicsChangedMsg struct{}
 
-// SceneAdvanceMsg asks any active visual stage to swap to the next scene
+// SceneAdvanceMsg asks any active visual stage to swap to a specific scene
 // variant for the current phase. Emitted by the producer when the speaker's
 // streamed text contains a scene-switch marker (today: the puzzle host's
-// surface narration uses `<scene/>` between paragraphs so images follow the
-// audio beats instead of a fixed timer). Stages without a multi-variant scene
-// active treat it as a no-op.
+// surface and conclusion narration use `<scene N/>` to flag a beat boundary
+// so images follow the audio beats instead of a fixed timer).
+//
+// Index is the 0-based absolute frame the renderer should jump to. A
+// negative Index (markerIdxNoNumber) preserves the legacy "advance by one"
+// semantics for unnumbered `<scene/>` markers — the renderer increments
+// curSceneIdx by one mod count.
+//
+// Stages without a multi-variant scene active treat it as a no-op.
 type SceneAdvanceMsg struct {
 	ChannelID string
+	Index     int
 }
 
 // MsgChannelID extracts the channel id from any debate event message. Returns

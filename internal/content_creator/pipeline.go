@@ -74,6 +74,14 @@ type Deps struct {
 // dominant offset and 2300ms wasn't enough.
 const subtitleClientLatency = 3100 * time.Millisecond
 
+// surfaceSubtitleExtraDelay is an additional offset applied ONLY to the
+// puzzle host's surface-narration subtitle dispatch. Surface turns are
+// long, slow, and music-bedded — the subtitle was landing slightly ahead
+// of the spoken audio on listener-side playback, breaking the late-night
+// storyteller feel. Scene markers are NOT delayed (they remain tied to
+// the audio start), only the on-screen caption shifts.
+const surfaceSubtitleExtraDelay = 1500 * time.Millisecond
+
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
@@ -300,6 +308,23 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	}
 	defer turnFile.Close()
 
+	// Per-turn raw-script file: captures the host's UNCLEANED stream
+	// including `<scene N/>` markers, paragraph breaks, and any other
+	// stage cues that get stripped before TTS / transcript / memory
+	// see them. Lives next to turn_NNN.mp3 so a single folder gives a
+	// full picture of the turn for post-mortem debugging — especially
+	// useful for diagnosing scene-marker placement vs. audio drift.
+	scriptPath := filepath.Join(p.d.OutDir, fmt.Sprintf("turn_%03d.script.txt", t.ID))
+	scriptFile, err := os.Create(scriptPath)
+	if err != nil {
+		return fmt.Errorf("create turn script file: %w", err)
+	}
+	defer scriptFile.Close()
+	if _, err := fmt.Fprintf(scriptFile, "# turn %d  speaker=%s  role=%s  directive=%s\n",
+		t.ID, t.Speaker.Name(), t.Speaker.Role(), t.Directive); err != nil {
+		p.d.Log.Warn("script header write", "turn", t.ID, "err", err)
+	}
+
 	// Audio sink: tee to the shared livestream (paced via ffmpeg -re) and
 	// the per-turn file. Writes are serialized within this goroutine, so a
 	// plain MultiWriter is safe.
@@ -332,6 +357,13 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		if d.TextChunk == "" {
 			continue
 		}
+		// Mirror raw LLM bytes (markers and all) into the per-turn
+		// script file before splitting / cleaning. ChunkBoundaries
+		// are not preserved as newlines — the file is a verbatim
+		// reconstruction of what the model wrote.
+		if _, err := scriptFile.WriteString(d.TextChunk); err != nil {
+			p.d.Log.Warn("script chunk write", "turn", t.ID, "err", err)
+		}
 		for _, sent := range splitter.Push(d.TextChunk) {
 			n, err := p.synthSentence(ctx, t, sent, sink)
 			if err != nil {
@@ -361,6 +393,8 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		// Don't keep an empty-stream artefact, and don't include it in concat.
 		_ = turnFile.Close()
 		_ = os.Remove(turnPath)
+		_ = scriptFile.Close()
+		_ = os.Remove(scriptPath)
 		t.AudioPath = ""
 	}
 
@@ -390,16 +424,17 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// while paragraph N's audio is still playing — the "image one ahead
 	// of audio" bug.
 	cleaned, leadAdvances, trailAdvances := stripSceneMarkers(sent)
-	// Clamp the combined count to the per-turn cap, then re-split: the
-	// cap distributes across both buckets so an over-eager host can't
-	// wrap the rotation back to frame 0 by piling markers on either end.
+	// Drop indices that would point past the planner's frame count for
+	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
+	// the last frame for the rest of the turn. Unnumbered legacy markers
+	// (-1) are kept; the renderer treats them as "advance one".
 	leadAdvances, trailAdvances = p.clampLeadTrail(t, leadAdvances, trailAdvances)
-	if leadAdvances > 0 || trailAdvances > 0 {
+	if len(leadAdvances) > 0 || len(trailAdvances) > 0 {
 		p.d.Log.Info("scene marker",
 			"turn", t.ID,
 			"directive", strings.SplitN(t.Directive, ":", 2)[0],
-			"leading", leadAdvances,
-			"trailing", trailAdvances,
+			"leading", len(leadAdvances),
+			"trailing", len(trailAdvances),
 			"already_emitted", t.sceneAdvances,
 			"sentence_preview", truncatePreview(cleaned, 60))
 	}
@@ -407,11 +442,13 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		// Marker-only sentence (rare — usually only the surface narration's
 		// final paragraph break). Both buckets fire immediately; there's
 		// no audio gap to defer trailing advances against.
-		total := leadAdvances + trailAdvances
-		for i := 0; i < total; i++ {
-			p.d.Send(SceneAdvanceMsg{})
+		for _, idx := range leadAdvances {
+			p.d.Send(SceneAdvanceMsg{Index: idx})
 		}
-		t.sceneAdvances += total
+		for _, idx := range trailAdvances {
+			p.d.Send(SceneAdvanceMsg{Index: idx})
+		}
+		t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 		return 0, nil
 	}
 	sent = cleaned
@@ -469,27 +506,38 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		AudioDuration: audioDuration,
 	}
 	send := p.d.Send
-	// Trailing advances fire when this sentence's audio finishes
-	// playing back to the listener — that's targetSend + audioDuration
-	// in wall-clock terms. Leading advances fire alongside the
-	// TranscriptMsg at audio start.
-	fireLeading := func() {
-		send(msg)
-		for i := 0; i < leadAdvances; i++ {
-			send(SceneAdvanceMsg{})
+	// Subtitle dispatch is offset on surface turns only — see
+	// surfaceSubtitleExtraDelay. Scene markers (leading + trailing)
+	// stay locked to the audio timeline so the picture doesn't drift
+	// even when the caption is held.
+	subtitleAt := targetSend
+	if strings.HasPrefix(t.Directive, "surface") {
+		subtitleAt = subtitleAt.Add(surfaceSubtitleExtraDelay)
+	}
+	fireSubtitle := func() { send(msg) }
+	fireLeadingScenes := func() {
+		for _, idx := range leadAdvances {
+			send(SceneAdvanceMsg{Index: idx})
 		}
 	}
 	fireTrailing := func() {
-		for i := 0; i < trailAdvances; i++ {
-			send(SceneAdvanceMsg{})
+		for _, idx := range trailAdvances {
+			send(SceneAdvanceMsg{Index: idx})
 		}
 	}
-	if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
-		fireLeading()
+	if remaining := time.Until(subtitleAt); remaining <= 50*time.Millisecond {
+		fireSubtitle()
 	} else {
-		time.AfterFunc(remaining, fireLeading)
+		time.AfterFunc(remaining, fireSubtitle)
 	}
-	if trailAdvances > 0 {
+	if len(leadAdvances) > 0 {
+		if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
+			fireLeadingScenes()
+		} else {
+			time.AfterFunc(remaining, fireLeadingScenes)
+		}
+	}
+	if len(trailAdvances) > 0 {
 		// targetSend is the sentence's audio-start moment; add
 		// audioDuration to land at audio-end on the listener's timeline.
 		trailAt := targetSend.Add(audioDuration)
@@ -499,7 +547,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			time.AfterFunc(remaining, fireTrailing)
 		}
 	}
-	t.sceneAdvances += leadAdvances + trailAdvances
+	t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 	return n, nil
 }
 
@@ -513,57 +561,45 @@ func truncatePreview(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// clampLeadTrail applies the same per-turn advance cap as clampAdvances
-// but to the leading + trailing buckets together. Spends leading
-// advances first (they ride with the current TranscriptMsg, so they're
-// the ones the host is most likely to mean as "advance now"), then
-// trailing. Returns the (possibly-reduced) leading and trailing counts.
-func (p *Pipeline) clampLeadTrail(t *Turn, lead, trail int) (int, int) {
-	total := p.clampAdvances(t, lead+trail)
-	if total <= 0 {
-		return 0, 0
-	}
-	if lead >= total {
-		return total, 0
-	}
-	return lead, total - lead
+// clampLeadTrail filters out scene-marker indices that point past the
+// current phase's frame count so a stray "<scene 99/>" against a 14-
+// frame plan doesn't pin the renderer on the last frame. Unnumbered
+// legacy markers (markerIdxNoNumber) pass through unchanged — the
+// renderer interprets them as "advance one". Returns the filtered
+// leading and trailing slices in document order.
+func (p *Pipeline) clampLeadTrail(t *Turn, lead, trail []int) ([]int, []int) {
+	count := p.phaseFrameCount(t)
+	return clampMarkerIndices(lead, count), clampMarkerIndices(trail, count)
 }
 
-// clampAdvances limits how many `<scene/>` markers we will emit for this
-// turn so excess host markers don't wrap the rotation back to frame 0.
-// The cap is per-phase (SurfaceFrames-1 / ConclusionFrames-1): the visual
-// director generated N distinct beats; the first paints when the phase
-// opens, so the host walks frames 1..N-1 with one marker each. A 0 cap
-// (no plan available for that phase) returns raw — accept whatever the
-// host emits.
-func (p *Pipeline) clampAdvances(t *Turn, raw int) int {
-	if raw <= 0 {
-		return raw
+// clampMarkerIndices drops any explicit index >= count and keeps -1
+// (legacy unnumbered markers) intact. count <= 0 disables the cap.
+func clampMarkerIndices(in []int, count int) []int {
+	if len(in) == 0 || count <= 0 {
+		return in
 	}
-	cap := 0
+	out := in[:0]
+	for _, idx := range in {
+		if idx == markerIdxNoNumber || idx < count {
+			out = append(out, idx)
+		}
+	}
+	return out
+}
+
+// phaseFrameCount returns how many planned frames the current turn's
+// directive has. 0 means "no plan for this phase" — clamp is disabled.
+func (p *Pipeline) phaseFrameCount(t *Turn) int {
 	switch {
 	case strings.HasPrefix(t.Directive, "surface"):
-		cap = p.d.SurfaceFrames - 1
+		return p.d.SurfaceFrames
 	case strings.HasPrefix(t.Directive, "conclusion"):
-		cap = p.d.ConclusionFrames - 1
-	default:
-		// Other directives (answer, evaluate-solution, …) shouldn't be
-		// cutting scenes anyway. Pass through raw so a future marker-
-		// emitting directive isn't silently muted.
-		return raw
+		return p.d.ConclusionFrames
 	}
-	if cap <= 0 {
-		// No plan for this phase → don't cap.
-		return raw
-	}
-	remaining := cap - t.sceneAdvances
-	if remaining <= 0 {
-		return 0
-	}
-	if raw > remaining {
-		return remaining
-	}
-	return raw
+	// Other directives (answer, evaluate-solution, …) don't cut scenes;
+	// 0 disables the per-marker clamp so any future marker-emitting
+	// directive isn't silently muted.
+	return 0
 }
 
 // updateMemories pushes the played turn into the transcript log AND into every

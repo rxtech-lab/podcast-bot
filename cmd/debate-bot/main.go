@@ -772,13 +772,19 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 
 			// Plan synchronously; phase-1 + conclusion both need it.
 			plan := planPuzzleScenes(r.ctx, r.log, &debateEnv, d.topic)
-			// Tell the host (via system prompt) and the pipeline (via
-			// advance cap) how many surface + conclusion beats the visual
-			// director allocated. Must be set before orch.Run, which
-			// constructs the host agent in Setup. No-op when plan is nil.
+			// Hand the host the planner's per-frame direction lists so
+			// its system prompt can enumerate beats and emit numbered
+			// "<scene N/>" markers locked to the cached images. The
+			// anchor list is parallel to Surface and gives the host a
+			// verbatim string-match trigger for each marker — without
+			// it the host counts paragraph breaks and drifts off the
+			// planner's intent. Must happen before orch.Run, which
+			// constructs the host agent in Setup. No-op when plan is
+			// nil.
 			if plan != nil {
-				orch.SetSurfaceFrames(plan.SurfaceCount())
-				orch.SetConclusionFrames(plan.ConclusionCount())
+				orch.SetSurfacePlan(plan.Surface)
+				orch.SetSurfaceAnchors(plan.SurfaceAnchors)
+				orch.SetConclusionPlan(plan.Conclusion)
 			}
 
 			// Surface scenes are the only phase-gated dependency for the
