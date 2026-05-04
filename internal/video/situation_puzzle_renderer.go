@@ -6,6 +6,7 @@ import (
 	"image/draw"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
@@ -15,16 +16,26 @@ import (
 // (already painted by drawBackground) with minimal title chrome at the
 // top and a subtitle anchored at the bottom third. No side panels, no
 // CNN-style red banner, no lower-third strip.
+//
+// scene is the active scenes.Scene* name (surface / qa / reveal /
+// conclusion / "" when none yet). drawPuzzleOverlay uses it to pick a
+// per-scene subtitle treatment — surface paints the caption directly on
+// the scene with a black outline, others keep the slab-and-rule look.
+//
+// speakerStart is when the current speaker first appeared on screen
+// (zero when no speaker). The surface-scene path uses it to fade the
+// lower-third name plate after the first 30s of the narration so the
+// imagery owns the rest of the screen time.
 func (r *Renderer) framePuzzle(
-	topic, phase, speaker, role, body, surface string,
-	bodyStart time.Time, bodyDur time.Duration,
+	topic, phase, scene, speaker, role, body, surface string,
+	bodyStart time.Time, bodyDur time.Duration, speakerStart time.Time,
 	clockE, clockT time.Duration,
 	userName, userMsg string, userStart, userExpiry time.Time,
 ) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, r.width, r.height))
 	r.drawBackground(img)
-	r.drawPuzzleOverlay(img, topic, phase, speaker, role, body, surface,
-		bodyStart, bodyDur, clockE, clockT,
+	r.drawPuzzleOverlay(img, topic, phase, scene, speaker, role, body, surface,
+		bodyStart, bodyDur, speakerStart, clockE, clockT,
 		userName, userMsg, userStart, userExpiry)
 	return img.Pix
 }
@@ -60,8 +71,8 @@ const puzzleSubtitleMaxLines = 1
 // stays crisp at any output resolution. Scene image content remains the
 // only painterly element, which is exactly the HBO documentary look.
 func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
-	topic, phase, speaker, role, body, surface string,
-	bodyStart time.Time, bodyDur time.Duration,
+	topic, phase, scene, speaker, role, body, surface string,
+	bodyStart time.Time, bodyDur time.Duration, speakerStart time.Time,
 	clockE, clockT time.Duration,
 	userName, userMsg string, userStart, userExpiry time.Time,
 ) {
@@ -122,6 +133,13 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 	switch {
 	case speaker != "":
 		hasBody := strings.TrimSpace(body) != ""
+		// Cinematic-narration scenes (surface, conclusion) drop the slab
+		// chrome entirely: the caption paints straight on the painted
+		// scene with a black outline, and the speaker name plate fades
+		// out 30s in so the imagery owns the rest of the screen. The
+		// pivot scenes (qa, reveal) keep the HBO slab look — they're
+		// short and the slab carries the documentary-promo feel.
+		isCinematic := scene == "surface" || scene == "conclusion"
 
 		var ltTop int
 		if hasBody {
@@ -133,10 +151,16 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 			qcBot := bottomBarTop - 18
 			qcTop := qcBot - cardH
 
-			drawHBOQuoteCard(img, qcLeft, qcTop, qcRight, qcBot)
-			drawHBOSubtitleBody(img, r.bodyFace, body,
-				qcLeft, qcTop, qcRight, qcBot,
-				bodyFG, bodyStart, bodyDur)
+			if isCinematic {
+				drawHBOSubtitleBodyOutlined(img, r.bodyFace, body,
+					qcLeft, qcTop, qcRight, qcBot,
+					bodyFG, bodyStart, bodyDur)
+			} else {
+				drawHBOQuoteCard(img, qcLeft, qcTop, qcRight, qcBot)
+				drawHBOSubtitleBody(img, r.bodyFace, body,
+					qcLeft, qcTop, qcRight, qcBot,
+					bodyFG, bodyStart, bodyDur)
+			}
 
 			ltTop = qcTop - ltGap - ltH
 		} else {
@@ -146,9 +170,18 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 			ltTop = bottomBarTop - 18 - ltH
 		}
 
-		drawHBOLowerThird(img, ltLeft, ltTop, ltLeft+ltW, ltTop+ltH,
-			ltGoldW, speaker, hboPuzzleRoleLabel(role),
-			r.tagFace, r.panelPosFace)
+		ltAlpha := 1.0
+		if isCinematic {
+			// Cinematic narration: lower-third name plate fades out after
+			// the first 30s so the imagery has the screen for the rest of
+			// the storytelling. Hold full alpha for 25s, fade over 5s.
+			ltAlpha = surfaceLowerThirdAlpha(speakerStart)
+		}
+		if ltAlpha > 0 {
+			drawHBOLowerThirdAlpha(img, ltLeft, ltTop, ltLeft+ltW, ltTop+ltH,
+				ltGoldW, speaker, hboPuzzleRoleLabel(role),
+				r.tagFace, r.panelPosFace, ltAlpha)
+		}
 
 	case topic != "":
 		// Idle puzzle frame (no one speaking yet — typically while Gemini
@@ -206,13 +239,108 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 	}
 }
 
+// stripPuzzleSubtitlePunct removes punctuation, pause indicators and
+// stray symbols from a puzzle subtitle body so the cinematic single-row
+// caption shows only the readable words. Targets:
+//   - CJK fullstop / comma / pauses: 。 ， 、 ； ： ！ ？ 「 」 『 』 （ ）《 》 【 】
+//   - CJK pause/ellipsis sequences: …… —— ···
+//   - Latin punctuation: . , ; : ! ? — - … " ' ( ) [ ] { }
+//
+// Stripping happens before line wrapping so a residue line that would
+// otherwise contain only "。" or ", " disappears from the display
+// entirely. Letters / digits / CJK glyphs are kept verbatim. Whitespace
+// is collapsed to a single space so the wrapper still has word
+// boundaries for Latin text.
+func stripPuzzleSubtitlePunct(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		if isPuzzleSubtitleWordRune(r) {
+			b.WriteRune(r)
+			prevSpace = false
+			continue
+		}
+		// Map any non-word rune to a single collapsed space so Latin
+		// "Hello, world" doesn't become "Helloworld" while CJK still
+		// reads cleanly (CJK has no inter-glyph spaces, so the trim at
+		// the end strips trailing/leading spaces and consecutive spaces
+		// inside CJK runs are collapsed to one each).
+		if !prevSpace {
+			b.WriteByte(' ')
+			prevSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// isPuzzleSubtitleWordRune reports whether r is a content rune that
+// should appear in the cinematic puzzle caption — letter, digit, or any
+// glyph in the CJK Unified Ideographs (and adjacent) blocks. Colons
+// (`:` / `：`) are also kept because they're typically structural
+// (e.g. "今晚的题目：归途" or "Alice: …") and dropping them collapses
+// otherwise-meaningful labels. Everything else (sentence-final
+// punctuation, pause indicators, symbols, control, whitespace) is
+// dropped or mapped to a separator by stripPuzzleSubtitlePunct.
+func isPuzzleSubtitleWordRune(r rune) bool {
+	if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		return true
+	}
+	// Keep colons — both ASCII and the fullwidth CJK variant.
+	if r == ':' || r == '：' {
+		return true
+	}
+	// IsLetter already covers Han ideographs in modern Go, but be
+	// explicit so a future stdlib quirk doesn't silently drop them.
+	switch {
+	case r >= 0x4E00 && r <= 0x9FFF, // CJK Unified Ideographs
+		r >= 0x3400 && r <= 0x4DBF,   // CJK Unified Ext A
+		r >= 0x20000 && r <= 0x2A6DF, // CJK Unified Ext B
+		r >= 0x3040 && r <= 0x309F,   // Hiragana
+		r >= 0x30A0 && r <= 0x30FF,   // Katakana
+		r >= 0xAC00 && r <= 0xD7AF:   // Hangul syllables
+		return true
+	}
+	return false
+}
+
+// lineWeights returns the dwell-time weight for each wrapped subtitle
+// line. Weight is the count of content runes — letters, digits, CJK
+// glyphs — so a line of "是" weighs 1 while a line of 30 characters
+// weighs 30, and the audio time gets distributed proportionally instead
+// of equally. A line whose content count is 0 (theoretical edge case
+// after stripPuzzleSubtitlePunct) gets a min weight of 1 so it still
+// dwells briefly on screen.
+func lineWeights(lines []string) []int {
+	out := make([]int, len(lines))
+	for i, ln := range lines {
+		w := 0
+		for _, r := range ln {
+			if isPuzzleSubtitleWordRune(r) {
+				w++
+			}
+		}
+		if w < 1 {
+			w = 1
+		}
+		out[i] = w
+	}
+	return out
+}
+
 // subtitleCardHeight returns the snug height of the speaker-mode quote
 // card given the wrapped body, mirroring the padding/line-metric math
 // inside drawHBOSubtitleBody so the chrome wraps the text instead of
 // floating inside an oversized slab. Caps the visible rows at
 // puzzleSubtitleMaxLines so longer passages clip to that height and
-// rely on drawHBOSubtitleBody's vertical scroll for overflow.
+// rely on drawHBOSubtitleBody's vertical scroll for overflow. Body is
+// punctuation-stripped before wrapping to match what drawHBOSubtitleBody
+// will actually render.
 func subtitleCardHeight(face font.Face, body string, x0, x1 int) int {
+	body = stripPuzzleSubtitlePunct(body)
 	const (
 		padX    = 32
 		padY    = 22
@@ -263,17 +391,22 @@ func drawHBOQuoteCard(dst *image.RGBA, x0, y0, x1, y1 int) {
 // drawHBOSubtitleBody paints wrapped body text inside the puzzle's quote
 // card. Unlike drawSubtitle (which auto-sizes a small inner content box
 // and reserves space for a role pill), this fills the full chrome rect
-// with body text, top-anchored. Long passages auto-scroll vertically with
-// stepped jumps: with n wrapped lines and maxLines visible at once, there
-// are (n - maxLines + 1) distinct visible window positions (line 0, 1, …,
-// n - maxLines). The audio duration is split evenly across those
-// positions so each position dwells for audioDuration/(n - maxLines + 1)
-// — including the final position, which would otherwise only appear at
-// t = audioDuration the moment the next sentence replaces the body.
+// with body text, top-anchored.
+//
+// The body is first run through stripPuzzleSubtitlePunct so periods,
+// pause indicators (……, ——), commas and other punctuation don't show on
+// the cinematic single-row caption — only the readable words remain.
+//
+// Long passages auto-scroll vertically with stepped jumps. Each wrapped
+// line dwells for a duration proportional to its content length (rune
+// count of letters/digits/CJK glyphs after the punctuation strip), so a
+// short tail line that would otherwise sit on screen as long as a
+// content-heavy line gets a proportionally short slot.
 func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	x0, y0, x1, y1 int, fg color.RGBA,
 	bodyStart time.Time, bodyAudioDuration time.Duration,
 ) {
+	body = stripPuzzleSubtitlePunct(body)
 	if body == "" {
 		return
 	}
@@ -311,23 +444,38 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	lines := wrapLines(face, body, innerW)
 	overflow := len(lines) > maxLines
 
-	// Stepped vertical scroll. With n wrapped lines and maxLines visible,
-	// there are (n - maxLines + 1) distinct visible window positions
-	// (line 0 at the top through line n - maxLines at the top). Splitting
-	// bodyAudioDuration evenly across those positions gives each one a
-	// dwell of audioDuration/(n - maxLines + 1), and the scroll position
-	// snaps one lineH forward at every slot boundary. The final position
-	// is reached at t = audioDuration * (n - maxLines)/(n - maxLines + 1)
-	// so the last line is read for one full slot, not just the moment
-	// before the next sentence lands.
+	// Stepped vertical scroll, with PER-LINE dwell weighted by line
+	// content length. Equal-time slotting (the previous behaviour) gave a
+	// 30-character line and a 2-character tail line the same screen time
+	// — bad for reading flow and especially noticeable when wrap leaves a
+	// short residue on the last row. Now each step k dwells for
+	// weights[k] / sum(weights) * audioDur. Weights are the rune count of
+	// each line's content runes (letters/digits/CJK glyphs only — the
+	// punctuation-stripped body still excludes them, but lineWeight
+	// double-checks). Single-rune lines get a min weight of 1 so an
+	// edge-case all-punctuation line still appears briefly.
 	scrollPx := 0
 	if overflow && !bodyStart.IsZero() && bodyAudioDuration > 0 {
 		overflowSlots := len(lines) - maxLines
-		slotDuration := bodyAudioDuration / time.Duration(overflowSlots+1)
-		if slotDuration > 0 {
-			step := int(time.Since(bodyStart) / slotDuration)
-			if step < 0 {
-				step = 0
+		weights := lineWeights(lines)
+		var totalW int64
+		for _, w := range weights {
+			totalW += int64(w)
+		}
+		if totalW > 0 {
+			elapsed := time.Since(bodyStart)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			step := overflowSlots
+			var acc int64
+			for k := 0; k <= overflowSlots; k++ {
+				acc += int64(weights[k])
+				boundary := time.Duration(int64(bodyAudioDuration) * acc / totalW)
+				if elapsed < boundary {
+					step = k
+					break
+				}
 			}
 			if step > overflowSlots {
 				step = overflowSlots
@@ -359,21 +507,32 @@ func drawHBOSubtitleBody(dst *image.RGBA, face font.Face, body string,
 	}
 }
 
-// drawHBOLowerThird paints the HBO-style speaker name plate: solid black
-// rectangle with a gold vertical flag on the left edge, the speaker
-// name in bold caps, and a smaller gold subtitle row for role.
-func drawHBOLowerThird(dst *image.RGBA, x0, y0, x1, y1, goldW int,
-	name, role string, nameFace, roleFace font.Face) {
+// drawHBOLowerThirdAlpha paints the lower-third with a global alpha
+// scaler (0..1) so callers can fade the entire plate in or out. Used by
+// the surface-scene path to dissolve the name plate after the first 30s
+// of the host's narration. alpha values <= 0 are treated as "skip"; the
+// caller should usually short-circuit before calling.
+func drawHBOLowerThirdAlpha(dst *image.RGBA, x0, y0, x1, y1, goldW int,
+	name, role string, nameFace, roleFace font.Face, alpha float64) {
+	if alpha <= 0 {
+		return
+	}
+	if alpha > 1 {
+		alpha = 1
+	}
+	scaleA := func(a uint8) uint8 { return uint8(float64(a) * alpha) }
+
+	bg := color.RGBA{0x07, 0x07, 0x0a, scaleA(0xee)}
 	box := image.Rect(x0, y0, x1, y1)
-	draw.Draw(dst, box, &image.Uniform{color.RGBA{0x07, 0x07, 0x0a, 0xee}},
-		image.Point{}, draw.Over)
+	draw.Draw(dst, box, &image.Uniform{bg}, image.Point{}, draw.Over)
 	flag := image.Rect(x0, y0, x0+goldW, y1)
-	draw.Draw(dst, flag, &image.Uniform{hboGold}, image.Point{}, draw.Src)
+	gold := color.RGBA{hboGold.R, hboGold.G, hboGold.B, scaleA(hboGold.A)}
+	draw.Draw(dst, flag, &image.Uniform{gold}, image.Point{}, draw.Over)
 
 	// Name — bold white, slightly larger.
 	nameY := y0 + 38
 	d := &font.Drawer{Dst: dst,
-		Src:  image.NewUniform(color.RGBA{0xff, 0xff, 0xff, 0xff}),
+		Src:  image.NewUniform(color.RGBA{0xff, 0xff, 0xff, scaleA(0xff)}),
 		Face: nameFace}
 	d.Dot.X = fixed.I(x0 + goldW + 18)
 	d.Dot.Y = fixed.I(nameY)
@@ -383,10 +542,158 @@ func drawHBOLowerThird(dst *image.RGBA, x0, y0, x1, y1, goldW int,
 	if role != "" {
 		roleY := y0 + 64
 		dr := &font.Drawer{Dst: dst,
-			Src: image.NewUniform(hboGold), Face: roleFace}
+			Src: image.NewUniform(gold), Face: roleFace}
 		dr.Dot.X = fixed.I(x0 + goldW + 18)
 		dr.Dot.Y = fixed.I(roleY)
 		dr.DrawString(strings.ToUpper(role))
+	}
+}
+
+// surfaceFadeHoldDuration is how long the surface-scene lower-third name
+// plate stays at full opacity before it begins to fade. The audience gets
+// a clean read of "who's narrating · HOST" early in the surface story,
+// then the chrome dissolves so the imagery has the screen.
+const surfaceFadeHoldDuration = 25 * time.Second
+
+// surfaceFadeOutDuration is the linear fade-out window applied immediately
+// after surfaceFadeHoldDuration. Combined with the hold, the plate is
+// fully gone at speakerStart + 30s. A 5s fade reads as a deliberate
+// dissolve rather than a hard cut.
+const surfaceFadeOutDuration = 5 * time.Second
+
+// surfaceLowerThirdAlpha returns the global alpha [0,1] for the surface-
+// scene name plate at the current frame given when the speaker first
+// appeared. A zero speakerStart (no speaker / not yet recorded) returns
+// 1 so the chrome shows from the first frame and the fade clock starts
+// once SetState records a real time.
+func surfaceLowerThirdAlpha(speakerStart time.Time) float64 {
+	if speakerStart.IsZero() {
+		return 1
+	}
+	elapsed := time.Since(speakerStart)
+	if elapsed < surfaceFadeHoldDuration {
+		return 1
+	}
+	if elapsed >= surfaceFadeHoldDuration+surfaceFadeOutDuration {
+		return 0
+	}
+	t := elapsed - surfaceFadeHoldDuration
+	return 1 - float64(t)/float64(surfaceFadeOutDuration)
+}
+
+// drawHBOSubtitleBodyOutlined paints the puzzle subtitle text directly
+// on the scene background — no quote-card slab — with a black outline
+// (1-2px stroke) so glyphs stay legible against any painted scene.
+// Mirrors drawHBOSubtitleBody's wrapping, weighted-scroll math, and
+// punctuation strip so the on-screen text size is identical between the
+// two paths and a phase change between scenes doesn't cause subtle
+// reflow.
+func drawHBOSubtitleBodyOutlined(dst *image.RGBA, face font.Face, body string,
+	x0, y0, x1, y1 int, fg color.RGBA,
+	bodyStart time.Time, bodyAudioDuration time.Duration,
+) {
+	body = stripPuzzleSubtitlePunct(body)
+	if body == "" {
+		return
+	}
+	const (
+		padX     = 32
+		padY     = 22
+		lineGap  = 10
+		strokePx = 2
+	)
+
+	innerL := x0 + padX
+	innerT := y0 + padY
+	innerR := x1 - padX
+	innerB := y1 - padY
+	innerW := innerR - innerL
+	innerH := innerB - innerT
+	if innerW <= 0 || innerH <= 0 {
+		return
+	}
+
+	metrics := face.Metrics()
+	asc, desc := metrics.Ascent.Ceil(), metrics.Descent.Ceil()
+	lineH := metrics.Height.Ceil() + lineGap
+	if lineH <= 0 {
+		lineH = asc + desc + lineGap
+	}
+
+	maxLines := innerH / lineH
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	if maxLines > puzzleSubtitleMaxLines {
+		maxLines = puzzleSubtitleMaxLines
+	}
+
+	lines := wrapLines(face, body, innerW)
+	overflow := len(lines) > maxLines
+
+	scrollPx := 0
+	if overflow && !bodyStart.IsZero() && bodyAudioDuration > 0 {
+		overflowSlots := len(lines) - maxLines
+		weights := lineWeights(lines)
+		var totalW int64
+		for _, w := range weights {
+			totalW += int64(w)
+		}
+		if totalW > 0 {
+			elapsed := time.Since(bodyStart)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			step := overflowSlots
+			var acc int64
+			for k := 0; k <= overflowSlots; k++ {
+				acc += int64(weights[k])
+				boundary := time.Duration(int64(bodyAudioDuration) * acc / totalW)
+				if elapsed < boundary {
+					step = k
+					break
+				}
+			}
+			if step > overflowSlots {
+				step = overflowSlots
+			}
+			scrollPx = step * lineH
+		}
+	}
+
+	clipRect := image.Rect(innerL, innerT, innerR, innerB).Intersect(dst.Bounds())
+	clip, _ := dst.SubImage(clipRect).(*image.RGBA)
+	if clip == nil {
+		clip = dst
+	}
+
+	outline := color.RGBA{0x00, 0x00, 0x00, 0xff}
+	stroke := &font.Drawer{Dst: clip, Src: image.NewUniform(outline), Face: face}
+	fill := &font.Drawer{Dst: clip, Src: image.NewUniform(fg), Face: face}
+
+	for i, ln := range lines {
+		y := innerT + asc + i*lineH - scrollPx
+		if y+desc < innerT || y-asc > innerB {
+			continue
+		}
+		w := stroke.MeasureString(ln).Ceil()
+		x := innerL + (innerW-w)/2
+
+		// 8-direction stroke: stamp the glyph at every offset within
+		// strokePx of (x, y). Cheap (8 extra DrawString calls per line)
+		// and visually equivalent to a Gaussian-feathered outline at this
+		// glyph size.
+		for dy := -strokePx; dy <= strokePx; dy++ {
+			for dx := -strokePx; dx <= strokePx; dx++ {
+				if dx == 0 && dy == 0 {
+					continue
+				}
+				stroke.Dot = fixed.P(x+dx, y+dy)
+				stroke.DrawString(ln)
+			}
+		}
+		fill.Dot = fixed.P(x, y)
+		fill.DrawString(ln)
 	}
 }
 

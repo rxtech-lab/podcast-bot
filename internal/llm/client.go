@@ -218,6 +218,14 @@ func (c *Client) StreamWithTools(
 // JSON makes a non-streaming chat completion that asks the model to return
 // JSON. The raw JSON bytes are returned. Used for short structured calls
 // like viewer.WantsToAsk.
+//
+// Some gateway-routed models (notably google/gemini-3-flash via the
+// Vercel AI Gateway) reject the OpenAI-compatible response_format=json
+// parameter with a 400 invalid_request_error. When that specific error
+// surfaces, we transparently retry without the response_format hint —
+// the system prompt always asks for "strict JSON" so the model usually
+// complies on the second pass, and JSON-extraction in the caller
+// (json.Unmarshal) is the source of truth for shape correctness.
 func (c *Client) JSON(ctx context.Context, system, user string) ([]byte, error) {
 	resp, err := c.c.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
@@ -230,12 +238,39 @@ func (c *Client) JSON(ctx context.Context, system, user string) ([]byte, error) 
 		},
 	})
 	if err != nil {
-		return nil, err
+		if isResponseFormatRejection(err) {
+			resp, err = c.c.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+				Model: c.model,
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.SystemMessage(system),
+					openai.UserMessage(user),
+				},
+			})
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("empty completion")
 	}
 	return []byte(resp.Choices[0].Message.Content), nil
+}
+
+// isResponseFormatRejection reports whether err is the AI Gateway's
+// 400 "Invalid input" response keyed on the response_format parameter —
+// the signal that the upstream model doesn't support OpenAI-compatible
+// JSON mode. Detected via the error message rather than a typed check
+// because the openai-go client surfaces gateway 400s as opaque APIError
+// strings.
+func isResponseFormatRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "response_format") &&
+		(strings.Contains(msg, "Invalid input") ||
+			strings.Contains(msg, "invalid_request_error"))
 }
 
 // AssembleToolCalls turns a sequence of streamed tool-call deltas into

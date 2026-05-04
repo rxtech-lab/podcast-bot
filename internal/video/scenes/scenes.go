@@ -43,6 +43,14 @@ const (
 	ConclusionVariantCount = 4
 )
 
+// surfaceBatchSize is the maximum number of surface frames generated in
+// parallel. With long story-ordered plans now reaching maxSurfaceFrames
+// (14), an unbounded fan-out hammered the gateway and tripped rate
+// limits. 13 keeps the busiest puzzle's surface gen within one batch
+// while leaving headroom for the qa + reveal jobs that share the same
+// gateway endpoint.
+const surfaceBatchSize = 13
+
 // genSize is what we ask the gateway for. Gemini flash-image accepts
 // 1024×1024; we resample to the renderer's 1280×720 below. Picking square
 // gives the model the most freedom — landscape crops cleanly because
@@ -245,6 +253,17 @@ func GenerateWithPlan(ctx context.Context, client *imagegen.Client, topic *confi
 		}
 	}
 
+	// surfaceBatchSemaphore caps how many surface frames generate
+	// concurrently. The gateway's Gemini chat-completions image path takes
+	// a single prompt per call, so the only knob we have is goroutine
+	// concurrency. 13 was picked deliberately by the operator — gives
+	// good throughput on long surface plans (up to maxSurfaceFrames) while
+	// staying under the upstream gateway's per-IP fan-out budget. Other
+	// scene phases (qa / reveal / conclusion) are not gated; they're at
+	// most 1+1+conclusionN jobs total, so concurrent saturation stays
+	// bounded.
+	surfaceSem := make(chan struct{}, surfaceBatchSize)
+
 	var (
 		wg     sync.WaitGroup
 		errsMu sync.Mutex
@@ -254,6 +273,10 @@ func GenerateWithPlan(ctx context.Context, client *imagegen.Client, topic *confi
 		wg.Add(1)
 		go func(j job) {
 			defer wg.Done()
+			if j.name == SceneSurface {
+				surfaceSem <- struct{}{}
+				defer func() { <-surfaceSem }()
+			}
 			prompt := buildPromptVariantWithPlan(j.name, topic, j.variant, plan)
 			img, err := loadOrGenerate(ctx, client, j.cacheName, prompt, cacheDir)
 			if err != nil {

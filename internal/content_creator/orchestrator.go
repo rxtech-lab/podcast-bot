@@ -53,6 +53,11 @@ type Orchestrator struct {
 	// belt-and-braces safeguard if the LLM misses the count.
 	// 0 means "host falls back to a guidance range, pipeline doesn't cap".
 	surfaceFrames int
+	// conclusionFrames is the same idea for the conclusion phase. The
+	// conclusion now reads as a longer reflective epilogue (matching the
+	// surface's cinematic feel) and uses scene markers to advance through
+	// the planned aftermath beats instead of a wall-clock timer.
+	conclusionFrames int
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.
@@ -196,7 +201,8 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	case agent.RolePlayer:
 		return agent.NewPlayer(base)
 	case agent.RolePuzzleHost:
-		return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth, o.surfaceFrames)
+		return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth,
+			o.surfaceFrames, o.conclusionFrames)
 	}
 	return nil
 }
@@ -242,11 +248,12 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		TTS: o.TTS, OutDir: o.Env.OutDir,
 		Send: o.Send, Log: o.Log,
 		Topic: o.Topic.Title, Language: o.Topic.Language,
-		ContentType:   o.Topic.Type,
-		Transcript:    o.Transcript,
-		LiveStream:    o.LiveStream,
-		MusicPaths:    o.puzzleMusic,
-		SurfaceFrames: o.surfaceFrames,
+		ContentType:      o.Topic.Type,
+		Transcript:       o.Transcript,
+		LiveStream:       o.LiveStream,
+		MusicPaths:       o.puzzleMusic,
+		SurfaceFrames:    o.surfaceFrames,
+		ConclusionFrames: o.conclusionFrames,
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

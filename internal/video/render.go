@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -76,6 +77,15 @@ type Renderer struct {
 	// in the second half of playback rather than at a fixed offset.
 	bodyAudioDuration time.Duration
 
+	// speakerStartedAt is the wall-clock moment the current speaker became
+	// non-empty. Distinct from bodyStartedAt: that one resets on every
+	// sentence; this one resets only when the speaker actually changes (or
+	// becomes empty). framePuzzle uses it to fade the surface-scene lower-
+	// third name plate after 30s — the audience sees who's narrating early
+	// in the surface narration, then the chrome fades so the imagery has
+	// the screen.
+	speakerStartedAt time.Time
+
 	// Wall-clock display fed by the pipeline's once-per-second TickMsg.
 	clockElapsed time.Duration
 	clockTotal   time.Duration
@@ -112,7 +122,14 @@ type Renderer struct {
 	// image; prevSceneBg is the previous scene retained for the duration
 	// of one crossfade so the renderer can blend old → new. Setters live
 	// in SetPuzzleMode / SetSceneBackground.
+	//
+	// puzzleSceneName is the active scene name (one of scenes.Scene*).
+	// framePuzzle reads it to choose a per-scene subtitle treatment —
+	// the surface phase paints the caption directly on the scene with a
+	// black outline (no quote-card chrome) for an opening-credits feel,
+	// while QA / reveal / conclusion keep the slab-and-rule layout.
 	puzzleMode           bool
+	puzzleSceneName      string
 	sceneBg              *image.RGBA
 	prevSceneBg          *image.RGBA
 	sceneTransitionStart time.Time
@@ -388,6 +405,7 @@ func (r *Renderer) SetClock(elapsed, total time.Duration) {
 func (r *Renderer) SetState(speaker, role, side, body string, audioDuration time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	prevSpeaker := r.speaker
 	r.speaker = speaker
 	r.role = role
 	r.side = side
@@ -397,6 +415,17 @@ func (r *Renderer) SetState(speaker, role, side, body string, audioDuration time
 		// wherever the previous body had scrolled to.
 		r.bodyStartedAt = time.Now()
 		r.bodyAudioDuration = audioDuration
+	}
+	if speaker != prevSpeaker {
+		// Speaker actually changed (not just a sentence-internal body
+		// update). Restart the speaker-on-screen clock so the surface
+		// lower-third's 30s name-plate fade starts from this turn's
+		// beginning, not the previous speaker's.
+		if speaker == "" {
+			r.speakerStartedAt = time.Time{}
+		} else {
+			r.speakerStartedAt = time.Now()
+		}
 	}
 	r.body = body
 
@@ -426,8 +455,18 @@ func (r *Renderer) SetPuzzleMode(b bool) {
 	if !b {
 		r.sceneBg = nil
 		r.prevSceneBg = nil
+		r.puzzleSceneName = ""
 		r.sceneTransitionStart = time.Time{}
 	}
+}
+
+// SetPuzzleSceneName records the active puzzle scene (one of the
+// scenes.Scene* names) so framePuzzle can apply a scene-specific
+// subtitle treatment. Idempotent.
+func (r *Renderer) SetPuzzleSceneName(name string) {
+	r.mu.Lock()
+	r.puzzleSceneName = name
+	r.mu.Unlock()
 }
 
 // SetSceneBackground swaps in a new scene background, retaining the
@@ -658,13 +697,15 @@ func (r *Renderer) Frame() []byte {
 	modeStart := r.stageModeStart
 	bodyStart := r.bodyStartedAt
 	bodyDur := r.bodyAudioDuration
+	speakerStart := r.speakerStartedAt
 	puzzleMode := r.puzzleMode
+	puzzleScene := r.puzzleSceneName
 	r.mu.Unlock()
 
 	if puzzleMode {
-		return r.framePuzzle(topic, phase, speaker, role, body,
+		return r.framePuzzle(topic, phase, puzzleScene, speaker, role, body,
 			affPos, /* surface text shown in idle subtitle */
-			bodyStart, bodyDur,
+			bodyStart, bodyDur, speakerStart,
 			clockE, clockT,
 			userName, userMsg, userStart, userExpiry)
 	}
@@ -1147,10 +1188,21 @@ func drawRectOutline(dst *image.RGBA, r image.Rectangle, w int, c color.RGBA) {
 	draw.Draw(dst, right, src, image.Point{}, draw.Src)
 }
 
-// wrapLines breaks text into lines that fit within maxWidth pixels. CJK text
-// is one continuous run with no spaces; we wrap by measuring rune-by-rune. For
-// Latin text, words from strings.Fields give nicer breaks. We pick whichever
-// produces sane output: any rune outside ASCII forces per-rune wrapping.
+// wrapLines breaks text into lines that fit within maxWidth pixels.
+//
+// The algorithm walks the string rune-by-rune, tracking the most recent
+// space (the preferred break point for both CJK-with-stripped-punctuation
+// and Latin word-flow). When the running line would overflow, we break
+// at the last space seen since the line started; if no space is
+// available (long CJK run with no internal whitespace) we break at the
+// current rune.
+//
+// After greedy wrap completes, the LAST line is rebalanced if it's
+// noticeably shorter than the line above it — without that, a short
+// trailing word ends up alone on its own row, which the puzzle subtitle
+// scrolls to and reads as an awkward 1-word "line 2". The balancer
+// reflows content from the previous line into the trailing line at a
+// space-aligned cut point closer to the midpoint of the combined runes.
 func wrapLines(face font.Face, text string, maxWidth int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -1158,59 +1210,129 @@ func wrapLines(face font.Face, text string, maxWidth int) []string {
 	}
 	d := &font.Drawer{Face: face}
 	maxFixed := fixed.I(maxWidth)
+	runes := []rune(text)
 
-	if hasCJK(text) {
-		var lines []string
-		var cur strings.Builder
-		for _, ch := range text {
-			cand := cur.String() + string(ch)
-			if d.MeasureString(cand) > maxFixed && cur.Len() > 0 {
-				lines = append(lines, cur.String())
-				cur.Reset()
+	var lines []string
+	start := 0
+	for start < len(runes) {
+		// Skip leading spaces left over from the previous break.
+		for start < len(runes) && runes[start] == ' ' {
+			start++
+		}
+		if start >= len(runes) {
+			break
+		}
+		// Scan forward, tracking the most recent space, until adding the
+		// next rune would push us over maxWidth.
+		end := start
+		lastSpace := -1
+		for end < len(runes) {
+			if d.MeasureString(string(runes[start:end+1])) > maxFixed {
+				break
 			}
-			cur.WriteRune(ch)
+			if runes[end] == ' ' {
+				lastSpace = end
+			}
+			end++
 		}
-		if cur.Len() > 0 {
-			lines = append(lines, cur.String())
+		if end == len(runes) {
+			line := strings.TrimSpace(string(runes[start:]))
+			if line != "" {
+				lines = append(lines, line)
+			}
+			break
 		}
+		// Prefer breaking at the last space we saw — that yields word-
+		// aligned breaks for Latin text and clean phrase breaks for CJK
+		// content where punctuation has been stripped to spaces. Fall back
+		// to a rune-level break only when no space is available within
+		// the line (a long unbroken run, e.g. Chinese without
+		// punctuation).
+		breakAt := end
+		if lastSpace > start {
+			breakAt = lastSpace
+		}
+		line := strings.TrimSpace(string(runes[start:breakAt]))
+		if line != "" {
+			lines = append(lines, line)
+		}
+		start = breakAt
+	}
+
+	return balanceLastLine(lines, face, maxWidth)
+}
+
+// balanceLastLine rebalances the final two wrapped lines if the trailing
+// one is much shorter than the line above it. Without this a 30-char
+// "line 1 ─ line 2 of 1 word" wrap reads as an awkward dangling tail in
+// the puzzle subtitle scroll. We re-split the combined trailing two lines
+// at a cut point near the midpoint, preferring space-aligned cuts and
+// requiring both halves to fit within maxWidth.
+func balanceLastLine(lines []string, face font.Face, maxWidth int) []string {
+	if len(lines) < 2 {
+		return lines
+	}
+	n := len(lines)
+	last := lines[n-1]
+	prev := lines[n-2]
+	lastN := utf8.RuneCountInString(last)
+	prevN := utf8.RuneCountInString(prev)
+	// Threshold: rebalance when the trailing line is less than 60% the
+	// length of the line above it. Tuned to leave already-balanced wraps
+	// alone (e.g. a 30-char line followed by a 25-char line) while
+	// catching the pathological "30 chars + 1-2 chars" case.
+	if lastN*100 >= prevN*60 {
+		return lines
+	}
+	combined := strings.TrimSpace(prev) + " " + strings.TrimSpace(last)
+	runes := []rune(combined)
+	if len(runes) < 2 {
 		return lines
 	}
 
-	words := strings.Fields(text)
-	var lines []string
-	cur := ""
-	for _, w := range words {
-		candidate := w
-		if cur != "" {
-			candidate = cur + " " + w
+	d := &font.Drawer{Face: face}
+	maxFixed := fixed.I(maxWidth)
+	target := len(runes) / 2
+
+	// Score each candidate split: distance from the midpoint plus a
+	// strong penalty when the cut isn't on a space (so word-aligned cuts
+	// win even when slightly off-centre). Both halves must fit within
+	// maxWidth or we skip the candidate.
+	bestSplit := -1
+	bestCost := -1
+	for i := 1; i < len(runes); i++ {
+		left := strings.TrimSpace(string(runes[:i]))
+		right := strings.TrimSpace(string(runes[i:]))
+		if left == "" || right == "" {
+			continue
 		}
-		if d.MeasureString(candidate) > maxFixed && cur != "" {
-			lines = append(lines, cur)
-			cur = w
-		} else {
-			cur = candidate
+		if d.MeasureString(left) > maxFixed || d.MeasureString(right) > maxFixed {
+			continue
+		}
+		dist := i - target
+		if dist < 0 {
+			dist = -dist
+		}
+		atSpace := runes[i-1] == ' ' || runes[i] == ' '
+		cost := dist
+		if !atSpace {
+			cost += 100
+		}
+		if bestCost < 0 || cost < bestCost {
+			bestCost = cost
+			bestSplit = i
 		}
 	}
-	if cur != "" {
-		lines = append(lines, cur)
+	if bestSplit < 0 {
+		return lines
 	}
-	return lines
+	left := strings.TrimSpace(string(runes[:bestSplit]))
+	right := strings.TrimSpace(string(runes[bestSplit:]))
+	if left == "" || right == "" {
+		return lines
+	}
+	out := append([]string(nil), lines[:n-2]...)
+	out = append(out, left, right)
+	return out
 }
 
-// hasCJK reports whether s contains any character in the common CJK ranges.
-// Used to switch wrapping strategy: per-rune for CJK (no inter-glyph spaces),
-// per-word for Latin-ish text.
-func hasCJK(s string) bool {
-	for _, r := range s {
-		switch {
-		case r >= 0x3000 && r <= 0x303f, // CJK symbols and punctuation
-			r >= 0x3400 && r <= 0x4dbf, // CJK ext A
-			r >= 0x4e00 && r <= 0x9fff, // CJK unified
-			r >= 0xff00 && r <= 0xffef, // halfwidth/fullwidth
-			r >= 0x3040 && r <= 0x30ff, // hiragana/katakana
-			r >= 0xac00 && r <= 0xd7af: // hangul
-			return true
-		}
-	}
-	return false
-}

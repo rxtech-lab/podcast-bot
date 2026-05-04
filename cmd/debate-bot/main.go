@@ -758,18 +758,51 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		if d.topic.Type == config.ContentTypeSituationPuzzle && ch.puzzleStage != nil {
 			scenesCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-bgs")
 			musicCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-music")
-			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] planning + generating surface scenes + music (this can take ~60s on first run; conclusion runs in background)\n",
+			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] planning + generating scenes + music in parallel (this can take ~30-60s on first run; conclusion runs concurrently)\n",
 				ch.def.Number, ch.def.ID)
+
+			// Music generation does not depend on the scene plan, so kick
+			// it off immediately — runs concurrently with planning AND
+			// scene generation below. Saves the plan latency (~4s) off the
+			// music critical path.
+			musicCh := make(chan *musicgen.PuzzleMusic, 1)
+			go func() {
+				musicCh <- generatePuzzleMusic(r.ctx, r.log, d.topic, musicCacheDir)
+			}()
+
+			// Plan synchronously; phase-1 + conclusion both need it.
 			plan := planPuzzleScenes(r.ctx, r.log, &debateEnv, d.topic)
 			// Tell the host (via system prompt) and the pipeline (via
-			// advance cap) how many surface beats the visual director
-			// allocated. Must be set before orch.Run, which constructs the
-			// host agent in Setup. No-op when plan is nil.
+			// advance cap) how many surface + conclusion beats the visual
+			// director allocated. Must be set before orch.Run, which
+			// constructs the host agent in Setup. No-op when plan is nil.
 			if plan != nil {
 				orch.SetSurfaceFrames(plan.SurfaceCount())
+				orch.SetConclusionFrames(plan.ConclusionCount())
 			}
-			music := generatePuzzleAssets(r.ctx, r.log, ch.puzzleStage, d.topic, plan,
-				scenesCacheDir, musicCacheDir)
+
+			// Surface scenes are the only phase-gated dependency for the
+			// show start — the host narrates surface for several minutes
+			// before any qa/reveal/conclusion phase, so qa + reveal +
+			// conclusion can attach in the background as they land
+			// (AttachScenes is additive). This trims show-start latency
+			// when one of the non-surface gens hits a slow retry.
+			surfaceDone := make(chan struct{})
+			go func() {
+				defer close(surfaceDone)
+				generatePuzzleScenePhases(r.ctx, r.log, ch.puzzleStage,
+					d.topic, plan, scenesCacheDir, "surface", scenes.SceneSurface)
+			}()
+			go generatePuzzleScenePhases(r.ctx, r.log, ch.puzzleStage,
+				d.topic, plan, scenesCacheDir, "qa+reveal",
+				scenes.SceneQA, scenes.SceneReveal)
+			go generatePuzzleConclusion(r.ctx, r.log, ch.puzzleStage, d.topic, plan, scenesCacheDir)
+
+			// Block on the assets the podcast needs to actually start —
+			// surface scenes + music. Everything else is allowed to lag.
+			music := <-musicCh
+			<-surfaceDone
+
 			if music != nil {
 				m := map[string]string{}
 				if music.SurfacePath != "" {
@@ -780,7 +813,6 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 				}
 				orch.SetPuzzleMusic(m)
 			}
-			go generatePuzzleConclusion(r.ctx, r.log, ch.puzzleStage, d.topic, plan, scenesCacheDir)
 		}
 
 		runErr := orch.Run(r.ctx)
@@ -977,89 +1009,76 @@ func agentNames(specs []config.AgentSpec) []string {
 	return out
 }
 
-// generatePuzzleAssets builds the surface/qa/reveal scene backgrounds AND
-// the music beds for a single puzzle topic in parallel, then hands the
-// scenes to the channel's PuzzleStage and returns the music paths to the
-// caller (which forwards them into orch.SetPuzzleMusic).
+// generatePuzzleScenePhases generates the listed scene phases and attaches
+// them to the channel's PuzzleStage as they land (AttachScenes is now
+// additive, so partial fills don't clobber prior attaches). Blocks until
+// generation finishes — caller decides whether to await this goroutine
+// or let it run in the background.
 //
-// Conclusion images are deliberately deferred: they only paint at the very
-// end of the show, so we kick off their generation in a background
-// goroutine and return immediately once surface assets are ready. The
-// PuzzleStage.AttachConclusion call lands later, possibly mid-show, and
-// the stage swaps to those images when the conclusion phase actually
-// begins. This shaves up to ~30s off the start-of-podcast wait on the
-// first run of a topic.
+// Used in two roles by main.go:
+//   - "surface only" — blocks the show start so the host has imagery for
+//     the opening narration.
+//   - "qa + reveal" — runs in the background; attaches when ready, well
+//     before the qa/reveal phases of the show begin (the surface
+//     narration runs ~3-5 min, plenty of slack).
 //
-// Logs but never propagates errors — missing scenes leave the renderer
-// on its default bg, missing music leaves the surface/reveal turns on
-// dry TTS. A returned nil *PuzzleMusic means caller should not bother
-// forwarding music to the orchestrator at all.
-func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
+// Logs but never propagates errors — missing scenes leave the renderer on
+// its default bg, which is acceptable degradation.
+func generatePuzzleScenePhases(ctx context.Context, log *slog.Logger,
 	ps *video.PuzzleStage, topic *config.DebateTopic, plan *scenes.ScenePlan,
-	scenesCacheDir, musicCacheDir string) *musicgen.PuzzleMusic {
+	scenesCacheDir, label string, phases ...string) {
+	client, err := imagegen.New("")
+	if err != nil {
+		log.Warn("puzzle scene gen disabled", "label", label, "err", err)
+		return
+	}
+	t0 := time.Now()
+	sc, err := scenes.GenerateWithPlan(ctx, client, topic, plan, scenesCacheDir, phases...)
+	if err != nil {
+		log.Warn("puzzle scene gen partial",
+			"label", label,
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond),
+			"err", err)
+	} else {
+		log.Info("puzzle scenes ready",
+			"label", label,
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+	}
+	if sc != nil {
+		ps.AttachScenes(sc)
+	}
+}
 
-	var (
-		wg       sync.WaitGroup
-		musicOut *musicgen.PuzzleMusic
-	)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		client, err := imagegen.New("")
-		if err != nil {
-			log.Warn("puzzle scene gen disabled", "err", err)
-			return
-		}
-		t0 := time.Now()
-		// Phase 1 (blocking): only the assets the host needs to start
-		// narrating — surface (the long opening), qa (the question
-		// loop), and reveal (the truth). Conclusion images are generated
-		// in a separate background goroutine and attached when ready;
-		// they only paint at the very end of the show, so the podcast can
-		// start before they finish.
-		sc, err := scenes.GenerateWithPlan(ctx, client, topic, plan, scenesCacheDir,
-			scenes.SceneSurface, scenes.SceneQA, scenes.SceneReveal)
-		if err != nil {
-			log.Warn("puzzle scene gen partial",
-				"title", topic.Title,
-				"elapsed", time.Since(t0).Round(time.Millisecond),
-				"err", err)
-		} else {
-			log.Info("puzzle scenes ready",
-				"title", topic.Title,
-				"elapsed", time.Since(t0).Round(time.Millisecond))
-		}
-		if sc != nil {
-			ps.AttachScenes(sc)
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		client, err := musicgen.New("")
-		if err != nil {
-			log.Warn("puzzle music gen disabled", "err", err)
-			return
-		}
-		t0 := time.Now()
-		pm, err := musicgen.Generate(ctx, client, topic, musicCacheDir)
-		if err != nil {
-			log.Warn("puzzle music gen partial",
-				"title", topic.Title,
-				"elapsed", time.Since(t0).Round(time.Millisecond),
-				"err", err)
-		} else {
-			log.Info("puzzle music ready",
-				"title", topic.Title,
-				"elapsed", time.Since(t0).Round(time.Millisecond))
-		}
-		musicOut = pm
-	}()
-
-	wg.Wait()
-	return musicOut
+// generatePuzzleMusic generates the music bed for a puzzle topic. Returns
+// the music paths or nil if generation failed. Designed to run as a
+// goroutine — the caller publishes the result via orch.SetPuzzleMusic
+// once both music and phase-1 scenes are ready.
+//
+// Music does NOT depend on the scene plan, so this can start as soon as
+// the topic is admitted, in parallel with planPuzzleScenes. That trims
+// the planning latency (~4s) off the music critical path on first runs.
+func generatePuzzleMusic(ctx context.Context, log *slog.Logger,
+	topic *config.DebateTopic, musicCacheDir string) *musicgen.PuzzleMusic {
+	client, err := musicgen.New("")
+	if err != nil {
+		log.Warn("puzzle music gen disabled", "err", err)
+		return nil
+	}
+	t0 := time.Now()
+	pm, err := musicgen.Generate(ctx, client, topic, musicCacheDir)
+	if err != nil {
+		log.Warn("puzzle music gen partial",
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond),
+			"err", err)
+	} else {
+		log.Info("puzzle music ready",
+			"title", topic.Title,
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+	}
+	return pm
 }
 
 // planPuzzleScenes asks the host LLM to design the variant-direction list
@@ -1069,7 +1088,7 @@ func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
 // rotation directions. Reuses the host model + endpoint so we don't need a
 // separate API key wired through env.
 func planPuzzleScenes(ctx context.Context, log *slog.Logger, env *config.Env, topic *config.DebateTopic) *scenes.ScenePlan {
-	if env == nil || env.OpenAIBaseURL == "" || env.OpenAIKey == "" || env.HostModel == "" {
+	if env == nil || env.OpenAIBaseURL == "" || env.OpenAIKey == "" {
 		// No LLM creds → skip the LLM path entirely and use the heuristic
 		// fallback so the surface still gets story-ordered chunks.
 		if fb := scenes.FallbackPlan(topic); fb != nil {
@@ -1081,7 +1100,27 @@ func planPuzzleScenes(ctx context.Context, log *slog.Logger, env *config.Env, to
 		}
 		return nil
 	}
-	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, env.HostModel)
+	// Prefer the dedicated scene-planner model (SCENE_PLANNER_MODEL) when
+	// configured; LoadEnv falls back to HostModel if unset. The planner
+	// only runs once per puzzle so a higher-quality model is cheap here.
+	model := env.ScenePlannerModel
+	if model == "" {
+		model = env.HostModel
+	}
+	if model == "" {
+		if fb := scenes.FallbackPlan(topic); fb != nil {
+			log.Info("scene plan fallback ready (no model configured)",
+				"title", topic.Title,
+				"surface_frames", fb.SurfaceCount(),
+				"conclusion_frames", fb.ConclusionCount())
+			return fb
+		}
+		return nil
+	}
+	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
+	log.Info("scene plan llm",
+		"title", topic.Title,
+		"model", model)
 	t0 := time.Now()
 	plan, err := scenes.Plan(ctx, client, topic)
 	if err != nil || plan == nil {

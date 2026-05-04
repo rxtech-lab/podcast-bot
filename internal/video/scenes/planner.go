@@ -123,6 +123,7 @@ Rules:
 	if err != nil {
 		return nil, fmt.Errorf("llm json call: %w", err)
 	}
+	raw = unwrapJSONFences(raw)
 
 	var parsed struct {
 		Surface    []string `json:"surface"`
@@ -147,6 +148,29 @@ func truncateForLog(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// unwrapJSONFences strips a leading "```json" / "```" code fence and a
+// trailing "```" fence from raw before json.Unmarshal sees it. Some LLMs
+// (notably the gateway-routed Gemini family without response_format) wrap
+// their JSON answer in markdown fences regardless of explicit "no
+// markdown" instructions. Stripping is a no-op when the raw bytes don't
+// start with a fence.
+func unwrapJSONFences(raw []byte) []byte {
+	s := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(s, "```") {
+		return raw
+	}
+	// Drop the opening fence + optional language tag through end-of-line.
+	if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+		s = s[nl+1:]
+	} else {
+		s = strings.TrimPrefix(s, "```")
+	}
+	// Drop the closing fence if present.
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, "```")
+	return []byte(strings.TrimSpace(s))
 }
 
 // FallbackPlan builds a deterministic story-ordered ScenePlan from the

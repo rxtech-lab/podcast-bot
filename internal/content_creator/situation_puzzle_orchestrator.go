@@ -58,3 +58,14 @@ func (o *Orchestrator) SetSurfaceFrames(n int) {
 	}
 	o.surfaceFrames = n
 }
+
+// SetConclusionFrames is the same as SetSurfaceFrames for the conclusion
+// phase. Conclusion now uses scene-marker advancement (not a wall-clock
+// timer) so the host needs to know how many markers to emit and the
+// pipeline needs to know how many to cap at.
+func (o *Orchestrator) SetConclusionFrames(n int) {
+	if n <= 0 {
+		return
+	}
+	o.conclusionFrames = n
+}

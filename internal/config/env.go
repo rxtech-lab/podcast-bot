@@ -16,6 +16,14 @@ type Env struct {
 	OpenAIKey     string
 	HostModel     string
 
+	// ScenePlannerModel is the LLM used for the visual director call that
+	// proposes the per-frame surface + conclusion beats. Falls back to
+	// HostModel if unset. Use a higher-quality model here (e.g.
+	// openai/gpt-5.4 or anthropic/claude-opus-4-7) since the plan only
+	// runs once per puzzle and benefits from richer reasoning about
+	// scene composition + story-beat ordering. Set via SCENE_PLANNER_MODEL.
+	ScenePlannerModel string
+
 	CompressionBaseURL string
 	CompressionKey     string
 	CompressionModel   string
@@ -47,6 +55,7 @@ func LoadEnv() (*Env, error) {
 		OpenAIBaseURL:      strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
 		OpenAIKey:          strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
 		HostModel:          strings.TrimSpace(os.Getenv("HOST_MODEL")),
+		ScenePlannerModel:  strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
 		CompressionBaseURL: strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
 		CompressionKey:     strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
 		CompressionModel:   strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
@@ -62,6 +71,9 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.CompressionKey == "" {
 		e.CompressionKey = e.OpenAIKey
+	}
+	if e.ScenePlannerModel == "" {
+		e.ScenePlannerModel = e.HostModel
 	}
 	if e.OutDir == "" {
 		e.OutDir = "./out"

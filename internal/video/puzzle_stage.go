@@ -157,13 +157,36 @@ func (s *PuzzleStage) idle() {
 }
 
 // AttachScenes hands pre-generated scene images to the stage. Caller is
-// cmd/debate-bot, which kicks off scenes.Generate asynchronously when a
+// cmd/debate-bot, which kicks off scene generation asynchronously when a
 // puzzle topic is admitted and calls AttachScenes on completion. Safe to
-// call before or after the topic activates — the surface scene is applied
+// call before or after the topic activates — the active scene is applied
 // immediately if the stage is currently active.
+//
+// Additive merge: each call updates only the non-empty fields on sc into
+// the stage's accumulated PuzzleScenes. This lets the caller stream the
+// assets in (surface first to unblock show start, then qa + reveal +
+// conclusion in the background) without later attaches clobbering
+// earlier ones.
 func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
+	if sc == nil {
+		return
+	}
 	s.mu.Lock()
-	s.sceneScenes = sc
+	if s.sceneScenes == nil {
+		s.sceneScenes = &scenes.PuzzleScenes{}
+	}
+	if len(sc.Surface) > 0 {
+		s.sceneScenes.Surface = sc.Surface
+	}
+	if sc.QA != nil {
+		s.sceneScenes.QA = sc.QA
+	}
+	if sc.Reveal != nil {
+		s.sceneScenes.Reveal = sc.Reveal
+	}
+	if len(sc.Conclusion) > 0 {
+		s.sceneScenes.Conclusion = sc.Conclusion
+	}
 	active := s.active
 	cur := s.curScene
 	s.mu.Unlock()
@@ -183,8 +206,9 @@ func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
 // attached PuzzleScenes. Called by cmd/debate-bot when the deferred
 // conclusion-image generation finishes — the podcast can already be in
 // flight at that point because surface assets unblock the run. If the stage
-// is currently in the conclusion phase, applies the new image immediately
-// and starts the timer rotation.
+// is already in the conclusion phase, paints frame 0; subsequent frames
+// are advanced by `<scene/>` markers in the host's conclusion narration
+// (see advanceScene), so no timer rotation is started here.
 func (s *PuzzleStage) AttachConclusion(imgs []*image.RGBA) {
 	s.mu.Lock()
 	if s.sceneScenes == nil {
@@ -198,7 +222,6 @@ func (s *PuzzleStage) AttachConclusion(imgs []*image.RGBA) {
 		return
 	}
 	s.applyScene(scenes.SceneConclusion, 0)
-	s.maybeStartSceneRotation(scenes.SceneConclusion)
 }
 
 // setSceneFor applies the scene image keyed by name to the encoder if
@@ -251,11 +274,14 @@ func (s *PuzzleStage) advanceScene() {
 
 // applyScene blits the indexed variant of the named scene through the
 // encoder. Silently no-ops if scenes haven't been attached yet or the
-// variant slot is empty.
+// variant slot is empty. Also forwards the scene name so the renderer
+// can apply scene-specific subtitle treatment (surface = black-outline
+// caption with no slab; others = HBO quote card).
 func (s *PuzzleStage) applyScene(name string, idx int) {
 	s.mu.Lock()
 	sc := s.sceneScenes
 	s.mu.Unlock()
+	s.enc.SetPuzzleSceneName(name)
 	if sc == nil {
 		return
 	}
@@ -269,13 +295,13 @@ func (s *PuzzleStage) applyScene(name string, idx int) {
 // maybeStartSceneRotation kicks off a goroutine that swaps to the next
 // variant of name every sceneRotationInterval, but only if the scene has
 // more than one variant. Scenes with a single image (qa, reveal) skip
-// rotation entirely. The surface scene also skips: its variant rotation
-// is driven by scene-switch markers in the host's narration (see
-// advanceScene) so the cuts land on paragraph beats rather than a wall
-// clock. Caller is responsible for having called stopSceneRotation first
-// if a different scene was previously active.
+// rotation entirely. Surface AND conclusion also skip: both narration
+// phases are driven by scene-switch markers in the host's transcript
+// (see advanceScene) so the cuts land on paragraph beats rather than a
+// wall clock. Caller is responsible for having called stopSceneRotation
+// first if a different scene was previously active.
 func (s *PuzzleStage) maybeStartSceneRotation(name string) {
-	if name == scenes.SceneSurface {
+	if name == scenes.SceneSurface || name == scenes.SceneConclusion {
 		return
 	}
 	s.mu.Lock()

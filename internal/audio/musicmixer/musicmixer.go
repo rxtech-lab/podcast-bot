@@ -48,6 +48,12 @@ import (
 // under speech without competing with it.
 const musicVolume = 0.10
 
+// ttsVolume is the linear gain applied to TTS PCM before it's mixed
+// in. 0.80 ≈ −1.9 dBFS, slightly attenuated from raw so the speaker
+// sits at a comfortable volume above the music bed without clipping
+// when peaks stack with the music. Tuned by ear.
+const ttsVolume = 0.80
+
 // pcmSampleRate / pcmChannels / pcmSampleBytes describe the PCM
 // format passed between the three ffmpeg processes and the Go
 // mixer. The output mp3 is re-encoded to the same sample rate
@@ -323,7 +329,7 @@ func (m *Mixer) mixLoop() {
 			break
 		}
 
-		mixInto(music, residual, musicVolume)
+		mixInto(music, residual, musicVolume, ttsVolume)
 		if len(residual) >= len(music) {
 			residual = residual[len(music):]
 		} else {
@@ -337,17 +343,19 @@ func (m *Mixer) mixLoop() {
 	}
 }
 
-// mixInto attenuates `music` by `volume` in place and additively
-// mixes the leading `len(music)` bytes of `tts` on top, clipping
-// to int16 range. Both buffers are s16le-encoded mono PCM at the
-// pipeline sample rate.
-func mixInto(music, tts []byte, volume float32) {
+// mixInto attenuates `music` by `musicVol` in place and additively
+// mixes the leading `len(music)` bytes of `tts` (scaled by `ttsVol`)
+// on top, clipping to int16 range. Both buffers are s16le-encoded
+// mono PCM at the pipeline sample rate. Independent volume scales let
+// the operator dial in the speaker-vs-bed balance without re-encoding
+// the source files.
+func mixInto(music, tts []byte, musicVol, ttsVol float32) {
 	for i := 0; i+1 < len(music); i += 2 {
 		m := int16(binary.LittleEndian.Uint16(music[i:]))
-		mixed := int32(float32(m) * volume)
+		mixed := int32(float32(m) * musicVol)
 		if i+1 < len(tts) {
 			t := int16(binary.LittleEndian.Uint16(tts[i:]))
-			mixed += int32(t)
+			mixed += int32(float32(t) * ttsVol)
 		}
 		if mixed > 32767 {
 			mixed = 32767

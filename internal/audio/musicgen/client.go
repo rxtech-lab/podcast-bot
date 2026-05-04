@@ -178,18 +178,7 @@ func (c *Client) generateOnce(ctx context.Context, req Request) ([]byte, error) 
 		return nil, statusErr
 	}
 
-	var parsed struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					InlineData struct {
-						MimeType string `json:"mimeType"`
-						Data     string `json:"data"`
-					} `json:"inlineData"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
+	var parsed lyriaResponse
 	if err := json.Unmarshal(rawResp, &parsed); err != nil {
 		return nil, fmt.Errorf("parse lyria response: %w (body: %s)", err, truncate(string(rawResp), 400))
 	}
@@ -201,7 +190,53 @@ func (c *Client) generateOnce(ctx context.Context, req Request) ([]byte, error) 
 			return base64.StdEncoding.DecodeString(part.InlineData.Data)
 		}
 	}
+
+	// No audio in any candidate. Lyria's copyright/safety filter returns
+	// HTTP 200 with finishReason="OTHER" and a message that the content
+	// "may contain material that resembles existing copyrighted works",
+	// which is recoverable on retry — Lyria samples the latent space
+	// stochastically, so the same prompt frequently produces a clean
+	// generation on the next attempt. Mark these retryable so the outer
+	// loop re-rolls instead of silently degrading the puzzle to dry TTS.
+	if reason, msg, ok := parsed.retryableFinish(); ok {
+		return nil, retryable(fmt.Errorf("lyria filter (finishReason=%s): %s", reason, msg))
+	}
 	return nil, fmt.Errorf("no audio data in response (body: %s)", truncate(string(rawResp), 400))
+}
+
+// lyriaResponse mirrors the candidates[].content.parts[].inlineData
+// shape Gemini Generative Language returns for music generation, plus
+// finishReason / finishMessage for filter-driven empty responses.
+type lyriaResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				InlineData struct {
+					MimeType string `json:"mimeType"`
+					Data     string `json:"data"`
+				} `json:"inlineData"`
+			} `json:"parts"`
+		} `json:"content"`
+		FinishReason  string `json:"finishReason"`
+		FinishMessage string `json:"finishMessage"`
+	} `json:"candidates"`
+}
+
+// retryableFinish reports whether any candidate carries a finishReason
+// that's worth re-rolling. Today: "OTHER" (the bucket Lyria's copyright/
+// safety filter falls into), "SAFETY", "RECITATION", "PROHIBITED_CONTENT"
+// — all generation-time decisions that the same prompt re-rolled
+// stochastically can clear. STOP / MAX_TOKENS would have produced audio,
+// so we don't see those here; everything else is treated as permanent.
+// Returns the offending reason + message for log readability.
+func (p lyriaResponse) retryableFinish() (reason, message string, ok bool) {
+	for _, c := range p.Candidates {
+		switch strings.ToUpper(c.FinishReason) {
+		case "OTHER", "SAFETY", "RECITATION", "PROHIBITED_CONTENT":
+			return c.FinishReason, truncate(c.FinishMessage, 200), true
+		}
+	}
+	return "", "", false
 }
 
 func truncate(s string, n int) string {

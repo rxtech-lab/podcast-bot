@@ -52,6 +52,11 @@ type Deps struct {
 	// 0 disables the cap (no plan available, accept whatever the host
 	// emits).
 	SurfaceFrames int
+	// ConclusionFrames is the same idea for the conclusion phase. The
+	// conclusion now reads as a longer reflective epilogue with scene
+	// markers driving the image rotation; the pipeline caps marker count
+	// at ConclusionFrames-1.
+	ConclusionFrames int
 }
 
 // subtitleClientLatency compensates for buffering that happens after the
@@ -376,24 +381,37 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if sent == "" {
 		return 0, nil
 	}
-	// Strip any scene-switch markers the speaker emitted at the start of this
-	// sentence. The marker count drives one SceneAdvanceMsg per occurrence,
-	// scheduled to fire at the same target time as this sentence's
-	// TranscriptMsg so the on-screen image cuts in lockstep with the audio.
-	cleaned, advances := stripSceneMarkers(sent)
-	// Clamp advances to the per-turn cap so an over-eager host can't
-	// wrap the surface rotation back to frame 0. capRemaining returns the
-	// number we're still allowed to emit on this turn (cap minus already-
-	// emitted), or -1 when no cap applies.
-	advances = p.clampAdvances(t, advances)
+	// Strip any scene-switch markers the speaker emitted in this sentence.
+	// stripSceneMarkers separates leading markers (fire with this
+	// sentence's TranscriptMsg) from trailing markers (fire AFTER this
+	// sentence's audio finishes — the image only advances once the
+	// previous beat's last words have been heard). Without that split,
+	// "[paragraph N last sentence] <scene/>" cuts the image to frame N+1
+	// while paragraph N's audio is still playing — the "image one ahead
+	// of audio" bug.
+	cleaned, leadAdvances, trailAdvances := stripSceneMarkers(sent)
+	// Clamp the combined count to the per-turn cap, then re-split: the
+	// cap distributes across both buckets so an over-eager host can't
+	// wrap the rotation back to frame 0 by piling markers on either end.
+	leadAdvances, trailAdvances = p.clampLeadTrail(t, leadAdvances, trailAdvances)
+	if leadAdvances > 0 || trailAdvances > 0 {
+		p.d.Log.Info("scene marker",
+			"turn", t.ID,
+			"directive", strings.SplitN(t.Directive, ":", 2)[0],
+			"leading", leadAdvances,
+			"trailing", trailAdvances,
+			"already_emitted", t.sceneAdvances,
+			"sentence_preview", truncatePreview(cleaned, 60))
+	}
 	if cleaned == "" {
 		// Marker-only sentence (rare — usually only the surface narration's
-		// final paragraph break). Fire the advance immediately and bail out
-		// of TTS — there's nothing to speak.
-		for i := 0; i < advances; i++ {
+		// final paragraph break). Both buckets fire immediately; there's
+		// no audio gap to defer trailing advances against.
+		total := leadAdvances + trailAdvances
+		for i := 0; i < total; i++ {
 			p.d.Send(SceneAdvanceMsg{})
 		}
-		t.sceneAdvances += advances
+		t.sceneAdvances += total
 		return 0, nil
 	}
 	sent = cleaned
@@ -451,41 +469,93 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		AudioDuration: audioDuration,
 	}
 	send := p.d.Send
-	if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
+	// Trailing advances fire when this sentence's audio finishes
+	// playing back to the listener — that's targetSend + audioDuration
+	// in wall-clock terms. Leading advances fire alongside the
+	// TranscriptMsg at audio start.
+	fireLeading := func() {
 		send(msg)
-		for i := 0; i < advances; i++ {
+		for i := 0; i < leadAdvances; i++ {
 			send(SceneAdvanceMsg{})
 		}
-	} else {
-		time.AfterFunc(remaining, func() {
-			send(msg)
-			for i := 0; i < advances; i++ {
-				send(SceneAdvanceMsg{})
-			}
-		})
 	}
-	t.sceneAdvances += advances
+	fireTrailing := func() {
+		for i := 0; i < trailAdvances; i++ {
+			send(SceneAdvanceMsg{})
+		}
+	}
+	if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
+		fireLeading()
+	} else {
+		time.AfterFunc(remaining, fireLeading)
+	}
+	if trailAdvances > 0 {
+		// targetSend is the sentence's audio-start moment; add
+		// audioDuration to land at audio-end on the listener's timeline.
+		trailAt := targetSend.Add(audioDuration)
+		if remaining := time.Until(trailAt); remaining <= 50*time.Millisecond {
+			fireTrailing()
+		} else {
+			time.AfterFunc(remaining, fireTrailing)
+		}
+	}
+	t.sceneAdvances += leadAdvances + trailAdvances
 	return n, nil
 }
 
+// truncatePreview clips s to n runes for log lines so a long sentence
+// doesn't blow out the log entry. Adds an ellipsis on truncation.
+func truncatePreview(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// clampLeadTrail applies the same per-turn advance cap as clampAdvances
+// but to the leading + trailing buckets together. Spends leading
+// advances first (they ride with the current TranscriptMsg, so they're
+// the ones the host is most likely to mean as "advance now"), then
+// trailing. Returns the (possibly-reduced) leading and trailing counts.
+func (p *Pipeline) clampLeadTrail(t *Turn, lead, trail int) (int, int) {
+	total := p.clampAdvances(t, lead+trail)
+	if total <= 0 {
+		return 0, 0
+	}
+	if lead >= total {
+		return total, 0
+	}
+	return lead, total - lead
+}
+
 // clampAdvances limits how many `<scene/>` markers we will emit for this
-// turn so excess host markers don't wrap the surface rotation back to
-// frame 0. The cap is Deps.SurfaceFrames-1 (the visual director generated
-// SurfaceFrames distinct beats; the first paints at topic admission, so
-// the host walks frames 1..SurfaceFrames-1 with one marker each). A cap
-// of 0 (no plan) means "accept whatever the host emits" — return raw.
+// turn so excess host markers don't wrap the rotation back to frame 0.
+// The cap is per-phase (SurfaceFrames-1 / ConclusionFrames-1): the visual
+// director generated N distinct beats; the first paints when the phase
+// opens, so the host walks frames 1..N-1 with one marker each. A 0 cap
+// (no plan available for that phase) returns raw — accept whatever the
+// host emits.
 func (p *Pipeline) clampAdvances(t *Turn, raw int) int {
-	if raw <= 0 || p.d.SurfaceFrames <= 0 {
+	if raw <= 0 {
 		return raw
 	}
-	// Markers are only meaningful for the surface directive; other
-	// directives (answer, evaluate-solution, …) shouldn't be cutting
-	// scenes anyway, but a defensive prefix check keeps us from capping
-	// the wrong stream if a future directive starts emitting markers.
-	if !strings.HasPrefix(t.Directive, "surface") {
+	cap := 0
+	switch {
+	case strings.HasPrefix(t.Directive, "surface"):
+		cap = p.d.SurfaceFrames - 1
+	case strings.HasPrefix(t.Directive, "conclusion"):
+		cap = p.d.ConclusionFrames - 1
+	default:
+		// Other directives (answer, evaluate-solution, …) shouldn't be
+		// cutting scenes anyway. Pass through raw so a future marker-
+		// emitting directive isn't silently muted.
 		return raw
 	}
-	cap := p.d.SurfaceFrames - 1
+	if cap <= 0 {
+		// No plan for this phase → don't cap.
+		return raw
+	}
 	remaining := cap - t.sceneAdvances
 	if remaining <= 0 {
 		return 0

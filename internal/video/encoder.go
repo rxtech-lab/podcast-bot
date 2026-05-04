@@ -274,6 +274,14 @@ func (e *Encoder) SetPuzzleMode(b bool) { e.rend.SetPuzzleMode(b) }
 // surface → Q&A → reveal → conclusion.
 func (e *Encoder) SetSceneBackground(img *image.RGBA) { e.rend.SetSceneBackground(img) }
 
+// SetPuzzleSceneName records the active puzzle scene name (one of
+// scenes.Scene*) so the renderer can apply scene-specific subtitle
+// styling — today, the surface phase paints the caption directly on the
+// scene with a black outline (no quote-card chrome), while QA/reveal/
+// conclusion keep the slab-and-rule look. PuzzleStage calls this in
+// lockstep with SetSceneBackground.
+func (e *Encoder) SetPuzzleSceneName(name string) { e.rend.SetPuzzleSceneName(name) }
+
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).
 // Calling with empty speaker hides the subtitle (idle state).
