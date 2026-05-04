@@ -44,7 +44,7 @@ func (q *userQueue) drain() ([]string, bool) {
 
 // Planner decides what turn happens next.
 type Planner struct {
-	topic      *config.Topic
+	topic      *config.DebateTopic
 	tracker    *Tracker
 	registry   *agent.Registry
 	queue      *userQueue
@@ -66,10 +66,18 @@ type plannerState struct {
 	endRequested   bool
 	verdictEmitted bool
 	conclusionDone bool
+
+	// pendingAnswerUser flags that the host just took an address-user turn and
+	// the very next turn MUST be a candidate answering that question. Without
+	// this, a fresh user message arriving during the host's turn would re-trigger
+	// another host address-user turn on the next planner call, and the candidate
+	// would never get to speak.
+	pendingAnswerUser     bool
+	pendingAnswerUserText string
 }
 
 // NewPlanner constructs the planner; the queue is kept by the orchestrator.
-func NewPlanner(topic *config.Topic, tracker *Tracker, reg *agent.Registry, q *userQueue, tr *Transcript) *Planner {
+func NewPlanner(topic *config.DebateTopic, tracker *Tracker, reg *agent.Registry, q *userQueue, tr *Transcript) *Planner {
 	return &Planner{
 		topic:      topic,
 		tracker:    tracker,
@@ -94,7 +102,24 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 		p.state.endRequested = true
 	}
 
-	// User questions take priority; weave in via host.
+	// If the host just took an address-user turn, the next scheduled turn MUST
+	// be a candidate answering that question — even if more user messages have
+	// landed in the queue meanwhile. Re-queue any drained-but-deferred messages
+	// so they get their own host+candidate cycle on the next call.
+	if p.state.pendingAnswerUser {
+		text := p.state.pendingAnswerUserText
+		p.state.pendingAnswerUser = false
+		p.state.pendingAnswerUserText = ""
+		if ag := p.pickFreeDebateCandidate(); ag != nil {
+			for _, q := range queued {
+				p.queue.push(q)
+			}
+			return p.makeTurn(ag, "answer-user:"+text, p.segmentSeconds()), true
+		}
+		// Degenerate: no candidates at all. Fall through to phase logic.
+	}
+
+	// User questions take priority; weave in via host, then a candidate answers.
 	if len(queued) > 0 && !p.state.endRequested {
 		// Debounce: wait briefly and drain again so messages typed in rapid
 		// succession collapse into a single host address-user turn instead of
@@ -110,6 +135,8 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 			p.state.endRequested = true
 		}
 		text := strings.Join(queued, " | ")
+		p.state.pendingAnswerUser = true
+		p.state.pendingAnswerUserText = text
 		return p.makeTurn(p.registry.Host, "address-user:"+text, p.budgetSeconds(20)), true
 	}
 
@@ -163,22 +190,43 @@ func (p *Planner) planOpening() (*Turn, bool) {
 
 // planFreeDebate alternates sides, occasionally letting a viewer interject.
 func (p *Planner) planFreeDebate(ctx context.Context) (*Turn, bool) {
-	idx := p.state.freeDebateIdx
-	p.state.freeDebateIdx++
-
 	// Every 3rd inter-segment slot, probe viewers in parallel.
-	if idx > 0 && idx%3 == 0 && len(p.registry.Viewers) > 0 {
+	if p.state.freeDebateIdx > 0 && p.state.freeDebateIdx%3 == 0 && len(p.registry.Viewers) > 0 {
 		if v, q := p.askAnyViewer(ctx); v != nil {
 			directive := "ask:" + q
+			p.state.freeDebateIdx++
 			return p.makeTurn(v, directive, p.budgetSeconds(25)), true
 		}
 	}
 
-	// Strict round-robin within each side. We can't use "smallest accumulated
-	// speaking time" here because the planner runs ahead of the producer (turn
-	// channel is buffered) and `tracker.Used` only updates after a turn finishes
-	// playing, so the same speaker would be re-picked while their previous turn
-	// is still being synthesised — which produced two same-side answers in a row.
+	pick := p.pickFreeDebateCandidate()
+	if pick == nil {
+		return p.makeTurn(p.registry.Host, "transition:next-side", p.budgetSeconds(10)), true
+	}
+	// If this candidate is already over their fair share, swap to host warn-time.
+	totalCands := len(p.registry.Affirmatve) + len(p.registry.Negative)
+	share := (p.tracker.Total() / 2) / time.Duration(max(1, totalCands/2))
+	if p.tracker.Used(pick.Name()) > share+30*time.Second {
+		return p.makeTurn(p.registry.Host, "warn-time:"+pick.Name(), p.budgetSeconds(10)), true
+	}
+	// "rebut" (no who) — the opponent's actual last claim is auto-injected
+	// into the user prompt by base.runStream so the LLM gets the verbatim text.
+	return p.makeTurn(pick, "rebut", p.segmentSeconds()), true
+}
+
+// pickFreeDebateCandidate advances the same alternating-side / per-side
+// round-robin cursor that planFreeDebate uses, so weaving an audience answer
+// in does not desync the rotation. Returns nil when neither side has any
+// candidates — caller is expected to handle that degenerate case.
+//
+// We can't use "smallest accumulated speaking time" here because the planner
+// runs ahead of the producer (turn channel is buffered) and tracker.Used only
+// updates after a turn finishes playing, so the same speaker would be re-picked
+// while their previous turn is still being synthesised — which produced two
+// same-side answers in a row.
+func (p *Planner) pickFreeDebateCandidate() agent.Agent {
+	idx := p.state.freeDebateIdx
+	p.state.freeDebateIdx++
 	var candidates []agent.Agent
 	var rrIdx *int
 	if idx%2 == 0 {
@@ -189,19 +237,21 @@ func (p *Planner) planFreeDebate(ctx context.Context) (*Turn, bool) {
 		rrIdx = &p.state.negRRIdx
 	}
 	if len(candidates) == 0 {
-		return p.makeTurn(p.registry.Host, "transition:next-side", p.budgetSeconds(10)), true
+		// Try the other side before giving up.
+		if idx%2 == 0 {
+			candidates = p.registry.Negative
+			rrIdx = &p.state.negRRIdx
+		} else {
+			candidates = p.registry.Affirmatve
+			rrIdx = &p.state.affRRIdx
+		}
+		if len(candidates) == 0 {
+			return nil
+		}
 	}
 	pick := candidates[*rrIdx%len(candidates)]
 	*rrIdx++
-	// If this candidate is already over their fair share, swap to host warn-time.
-	totalCands := len(p.registry.Affirmatve) + len(p.registry.Negative)
-	share := (p.tracker.Total() / 2) / time.Duration(max(1, totalCands/2))
-	if p.tracker.Used(pick.Name()) > share+30*time.Second {
-		return p.makeTurn(p.registry.Host, "warn-time:"+pick.Name(), p.budgetSeconds(10)), true
-	}
-	// "rebut" (no who) — the opponent's actual last claim is auto-injected
-	// into the user prompt by base.runStream so the LLM gets the verbatim text.
-	return p.makeTurn(pick, "rebut", p.segmentSeconds()), true
+	return pick
 }
 
 func (p *Planner) askAnyViewer(ctx context.Context) (agent.Agent, string) {

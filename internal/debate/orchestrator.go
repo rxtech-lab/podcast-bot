@@ -21,7 +21,7 @@ import (
 // Orchestrator wires every package together for one debate run.
 type Orchestrator struct {
 	Env        *config.Env
-	Topic      *config.Topic
+	Topic      *config.DebateTopic
 	MCPConfig  *config.MCPConfig
 	Tools      *tools.Registry
 	MemStore   *memory.Store
@@ -40,7 +40,7 @@ type Orchestrator struct {
 
 // New constructs an Orchestrator after loaders + .env are validated.
 // liveStream is the shared mp3 broadcaster the pipeline writes audio into.
-func New(env *config.Env, topic *config.Topic, mcpCfg *config.MCPConfig,
+func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 	send func(any), log *slog.Logger, liveStream *audio.LiveStream,
 ) (*Orchestrator, error) {
 	memStore, err := memory.NewStore(filepath.Join(env.OutDir, "memory"))
@@ -238,7 +238,7 @@ func EnsureOutDir(p string) error {
 // buildTTSProvider constructs the TTS provider selected by topic.tts_provider
 // and validates the env vars that provider requires. Defaults to Azure when
 // the field is blank.
-func buildTTSProvider(env *config.Env, topic *config.Topic) (tts.Provider, error) {
+func buildTTSProvider(env *config.Env, topic *config.DebateTopic) (tts.Provider, error) {
 	provider := topic.TTSProvider
 	if provider == "" {
 		provider = config.TTSProviderAzure

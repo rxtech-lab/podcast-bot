@@ -30,9 +30,9 @@ func main() {
 		os.Exit(1)
 	}
 	switch os.Args[1] {
-	case "run":
-		os.Exit(runCmd(os.Args[2:]))
-	case "server":
+	case "server", "run":
+		// `run` is kept as an alias for `server` for backwards compatibility
+		// with the previous TUI+server combo command.
 		os.Exit(serverCmd(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
@@ -44,21 +44,23 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `debate-bot — multi-agent debate podcast
+	fmt.Fprintln(os.Stderr, `debate-bot — multi-agent debate podcast (web UI)
 
 usage:
-  debate-bot run    --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr 127.0.0.1:0]
-  debate-bot server --topic ./topic.md [--mcp ./mcp.json] [--out ./out] [--addr :3000]
+  debate-bot server --debate ./debate.md [--mcp ./mcp.json] [--out ./out] [--addr :3000]
 
-  --topic accepts a single .md path OR a glob (e.g. "topics/*.md"). When the
-  glob matches multiple files the topics are queued and run sequentially —
-  the audio livestream and HLS video are reused across topics; the title
-  swaps when each new topic starts.
+  --debate accepts a single .md path OR a glob (e.g. "topics/*.md"). When the
+  glob matches multiple files the debates are queued and run sequentially —
+  the audio livestream and HLS video are reused across debates; the title
+  swaps when each new debate starts.
 
-  run     starts the TUI and an embedded HTTP server; the TUI consumes the
-          server over loopback. Audio plays via local ffplay.
-  server  starts only the HTTP server (no TUI, no local audio playback) so the
-          web UI and remote clients can connect.
+  Adding "parallel: true" to a debate.md frontmatter switches the whole queue
+  into TV-channel mode: every debate runs concurrently as its own channel,
+  each with an independent video + audio stream. Switch channels in the web
+  UI's left sidebar.
+
+  --topic is a deprecated alias for --debate (still works, prints a warning).
+  `+"`run`"+` is kept as an alias for `+"`server`"+` for backwards compatibility.
 
 env (loaded from .env if present):
   OPENAI_BASE_URL   OPENAI_API_KEY   HOST_MODEL
@@ -73,10 +75,23 @@ type loadedTopic struct {
 	id    string
 	path  string
 	title string
-	topic *config.Topic
+	topic *config.DebateTopic
 }
 
-// runtime bundles the shared infrastructure that every queued topic reuses.
+// channelRuntime is the per-channel slice of audio/video infrastructure used
+// in parallel mode. In sequential mode there's exactly one of these, shared
+// across the queue (set on runtime.live / runtime.enc).
+type channelRuntime struct {
+	id   string
+	live *audio.LiveStream
+	enc  *video.Encoder // may be nil if encoder failed to start
+}
+
+// runtime bundles the shared infrastructure that every queued debate reuses.
+//
+// In sequential mode `live` and `enc` hold the single shared streams and
+// `channels` is empty. In parallel mode `live`/`enc` are nil and one entry per
+// debate lives in `channels`.
 type runtime struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -91,6 +106,8 @@ type runtime struct {
 	srv      *server.Server
 	sessions *server.SessionRegistry
 	topics   []loadedTopic
+	channels []*channelRuntime // populated in parallel mode only
+	parallel bool
 	addr     string
 	stopSig  chan os.Signal
 }
@@ -152,30 +169,47 @@ type stringSlice []string
 func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
 func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 
-// extractTopicArgs hoists every --topic occurrence out of args so the stdlib
-// flag parser doesn't trip on the trailing values an unquoted shell glob
-// produces. Without this, `--topic ./topics/*.md --mcp x.json` (which the
-// shell expands into `--topic a.md b.md c.md --mcp x.json`) would see `b.md`
-// as the first positional arg and silently stop, so --mcp would be ignored.
+// extractDebateArgs hoists every --debate (and the deprecated --topic alias)
+// occurrence out of args so the stdlib flag parser doesn't trip on the trailing
+// values an unquoted shell glob produces. Without this, `--debate ./topics/*.md
+// --mcp x.json` (which the shell expands into `--debate a.md b.md c.md --mcp
+// x.json`) would see `b.md` as the first positional arg and silently stop, so
+// --mcp would be ignored.
 //
-// All non-flag tokens that immediately follow a --topic occurrence are
-// collected as topic paths until the next flag (anything starting with -).
-func extractTopicArgs(args []string) (topics []string, rest []string) {
+// All non-flag tokens that immediately follow a --debate/--topic occurrence are
+// collected as debate paths until the next flag (anything starting with -).
+// usedDeprecated is set when the legacy --topic spelling appeared, so the
+// caller can print a one-line deprecation notice.
+func extractDebateArgs(args []string) (debates []string, rest []string, usedDeprecated bool) {
 	rest = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--topic" || a == "-topic":
+		case a == "--debate" || a == "-debate":
 			i++
 			for i < len(args) && !strings.HasPrefix(args[i], "-") {
-				topics = append(topics, args[i])
+				debates = append(debates, args[i])
 				i++
 			}
 			i-- // outer loop will increment
+		case strings.HasPrefix(a, "--debate="):
+			debates = append(debates, strings.TrimPrefix(a, "--debate="))
+		case strings.HasPrefix(a, "-debate="):
+			debates = append(debates, strings.TrimPrefix(a, "-debate="))
+		case a == "--topic" || a == "-topic":
+			usedDeprecated = true
+			i++
+			for i < len(args) && !strings.HasPrefix(args[i], "-") {
+				debates = append(debates, args[i])
+				i++
+			}
+			i--
 		case strings.HasPrefix(a, "--topic="):
-			topics = append(topics, strings.TrimPrefix(a, "--topic="))
+			usedDeprecated = true
+			debates = append(debates, strings.TrimPrefix(a, "--topic="))
 		case strings.HasPrefix(a, "-topic="):
-			topics = append(topics, strings.TrimPrefix(a, "-topic="))
+			usedDeprecated = true
+			debates = append(debates, strings.TrimPrefix(a, "-topic="))
 		default:
 			rest = append(rest, a)
 		}
@@ -257,66 +291,124 @@ func bootstrap(topicSpecs []string, mcpPath, outOverride, addr string) (*runtime
 		cancel()
 	}()
 
-	live, err := audio.NewLiveStream(ctx, log)
-	if err != nil {
-		cancel()
-		fmt.Fprintln(os.Stderr, "livestream:", err)
-		return nil, 1
-	}
-
 	bus := eventbus.New(log)
 
-	// Video encoder + Stage live for the whole session and span topics. The
-	// Stage subscribes to TopicMsg events to swap title and rosters between
-	// runs.
-	var (
-		enc    *video.Encoder
-		hlsDir string
-	)
-	// All queued topics share the same encoder, so pick the resolution from
-	// the first topic. Mixed resolutions in a queue aren't supported — flag
-	// any divergence so it's obvious why later topics didn't change the size.
-	res := video.Resolution(topics[0].topic.Resolution)
-	for _, t := range topics[1:] {
-		if t.topic.Resolution != topics[0].topic.Resolution {
-			log.Warn("topic resolution mismatch — using first topic's value",
-				"using", topics[0].topic.Resolution,
-				"ignored", t.topic.Resolution,
-				"topic", t.id)
+	// Parallel mode is opt-in via `parallel: true` on any debate.md in the
+	// queue — when set, every debate runs concurrently as its own channel,
+	// each with an independent LiveStream + Encoder + HLS dir.
+	parallel := false
+	for _, t := range topics {
+		if t.topic.Parallel {
+			parallel = true
+			break
 		}
 	}
-	enc, err = video.New(ctx, env.OutDir, res, log)
-	if err != nil {
-		log.Warn("video encoder disabled", "err", err)
-		fmt.Fprintln(os.Stderr, "video disabled:", err)
-	} else {
-		hlsDir = enc.HLSDir()
-		enc.AttachAudio(ctx, live)
-		stage := video.NewStage(enc)
-		go stage.Run(ctx, bus)
+
+	rt := &runtime{
+		ctx: ctx, cancel: cancel, log: log, closer: closer,
+		env: env, mcpCfg: mcpCfg, bus: bus,
+		topics: topics, parallel: parallel,
+		addr: addr, stopSig: stopSig,
 	}
 
-	// Seed the session registry with the topic queue.
+	// Seed the session registry with the queue and the queue mode.
 	seed := make([]server.Session, len(topics))
 	for i, t := range topics {
 		seed[i] = server.Session{ID: t.id, Title: t.title, Status: server.StatusPending}
 	}
-	sessions := server.NewSessionRegistry(seed)
-
-	srv := server.New(server.Deps{
-		Bus:         bus,
-		LiveStream:  live,
-		Sessions:    sessions,
-		Log:         log,
-		VideoHLSDir: hlsDir,
-	})
-
-	rt := &runtime{
-		ctx: ctx, cancel: cancel, log: log, closer: closer,
-		env: env, mcpCfg: mcpCfg, bus: bus, live: live, enc: enc, srv: srv,
-		sessions: sessions, topics: topics,
-		addr: addr, stopSig: stopSig,
+	mode := server.ModeSequential
+	if parallel {
+		mode = server.ModeParallel
 	}
+	sessions := server.NewSessionRegistry(seed, mode)
+	rt.sessions = sessions
+
+	if parallel {
+		// One LiveStream + Encoder + ChannelStage per debate. Each Stage
+		// filters bus events by channel id, so concurrent topics never bleed
+		// each other's transcript / phase / topic state into the wrong stream.
+		for _, lt := range topics {
+			res := video.Resolution(lt.topic.Resolution)
+			channelOutDir := filepath.Join(env.OutDir, lt.id)
+			if err := debate.EnsureOutDir(channelOutDir); err != nil {
+				cancel()
+				fmt.Fprintln(os.Stderr, "channel out dir:", err)
+				return nil, 1
+			}
+			live, err := audio.NewLiveStream(ctx, log)
+			if err != nil {
+				cancel()
+				fmt.Fprintln(os.Stderr, "livestream:", err)
+				return nil, 1
+			}
+			cr := &channelRuntime{id: lt.id, live: live}
+			enc, err := video.New(ctx, channelOutDir, res, log)
+			if err != nil {
+				log.Warn("video encoder disabled for channel", "id", lt.id, "err", err)
+				fmt.Fprintln(os.Stderr, "video disabled for", lt.id, ":", err)
+			} else {
+				cr.enc = enc
+				enc.AttachAudio(ctx, live)
+				stage := video.NewChannelStage(enc, lt.id)
+				go stage.Run(ctx, bus)
+			}
+			rt.channels = append(rt.channels, cr)
+
+			hlsDir := ""
+			if cr.enc != nil {
+				hlsDir = cr.enc.HLSDir()
+			}
+			sessions.RegisterChannel(lt.id, server.ChannelResources{
+				HLSDir:     hlsDir,
+				LiveStream: live,
+			})
+		}
+	} else {
+		// Sequential mode (today): one shared LiveStream + Encoder + Stage
+		// span the whole queue.
+		live, err := audio.NewLiveStream(ctx, log)
+		if err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, "livestream:", err)
+			return nil, 1
+		}
+		rt.live = live
+
+		// All queued debates share the same encoder, so pick the resolution
+		// from the first debate. Mixed resolutions aren't supported — flag any
+		// divergence so it's obvious why later debates didn't change the size.
+		res := video.Resolution(topics[0].topic.Resolution)
+		for _, t := range topics[1:] {
+			if t.topic.Resolution != topics[0].topic.Resolution {
+				log.Warn("topic resolution mismatch — using first topic's value",
+					"using", topics[0].topic.Resolution,
+					"ignored", t.topic.Resolution,
+					"topic", t.id)
+			}
+		}
+		enc, err := video.New(ctx, env.OutDir, res, log)
+		if err != nil {
+			log.Warn("video encoder disabled", "err", err)
+			fmt.Fprintln(os.Stderr, "video disabled:", err)
+		} else {
+			rt.enc = enc
+			enc.AttachAudio(ctx, live)
+			stage := video.NewStage(enc)
+			go stage.Run(ctx, bus)
+		}
+	}
+
+	deps := server.Deps{
+		Bus:        bus,
+		LiveStream: rt.live,
+		Sessions:   sessions,
+		Log:        log,
+	}
+	if rt.enc != nil {
+		deps.VideoHLSDir = rt.enc.HLSDir()
+	}
+	rt.srv = server.New(deps)
+
 	return rt, 0
 }
 
@@ -328,6 +420,14 @@ func (r *runtime) shutdown() {
 	if r.live != nil {
 		_ = r.live.CloseInput()
 	}
+	for _, c := range r.channels {
+		if c.enc != nil {
+			_ = c.enc.Close()
+		}
+		if c.live != nil {
+			_ = c.live.CloseInput()
+		}
+	}
 	if r.bus != nil {
 		r.bus.Close()
 	}
@@ -336,9 +436,27 @@ func (r *runtime) shutdown() {
 	}
 }
 
-// runQueue plays each queued topic to completion in order. The shared bus,
-// livestream, encoder and server stay up across topics; only the
-// orchestrator (and its OutDir, agents, transcript) is rebuilt per topic.
+// run dispatches to the right execution mode.
+func (r *runtime) run() error {
+	if r.parallel {
+		return r.runParallel()
+	}
+	return r.runQueue()
+}
+
+// channelSend wraps the shared bus.Publish so events emitted by an orchestrator
+// for a given channel are stamped with that channel id before they hit the bus.
+// In sequential mode the channel id is the active topic's id (so the frontend
+// can still associate transcript events with a queue entry).
+func (r *runtime) channelSend(channelID string) func(any) {
+	return func(v any) {
+		r.bus.Publish(debate.StampChannelID(v, channelID))
+	}
+}
+
+// runQueue plays each queued debate to completion in order. The shared bus,
+// livestream, encoder and server stay up across debates; only the
+// orchestrator (and its OutDir, agents, transcript) is rebuilt per debate.
 func (r *runtime) runQueue() error {
 	for i, lt := range r.topics {
 		if r.ctx.Err() != nil {
@@ -353,7 +471,8 @@ func (r *runtime) runQueue() error {
 			continue
 		}
 
-		orch, err := debate.New(&topicEnv, lt.topic, r.mcpCfg, r.bus.Publish, r.log, r.live)
+		send := r.channelSend(lt.id)
+		orch, err := debate.New(&topicEnv, lt.topic, r.mcpCfg, send, r.log, r.live)
 		if err != nil {
 			r.log.Error("orchestrator build", "id", lt.id, "err", err)
 			r.sessions.SetStatus(lt.id, server.StatusError)
@@ -370,20 +489,18 @@ func (r *runtime) runQueue() error {
 			"title", lt.title,
 			"out_dir", topicEnv.OutDir,
 		)
-		fmt.Fprintf(os.Stdout, "▶ starting topic %d/%d [%s] %s\n",
+		fmt.Fprintf(os.Stdout, "▶ starting debate %d/%d [%s] %s\n",
 			i+1, len(r.topics), lt.id, lt.title)
 
 		// Announce the new topic so the Stage updates the encoder title +
 		// side panels and the web UI clears its transcript view.
-		affNames := agentNames(lt.topic.Affirmative)
-		negNames := agentNames(lt.topic.Negative)
-		r.bus.Publish(debate.TopicMsg{
+		send(debate.TopicMsg{
 			ID:       lt.id,
 			Title:    lt.title,
 			Index:    i,
 			Total:    len(r.topics),
-			AffNames: affNames,
-			NegNames: negNames,
+			AffNames: agentNames(lt.topic.Affirmative),
+			NegNames: agentNames(lt.topic.Negative),
 		})
 
 		err = orch.Run(r.ctx)
@@ -402,10 +519,107 @@ func (r *runtime) runQueue() error {
 			filepath.Join(topicEnv.OutDir, "transcript.txt"),
 			filepath.Join(topicEnv.OutDir, "debate.mp3"),
 		)
-		fmt.Fprintf(os.Stdout, "✓ finished topic %d/%d [%s]\n",
+		fmt.Fprintf(os.Stdout, "✓ finished debate %d/%d [%s]\n",
 			i+1, len(r.topics), lt.id)
 	}
 	return nil
+}
+
+// runParallel starts every queued debate concurrently, each on its own
+// LiveStream + Encoder + ChannelStage. Returns when every orchestrator has
+// finished (or the context is cancelled).
+func (r *runtime) runParallel() error {
+	if len(r.channels) != len(r.topics) {
+		return fmt.Errorf("runtime not initialised for parallel mode: %d channels for %d debates",
+			len(r.channels), len(r.topics))
+	}
+
+	type result struct {
+		id  string
+		err error
+	}
+	resultCh := make(chan result, len(r.topics))
+
+	for i, lt := range r.topics {
+		i, lt := i, lt
+		ch := r.channels[i]
+		topicEnv := *r.env
+		topicEnv.OutDir = filepath.Join(r.env.OutDir, lt.id)
+		if err := debate.EnsureOutDir(topicEnv.OutDir); err != nil {
+			r.log.Error("channel out dir", "id", lt.id, "err", err)
+			r.sessions.SetStatus(lt.id, server.StatusError)
+			resultCh <- result{id: lt.id, err: err}
+			continue
+		}
+
+		send := r.channelSend(lt.id)
+		orch, err := debate.New(&topicEnv, lt.topic, r.mcpCfg, send, r.log, ch.live)
+		if err != nil {
+			r.log.Error("orchestrator build", "id", lt.id, "err", err)
+			r.sessions.SetStatus(lt.id, server.StatusError)
+			resultCh <- result{id: lt.id, err: err}
+			continue
+		}
+
+		// Expose the orch on the existing channel registration so the server's
+		// /api/transcript?channel=X and POST /api/messages?channel=X find it.
+		r.sessions.RegisterChannel(lt.id, server.ChannelResources{
+			Orch:       orch,
+			HLSDir:     existingHLSDir(r.sessions.ChannelResources(lt.id)),
+			LiveStream: ch.live,
+		})
+		r.sessions.SetStatus(lt.id, server.StatusRunning)
+
+		r.log.Info("starting parallel debate",
+			"index", i+1, "of", len(r.topics),
+			"id", lt.id, "title", lt.title,
+			"out_dir", topicEnv.OutDir)
+		fmt.Fprintf(os.Stdout, "▶ starting channel [%s] %s\n", lt.id, lt.title)
+
+		send(debate.TopicMsg{
+			ID:       lt.id,
+			Title:    lt.title,
+			Index:    i,
+			Total:    len(r.topics),
+			AffNames: agentNames(lt.topic.Affirmative),
+			NegNames: agentNames(lt.topic.Negative),
+		})
+
+		go func() {
+			runErr := orch.Run(r.ctx)
+			orch.Shutdown()
+			if runErr != nil {
+				r.log.Error("channel finished with error", "id", lt.id, "err", runErr)
+				r.sessions.SetStatus(lt.id, server.StatusError)
+			} else {
+				r.sessions.SetStatus(lt.id, server.StatusDone)
+				r.sessions.SetOutputs(lt.id,
+					filepath.Join(topicEnv.OutDir, "transcript.txt"),
+					filepath.Join(topicEnv.OutDir, "debate.mp3"),
+				)
+				fmt.Fprintf(os.Stdout, "✓ finished channel [%s]\n", lt.id)
+			}
+			resultCh <- result{id: lt.id, err: runErr}
+		}()
+	}
+
+	var firstErr error
+	for range r.topics {
+		res := <-resultCh
+		if res.err != nil && firstErr == nil && r.ctx.Err() == nil {
+			firstErr = res.err
+		}
+	}
+	return firstErr
+}
+
+// existingHLSDir is a small helper so RegisterChannel calls can preserve the
+// HLSDir installed at bootstrap time when only updating the orchestrator.
+func existingHLSDir(prev *server.ChannelResources) string {
+	if prev == nil {
+		return ""
+	}
+	return prev.HLSDir
 }
 
 func agentNames(specs []config.AgentSpec) []string {
@@ -416,62 +630,14 @@ func agentNames(specs []config.AgentSpec) []string {
 	return out
 }
 
-// runCmd: TUI + embedded server (loopback).
-func runCmd(args []string) int {
-	specs, rest := extractTopicArgs(args)
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	fs.Var((*stringSlice)(&specs), "topic", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --topic are also accepted")
-	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
-	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
-	addr := fs.String("addr", "127.0.0.1:0", "loopback HTTP listen address")
-	if err := fs.Parse(rest); err != nil {
-		return 2
-	}
-	if len(specs) == 0 {
-		fmt.Fprintln(os.Stderr, "missing --topic")
-		return 2
-	}
-
-	rt, code := bootstrap(specs, *mcpPath, *outDir, *addr)
-	if code != 0 {
-		return code
-	}
-	defer rt.shutdown()
-
-	addrCh := make(chan *net.TCPAddr, 1)
-	srvErrCh := make(chan error, 1)
-	go func() {
-		srvErrCh <- rt.srv.ListenAndServe(rt.ctx, rt.addr, func(a *net.TCPAddr) {
-			addrCh <- a
-		})
-	}()
-
-	bound := <-addrCh
-	baseURL := fmt.Sprintf("http://%s", bound.String())
-	fmt.Fprintln(os.Stdout, "server listening at", baseURL)
-
-	queueDone := make(chan error, 1)
-	go func() {
-		queueDone <- rt.runQueue()
-	}()
-
-	cliErr := runTUIClient(rt.ctx, rt.log, baseURL)
-	rt.cancel()
-	if err := <-queueDone; err != nil {
-		rt.log.Error("topic queue error", "err", err)
-	}
-	<-srvErrCh
-	if cliErr != nil {
-		rt.log.Error("tui error", "err", cliErr)
-	}
-	return 0
-}
-
-// serverCmd: headless HTTP server only (no TUI, no local audio playback).
+// serverCmd: HTTP server hosting the web UI + HLS video + audio stream.
 func serverCmd(args []string) int {
-	specs, rest := extractTopicArgs(args)
+	specs, rest, deprecated := extractDebateArgs(args)
+	if deprecated {
+		fmt.Fprintln(os.Stderr, "warning: --topic is deprecated, use --debate")
+	}
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	fs.Var((*stringSlice)(&specs), "topic", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --topic are also accepted")
+	fs.Var((*stringSlice)(&specs), "debate", "path or glob to debate .md file(s) — repeatable; consecutive paths after one --debate are also accepted")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", ":3000", "HTTP listen address")
@@ -479,7 +645,7 @@ func serverCmd(args []string) int {
 		return 2
 	}
 	if len(specs) == 0 {
-		fmt.Fprintln(os.Stderr, "missing --topic")
+		fmt.Fprintln(os.Stderr, "missing --debate")
 		return 2
 	}
 
@@ -498,7 +664,7 @@ func serverCmd(args []string) int {
 
 	queueDone := make(chan error, 1)
 	go func() {
-		queueDone <- rt.runQueue()
+		queueDone <- rt.run()
 	}()
 
 	select {

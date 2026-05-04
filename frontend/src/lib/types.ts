@@ -45,6 +45,8 @@ export interface EndedEvent {
 
 export type SessionStatus = 'pending' | 'running' | 'done' | 'error'
 
+export type Mode = 'sequential' | 'parallel'
+
 export interface Session {
   id: string
   title: string
@@ -53,7 +55,16 @@ export interface Session {
   audio_path?: string
 }
 
+// Server response shape for GET /api/topics. The mode determines whether the
+// frontend scopes its URLs by channel id (parallel) or shares one stream
+// across the queue (sequential).
+export interface TopicsResponse {
+  mode: Mode
+  items: Session[]
+}
+
 export interface TopicEvent {
+  channel_id?: string
   id: string
   title: string
   index: number

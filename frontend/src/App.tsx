@@ -1,13 +1,28 @@
 import { useEffect, useState } from 'react'
 import { Chat } from '@/components/Chat'
 import { AppHeader } from '@/components/AppHeader'
+import {
+  ChannelSwitcher,
+  ChannelSwitcherToggle,
+} from '@/components/ChannelSwitcher'
 import { VideoStage } from '@/components/VideoStage'
 import { loadHistory } from '@/lib/api'
 import { useDebateEvents } from '@/lib/sse'
 import type { ChatLine } from '@/lib/types'
 
+const CHANNELS_OPEN_KEY = 'debate-bot:channels-open'
+
 function App() {
   const [initialHistory, setInitialHistory] = useState<ChatLine[]>([])
+  const [channelsOpen, setChannelsOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    const v = window.localStorage.getItem(CHANNELS_OPEN_KEY)
+    return v === null ? true : v === '1'
+  })
+
+  useEffect(() => {
+    window.localStorage.setItem(CHANNELS_OPEN_KEY, channelsOpen ? '1' : '0')
+  }, [channelsOpen])
 
   useEffect(() => {
     loadHistory()
@@ -15,6 +30,7 @@ function App() {
       .catch((e) => console.warn('history load failed', e))
   }, [])
 
+  const { state, selectChannel } = useDebateEvents(initialHistory)
   const {
     history,
     phase,
@@ -22,10 +38,21 @@ function App() {
     remainingMs,
     status,
     topics,
+    mode,
     currentTopicId,
     currentTopicIndex,
     totalTopics,
-  } = useDebateEvents(initialHistory)
+  } = state
+
+  // In parallel mode every channel is live from t=0, so default the tuned
+  // channel to the first one as soon as the topic list lands. In sequential
+  // mode the current topic id arrives via the `topic` SSE event instead.
+  useEffect(() => {
+    if (mode !== 'parallel') return
+    if (currentTopicId) return
+    const first = topics.find((t) => t.status === 'running') ?? topics[0]
+    if (first) selectChannel(first.id)
+  }, [mode, topics, currentTopicId, selectChannel])
 
   useEffect(() => {
     const current = topics.find((t) => t.id === currentTopicId)
@@ -39,6 +66,12 @@ function App() {
         ? `[${currentTopicIndex + 1}/${totalTopics}] ${title} — debate-bot`
         : `${title} — debate-bot`
   }, [topics, currentTopicId, currentTopicIndex, totalTopics])
+
+  // Pass the channel id to VideoStage / Chat only in parallel mode — in
+  // sequential mode the unprefixed routes serve the single shared stream and
+  // route user messages to the current orchestrator.
+  const activeChannelId =
+    mode === 'parallel' ? currentTopicId ?? undefined : undefined
 
   return (
     <div className="dark relative flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
@@ -56,14 +89,23 @@ function App() {
           elapsedMs={elapsedMs}
           remainingMs={remainingMs}
           status={status}
-          topics={topics}
-          currentTopicId={currentTopicId}
           currentTopicIndex={currentTopicIndex}
           totalTopics={totalTopics}
         />
         <main className="flex-1 flex flex-col md:flex-row min-h-0 gap-3 p-3">
-          <VideoStage phase={phase} />
-          <Chat history={history} />
+          {channelsOpen ? (
+            <ChannelSwitcher
+              topics={topics}
+              mode={mode}
+              currentChannelId={currentTopicId}
+              onSelect={selectChannel}
+              onCollapse={() => setChannelsOpen(false)}
+            />
+          ) : (
+            <ChannelSwitcherToggle onExpand={() => setChannelsOpen(true)} />
+          )}
+          <VideoStage phase={phase} channelId={activeChannelId} />
+          <Chat history={history} channelId={activeChannelId} />
         </main>
       </div>
     </div>

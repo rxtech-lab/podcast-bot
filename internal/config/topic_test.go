@@ -49,6 +49,38 @@ func TestLoadTopicMissing(t *testing.T) {
 	}
 }
 
+func TestLoadTopicParallelFlag(t *testing.T) {
+	dir := t.TempDir()
+	withFlag := filepath.Join(dir, "with.md")
+	if err := os.WriteFile(withFlag, []byte(`---
+title: "x"
+language: en-US
+parallel: true
+affirmative: [{name: A, model: m}]
+negative:    [{name: B, model: m}]
+judge:       {model: m}
+---
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tp, err := config.LoadTopic(withFlag)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !tp.Parallel {
+		t.Errorf("expected Parallel=true, got false")
+	}
+
+	// Default should be false when omitted.
+	tp2, err := config.LoadTopic("../../examples/topic.md")
+	if err != nil {
+		t.Fatalf("load example: %v", err)
+	}
+	if tp2.Parallel {
+		t.Errorf("expected Parallel=false by default, got true")
+	}
+}
+
 func TestLoadTopicTTSProviderDefaultAndValidation(t *testing.T) {
 	tp, err := config.LoadTopic("../../examples/topic.md")
 	if err != nil {

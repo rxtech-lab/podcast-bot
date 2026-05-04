@@ -2,6 +2,7 @@ import { useEffect, useReducer } from 'react'
 import { loadHistory, loadTopics } from './api'
 import type {
   ChatLine,
+  Mode,
   PhaseEvent,
   Session,
   StatusEvent,
@@ -17,6 +18,7 @@ export interface DebateState {
   remainingMs: number
   status: string
   topics: Session[]
+  mode: Mode
   currentTopicId: string | null
   currentTopicIndex: number
   totalTopics: number
@@ -28,7 +30,8 @@ type Action =
   | { kind: 'phase'; phase: string }
   | { kind: 'tick'; elapsedMs: number; remainingMs: number }
   | { kind: 'status'; text: string }
-  | { kind: 'topics'; topics: Session[] }
+  | { kind: 'topics'; topics: Session[]; mode: Mode }
+  | { kind: 'select-channel'; id: string }
   | {
       kind: 'topic-switch'
       id: string
@@ -43,6 +46,7 @@ const initialState: DebateState = {
   remainingMs: 0,
   status: '',
   topics: [],
+  mode: 'sequential',
   currentTopicId: null,
   currentTopicIndex: 0,
   totalTopics: 0,
@@ -65,7 +69,26 @@ function reducer(state: DebateState, action: Action): DebateState {
     case 'status':
       return { ...state, status: action.text }
     case 'topics':
-      return { ...state, topics: action.topics, totalTopics: action.topics.length }
+      return {
+        ...state,
+        topics: action.topics,
+        totalTopics: action.topics.length,
+        mode: action.mode,
+      }
+    case 'select-channel':
+      // Frontend-initiated channel switch (parallel mode). Reset transcript /
+      // phase / timers so the UI doesn't briefly show stale data from the
+      // previous channel before the SSE stream catches up.
+      return {
+        ...state,
+        history: [],
+        phase: 'setup',
+        elapsedMs: 0,
+        remainingMs: 0,
+        status: '',
+        currentTopicId: action.id,
+        currentTopicIndex: state.topics.findIndex((t) => t.id === action.id),
+      }
     case 'topic-switch':
       return {
         ...state,
@@ -99,16 +122,44 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
     dispatch({ kind: 'history', lines: initialHistory })
   }, [initialHistory])
 
-  // Initial fetch + refresh on every topic switch so the queue list (status:
-  // pending/running/done) stays in sync without per-topic polling.
+  // Initial fetch + refresh on every channel switch so the queue list
+  // (status: pending/running/done) and mode flag stay in sync.
   useEffect(() => {
     loadTopics()
-      .then((topics) => dispatch({ kind: 'topics', topics }))
+      .then((resp) => dispatch({ kind: 'topics', topics: resp.items, mode: resp.mode }))
       .catch(() => {})
   }, [state.currentTopicId])
 
+  // selectChannel switches which channel's transcript / audio / video the UI
+  // shows in parallel mode. In sequential mode this is a no-op for streaming
+  // (one shared stream) but still narrows the transcript view.
+  const selectChannel = (id: string) => {
+    if (id === state.currentTopicId) return
+    dispatch({ kind: 'select-channel', id })
+    loadHistory(state.mode === 'parallel' ? id : undefined)
+      .then((lines) =>
+        dispatch({
+          kind: 'history',
+          lines: lines.map((l) => ({
+            speaker: l.speaker,
+            role: l.role,
+            side: l.side,
+            text: l.text,
+          })),
+        }),
+      )
+      .catch(() => {})
+  }
+
   useEffect(() => {
-    const es = new EventSource('/api/events')
+    // In parallel mode SSE is filtered to the active channel so we only see
+    // its events; in sequential mode the stream is unfiltered (today's
+    // behavior) and the active topic id arrives via the `topic` event.
+    const url =
+      state.mode === 'parallel' && state.currentTopicId
+        ? `/api/events?channel=${encodeURIComponent(state.currentTopicId)}`
+        : '/api/events'
+    const es = new EventSource(url)
     let inFlight: InFlight | null = null
 
     es.addEventListener('transcript', (ev) => {
@@ -189,8 +240,10 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
       })
       // Refetch the persisted transcript snapshot — the orchestrator may
       // have already pushed lines (e.g. host opening) before this event
-      // arrives in the browser.
-      loadHistory()
+      // arrives in the browser. Scope by channel in parallel mode.
+      const fetchChannel =
+        state.mode === 'parallel' ? (m.channel_id || m.id) : undefined
+      loadHistory(fetchChannel)
         .then((lines) =>
           dispatch({
             kind: 'history',
@@ -212,7 +265,9 @@ export function useDebateEvents(initialHistory: ChatLine[]) {
     return () => {
       es.close()
     }
-  }, [])
+    // Re-open SSE when the active channel changes in parallel mode so the
+    // server-side filter switches with us.
+  }, [state.mode, state.currentTopicId])
 
-  return state
+  return { state, selectChannel }
 }

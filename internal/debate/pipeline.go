@@ -272,10 +272,23 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 
 // updateMemories pushes the played turn into the transcript log AND into every
 // other agent's memory (asynchronously triggers compression if large).
+//
+// Special case: the host also records its own turns into its own memory via
+// ListenSelf. This lets the host see its prior intros / handoffs /
+// address-user lines on subsequent turns and stop recycling identical
+// phrasing. Other agents keep the original behaviour (their own past turns
+// only show up via the recent-transcript window in the prompt body).
 func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 	full := p.d.Transcript.AppendFromTurn(t)
 	for _, a := range p.d.Registry.All() {
 		if a == t.Speaker {
+			if t.Speaker.Role() == agent.RoleHost {
+				if ls, ok := a.(interface {
+					ListenSelf(context.Context, agent.TranscriptLine) error
+				}); ok {
+					_ = ls.ListenSelf(ctx, full)
+				}
+			}
 			continue
 		}
 		_ = a.Listen(ctx, full)

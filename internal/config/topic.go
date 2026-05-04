@@ -33,18 +33,22 @@ const (
 	Resolution4K    = "4k"
 )
 
-// Topic is the full topic.md content: YAML frontmatter + named markdown sections.
-type Topic struct {
+// DebateTopic is the full debate.md content: YAML frontmatter + named markdown sections.
+type DebateTopic struct {
 	Title             string      `yaml:"title"`
 	Language          string      `yaml:"language"`
 	TotalMinutes      int         `yaml:"total_minutes"`
 	SegmentMaxSeconds int         `yaml:"segment_max_seconds"`
 	TTSProvider       string      `yaml:"tts_provider,omitempty"`
 	Resolution        string      `yaml:"resolution,omitempty"`
-	Affirmative       []AgentSpec `yaml:"affirmative"`
-	Negative          []AgentSpec `yaml:"negative"`
-	Judge             AgentSpec   `yaml:"judge"`
-	Viewers           []AgentSpec `yaml:"viewers"`
+	// Parallel, when true on any debate in the queue, makes the whole queue
+	// run concurrently as separate channels (each with its own encoder + HLS
+	// stream) instead of the default sequential mode.
+	Parallel    bool        `yaml:"parallel,omitempty"`
+	Affirmative []AgentSpec `yaml:"affirmative"`
+	Negative    []AgentSpec `yaml:"negative"`
+	Judge       AgentSpec   `yaml:"judge"`
+	Viewers     []AgentSpec `yaml:"viewers"`
 
 	// Body sections, populated from markdown after frontmatter.
 	Background     string `yaml:"-"`
@@ -53,19 +57,19 @@ type Topic struct {
 	Rules          string `yaml:"-"`
 }
 
-// LoadTopic parses a topic.md file with YAML frontmatter and markdown body.
-func LoadTopic(path string) (*Topic, error) {
+// LoadTopic parses a debate.md file with YAML frontmatter and markdown body.
+func LoadTopic(path string) (*DebateTopic, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read topic: %w", err)
+		return nil, fmt.Errorf("read debate: %w", err)
 	}
 	front, body, err := splitFrontmatter(string(raw))
 	if err != nil {
 		return nil, err
 	}
-	var t Topic
+	var t DebateTopic
 	if err := yaml.Unmarshal([]byte(front), &t); err != nil {
-		return nil, fmt.Errorf("parse topic frontmatter: %w", err)
+		return nil, fmt.Errorf("parse debate frontmatter: %w", err)
 	}
 	parseSections(body, &t)
 	if err := validateTopic(&t); err != nil {
@@ -117,7 +121,7 @@ func splitFrontmatter(s string) (front, body string, err error) {
 	return front, body, nil
 }
 
-func parseSections(body string, t *Topic) {
+func parseSections(body string, t *DebateTopic) {
 	sections := map[string]*string{
 		"background":          &t.Background,
 		"affirmative position": &t.AffirmativePos,
@@ -148,7 +152,7 @@ func parseSections(body string, t *Topic) {
 	flush()
 }
 
-func validateTopic(t *Topic) error {
+func validateTopic(t *DebateTopic) error {
 	if t.Title == "" {
 		return fmt.Errorf("topic title is required")
 	}

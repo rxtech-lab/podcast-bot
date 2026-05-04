@@ -4,11 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 )
+
+// ToolDispatcher resolves a single tool call into its result string. The
+// caller (typically an agent's Base) wires this through to the tools.Registry
+// so that StreamWithTools can stay agnostic of the registry/agent context.
+type ToolDispatcher func(ctx context.Context, name, jsonArgs string) (string, error)
+
+// maxToolRounds caps the assistant↔tool ping-pong inside StreamWithTools so a
+// model that keeps re-calling tools can never loop forever.
+const maxToolRounds = 8
 
 // Client wraps an OpenAI-compatible chat completions endpoint with a fixed model.
 // One Client per agent so per-agent BaseURL/API-key overrides are simple.
@@ -100,6 +110,108 @@ func (c *Client) Stream(
 		case <-streamCtx.Done():
 		}
 	}()
+	return out, nil
+}
+
+// StreamWithTools runs a multi-round streaming conversation that handles tool
+// calls transparently: when the model emits tool_calls, this method dispatches
+// them, appends the assistant + tool messages to history, and re-streams until
+// the model produces a tool-call-free assistant turn. Only TEXT deltas are
+// forwarded to the returned Stream — tool-call deltas are consumed internally
+// so downstream consumers (e.g. the TTS pipeline) don't have to know tools
+// exist. tools may be empty/nil; in that case this just delegates to Stream.
+func (c *Client) StreamWithTools(
+	ctx context.Context,
+	system string,
+	history []Message,
+	tools []openai.ChatCompletionToolParam,
+	dispatch ToolDispatcher,
+) (*Stream, error) {
+	streamCtx, cancel := context.WithCancel(ctx)
+	out := &Stream{
+		deltas: make(chan Delta, 16),
+		errCh:  make(chan error, 1),
+		stop:   cancel,
+	}
+
+	go func() {
+		defer close(out.deltas)
+		msgs := append([]Message(nil), history...)
+
+		for round := 0; round < maxToolRounds; round++ {
+			inner, err := c.Stream(streamCtx, system, msgs, tools)
+			if err != nil {
+				select {
+				case out.errCh <- err:
+				default:
+				}
+				return
+			}
+
+			var assistantText strings.Builder
+			var tcDeltas []DeltaToolCall
+			for d := range inner.Deltas() {
+				if d.Done {
+					break
+				}
+				if d.TextChunk != "" {
+					assistantText.WriteString(d.TextChunk)
+					select {
+					case out.deltas <- Delta{TextChunk: d.TextChunk}:
+					case <-streamCtx.Done():
+						return
+					}
+				}
+				if d.ToolCall != nil {
+					tcDeltas = append(tcDeltas, *d.ToolCall)
+				}
+			}
+			if err := inner.Err(); err != nil {
+				select {
+				case out.errCh <- err:
+				default:
+				}
+				return
+			}
+
+			// Tool-call-free round → we're done; surface the terminal Done.
+			if len(tcDeltas) == 0 {
+				select {
+				case out.deltas <- Delta{Done: true}:
+				case <-streamCtx.Done():
+				}
+				return
+			}
+
+			calls := AssembleToolCalls(tcDeltas)
+			msgs = append(msgs, Message{
+				Role:      RoleAssistant,
+				Content:   assistantText.String(),
+				ToolCalls: calls,
+			})
+			for _, tc := range calls {
+				var result string
+				if dispatch == nil {
+					result = "tool error: no dispatcher configured"
+				} else if r, derr := dispatch(streamCtx, tc.Name, tc.Arguments); derr != nil {
+					result = "tool error: " + derr.Error()
+				} else {
+					result = r
+				}
+				msgs = append(msgs, Message{
+					Role:       RoleTool,
+					Content:    result,
+					ToolCallID: tc.ID,
+				})
+			}
+		}
+
+		select {
+		case out.errCh <- fmt.Errorf("tool-call loop exceeded %d rounds", maxToolRounds):
+		default:
+		}
+	}()
+
 	return out, nil
 }
 

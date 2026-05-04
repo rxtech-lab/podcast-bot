@@ -5,14 +5,21 @@
 // orchestrator (the one whose transcript and chat sink the API exposes) is
 // tracked via SessionRegistry.
 //
-// Endpoints:
-//   GET  /api/topics            — JSON list of every queued topic + status.
-//   GET  /api/transcript        — JSON snapshot of the current topic transcript.
+// Endpoints (sequential mode, single shared stream):
+//   GET  /api/topics            — JSON list of every queued debate + status.
+//   GET  /api/transcript        — JSON snapshot of the current debate transcript.
 //   GET  /api/events            — Server-Sent Events stream of live events.
 //   GET  /api/audio/stream      — chunked MP3 audio stream of the live debate.
 //   GET  /api/video/...         — HLS playlist + segments.
 //   POST /api/messages          — push a user message into the live orchestrator.
 //   GET  /                      — embedded web UI (Twitch-like viewer).
+//
+// In parallel (channel) mode every per-channel route is also exposed:
+//   GET  /api/transcript?channel=<id>
+//   GET  /api/events?channel=<id>           (filters bus events by ChannelID)
+//   GET  /api/audio/<id>/stream
+//   GET  /api/video/<id>/...
+//   POST /api/messages?channel=<id>
 package server
 
 import (
@@ -36,13 +43,18 @@ import (
 
 // Deps wires the server to shared (cross-topic) state plus the registry that
 // tracks which orchestrator is currently running.
+//
+// LiveStream and VideoHLSDir describe the *default* (sequential) channel —
+// the one served at /api/audio/stream and /api/video/... without any channel
+// path segment. In parallel mode they are nil/"" and per-channel resources
+// come from Sessions.ChannelResources(id).
 type Deps struct {
 	Bus        *eventbus.Bus
 	LiveStream *audio.LiveStream
 	Sessions   *SessionRegistry
 	Log        *slog.Logger
 	// VideoHLSDir is the directory holding stream.m3u8 + segments. When empty,
-	// the /api/video/* routes return 404.
+	// the unprefixed /api/video/ route returns 404.
 	VideoHLSDir string
 }
 
@@ -111,14 +123,39 @@ func toDTO(l agent.TranscriptLine) transcriptDTO {
 	}
 }
 
+// topicsResponse is the body of GET /api/topics. It includes the queue mode so
+// the frontend can decide whether to scope its URLs by channel id.
+type topicsResponse struct {
+	Mode  Mode      `json:"mode"`
+	Items []Session `json:"items"`
+}
+
 func (s *Server) handleTopics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.d.Sessions.List())
+	_ = json.NewEncoder(w).Encode(topicsResponse{
+		Mode:  s.d.Sessions.Mode(),
+		Items: s.d.Sessions.List(),
+	})
+}
+
+// orchForRequest returns the orchestrator the request targets:
+//   - If ?channel=<id> is present, the registered orchestrator for that channel.
+//   - Otherwise the current sequential orchestrator (Sessions.Current()).
+//
+// Returns nil when no orchestrator matches.
+func (s *Server) orchForRequest(r *http.Request) *debate.Orchestrator {
+	if id := r.URL.Query().Get("channel"); id != "" {
+		if res := s.d.Sessions.ChannelResources(id); res != nil {
+			return res.Orch
+		}
+		return nil
+	}
+	return s.d.Sessions.Current()
 }
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	cur := s.d.Sessions.Current()
+	cur := s.orchForRequest(r)
 	if cur == nil {
 		_ = json.NewEncoder(w).Encode([]transcriptDTO{})
 		return
@@ -143,40 +180,55 @@ func envelope(v any) (eventEnvelope, bool) {
 	switch m := v.(type) {
 	case debate.TranscriptMsg:
 		return eventEnvelope{"transcript", map[string]any{
-			"speaker": m.Speaker, "role": string(m.Role), "side": m.Side,
+			"channel_id": m.ChannelID,
+			"speaker":    m.Speaker, "role": string(m.Role), "side": m.Side,
 			"text": m.Text, "done": m.Done,
 		}}, true
 	case debate.TickMsg:
 		return eventEnvelope{"tick", map[string]any{
+			"channel_id":   m.ChannelID,
 			"elapsed_ms":   m.Elapsed.Milliseconds(),
 			"remaining_ms": m.Remaining.Milliseconds(),
 		}}, true
 	case debate.PhaseMsg:
-		return eventEnvelope{"phase", map[string]any{"phase": m.Phase.String()}}, true
+		return eventEnvelope{"phase", map[string]any{
+			"channel_id": m.ChannelID,
+			"phase":      m.Phase.String(),
+		}}, true
 	case debate.StatusMsg:
-		return eventEnvelope{"status", map[string]any{"text": m.Text}}, true
+		return eventEnvelope{"status", map[string]any{
+			"channel_id": m.ChannelID,
+			"text":       m.Text,
+		}}, true
 	case debate.ErrorMsg:
 		text := ""
 		if m.Err != nil {
 			text = m.Err.Error()
 		}
-		return eventEnvelope{"error", map[string]any{"text": text}}, true
+		return eventEnvelope{"error", map[string]any{
+			"channel_id": m.ChannelID,
+			"text":       text,
+		}}, true
 	case debate.EndedMsg:
 		return eventEnvelope{"ended", map[string]any{
-			"transcript_path": m.TranscriptPath, "audio_path": m.AudioPath,
+			"channel_id":      m.ChannelID,
+			"transcript_path": m.TranscriptPath,
+			"audio_path":      m.AudioPath,
 		}}, true
 	case debate.TopicMsg:
 		return eventEnvelope{"topic", map[string]any{
-			"id":    m.ID,
-			"title": m.Title,
-			"index": m.Index,
-			"total": m.Total,
+			"channel_id": m.ChannelID,
+			"id":         m.ID,
+			"title":      m.Title,
+			"index":      m.Index,
+			"total":      m.Total,
 		}}, true
 	}
 	return eventEnvelope{}, false
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	channelFilter := r.URL.Query().Get("channel")
 	sse := newSSEWriter(w)
 	ch, cancel := s.d.Bus.Subscribe(128)
 	defer cancel()
@@ -201,6 +253,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			// In parallel mode each event is stamped with its channel id; an
+			// empty filter means "send everything" (sequential mode default).
+			if channelFilter != "" {
+				eid := debate.MsgChannelID(v)
+				if eid != "" && eid != channelFilter {
+					continue
+				}
+			}
 			env, fine := envelope(v)
 			if !fine {
 				continue
@@ -213,6 +273,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
+	live := s.liveStreamForRequest(r)
+	if live == nil {
+		http.Error(w, "no audio stream", http.StatusNotFound)
+		return
+	}
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -220,7 +285,7 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 
 	rc := http.NewResponseController(w)
 
-	ch, cancel := s.d.LiveStream.Subscribe(128)
+	ch, cancel := live.Subscribe(128)
 	defer cancel()
 
 	for {
@@ -239,45 +304,83 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// liveStreamForRequest picks the LiveStream the request targets.
+// /api/audio/<id>/stream → that channel's stream; /api/audio/stream → default.
+func (s *Server) liveStreamForRequest(r *http.Request) *audio.LiveStream {
+	const prefix = "/api/audio/"
+	rel := strings.TrimPrefix(r.URL.Path, prefix)
+	rel = strings.TrimSuffix(rel, "/stream")
+	if rel != "" && rel != "stream" {
+		// /api/audio/<id>/stream
+		if res := s.d.Sessions.ChannelResources(rel); res != nil {
+			return res.LiveStream
+		}
+		return nil
+	}
+	return s.d.LiveStream
+}
+
 // handleVideo serves the HLS playlist + segments produced by the encoder.
 // It refuses any path that would escape the configured HLS directory and only
 // serves files whose extensions are recognised HLS artefacts.
+//
+// URL shapes:
+//
+//	/api/video/<file>            (sequential — uses Deps.VideoHLSDir)
+//	/api/video/<channel>/<file>  (parallel — uses ChannelResources(channel).HLSDir)
 func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
-	if s.d.VideoHLSDir == "" {
-		http.Error(w, "video not enabled", http.StatusNotFound)
-		return
-	}
 	const prefix = "/api/video/"
 	rel := strings.TrimPrefix(r.URL.Path, prefix)
-	if rel == "" || strings.Contains(rel, "..") || strings.ContainsAny(rel, "\\/") && !isAllowedSegmentPath(rel) {
+	if rel == "" || strings.Contains(rel, "..") {
 		http.NotFound(w, r)
 		return
 	}
+
+	hlsDir, file := s.resolveVideoTarget(rel)
+	if hlsDir == "" {
+		http.Error(w, "video not enabled", http.StatusNotFound)
+		return
+	}
+	if file == "" || strings.ContainsAny(file, `/\`) {
+		http.NotFound(w, r)
+		return
+	}
+
 	switch {
-	case strings.HasSuffix(rel, ".m3u8"):
+	case strings.HasSuffix(file, ".m3u8"):
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-cache")
-	case strings.HasSuffix(rel, ".ts"):
+	case strings.HasSuffix(file, ".ts"):
 		w.Header().Set("Content-Type", "video/mp2t")
 		w.Header().Set("Cache-Control", "max-age=10")
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	full := filepath.Join(s.d.VideoHLSDir, rel)
+	full := filepath.Join(hlsDir, file)
 	// Final containment check after Join.
 	clean := filepath.Clean(full)
-	if !strings.HasPrefix(clean, filepath.Clean(s.d.VideoHLSDir)+string(filepath.Separator)) &&
-		clean != filepath.Clean(s.d.VideoHLSDir) {
+	if !strings.HasPrefix(clean, filepath.Clean(hlsDir)+string(filepath.Separator)) &&
+		clean != filepath.Clean(hlsDir) {
 		http.NotFound(w, r)
 		return
 	}
 	http.ServeFile(w, r, full)
 }
 
-// isAllowedSegmentPath rejects nested paths; HLS files live flat in HLSDir.
-func isAllowedSegmentPath(rel string) bool {
-	return !strings.ContainsAny(rel, `/\`)
+// resolveVideoTarget splits the path tail under /api/video/ into (HLSDir, file).
+// A single segment ("stream.m3u8") routes to the default sequential dir; two
+// segments ("<channel>/stream.m3u8") route to that channel's per-debate dir.
+func (s *Server) resolveVideoTarget(rel string) (hlsDir, file string) {
+	if i := strings.Index(rel, "/"); i > 0 {
+		channelID := rel[:i]
+		file = rel[i+1:]
+		if res := s.d.Sessions.ChannelResources(channelID); res != nil {
+			return res.HLSDir, file
+		}
+		return "", ""
+	}
+	return s.d.VideoHLSDir, rel
 }
 
 type postMessageReq struct {
@@ -300,9 +403,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty text", http.StatusBadRequest)
 		return
 	}
-	cur := s.d.Sessions.Current()
+	cur := s.orchForRequest(r)
 	if cur == nil {
-		http.Error(w, "no active topic", http.StatusServiceUnavailable)
+		http.Error(w, "no active debate", http.StatusServiceUnavailable)
 		return
 	}
 	cur.PushUserMessage(req.Text)

@@ -4,19 +4,42 @@ import { SpeakerHigh, WarningCircle } from '@phosphor-icons/react'
 
 type Mode = 'warming' | 'video' | 'audio-fallback'
 
-const HLS_URL = '/api/video/stream.m3u8'
 const WARMUP_MS = 60_000
 const POLL_MS = 1500
 
 interface VideoStageProps {
   phase: string
+  // channelId is set in parallel mode so /api/video/<id>/stream.m3u8 and the
+  // matching audio fallback URL point at this channel's encoder. Empty in
+  // sequential mode.
+  channelId?: string
 }
 
-export function VideoStage({ phase }: VideoStageProps) {
+export function VideoStage({ phase, channelId }: VideoStageProps) {
+  const hlsUrl = channelId
+    ? `/api/video/${encodeURIComponent(channelId)}/stream.m3u8`
+    : '/api/video/stream.m3u8'
+  const audioUrl = channelId
+    ? `/api/audio/${encodeURIComponent(channelId)}/stream`
+    : '/api/audio/stream'
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [mode, setMode] = useState<Mode>('warming')
   const [warmingText, setWarmingText] = useState('warming up the video stream')
   const [degraded, setDegraded] = useState(false)
+
+  // Reset all stream state synchronously when the channel switches. Without
+  // this, the old <video> element stays mounted with the previous channel's
+  // HLS attached until the warming poll for the new URL completes — and a
+  // pending channel never has a manifest, so it would just keep playing the
+  // old stream. Using the React "derived state on prop change" pattern (set
+  // state during render) avoids the brief flash an effect would produce.
+  const [stagedUrl, setStagedUrl] = useState(hlsUrl)
+  if (stagedUrl !== hlsUrl) {
+    setStagedUrl(hlsUrl)
+    setMode('warming')
+    setDegraded(false)
+    setWarmingText('warming up the video stream')
+  }
 
   // Phase 1: poll the manifest until ffmpeg has produced segments, then flip
   // mode to 'video'. This effect does not touch the <video> element itself —
@@ -28,7 +51,7 @@ export function VideoStage({ phase }: VideoStageProps) {
       const deadline = Date.now() + WARMUP_MS
       while (!cancelled && Date.now() < deadline) {
         try {
-          const resp = await fetch(HLS_URL, { method: 'HEAD', cache: 'no-store' })
+          const resp = await fetch(hlsUrl, { method: 'HEAD', cache: 'no-store' })
           if (resp.ok) {
             if (!cancelled) setMode('video')
             return
@@ -57,7 +80,8 @@ export function VideoStage({ phase }: VideoStageProps) {
     return () => {
       cancelled = true
     }
-  }, [])
+    // Re-warm when the channel changes so the new manifest gets polled.
+  }, [hlsUrl])
 
   // Phase 2: when the <video> element is mounted (mode==='video'), attach
   // hls.js. We do this in a separate effect so it runs *after* React commits
@@ -86,7 +110,7 @@ export function VideoStage({ phase }: VideoStageProps) {
 
     if (Hls.isSupported()) {
       hls = new Hls({ liveSyncDurationCount: 3, enableWorker: true })
-      hls.loadSource(HLS_URL)
+      hls.loadSource(hlsUrl)
       hls.attachMedia(player)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (!cancelled) tryPlay()
@@ -101,7 +125,7 @@ export function VideoStage({ phase }: VideoStageProps) {
         }
       })
     } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
-      player.src = HLS_URL
+      player.src = hlsUrl
       tryPlay()
     } else {
       setDegraded(true)
@@ -114,7 +138,7 @@ export function VideoStage({ phase }: VideoStageProps) {
       window.removeEventListener('pointerdown', onFirstGesture)
       if (hls) hls.destroy()
     }
-  }, [mode])
+  }, [mode, hlsUrl])
 
   const isLive = phase !== 'setup' && phase !== 'ended'
 
@@ -166,7 +190,7 @@ export function VideoStage({ phase }: VideoStageProps) {
             {warmingText}
           </p>
           <audio
-            src="/api/audio/stream"
+            src={audioUrl}
             controls
             autoPlay
             className="w-full"

@@ -11,3 +11,4 @@ internal/server/web-dist
 topics/*.md
 !internal/video/assets/*.png
 gen-assets
+channels

@@ -117,6 +117,17 @@ func (b *Base) Listen(ctx context.Context, line TranscriptLine) error {
 	if line.Speaker == b.name {
 		return nil
 	}
+	return b.recordLine(line)
+}
+
+// ListenSelf records the agent's OWN turn into its memory, bypassing the
+// self-skip in Listen. Opt-in path used by the host so it can see its own
+// past intros / handoffs / address-user lines and avoid recycling phrasing.
+func (b *Base) ListenSelf(ctx context.Context, line TranscriptLine) error {
+	return b.recordLine(line)
+}
+
+func (b *Base) recordLine(line TranscriptLine) error {
 	if b.mem == nil {
 		return nil
 	}
@@ -191,7 +202,10 @@ func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*ll
 	)
 	user := strings.Join(parts, "\n")
 	hist := []llm.Message{{Role: llm.RoleUser, Content: user}}
-	return b.llmC.Stream(ctx, system, hist, nil)
+	return b.llmC.StreamWithTools(ctx, system, hist, b.reg.AsOpenAIParams(),
+		func(ctx context.Context, name, jsonArgs string) (string, error) {
+			return b.reg.Dispatch(ctx, name, jsonArgs, b)
+		})
 }
 
 // latestOpposingLine scans recent transcript backwards for the most recent

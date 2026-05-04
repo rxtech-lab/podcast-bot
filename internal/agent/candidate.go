@@ -24,6 +24,7 @@ Directives:
   "opening"   — start by introducing yourself BY NAME (state "%s" and which side you represent) in one short sentence, then deliver your opening statement; if the opponent has already spoken, still rebut their last claim before pivoting to your case.
   "rebut"     — counter the opponent's most recent claim aggressively, then add one new attack of your own.
   "defend:<who>" — answer their attack on you, then redirect with a counter-attack.
+  "answer-user:<text>" — the audience just asked the supplied question and the host has handed you the floor. Open by addressing the question directly in 1–2 sentences from your side's position, then pivot back into the debate by hitting the opponent's most recent claim with a fresh angle. Do not duck the question, but do not abandon your side's position to chase it.
   "closing"   — summarise your strongest hits against the opposition and request the audience's support.
   "conclusion" — one or two heartfelt sentences reflecting on the debate.`, name, side, position, name)
 }

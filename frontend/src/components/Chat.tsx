@@ -10,7 +10,14 @@ import type { ChatLine } from '@/lib/types'
 // off-screen.
 const TEXTAREA_MAX_HEIGHT_PX = 160
 
-export function Chat({ history }: { history: ChatLine[] }) {
+interface ChatProps {
+  history: ChatLine[]
+  // channelId is set in parallel mode so user messages are routed to the right
+  // orchestrator. Empty in sequential mode (server uses the active topic).
+  channelId?: string
+}
+
+export function Chat({ history, channelId }: ChatProps) {
   const [draft, setDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -35,7 +42,7 @@ export function Chat({ history }: { history: ChatLine[] }) {
     if (!text) return
     setDraft('')
     try {
-      await sendMessage(text)
+      await sendMessage(text, channelId)
     } catch (err) {
       console.warn('send failed', err)
     }
