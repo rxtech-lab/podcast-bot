@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg" // register decoder so models that return JPEG round-trip
@@ -61,11 +62,80 @@ type Request struct {
 // through chat completions with modalities=["image"], not the
 // /v1/images/generations endpoint. Generate auto-detects those models and
 // dispatches the correct request shape.
+//
+// Transient failures (DNS/connection errors, 429, 5xx) are retried with
+// exponential backoff up to maxRetryAttempts; permanent errors
+// (auth/parse/decode/content-filter) fail immediately so we don't burn
+// time on calls that can never succeed.
 func (c *Client) Generate(ctx context.Context, req Request) ([]byte, error) {
-	if isGeminiImageModel(req.Model) {
-		return c.generateChatImage(ctx, req)
+	doOnce := func() ([]byte, error) {
+		if isGeminiImageModel(req.Model) {
+			return c.generateChatImage(ctx, req)
+		}
+		return c.generateImage(ctx, req)
 	}
-	return c.generateImage(ctx, req)
+	var lastErr error
+	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
+		if attempt > 0 {
+			wait := retryBackoff(attempt)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+		raw, err := doOnce()
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if !isRetryable(err) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("after %d attempts: %w", maxRetryAttempts, lastErr)
+}
+
+// maxRetryAttempts caps how many times we'll retry a transient image-gen
+// failure. Picked so a brief DNS / network hiccup (the failure mode that
+// took out a whole puzzle's scene generation in 6 ms) recovers without
+// blocking the orchestrator for too long on a sustained outage.
+const maxRetryAttempts = 4
+
+// retryBackoff is the wait before the (attempt+1)-th try: 750 ms, 1.5 s,
+// 3 s. A linear-exponential schedule rather than full jitter — the upstream
+// is a single Vercel gateway, so spreading retries across many goroutines
+// has limited value, and predictable timing keeps logs interpretable.
+func retryBackoff(attempt int) time.Duration {
+	base := 750 * time.Millisecond
+	mult := time.Duration(1) << (attempt - 1)
+	return base * mult
+}
+
+// retryableError marks errors the Generate retry loop should re-attempt.
+// Network failures (dial errors, DNS, mid-flight resets) and gateway
+// 429/5xx wrap into this type; permanent errors (auth, parse, decode,
+// content-filter) do not, so they fail fast.
+type retryableError struct{ err error }
+
+func (e *retryableError) Error() string { return e.err.Error() }
+func (e *retryableError) Unwrap() error { return e.err }
+
+func retryable(err error) error { return &retryableError{err: err} }
+
+func isRetryable(err error) bool {
+	var r *retryableError
+	return errors.As(err, &r)
+}
+
+// isTransientStatus reports whether a gateway HTTP status code is worth
+// retrying. 429 (rate-limit) and 5xx (server-side outage / bad gateway)
+// are; 4xx (auth, bad request, content-filter) are not.
+func isTransientStatus(code int) bool {
+	if code == http.StatusTooManyRequests {
+		return true
+	}
+	return code/100 == 5
 }
 
 func (c *Client) generateImage(ctx context.Context, req Request) ([]byte, error) {
@@ -96,13 +166,17 @@ func (c *Client) generateImage(ctx context.Context, req Request) ([]byte, error)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, retryable(err)
 	}
 	defer resp.Body.Close()
 
 	rawResp, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("gateway %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		statusErr := fmt.Errorf("gateway %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		if isTransientStatus(resp.StatusCode) {
+			return nil, retryable(statusErr)
+		}
+		return nil, statusErr
 	}
 
 	var parsed struct {
@@ -148,13 +222,17 @@ func (c *Client) generateChatImage(ctx context.Context, req Request) ([]byte, er
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, retryable(err)
 	}
 	defer resp.Body.Close()
 
 	rawResp, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("gateway chat %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		statusErr := fmt.Errorf("gateway chat %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		if isTransientStatus(resp.StatusCode) {
+			return nil, retryable(statusErr)
+		}
+		return nil, statusErr
 	}
 
 	var parsed struct {

@@ -40,7 +40,9 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // musicVolume is the linear gain applied to the background bed
@@ -89,6 +91,16 @@ type Mixer struct {
 	// reader; bounded so a runaway producer can't accumulate
 	// unbounded memory.
 	ttsCh chan []byte
+
+	// ttsPCMIngested / ttsPCMDrained count TTS PCM bytes queued by
+	// ttsReader vs drained by mixLoop. Their difference is the audio
+	// currently buffered between mixer.Write and the encoder — bytes
+	// the producer has already pushed in but that haven't reached
+	// LiveStream yet. BufferedAudio() exposes this so the pipeline's
+	// subtitle playhead can account for the mixer-side lag that
+	// LiveStream.BytesAhead can't see.
+	ttsPCMIngested atomic.Uint64
+	ttsPCMDrained  atomic.Uint64
 
 	pumpDone   chan struct{}
 	mixDone    chan struct{}
@@ -281,12 +293,38 @@ func (m *Mixer) ttsReader() {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
+			m.ttsPCMIngested.Add(uint64(n))
 			m.ttsCh <- chunk
 		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// pcmBytesPerSec is the byte rate of the s16le mono PCM that flows
+// between ttsReader and mixLoop — used to convert the
+// ingested-minus-drained byte deficit into an audio-time duration
+// for BufferedAudio.
+const pcmBytesPerSec = pcmSampleRate * pcmChannels * pcmSampleBytes
+
+// BufferedAudio reports how much TTS audio is queued inside the
+// mixer between Write() and the mix loop's drain pointer. The
+// pipeline adds this to its subtitle playhead so a fast burst of
+// TTS bytes (typical of the puzzle Q&A, where short turns synth
+// faster than 1× realtime) doesn't make TranscriptMsgs fire ahead
+// of the audio they describe — without this, the subtitle visibly
+// ends before its audio does.
+func (m *Mixer) BufferedAudio() time.Duration {
+	if m == nil {
+		return 0
+	}
+	ingested := m.ttsPCMIngested.Load()
+	drained := m.ttsPCMDrained.Load()
+	if ingested <= drained {
+		return 0
+	}
+	return time.Duration(ingested-drained) * time.Second / pcmBytesPerSec
 }
 
 // mixLoop is the heart of the mixer. It reads music PCM at the
@@ -324,6 +362,10 @@ func (m *Mixer) mixLoop() {
 		}
 
 		mixInto(music, residual, musicVolume)
+		drained := min(len(music), len(residual))
+		if drained > 0 {
+			m.ttsPCMDrained.Add(uint64(drained))
+		}
 		if len(residual) >= len(music) {
 			residual = residual[len(music):]
 		} else {
