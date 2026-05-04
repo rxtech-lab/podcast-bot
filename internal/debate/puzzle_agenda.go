@@ -45,15 +45,20 @@ type puzzleState struct {
 	playerRR        int  // round-robin cursor across Players
 	qaCount         int  // number of completed player→host Q&A exchanges
 	awaitingAnswer  bool // a player has just asked; the next turn must be the host's answer
-	lastQuestion    string
 	lastWasProposal bool // last directive was propose-solution rather than ask-question
+	// playerSpoken tracks which players have already taken a turn. Used to
+	// emit "ask-question-first" on a player's debut so the LLM knows whether
+	// to introduce itself; subsequent turns get "ask-question" and skip the
+	// intro. Without this distinction every player kept opening with "我是X"
+	// on every turn because the directive looked identical.
+	playerSpoken map[string]bool
 
 	endRequested  bool
 	revealEmitted bool
 
 	// Conclusion round: each player speaks once, then the host signs off.
-	conclIdx     int
-	signoffSent  bool
+	conclIdx    int
+	signoffSent bool
 }
 
 // askViewerEvery sets how many Q&A rounds elapse between viewer probes during
@@ -138,14 +143,17 @@ func (p *PuzzlePlanner) planQA(ctx context.Context) (*Turn, bool) {
 		return p.planReveal()
 	}
 
-	// Host answers the player's most recent question.
+	// Host answers the player's most recent question. Embed the actual
+	// question text (pulled from the just-appended transcript line) into the
+	// directive so the host LLM doesn't have to hunt for it among recent
+	// transcript lines and mis-classify it as a meta question.
 	if p.state.awaitingAnswer {
 		p.state.awaitingAnswer = false
-		directive := "answer:" + p.state.lastQuestion
+		question := p.lastPlayerOrViewerText()
+		directive := "answer:" + question
 		if p.state.lastWasProposal {
-			directive = "evaluate-solution:" + p.state.lastQuestion
+			directive = "evaluate-solution:" + question
 		}
-		p.state.lastQuestion = ""
 		p.state.lastWasProposal = false
 		p.state.qaCount++
 		return p.makeTurn(p.registry.PuzzleHost, directive, p.budgetSeconds(15)), true
@@ -156,7 +164,6 @@ func (p *PuzzlePlanner) planQA(ctx context.Context) (*Turn, bool) {
 	// viewer is silent; we just fall through to the next player.
 	if p.state.qaCount > 0 && p.state.qaCount%askViewerEvery == 0 && len(p.registry.Viewers) > 0 {
 		if v, q := p.askAnyViewer(ctx); v != nil {
-			p.state.lastQuestion = q
 			p.state.awaitingAnswer = true
 			return p.makeTurn(v, "ask:"+q, p.budgetSeconds(20)), true
 		}
@@ -171,21 +178,51 @@ func (p *PuzzlePlanner) planQA(ctx context.Context) (*Turn, bool) {
 	pl := p.registry.Players[p.state.playerRR%len(p.registry.Players)]
 	p.state.playerRR++
 
+	// Mark this player as having spoken so subsequent turns get the
+	// "ask-question" directive (no re-introduction). First-turn directive
+	// "ask-question-first" is the LLM's only signal that it should open with
+	// "我是<name>" — the system prompt alone wasn't reliable.
+	firstTurn := false
+	if p.state.playerSpoken == nil {
+		p.state.playerSpoken = map[string]bool{}
+	}
+	if !p.state.playerSpoken[pl.Name()] {
+		firstTurn = true
+		p.state.playerSpoken[pl.Name()] = true
+	}
+
 	// Heuristic: every (askViewerEvery * 2) rounds, ask a player to attempt a
 	// full solution rather than another yes/no question. This keeps the round
 	// from running forever when nobody volunteers a guess. The host's
 	// evaluate-solution response will generally not give the truth away.
 	directive := "ask-question"
+	if firstTurn {
+		directive = "ask-question-first"
+	}
 	if p.state.qaCount > 0 && p.state.qaCount%(askViewerEvery*2) == 0 {
 		directive = "propose-solution"
 		p.state.lastWasProposal = true
 	}
-	// Stash the directive marker for the host's follow-up. The actual question
-	// text is captured from the produced transcript via Recent in the host's
-	// prompt; we just need to know which evaluator branch to take.
-	p.state.lastQuestion = directive
 	p.state.awaitingAnswer = true
 	return p.makeTurn(pl, directive, p.segmentSeconds()), true
+}
+
+// lastPlayerOrViewerText returns the most recent player or viewer line in the
+// transcript — i.e. the question the host is being asked to answer. Falls back
+// to "" when no such line exists yet (the host's prompt then degrades to
+// scanning the recent-transcript block as before).
+func (p *PuzzlePlanner) lastPlayerOrViewerText() string {
+	if p.transcript == nil {
+		return ""
+	}
+	lines := p.transcript.RecentN(8)
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := lines[i]
+		if l.Role == agent.RolePlayer || l.Role == agent.RoleViewer {
+			return strings.TrimSpace(l.Text)
+		}
+	}
+	return ""
 }
 
 // planReveal emits one host turn that reveals the truth, then advances to the

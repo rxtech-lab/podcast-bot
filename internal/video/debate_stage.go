@@ -85,7 +85,7 @@ func (s *DebateStage) Run(ctx context.Context, bus *eventbus.Bus) {
 			case debate.TranscriptMsg:
 				s.handleTranscript(m)
 			case debate.PhaseMsg:
-				s.enc.SetPhase(m.Phase.String())
+				s.enc.SetPhase(phaseChipText(m))
 			case debate.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
 			}

@@ -1,10 +1,47 @@
 package debate
 
 import (
+	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
+	"github.com/sirily11/debate-bot/internal/config"
 )
+
+// PhaseLabel returns the human-readable phase name for the given content
+// type. Single source of truth for both the video renderer's on-frame
+// chip and the SSE PhaseMsg.Label field, so frontends never need to map
+// phase IDs to text themselves.
+func PhaseLabel(contentType string, p agent.Phase) string {
+	switch contentType {
+	case config.ContentTypeSituationPuzzle:
+		switch p {
+		case agent.PhaseSetup, agent.PhaseOpening:
+			return "出題"
+		case agent.PhaseFreeSpeech:
+			return "問答"
+		case agent.PhaseVerdict:
+			return "揭曉"
+		case agent.PhaseEnded, agent.PhaseConclusion:
+			return "總結"
+		}
+	default:
+		// Debate (and unknown types — match the existing on-frame chip).
+		switch p {
+		case agent.PhaseOpening:
+			return "立論"
+		case agent.PhaseFreeSpeech:
+			return "自由辯論"
+		case agent.PhaseClosing:
+			return "結辯"
+		case agent.PhaseVerdict:
+			return "判決"
+		case agent.PhaseConclusion:
+			return "總結"
+		}
+	}
+	return strings.ToUpper(p.String())
+}
 
 // Tea-style messages the orchestrator pushes to the TUI via Send.
 // They are defined here (not in tui/) so the orchestrator does not depend on tui.
@@ -39,9 +76,18 @@ type TickMsg struct {
 }
 
 // PhaseMsg announces a phase change.
+//
+// Label is the human-readable phase name, content-type aware so the
+// frontend can show "問答" during a puzzle's Q&A round and "自由辯論"
+// during a debate's free-speech round without baking that mapping into
+// the client. The pipeline stamps it at emit time using the topic's
+// content type. Type carries the content discriminator (mirrors
+// TopicMsg.Type) so the frontend can also adjust styling by format.
 type PhaseMsg struct {
 	ChannelID string
 	Phase     agent.Phase
+	Label     string
+	Type      string
 }
 
 // StatusMsg pushes a status-line note (e.g. "MCP server X connected").
@@ -135,6 +181,8 @@ func StampChannelID(v any, id string) any {
 	case PhaseMsg:
 		m.ChannelID = id
 		return m
+	// Note: Label / Type fields on PhaseMsg are content-derived and don't
+	// need touching here — orchestrator stamps them at emit time.
 	case StatusMsg:
 		m.ChannelID = id
 		return m

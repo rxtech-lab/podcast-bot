@@ -37,6 +37,12 @@ type Orchestrator struct {
 	Send       func(any)
 	Log        *slog.Logger
 	LiveStream *audio.LiveStream
+
+	// puzzleMusic maps planner directive → mp3 path for situation-puzzle
+	// turns that should play with a Lyria background bed underneath the
+	// host's TTS. Populated by the caller via SetPuzzleMusic before Run.
+	// Empty when music generation failed or for non-puzzle topics.
+	puzzleMusic map[string]string
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.
@@ -228,6 +234,18 @@ func (o *Orchestrator) newPlanner() Planner {
 	return NewDebatePlanner(o.Topic, o.Tracker, o.Registry, o.Queue, o.Transcript)
 }
 
+// SetPuzzleMusic installs the per-directive music file map for the
+// upcoming pipeline run. Caller (cmd/debate-bot) populates this after
+// musicgen.Generate finishes so the surface and reveal turns mix the
+// generated bed under the host's TTS. No-op if music is empty or nil.
+// Must be called before Run.
+func (o *Orchestrator) SetPuzzleMusic(music map[string]string) {
+	if len(music) == 0 {
+		return
+	}
+	o.puzzleMusic = music
+}
+
 // Run executes Setup then drives the pipeline. Blocks until the planner finishes.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	if err := o.Setup(ctx); err != nil {
@@ -238,8 +256,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		Planner: planner, Tracker: o.Tracker, Registry: o.Registry,
 		TTS: o.TTS, OutDir: o.Env.OutDir,
 		Send: o.Send, Log: o.Log,
-		Topic: o.Topic.Title, Language: o.Topic.Language, Transcript: o.Transcript,
-		LiveStream: o.LiveStream,
+		Topic: o.Topic.Title, Language: o.Topic.Language,
+		ContentType: o.Topic.Type,
+		Transcript:  o.Transcript,
+		LiveStream:  o.LiveStream,
+		MusicPaths:  o.puzzleMusic,
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

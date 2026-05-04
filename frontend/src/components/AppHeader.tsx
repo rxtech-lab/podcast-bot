@@ -10,16 +10,10 @@ function fmtMs(ms: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
 }
 
-const phaseLabel: Record<string, string> = {
-  setup: 'setting up',
-  opening: 'opening statements',
-  'free-debate': 'free debate',
-  closing: 'closing statements',
-  verdict: "judge's verdict",
-  conclusion: 'conclusion',
-  ended: 'ended',
-}
-
+// phaseStyle is purely visual — color/ring tokens keyed by the raw phase
+// id. The human-readable label text is sent by the server (PhaseMsg.Label)
+// so the frontend stays content-type agnostic ("問答" for puzzle Q&A vs
+// "自由辯論" for debate free-speech is decided server-side).
 const phaseStyle: Record<string, string> = {
   setup:
     'bg-muted/60 text-muted-foreground ring-border',
@@ -39,6 +33,7 @@ const phaseStyle: Record<string, string> = {
 
 interface AppHeaderProps {
   phase: string
+  phaseLabel: string
   elapsedMs: number
   remainingMs: number
   status: string
@@ -48,6 +43,7 @@ interface AppHeaderProps {
 
 export function AppHeader({
   phase,
+  phaseLabel,
   elapsedMs,
   remainingMs,
   status,
@@ -57,7 +53,10 @@ export function AppHeader({
   const total = elapsedMs + remainingMs
   const pct = total > 0 ? Math.min(100, (elapsedMs / total) * 100) : 0
   const isLive = phase !== 'setup' && phase !== 'ended'
-  const label = phaseLabel[phase] ?? phase
+  // Server provides the label; fall back to the raw phase id so the pill
+  // never goes blank if the server omits it (e.g. older event with no
+  // label field).
+  const label = phaseLabel || phase
   const pillClass = phaseStyle[phase] ?? phaseStyle.setup
 
   return (

@@ -16,6 +16,7 @@ package video
 import (
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"log/slog"
 	"os"
@@ -261,6 +262,17 @@ func (e *Encoder) SetSides(aff, neg []string) { e.rend.SetSides(aff, neg) }
 // SetPositions sets each side's position statement (the stance they argue
 // for), drawn as small footer text inside the side panels.
 func (e *Encoder) SetPositions(aff, neg string) { e.rend.SetPositions(aff, neg) }
+
+// SetPuzzleMode toggles the cinematic puzzle layout — minimal chrome over
+// AI-generated scene backgrounds. PuzzleStage flips this on when a puzzle
+// topic activates and off when it idles.
+func (e *Encoder) SetPuzzleMode(b bool) { e.rend.SetPuzzleMode(b) }
+
+// SetSceneBackground swaps the active scene image, crossfading from the
+// previous one. Pass nil to clear (renderer falls back to its default bg
+// plate). Used by PuzzleStage on TopicMsg + PhaseMsg as the puzzle moves
+// surface → Q&A → reveal → conclusion.
+func (e *Encoder) SetSceneBackground(img *image.RGBA) { e.rend.SetSceneBackground(img) }
 
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).

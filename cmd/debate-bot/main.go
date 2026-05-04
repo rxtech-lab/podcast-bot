@@ -17,12 +17,15 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/audio"
+	"github.com/sirily11/debate-bot/internal/audio/musicgen"
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/debate"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/util"
 	"github.com/sirily11/debate-bot/internal/video"
+	"github.com/sirily11/debate-bot/internal/video/imagegen"
+	"github.com/sirily11/debate-bot/internal/video/scenes"
 	"github.com/sirily11/debate-bot/internal/watcher"
 )
 
@@ -81,6 +84,8 @@ usage:
 env (loaded from .env if present):
   OPENAI_BASE_URL   OPENAI_API_KEY   HOST_MODEL
   COMPRESSION_BASE_URL   COMPRESSION_API_KEY   COMPRESSION_MODEL
+  GEMINI_API_KEY                            (required — drives Lyria music
+                                              and Gemini scene image gen)
   AZURE_SPEECH_KEY   AZURE_SPEECH_REGION   (required when tts_provider=azure)
   ELEVENLABS_API_KEY                        (required when tts_provider=eleven)
   OUT_DIR (optional, default ./out)`)
@@ -183,10 +188,11 @@ func (q *debateQueue) Pop(ctx context.Context) (loadedDebate, bool) {
 // live and enc are nil for off-air channels (no debates queued AND no watcher
 // pre-initialised encoder).
 type channelRuntime struct {
-	def   config.Channel
-	queue *debateQueue
-	live  *audio.LiveStream
-	enc   *video.Encoder
+	def         config.Channel
+	queue       *debateQueue
+	live        *audio.LiveStream
+	enc         *video.Encoder
+	puzzleStage *video.PuzzleStage // retained so scene generators can call AttachScenes
 
 	// counterMu protects total + started, which feed the live TopicMsg.Total
 	// and Index values. Both grow over the channel's lifetime: total
@@ -591,6 +597,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 			// third stage here without disturbing the existing two.
 			debateStage := video.NewDebateChannelStage(enc, ch.ID)
 			puzzleStage := video.NewPuzzleChannelStage(enc, ch.ID)
+			cr.puzzleStage = puzzleStage
 			go debateStage.Run(ctx, bus)
 			go puzzleStage.Run(ctx, bus)
 		}
@@ -734,7 +741,36 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		fmt.Fprintf(os.Stdout, "▶ ch %d [%s] starting debate %d/%d — %s\n",
 			ch.def.Number, ch.def.ID, i+1, total, d.title)
 
+		// Send TopicMsg FIRST so the puzzle stage activates immediately
+		// with the title + "today's puzzle" idle decoration visible to
+		// viewers — they get a clean "preparing scene…" screen instead of
+		// staring at a stale frame from the previous topic.
 		send(buildTopicMsg(d, i, total))
+
+		// Situation-puzzle: BLOCK on asset generation before starting
+		// the orchestrator (so the host doesn't start narrating before the
+		// surface scene is on screen and the music bed is ready). Renderer
+		// shows the puzzle idle layout during the wait. Cached runs hit
+		// disk in <100ms so this is only painful on first generation.
+		// Scenes (Gemini image) and music (Lyria) generate in parallel.
+		if d.topic.Type == config.ContentTypeSituationPuzzle && ch.puzzleStage != nil {
+			scenesCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-bgs")
+			musicCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-music")
+			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] generating puzzle scene bgs + music (this can take ~90s on first run)\n",
+				ch.def.Number, ch.def.ID)
+			music := generatePuzzleAssets(r.ctx, r.log, ch.puzzleStage, d.topic,
+				scenesCacheDir, musicCacheDir)
+			if music != nil {
+				m := map[string]string{}
+				if music.SurfacePath != "" {
+					m[musicgen.PhaseSurface] = music.SurfacePath
+				}
+				if music.RevealPath != "" {
+					m[musicgen.PhaseReveal] = music.RevealPath
+				}
+				orch.SetPuzzleMusic(m)
+			}
+		}
 
 		runErr := orch.Run(r.ctx)
 		orch.Shutdown()
@@ -928,6 +964,76 @@ func agentNames(specs []config.AgentSpec) []string {
 		out[i] = s.Name
 	}
 	return out
+}
+
+// generatePuzzleAssets builds the four scene backgrounds AND the two
+// music beds for a single puzzle topic in parallel, then hands the
+// scenes to the channel's PuzzleStage and returns the music paths to
+// the caller (which forwards them into orch.SetPuzzleMusic).
+//
+// Logs but never propagates errors — missing scenes leave the renderer
+// on its default bg, missing music leaves the surface/reveal turns on
+// dry TTS. A returned nil *PuzzleMusic means caller should not bother
+// forwarding music to the orchestrator at all.
+func generatePuzzleAssets(ctx context.Context, log *slog.Logger,
+	ps *video.PuzzleStage, topic *config.DebateTopic,
+	scenesCacheDir, musicCacheDir string) *musicgen.PuzzleMusic {
+
+	var (
+		wg       sync.WaitGroup
+		musicOut *musicgen.PuzzleMusic
+	)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		client, err := imagegen.New("")
+		if err != nil {
+			log.Warn("puzzle scene gen disabled", "err", err)
+			return
+		}
+		t0 := time.Now()
+		sc, err := scenes.Generate(ctx, client, topic, scenesCacheDir)
+		if err != nil {
+			log.Warn("puzzle scene gen partial",
+				"title", topic.Title,
+				"elapsed", time.Since(t0).Round(time.Millisecond),
+				"err", err)
+		} else {
+			log.Info("puzzle scenes ready",
+				"title", topic.Title,
+				"elapsed", time.Since(t0).Round(time.Millisecond))
+		}
+		if sc != nil {
+			ps.AttachScenes(sc)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		client, err := musicgen.New("")
+		if err != nil {
+			log.Warn("puzzle music gen disabled", "err", err)
+			return
+		}
+		t0 := time.Now()
+		pm, err := musicgen.Generate(ctx, client, topic, musicCacheDir)
+		if err != nil {
+			log.Warn("puzzle music gen partial",
+				"title", topic.Title,
+				"elapsed", time.Since(t0).Round(time.Millisecond),
+				"err", err)
+		} else {
+			log.Info("puzzle music ready",
+				"title", topic.Title,
+				"elapsed", time.Since(t0).Round(time.Millisecond))
+		}
+		musicOut = pm
+	}()
+
+	wg.Wait()
+	return musicOut
 }
 
 // buildTopicMsg shapes the per-content-type TopicMsg the video stage consumes.

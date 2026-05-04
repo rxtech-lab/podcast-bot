@@ -16,6 +16,9 @@ import type {
 export interface DebateState {
   history: ChatLine[]
   phase: string
+  // Server-provided label for the current phase. Display this directly
+  // — it's already content-type aware ("問答" vs "自由辯論").
+  phaseLabel: string
   elapsedMs: number
   remainingMs: number
   status: string
@@ -29,7 +32,7 @@ export interface DebateState {
 type Action =
   | { kind: 'history'; lines: ChatLine[] }
   | { kind: 'append'; line: ChatLine }
-  | { kind: 'phase'; phase: string }
+  | { kind: 'phase'; phase: string; label: string }
   | { kind: 'tick'; elapsedMs: number; remainingMs: number }
   | { kind: 'status'; text: string }
   | { kind: 'channels'; channels: ChannelInfo[] }
@@ -39,6 +42,7 @@ type Action =
 const initialState: DebateState = {
   history: [],
   phase: 'setup',
+  phaseLabel: '',
   elapsedMs: 0,
   remainingMs: 0,
   status: '',
@@ -55,7 +59,7 @@ function reducer(state: DebateState, action: Action): DebateState {
     case 'append':
       return { ...state, history: [...state.history, action.line] }
     case 'phase':
-      return { ...state, phase: action.phase }
+      return { ...state, phase: action.phase, phaseLabel: action.label }
     case 'tick':
       return {
         ...state,
@@ -73,6 +77,7 @@ function reducer(state: DebateState, action: Action): DebateState {
         ...state,
         history: [],
         phase: 'setup',
+        phaseLabel: '',
         elapsedMs: 0,
         remainingMs: 0,
         status: '',
@@ -87,6 +92,7 @@ function reducer(state: DebateState, action: Action): DebateState {
         ...state,
         history: [],
         phase: 'setup',
+        phaseLabel: '',
         elapsedMs: 0,
         remainingMs: 0,
         status: '',
@@ -230,7 +236,7 @@ export function useDebateEvents() {
     es.addEventListener('phase', (ev) => {
       const m = JSON.parse((ev as MessageEvent).data) as PhaseEvent
       if (!accepts(m.channel_id)) return
-      dispatch({ kind: 'phase', phase: m.phase })
+      dispatch({ kind: 'phase', phase: m.phase, label: m.label || '' })
     })
 
     es.addEventListener('status', (ev) => {

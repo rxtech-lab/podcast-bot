@@ -13,6 +13,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/audio"
+	"github.com/sirily11/debate-bot/internal/audio/musicmixer"
 	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/tts"
 )
@@ -28,19 +29,37 @@ type Deps struct {
 	Log        *slog.Logger
 	Topic      string
 	Language   string
-	Transcript *Transcript
-	LiveStream *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
+	// ContentType is the topic.Type discriminator (config.ContentType*).
+	// Stamped onto PhaseMsg so the frontend can label phases without
+	// hardcoding the per-format mapping.
+	ContentType string
+	Transcript  *Transcript
+	LiveStream  *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
+
+	// MusicPaths maps planner directive prefix → mp3 file path for turns
+	// that should play with a Lyria-generated background bed mixed under
+	// the host's TTS. Today the situation-puzzle planner uses keys
+	// "surface" and "reveal"; other content types leave this nil.
+	// pipeline.produce looks the key up by t.Directive (matching either
+	// the bare directive or its prefix before any ":") and routes that
+	// turn's TTS through musicmixer.New. Empty/missing key → dry TTS.
+	MusicPaths map[string]string
 }
 
 // subtitleClientLatency compensates for buffering that happens after the
 // LiveStream's stdout — primarily the browser MediaSource source buffer
-// (~1.5s on Chromium for low-bitrate MP3) and any OS audio buffering. The
-// renderer's TranscriptMsg dispatch is delayed by bytesAhead/rate +
+// (~1.5–2s on Chromium for low-bitrate MP3) and any OS audio buffering.
+// The renderer's TranscriptMsg dispatch is delayed by bytesAhead/rate +
 // subtitleClientLatency so the subtitle change lands when the listener
 // actually starts hearing the new sentence.
 //
-// Tune up if subtitles still beat the audio; tune down if subtitles lag.
-const subtitleClientLatency = 1500 * time.Millisecond
+// Bumped 1500ms → 2300ms → 3100ms. The latest bump was driven by the
+// puzzle Q&A and conclusion sections: their short turns mean BytesAhead
+// drops near zero between turns, so the bytesAhead/rate term contributes
+// almost nothing and clientLatency alone has to cover the full
+// browser/OS buffering chain. With turns < 3s the constant becomes the
+// dominant offset and 2300ms wasn't enough.
+const subtitleClientLatency = 3100 * time.Millisecond
 
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
@@ -89,7 +108,11 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		defer close(producedCh)
 		for t := range turnCh {
 			if t.Phase != lastPhase {
-				p.d.Send(PhaseMsg{Phase: t.Phase})
+				p.d.Send(PhaseMsg{
+					Phase: t.Phase,
+					Type:  p.d.ContentType,
+					Label: PhaseLabel(p.d.ContentType, t.Phase),
+				})
 				lastPhase = t.Phase
 			}
 			start := time.Now()
@@ -139,6 +162,35 @@ func (p *Pipeline) tickLoop(ctx context.Context) {
 	}
 }
 
+// musicPathFor returns the on-disk mp3 path for the music bed that
+// should mix under this turn's TTS, or "" if no music applies.
+//
+// The lookup tries the full directive first, then the prefix before
+// any ":" — the puzzle planner emits bare "surface"/"reveal" today,
+// but if a future directive carries a payload (e.g. "reveal:short"),
+// the prefix match still finds the right music. Files that don't
+// exist on disk fall through to "" so a partial musicgen failure
+// degrades gracefully to dry TTS.
+func (p *Pipeline) musicPathFor(t *Turn) string {
+	if len(p.d.MusicPaths) == 0 {
+		return ""
+	}
+	candidates := []string{t.Directive}
+	if i := strings.Index(t.Directive, ":"); i > 0 {
+		candidates = append(candidates, t.Directive[:i])
+	}
+	for _, k := range candidates {
+		path := p.d.MusicPaths[k]
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 // produce runs the LLM stream sentence-by-sentence and synthesizes each
 // sentence to MP3, writing every chunk to the shared LiveStream broadcaster
 // AND a per-turn file (so the end-of-run ConcatToMP3 keeps working).
@@ -181,7 +233,35 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	// Audio sink: tee to the shared livestream (paced via ffmpeg -re) and the
 	// per-turn file. Writes are serialized within this goroutine, so a plain
 	// MultiWriter is safe.
-	sink := io.MultiWriter(turnFile, p.d.LiveStream)
+	//
+	// For situation-puzzle surface and reveal turns we additionally route
+	// the LiveStream side through an ffmpeg amix wrapper that mixes a
+	// pre-generated Lyria background bed underneath the TTS. The per-turn
+	// file always receives the dry TTS so end-of-run ConcatToMP3 produces
+	// an unmixed archive.
+	liveSink := io.Writer(p.d.LiveStream)
+	var mixer *musicmixer.Mixer
+	if musicPath := p.musicPathFor(t); musicPath != "" {
+		m, mErr := musicmixer.New(musicPath, p.d.LiveStream)
+		if mErr != nil {
+			p.d.Log.Warn("music mixer disabled — falling back to dry TTS",
+				"turn", t.ID, "directive", t.Directive, "err", mErr)
+		} else {
+			mixer = m
+			liveSink = m
+			p.d.Log.Info("music mixer attached",
+				"turn", t.ID, "directive", t.Directive, "music", musicPath)
+		}
+	}
+	defer func() {
+		if mixer != nil {
+			if cerr := mixer.Close(); cerr != nil {
+				p.d.Log.Warn("music mixer close",
+					"turn", t.ID, "directive", t.Directive, "err", cerr)
+			}
+		}
+	}()
+	sink := io.MultiWriter(turnFile, liveSink)
 	wroteAny := false
 
 	splitter := &audio.SentenceSplitter{}

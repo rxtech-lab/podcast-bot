@@ -26,6 +26,7 @@ function App() {
   const {
     history,
     phase,
+    phaseLabel,
     elapsedMs,
     remainingMs,
     status,
@@ -89,6 +90,7 @@ function App() {
       <div className="relative flex h-full flex-col">
         <AppHeader
           phase={phase}
+          phaseLabel={phaseLabel}
           elapsedMs={elapsedMs}
           remainingMs={remainingMs}
           status={status}

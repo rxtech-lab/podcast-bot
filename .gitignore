@@ -12,3 +12,5 @@ topics/*.md
 !internal/video/assets/*.png
 gen-assets
 channels
+debate-bot
+music-smoke

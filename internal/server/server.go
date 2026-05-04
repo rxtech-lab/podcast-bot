@@ -253,9 +253,15 @@ func envelope(v any) (eventEnvelope, bool) {
 			"remaining_ms": m.Remaining.Milliseconds(),
 		}}, true
 	case debate.PhaseMsg:
+		// label is the human-readable text the orchestrator stamped at
+		// emit time, content-type aware ("問答" for puzzle Q&A vs
+		// "自由辯論" for debate free-speech). Frontend should display
+		// label as-is rather than mapping `phase` itself.
 		return eventEnvelope{"phase", map[string]any{
 			"channel_id": m.ChannelID,
 			"phase":      m.Phase.String(),
+			"label":      m.Label,
+			"type":       m.Type,
 		}}, true
 	case debate.StatusMsg:
 		return eventEnvelope{"status", map[string]any{
@@ -282,6 +288,7 @@ func envelope(v any) (eventEnvelope, bool) {
 			"channel_id": m.ChannelID,
 			"id":         m.ID,
 			"title":      m.Title,
+			"type":       m.Type,
 			"index":      m.Index,
 			"total":      m.Total,
 		}}, true

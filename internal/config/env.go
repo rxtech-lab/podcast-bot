@@ -25,6 +25,12 @@ type Env struct {
 
 	ElevenLabsAPIKey string
 
+	// GeminiAPIKey authenticates against Google's Generative Language REST
+	// endpoints (image / music generation). Required at startup so puzzle
+	// asset generation can run unconditionally — debate-only deployments
+	// still need it set even though they won't call the endpoint.
+	GeminiAPIKey string
+
 	OutDir string
 }
 
@@ -47,6 +53,7 @@ func LoadEnv() (*Env, error) {
 		AzureSpeechKey:     strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
 		AzureSpeechRegion:  strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
 		ElevenLabsAPIKey:   strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
+		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		OutDir:             strings.TrimSpace(os.Getenv("OUT_DIR")),
 	}
 
@@ -72,6 +79,9 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.CompressionModel == "" {
 		missing = append(missing, "COMPRESSION_MODEL")
+	}
+	if e.GeminiAPIKey == "" {
+		missing = append(missing, "GEMINI_API_KEY")
 	}
 	// Provider-specific keys (Azure, ElevenLabs) are NOT required here —
 	// the orchestrator validates the credentials matching the chosen

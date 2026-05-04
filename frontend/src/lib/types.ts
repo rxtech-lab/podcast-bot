@@ -31,6 +31,11 @@ export interface TickEvent {
 export interface PhaseEvent {
   channel_id?: string
   phase: string
+  // Server-stamped human-readable label, content-type aware (e.g. "問答"
+  // for puzzle Q&A, "自由辯論" for debate free-speech). Frontend should
+  // display this directly rather than mapping `phase` itself.
+  label?: string
+  type?: string
 }
 
 export interface StatusEvent {
@@ -81,6 +86,7 @@ export interface TopicEvent {
   channel_id?: string
   id: string
   title: string
+  type?: string
   index: number
   total: number
 }
