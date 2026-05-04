@@ -353,18 +353,40 @@ func (s *PuzzleStage) handleTranscript(m debate.TranscriptMsg) {
 		return
 	}
 
+	// Done markers are sent immediately after produce() returns, so they can
+	// arrive ahead of (and interleaved with) the AfterFunc-scheduled
+	// sentence TranscriptMsgs of the same or next turn. If we let a Done
+	// for turn N+1 reach the speaker-change branch below, it flips the
+	// active speaker before turn N's last sentence text has even fired,
+	// clearing the body and making the puzzle Q&A subtitle visibly
+	// disappear mid-audio. They carry no Text and no AudioDuration —
+	// nothing for the on-air layout to do — so drop them here. Other bus
+	// subscribers (transcript log, web feed) still see the marker.
+	if m.Done {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	speakerKey := m.Speaker + "|" + string(m.Role)
 	curKey := s.curSpeaker + "|" + s.curRole
 
-	if speakerKey != curKey && m.Speaker != "" {
+	speakerChanged := speakerKey != curKey && m.Speaker != ""
+	if speakerChanged {
 		s.curSpeaker = m.Speaker
 		s.curRole = string(m.Role)
 		s.body.Reset()
 		s.enc.SetSpeaker(m.Speaker, string(m.Role), "")
-		s.enc.SetBody("", 0)
+		// Skip clearing the body when this same call carries the new
+		// sentence text — the SetBody below installs it atomically. The
+		// older "SetBody("", 0) then SetBody(text, dur)" pattern produced
+		// a microsecond window of empty body that an unlucky 30 fps
+		// Frame() could capture, presenting as the QA subtitle blinking
+		// out for one frame on every speaker swap.
+		if m.Text == "" {
+			s.enc.SetBody("", 0)
+		}
 	}
 
 	if m.Text != "" {

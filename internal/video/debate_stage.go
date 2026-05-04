@@ -159,6 +159,16 @@ func (s *DebateStage) handleTranscript(m debate.TranscriptMsg) {
 		return
 	}
 
+	// Done markers are sent right after produce() returns and can race
+	// ahead of (or interleave with) the AfterFunc-scheduled sentence
+	// TranscriptMsgs. Letting one reach the speaker-change branch below
+	// flips the active speaker before the last sentence's text has fired
+	// and clears the body mid-audio. They carry no Text — nothing for the
+	// on-air layout to do — so drop them here.
+	if m.Done {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -171,7 +181,13 @@ func (s *DebateStage) handleTranscript(m debate.TranscriptMsg) {
 		s.curSide = m.Side
 		s.body.Reset()
 		s.enc.SetSpeaker(m.Speaker, string(m.Role), m.Side)
-		s.enc.SetBody("", 0)
+		// Skip clearing the body when this same call carries the new
+		// sentence text — the SetBody below installs it atomically. The
+		// older "clear then set" pattern produced a microsecond window
+		// of empty body that an unlucky frame could capture as a blink.
+		if m.Text == "" {
+			s.enc.SetBody("", 0)
+		}
 	}
 
 	if m.Text != "" {

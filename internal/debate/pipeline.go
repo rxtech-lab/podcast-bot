@@ -384,23 +384,10 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// the two so the playhead never goes backwards. subtitleClientLatency
 	// covers downstream buffering (browser MediaSource buffer, OS audio
 	// buffer) that BytesAhead can't see past stdout.
-	//
-	// When a session-wide music mixer is in the path, TTS bytes sit
-	// inside the mixer's PCM pipeline (ttsCh + encoder) before they hit
-	// LiveStream — invisible to BytesAhead. Without adding the mixer's
-	// own buffered-audio measurement, the puzzle Q&A subtitle would
-	// fire ahead of audio because short turns synth faster than the
-	// music-paced mix loop drains, so several seconds of TTS pile up
-	// inside the mixer that the LiveStream-side playhead can't see.
-	mixerLag := time.Duration(0)
-	if p.sessionMixer != nil {
-		mixerLag = p.sessionMixer.BufferedAudio()
-	}
 	p.playheadMu.Lock()
 	bytesAhead := p.d.LiveStream.BytesAhead()
 	nowSync := time.Now().Add(
-		mixerLag +
-			time.Duration(float64(bytesAhead)/float64(audio.AudioBytesPerSec)*float64(time.Second)) +
+		time.Duration(float64(bytesAhead)/float64(audio.AudioBytesPerSec)*float64(time.Second)) +
 			subtitleClientLatency)
 	if nowSync.After(p.nextPlayAt) {
 		p.nextPlayAt = nowSync
