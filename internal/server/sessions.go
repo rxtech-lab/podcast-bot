@@ -1,14 +1,15 @@
 package server
 
 import (
+	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/debate"
 )
 
-// SessionStatus enumerates what a queued debate looks like to the web UI.
+// SessionStatus enumerates the lifecycle of one debate within its channel's
+// queue.
 type SessionStatus string
 
 const (
@@ -18,124 +19,236 @@ const (
 	StatusError   SessionStatus = "error"
 )
 
-// Mode indicates whether the queue is running sequentially (one shared
-// audio/video stream) or in parallel (one per channel). Surfaced via the
-// /api/topics response so the frontend can shape its URLs accordingly.
-type Mode string
-
-const (
-	ModeSequential Mode = "sequential"
-	ModeParallel   Mode = "parallel"
-)
-
-// Session is the metadata view of one debate queued for play.
-// The active debate's live state (transcript, push-user) is reached through
-// SessionRegistry.Current (sequential mode) or ChannelOrch (parallel mode).
+// Session is one debate's metadata view. Sessions are grouped under channels
+// in the registry.
 type Session struct {
 	ID             string        `json:"id"`
 	Title          string        `json:"title"`
 	Status         SessionStatus `json:"status"`
 	TranscriptPath string        `json:"transcript_path,omitempty"`
 	AudioPath      string        `json:"audio_path,omitempty"`
+	// DBPath points at the per-debate sqlite file. The server uses it to
+	// serve /api/transcript snapshots after a debate ends (when there's no
+	// longer a live orchestrator holding the in-memory transcript).
+	// Not exposed in JSON — clients shouldn't see filesystem paths.
+	DBPath string `json:"-"`
 }
 
-// ChannelResources bundles the per-channel runtime state that the HTTP server
-// needs to expose: the live orchestrator (for transcript / user messages), the
-// HLS output directory (for /api/video/{id}/...) and the audio livestream (for
-// /api/audio/{id}/stream).
+// ChannelInfo is the JSON-facing description of a channel surfaced via
+// /api/topics. Off-air channels (no debates assigned) are still listed so the
+// frontend can render an "off air" placeholder for them.
+type ChannelInfo struct {
+	ID              string    `json:"id"`
+	Number          int       `json:"number"`
+	Title           string    `json:"title"`
+	OffAir          bool      `json:"off_air"`
+	Debates         []Session `json:"debates"`
+	CurrentDebateID string    `json:"current_debate_id,omitempty"`
+}
+
+// channelState is the runtime + metadata SessionRegistry tracks per channel.
+// Only the metadata fields are exported via ChannelInfo; the live resources
+// (orch / hlsDir / livestream) are reached through ChannelResources.
+type channelState struct {
+	id     string
+	number int
+	title  string
+	hlsDir string
+	live   *audio.LiveStream
+
+	mu       sync.RWMutex
+	debates  []Session
+	currentI int                  // -1 when no debate is airing
+	orch     *debate.Orchestrator // current orch; nil between debates
+	// dbPath stays set after orch is cleared so /api/transcript can keep
+	// serving the most-recently-aired debate's history from disk.
+	dbPath string
+}
+
+// ChannelResources bundles the per-channel runtime state HTTP handlers need
+// when serving /api/video/<id>, /api/audio/<id>, /api/transcript?channel=<id>.
+//
+// CurrentDBPath is the sqlite file for the channel's currently airing or
+// most-recently-aired debate. It outlives Orch — when a debate ends and Orch
+// becomes nil, the path stays so the server can keep serving the transcript
+// from disk.
 type ChannelResources struct {
-	Orch       *debate.Orchestrator
-	HLSDir     string
-	LiveStream *audio.LiveStream
+	Orch          *debate.Orchestrator
+	HLSDir        string
+	LiveStream    *audio.LiveStream
+	CurrentDBPath string
 }
 
-// SessionRegistry tracks the queue of debates and which orchestrator is live.
-// In sequential mode it tracks a single "current" orchestrator that rotates
-// across topics; in parallel mode it tracks one orchestrator per channel id.
+// SessionRegistry tracks every channel and its queue of debates. Channels are
+// declared up front (from channels.json + the channel ids found on each
+// debate.md); the live orchestrator within a channel rotates as that
+// channel's queue plays out.
 type SessionRegistry struct {
 	mu       sync.RWMutex
-	sessions []Session
-	mode     Mode
-
-	current  atomic.Pointer[debate.Orchestrator]
-	channels map[string]*ChannelResources
+	order    []string                 // channel ids in display order (by number)
+	channels map[string]*channelState // id → state
 }
 
-// NewSessionRegistry seeds the registry with `pending` entries. mode reports
-// whether the runtime is sequential or parallel — the HTTP server includes it
-// in /api/topics so the frontend can pick the right URL shape.
-func NewSessionRegistry(seed []Session, mode Mode) *SessionRegistry {
-	r := &SessionRegistry{
-		mode:     mode,
-		channels: map[string]*ChannelResources{},
+// NewSessionRegistry builds an empty registry. Channels are added with
+// RegisterChannel; debates are seeded with SeedChannelDebates.
+func NewSessionRegistry() *SessionRegistry {
+	return &SessionRegistry{channels: map[string]*channelState{}}
+}
+
+// RegisterChannel declares a channel up front with its display metadata and
+// streaming resources. live/hlsDir may be empty when the channel is off-air
+// (no debates assigned). Calling RegisterChannel a second time for the same
+// id replaces the metadata + resources but keeps the existing debate queue.
+func (r *SessionRegistry) RegisterChannel(id string, number int, title, hlsDir string, live *audio.LiveStream) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.channels[id]; ok {
+		cur.number = number
+		cur.title = title
+		cur.hlsDir = hlsDir
+		cur.live = live
+		return
 	}
-	r.sessions = append(r.sessions, seed...)
-	return r
+	r.channels[id] = &channelState{
+		id:       id,
+		number:   number,
+		title:    title,
+		hlsDir:   hlsDir,
+		live:     live,
+		currentI: -1,
+	}
+	r.order = append(r.order, id)
+	// Keep display order stable by channel number.
+	sort.SliceStable(r.order, func(i, j int) bool {
+		return r.channels[r.order[i]].number < r.channels[r.order[j]].number
+	})
 }
 
-// Mode reports the queue execution mode (sequential or parallel).
-func (r *SessionRegistry) Mode() Mode { return r.mode }
-
-// List returns a copy of all sessions in queue order.
-func (r *SessionRegistry) List() []Session {
+// SeedChannelDebates installs the queue of debates for a channel (in play
+// order). All entries start as pending.
+func (r *SessionRegistry) SeedChannelDebates(channelID string, debates []Session) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]Session, len(r.sessions))
-	copy(out, r.sessions)
-	return out
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.debates = append(st.debates[:0], debates...)
 }
 
-// SetStatus updates a single session's lifecycle status.
-func (r *SessionRegistry) SetStatus(id string, status SessionStatus) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := range r.sessions {
-		if r.sessions[i].ID == id {
-			r.sessions[i].Status = status
+// SetDebateStatus updates a single debate's lifecycle status within its
+// channel.
+func (r *SessionRegistry) SetDebateStatus(channelID, debateID string, status SessionStatus) {
+	r.mu.RLock()
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for i := range st.debates {
+		if st.debates[i].ID == debateID {
+			st.debates[i].Status = status
 			return
 		}
 	}
 }
 
-// SetOutputs records on-disk artefacts produced by a finished session.
-func (r *SessionRegistry) SetOutputs(id, transcriptPath, audioPath string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := range r.sessions {
-		if r.sessions[i].ID == id {
-			r.sessions[i].TranscriptPath = transcriptPath
-			r.sessions[i].AudioPath = audioPath
+// SetDebateOutputs records on-disk artefacts produced by a finished debate.
+func (r *SessionRegistry) SetDebateOutputs(channelID, debateID, transcriptPath, audioPath string) {
+	r.mu.RLock()
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for i := range st.debates {
+		if st.debates[i].ID == debateID {
+			st.debates[i].TranscriptPath = transcriptPath
+			st.debates[i].AudioPath = audioPath
 			return
 		}
 	}
 }
 
-// SetCurrent installs the orchestrator that handles unprefixed /api/transcript
-// and /api/messages right now (sequential mode). Pass nil between topics or
-// after the queue drains.
-func (r *SessionRegistry) SetCurrent(o *debate.Orchestrator) {
-	r.current.Store(o)
+// SetCurrentOrch installs (or clears) the live orchestrator for a channel as
+// its queue advances. debateID identifies which debate just became live; pass
+// "" + nil to clear between debates. When orch is non-nil we also latch its
+// per-debate sqlite path so the server can keep serving /api/transcript from
+// disk after the orchestrator exits.
+func (r *SessionRegistry) SetCurrentOrch(channelID, debateID string, orch *debate.Orchestrator) {
+	r.mu.RLock()
+	st := r.channels[channelID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.orch = orch
+	st.currentI = -1
+	for i := range st.debates {
+		if st.debates[i].ID == debateID {
+			st.currentI = i
+			// Latch the new debate's DB path; a nil orch (cleared between
+			// debates) leaves dbPath alone so the just-finished debate's
+			// transcript stays readable until the next one starts.
+			if orch != nil && st.debates[i].DBPath != "" {
+				st.dbPath = st.debates[i].DBPath
+			}
+			return
+		}
+	}
 }
 
-// Current returns the live orchestrator (may be nil between topics).
-func (r *SessionRegistry) Current() *debate.Orchestrator {
-	return r.current.Load()
-}
-
-// RegisterChannel exposes per-channel runtime resources to the HTTP server.
-// In parallel mode each debate calls this once at startup with its own
-// orchestrator + HLS dir + livestream so /api/{video,audio,transcript,...}
-// can route requests to the right channel.
-func (r *SessionRegistry) RegisterChannel(id string, res ChannelResources) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.channels[id] = &res
-}
-
-// ChannelResources looks up the runtime resources for a channel id. Returns
-// nil if the channel is unknown.
+// ChannelResources returns the HTTP-facing resources for a channel id.
+// Returns nil when the channel is unknown.
 func (r *SessionRegistry) ChannelResources(id string) *ChannelResources {
 	r.mu.RLock()
+	st := r.channels[id]
+	r.mu.RUnlock()
+	if st == nil {
+		return nil
+	}
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return &ChannelResources{
+		Orch:          st.orch,
+		HLSDir:        st.hlsDir,
+		LiveStream:    st.live,
+		CurrentDBPath: st.dbPath,
+	}
+}
+
+// List returns the full channel list (with debate queues) for /api/topics.
+func (r *SessionRegistry) List() []ChannelInfo {
+	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.channels[id]
+	out := make([]ChannelInfo, 0, len(r.order))
+	for _, id := range r.order {
+		st := r.channels[id]
+		st.mu.RLock()
+		debates := make([]Session, len(st.debates))
+		copy(debates, st.debates)
+		var currentID string
+		if st.currentI >= 0 && st.currentI < len(st.debates) {
+			currentID = st.debates[st.currentI].ID
+		}
+		offAir := st.hlsDir == "" || len(st.debates) == 0
+		st.mu.RUnlock()
+		out = append(out, ChannelInfo{
+			ID:              id,
+			Number:          st.number,
+			Title:           st.title,
+			OffAir:          offAir,
+			Debates:         debates,
+			CurrentDebateID: currentID,
+		})
+	}
+	return out
 }

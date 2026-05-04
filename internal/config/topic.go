@@ -35,16 +35,18 @@ const (
 
 // DebateTopic is the full debate.md content: YAML frontmatter + named markdown sections.
 type DebateTopic struct {
-	Title             string      `yaml:"title"`
-	Language          string      `yaml:"language"`
-	TotalMinutes      int         `yaml:"total_minutes"`
-	SegmentMaxSeconds int         `yaml:"segment_max_seconds"`
-	TTSProvider       string      `yaml:"tts_provider,omitempty"`
-	Resolution        string      `yaml:"resolution,omitempty"`
-	// Parallel, when true on any debate in the queue, makes the whole queue
-	// run concurrently as separate channels (each with its own encoder + HLS
-	// stream) instead of the default sequential mode.
-	Parallel    bool        `yaml:"parallel,omitempty"`
+	Title             string `yaml:"title"`
+	Language          string `yaml:"language"`
+	TotalMinutes      int    `yaml:"total_minutes"`
+	SegmentMaxSeconds int    `yaml:"segment_max_seconds"`
+	TTSProvider       string `yaml:"tts_provider,omitempty"`
+	Resolution        string `yaml:"resolution,omitempty"`
+	// Channel is the id of the TV-style channel this debate belongs to.
+	// Channels are defined in channels.json. Multiple debates with the same
+	// channel id are queued and play sequentially within that channel; debates
+	// on different channels run in parallel as independent video streams.
+	// Required — startup fails if the id isn't defined in channels.json.
+	Channel     string      `yaml:"channel"`
 	Affirmative []AgentSpec `yaml:"affirmative"`
 	Negative    []AgentSpec `yaml:"negative"`
 	Judge       AgentSpec   `yaml:"judge"`
@@ -155,6 +157,9 @@ func parseSections(body string, t *DebateTopic) {
 func validateTopic(t *DebateTopic) error {
 	if t.Title == "" {
 		return fmt.Errorf("topic title is required")
+	}
+	if t.Channel == "" {
+		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:

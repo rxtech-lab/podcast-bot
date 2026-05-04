@@ -1,25 +1,23 @@
 // Package server hosts the HTTP API for a debate run.
 //
-// One server is shared across a sequential queue of topics: the underlying
-// event bus, audio livestream and HLS encoder are reused, and the active
-// orchestrator (the one whose transcript and chat sink the API exposes) is
-// tracked via SessionRegistry.
+// The server always operates in TV-channel mode: one channels.json defines
+// the available channels, debate.md files declare which channel they belong
+// to, and each channel runs its own queue of debates sequentially while all
+// channels run in parallel. Each channel has its own LiveStream + Encoder +
+// HLS dir; channels with no assigned debates are listed as off-air.
 //
-// Endpoints (sequential mode, single shared stream):
-//   GET  /api/topics            — JSON list of every queued debate + status.
-//   GET  /api/transcript        — JSON snapshot of the current debate transcript.
-//   GET  /api/events            — Server-Sent Events stream of live events.
-//   GET  /api/audio/stream      — chunked MP3 audio stream of the live debate.
-//   GET  /api/video/...         — HLS playlist + segments.
-//   POST /api/messages          — push a user message into the live orchestrator.
-//   GET  /                      — embedded web UI (Twitch-like viewer).
-//
-// In parallel (channel) mode every per-channel route is also exposed:
-//   GET  /api/transcript?channel=<id>
-//   GET  /api/events?channel=<id>           (filters bus events by ChannelID)
-//   GET  /api/audio/<id>/stream
-//   GET  /api/video/<id>/...
-//   POST /api/messages?channel=<id>
+// Endpoints:
+//   GET  /api/topics                        — channel list (number, title, off-air, debates queue).
+//   GET  /api/transcript?channel=<id>       — JSON snapshot of that channel's live transcript.
+//   GET  /api/events[?channel=<id>]         — Server-Sent Events; channel filter is optional.
+//   GET  /api/audio/<id>/stream             — chunked MP3 audio for that channel.
+//   GET  /api/video/<id>/<file>             — HLS playlist + segments for that channel.
+//   POST /api/messages?channel=<id>         — push a user message into that channel's orchestrator
+//                                             (uses the viewer's `debate-bot-username` cookie).
+//   GET  /api/me                            — return the viewer's username; issues + sets a cookie
+//                                             on first request.
+//   POST /api/me                            — change the viewer's username (body: {username}).
+//   GET  /                                  — embedded web UI.
 package server
 
 import (
@@ -41,21 +39,13 @@ import (
 	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
-// Deps wires the server to shared (cross-topic) state plus the registry that
-// tracks which orchestrator is currently running.
-//
-// LiveStream and VideoHLSDir describe the *default* (sequential) channel —
-// the one served at /api/audio/stream and /api/video/... without any channel
-// path segment. In parallel mode they are nil/"" and per-channel resources
-// come from Sessions.ChannelResources(id).
+// Deps wires the server to the event bus and the registry that tracks every
+// channel + its current orchestrator. Per-channel streaming resources
+// (LiveStream, HLS dir) are reached through Sessions.ChannelResources(id).
 type Deps struct {
-	Bus        *eventbus.Bus
-	LiveStream *audio.LiveStream
-	Sessions   *SessionRegistry
-	Log        *slog.Logger
-	// VideoHLSDir is the directory holding stream.m3u8 + segments. When empty,
-	// the unprefixed /api/video/ route returns 404.
-	VideoHLSDir string
+	Bus      *eventbus.Bus
+	Sessions *SessionRegistry
+	Log      *slog.Logger
 }
 
 // Server is the HTTP front-end.
@@ -70,9 +60,11 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/topics", s.handleTopics)
 	s.mux.HandleFunc("GET /api/transcript", s.handleTranscript)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
-	s.mux.HandleFunc("GET /api/audio/stream", s.handleAudio)
+	s.mux.HandleFunc("GET /api/audio/", s.handleAudio)
 	s.mux.HandleFunc("GET /api/video/", s.handleVideo)
 	s.mux.HandleFunc("POST /api/messages", s.handleMessages)
+	s.mux.HandleFunc("GET /api/me", s.handleGetMe)
+	s.mux.HandleFunc("POST /api/me", s.handlePostMe)
 	s.mux.Handle("/", staticHandler())
 	return s
 }
@@ -123,44 +115,75 @@ func toDTO(l agent.TranscriptLine) transcriptDTO {
 	}
 }
 
-// topicsResponse is the body of GET /api/topics. It includes the queue mode so
-// the frontend can decide whether to scope its URLs by channel id.
+// topicsResponse is the body of GET /api/topics — every channel with its
+// current debate queue. The frontend renders the channel switcher from this.
 type topicsResponse struct {
-	Mode  Mode      `json:"mode"`
-	Items []Session `json:"items"`
+	Channels []ChannelInfo `json:"channels"`
 }
 
 func (s *Server) handleTopics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(topicsResponse{
-		Mode:  s.d.Sessions.Mode(),
-		Items: s.d.Sessions.List(),
+		Channels: s.d.Sessions.List(),
 	})
 }
 
-// orchForRequest returns the orchestrator the request targets:
-//   - If ?channel=<id> is present, the registered orchestrator for that channel.
-//   - Otherwise the current sequential orchestrator (Sessions.Current()).
-//
-// Returns nil when no orchestrator matches.
+// orchForRequest returns the orchestrator the request targets via
+// ?channel=<id>. Returns nil when the channel is unknown or has no live
+// orchestrator (off-air, between debates).
 func (s *Server) orchForRequest(r *http.Request) *debate.Orchestrator {
-	if id := r.URL.Query().Get("channel"); id != "" {
-		if res := s.d.Sessions.ChannelResources(id); res != nil {
-			return res.Orch
-		}
+	id := r.URL.Query().Get("channel")
+	if id == "" {
 		return nil
 	}
-	return s.d.Sessions.Current()
+	if res := s.d.Sessions.ChannelResources(id); res != nil {
+		return res.Orch
+	}
+	return nil
 }
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	cur := s.orchForRequest(r)
-	if cur == nil {
-		_ = json.NewEncoder(w).Encode([]transcriptDTO{})
+
+	// Live orchestrator: serve the in-memory snapshot — zero IO and the
+	// freshest possible view of an in-progress debate.
+	if cur := s.orchForRequest(r); cur != nil {
+		writeTranscript(w, cur.Transcript.Snapshot())
 		return
 	}
-	lines := cur.Transcript.Snapshot()
+
+	// No live orch: fall back to the channel's most-recently-aired debate's
+	// sqlite file so a viewer who reloads after the debate ends still sees
+	// the chat history.
+	if path := s.dbPathForRequest(r); path != "" {
+		lines, err := debate.LoadSnapshot(path)
+		if err != nil {
+			s.d.Log.Warn("transcript disk load failed", "path", path, "err", err)
+			writeTranscript(w, nil)
+			return
+		}
+		writeTranscript(w, lines)
+		return
+	}
+
+	writeTranscript(w, nil)
+}
+
+// dbPathForRequest returns the sqlite path the request targets, derived from
+// the channel-id query parameter. Empty string when no channel is requested
+// or no debate has aired on that channel yet.
+func (s *Server) dbPathForRequest(r *http.Request) string {
+	id := r.URL.Query().Get("channel")
+	if id == "" {
+		return ""
+	}
+	if res := s.d.Sessions.ChannelResources(id); res != nil {
+		return res.CurrentDBPath
+	}
+	return ""
+}
+
+func writeTranscript(w http.ResponseWriter, lines []agent.TranscriptLine) {
 	out := make([]transcriptDTO, len(lines))
 	for i, l := range lines {
 		out[i] = toDTO(l)
@@ -304,30 +327,28 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// liveStreamForRequest picks the LiveStream the request targets.
-// /api/audio/<id>/stream → that channel's stream; /api/audio/stream → default.
+// liveStreamForRequest picks the LiveStream the request targets from the
+// /api/audio/<id>/stream URL.
 func (s *Server) liveStreamForRequest(r *http.Request) *audio.LiveStream {
 	const prefix = "/api/audio/"
 	rel := strings.TrimPrefix(r.URL.Path, prefix)
 	rel = strings.TrimSuffix(rel, "/stream")
-	if rel != "" && rel != "stream" {
-		// /api/audio/<id>/stream
-		if res := s.d.Sessions.ChannelResources(rel); res != nil {
-			return res.LiveStream
-		}
+	if rel == "" || rel == "stream" {
 		return nil
 	}
-	return s.d.LiveStream
+	if res := s.d.Sessions.ChannelResources(rel); res != nil {
+		return res.LiveStream
+	}
+	return nil
 }
 
 // handleVideo serves the HLS playlist + segments produced by the encoder.
 // It refuses any path that would escape the configured HLS directory and only
 // serves files whose extensions are recognised HLS artefacts.
 //
-// URL shapes:
+// URL shape:
 //
-//	/api/video/<file>            (sequential — uses Deps.VideoHLSDir)
-//	/api/video/<channel>/<file>  (parallel — uses ChannelResources(channel).HLSDir)
+//	/api/video/<channel>/<file>   uses ChannelResources(channel).HLSDir
 func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	const prefix = "/api/video/"
 	rel := strings.TrimPrefix(r.URL.Path, prefix)
@@ -338,7 +359,7 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 
 	hlsDir, file := s.resolveVideoTarget(rel)
 	if hlsDir == "" {
-		http.Error(w, "video not enabled", http.StatusNotFound)
+		http.Error(w, "channel off-air", http.StatusNotFound)
 		return
 	}
 	if file == "" || strings.ContainsAny(file, `/\`) {
@@ -368,19 +389,20 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, full)
 }
 
-// resolveVideoTarget splits the path tail under /api/video/ into (HLSDir, file).
-// A single segment ("stream.m3u8") routes to the default sequential dir; two
-// segments ("<channel>/stream.m3u8") route to that channel's per-debate dir.
+// resolveVideoTarget splits "<channel>/<file>" into (HLSDir, file). Returns
+// ("","") when the channel is unknown or off-air, or when no channel segment
+// is present.
 func (s *Server) resolveVideoTarget(rel string) (hlsDir, file string) {
-	if i := strings.Index(rel, "/"); i > 0 {
-		channelID := rel[:i]
-		file = rel[i+1:]
-		if res := s.d.Sessions.ChannelResources(channelID); res != nil {
-			return res.HLSDir, file
-		}
+	i := strings.Index(rel, "/")
+	if i <= 0 {
 		return "", ""
 	}
-	return s.d.VideoHLSDir, rel
+	channelID := rel[:i]
+	file = rel[i+1:]
+	if res := s.d.Sessions.ChannelResources(channelID); res != nil {
+		return res.HLSDir, file
+	}
+	return "", ""
 }
 
 type postMessageReq struct {
@@ -408,6 +430,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no active debate", http.StatusServiceUnavailable)
 		return
 	}
-	cur.PushUserMessage(req.Text)
+	username := s.ensureUsername(w, r)
+	cur.PushUserMessage(req.Text, username)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -2,18 +2,16 @@ import { useEffect, useState } from 'react'
 import { Chat } from '@/components/Chat'
 import { AppHeader } from '@/components/AppHeader'
 import {
+  ChannelSchedule,
   ChannelSwitcher,
   ChannelSwitcherToggle,
 } from '@/components/ChannelSwitcher'
 import { VideoStage } from '@/components/VideoStage'
-import { loadHistory } from '@/lib/api'
 import { useDebateEvents } from '@/lib/sse'
-import type { ChatLine } from '@/lib/types'
 
 const CHANNELS_OPEN_KEY = 'debate-bot:channels-open'
 
 function App() {
-  const [initialHistory, setInitialHistory] = useState<ChatLine[]>([])
   const [channelsOpen, setChannelsOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
     const v = window.localStorage.getItem(CHANNELS_OPEN_KEY)
@@ -24,54 +22,59 @@ function App() {
     window.localStorage.setItem(CHANNELS_OPEN_KEY, channelsOpen ? '1' : '0')
   }, [channelsOpen])
 
-  useEffect(() => {
-    loadHistory()
-      .then((lines) => setInitialHistory(lines))
-      .catch((e) => console.warn('history load failed', e))
-  }, [])
-
-  const { state, selectChannel } = useDebateEvents(initialHistory)
+  const { state, selectChannel } = useDebateEvents([])
   const {
     history,
     phase,
     elapsedMs,
     remainingMs,
     status,
-    topics,
-    mode,
-    currentTopicId,
-    currentTopicIndex,
-    totalTopics,
+    channels,
+    selectedChannelId,
+    selectedDebateIndex,
+    selectedDebateTotal,
   } = state
 
-  // In parallel mode every channel is live from t=0, so default the tuned
-  // channel to the first one as soon as the topic list lands. In sequential
-  // mode the current topic id arrives via the `topic` SSE event instead.
+  // Default the tuned channel to the first running (non-off-air) channel as
+  // soon as the channel list lands.
   useEffect(() => {
-    if (mode !== 'parallel') return
-    if (currentTopicId) return
-    const first = topics.find((t) => t.status === 'running') ?? topics[0]
-    if (first) selectChannel(first.id)
-  }, [mode, topics, currentTopicId, selectChannel])
+    if (selectedChannelId) return
+    const firstLive =
+      channels.find((c) => !c.off_air && c.current_debate_id) ??
+      channels.find((c) => !c.off_air) ??
+      channels[0]
+    if (firstLive) selectChannel(firstLive.id)
+  }, [channels, selectedChannelId, selectChannel])
+
+  const selectedChannel = channels.find((c) => c.id === selectedChannelId)
+  const airingDebate = selectedChannel?.debates.find(
+    (d) => d.id === selectedChannel.current_debate_id,
+  )
 
   useEffect(() => {
-    const current = topics.find((t) => t.id === currentTopicId)
-    const title = current?.title ?? topics[0]?.title
-    if (!title) {
+    const channelTitle = selectedChannel?.title
+    const debateTitle = airingDebate?.title
+    if (!channelTitle && !debateTitle) {
       document.title = 'debate-bot — live'
       return
     }
-    document.title =
-      totalTopics > 1
-        ? `[${currentTopicIndex + 1}/${totalTopics}] ${title} — debate-bot`
-        : `${title} — debate-bot`
-  }, [topics, currentTopicId, currentTopicIndex, totalTopics])
+    document.title = debateTitle
+      ? `${debateTitle} · ${channelTitle ?? ''} — debate-bot`
+      : `${channelTitle} — debate-bot`
+  }, [selectedChannel, airingDebate])
 
-  // Pass the channel id to VideoStage / Chat only in parallel mode — in
-  // sequential mode the unprefixed routes serve the single shared stream and
-  // route user messages to the current orchestrator.
-  const activeChannelId =
-    mode === 'parallel' ? currentTopicId ?? undefined : undefined
+  const offAir =
+    selectedChannel && selectedChannel.off_air
+      ? {
+          selectedTitle: selectedChannel.title,
+          selectedStatus: 'pending' as const,
+        }
+      : selectedChannel && !airingDebate && selectedChannel.debates.length === 0
+        ? {
+            selectedTitle: selectedChannel.title,
+            selectedStatus: 'pending' as const,
+          }
+        : undefined
 
   return (
     <div className="dark relative flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
@@ -89,23 +92,32 @@ function App() {
           elapsedMs={elapsedMs}
           remainingMs={remainingMs}
           status={status}
-          currentTopicIndex={currentTopicIndex}
-          totalTopics={totalTopics}
+          currentTopicIndex={selectedDebateIndex}
+          totalTopics={selectedDebateTotal}
         />
         <main className="flex-1 flex flex-col md:flex-row min-h-0 gap-3 p-3">
           {channelsOpen ? (
             <ChannelSwitcher
-              topics={topics}
-              mode={mode}
-              currentChannelId={currentTopicId}
+              channels={channels}
+              currentChannelId={selectedChannelId}
               onSelect={selectChannel}
               onCollapse={() => setChannelsOpen(false)}
             />
           ) : (
             <ChannelSwitcherToggle onExpand={() => setChannelsOpen(true)} />
           )}
-          <VideoStage phase={phase} channelId={activeChannelId} />
-          <Chat history={history} channelId={activeChannelId} />
+          <div className="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
+            <ChannelSchedule channel={selectedChannel} />
+            <VideoStage
+              phase={phase}
+              channelId={selectedChannelId ?? undefined}
+              offAir={offAir}
+            />
+          </div>
+          <Chat
+            history={history}
+            channelId={selectedChannelId ?? undefined}
+          />
         </main>
       </div>
     </div>

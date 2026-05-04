@@ -18,23 +18,32 @@ import (
 // ping-pong per message.
 const userDebounceWindow = 1500 * time.Millisecond
 
-// userQueue is a thread-safe FIFO of user input strings (and the `/end` sentinel).
+// userMessage is one message from one viewer. Username is the viewer-chosen
+// (typically random / persisted in localStorage on the frontend) handle; the
+// host weaves it into address-user turns so the AI says e.g. "Tom asks..."
+type userMessage struct {
+	Username string
+	Text     string
+}
+
+// userQueue is a thread-safe FIFO of viewer messages (plus the `/end`
+// sentinel — handled separately to keep that out-of-band).
 type userQueue struct {
 	mu  sync.Mutex
-	buf []string
+	buf []userMessage
 	end bool
 }
 
-func (q *userQueue) push(s string) {
+func (q *userQueue) push(m userMessage) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if s == "/end" {
+	if m.Text == "/end" {
 		q.end = true
 		return
 	}
-	q.buf = append(q.buf, s)
+	q.buf = append(q.buf, m)
 }
-func (q *userQueue) drain() ([]string, bool) {
+func (q *userQueue) drain() ([]userMessage, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := q.buf
@@ -134,7 +143,19 @@ func (p *Planner) Next(ctx context.Context) (*Turn, bool) {
 		if e {
 			p.state.endRequested = true
 		}
-		text := strings.Join(queued, " | ")
+		// Format as "Username: text" so the host AI references each viewer by
+		// name. Multiple messages from rapid-typing are joined with " | ";
+		// when several viewers chime in at once each gets their own line so
+		// the host can name them individually.
+		parts := make([]string, len(queued))
+		for i, m := range queued {
+			if m.Username != "" {
+				parts[i] = m.Username + ": " + m.Text
+			} else {
+				parts[i] = m.Text
+			}
+		}
+		text := strings.Join(parts, " | ")
 		p.state.pendingAnswerUser = true
 		p.state.pendingAnswerUserText = text
 		return p.makeTurn(p.registry.Host, "address-user:"+text, p.budgetSeconds(20)), true

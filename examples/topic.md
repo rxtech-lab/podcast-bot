@@ -1,6 +1,7 @@
 ---
 title: "AI 是否會取代程序員"
 language: zh-CN
+channel: default
 total_minutes: 30
 segment_max_seconds: 60
 affirmative:

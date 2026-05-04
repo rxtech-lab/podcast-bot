@@ -18,35 +18,40 @@ export interface TranscriptDTO extends ChatLine {
 }
 
 export interface TranscriptEvent extends ChatLine {
+  channel_id?: string
   done: boolean
 }
 
 export interface TickEvent {
+  channel_id?: string
   elapsed_ms: number
   remaining_ms: number
 }
 
 export interface PhaseEvent {
+  channel_id?: string
   phase: string
 }
 
 export interface StatusEvent {
+  channel_id?: string
   text: string
 }
 
 export interface ErrorEvent {
+  channel_id?: string
   text: string
 }
 
 export interface EndedEvent {
+  channel_id?: string
   transcript_path: string
   audio_path: string
 }
 
 export type SessionStatus = 'pending' | 'running' | 'done' | 'error'
 
-export type Mode = 'sequential' | 'parallel'
-
+// One debate within a channel's sequential queue.
 export interface Session {
   id: string
   title: string
@@ -55,12 +60,21 @@ export interface Session {
   audio_path?: string
 }
 
-// Server response shape for GET /api/topics. The mode determines whether the
-// frontend scopes its URLs by channel id (parallel) or shares one stream
-// across the queue (sequential).
+// One TV-style channel: id + display number/title, plus the queue of debates
+// assigned to it. off_air = true when the channel is defined in channels.json
+// but no debates target it (no encoder is spawned in this case).
+export interface ChannelInfo {
+  id: string
+  number: number
+  title: string
+  off_air: boolean
+  debates: Session[]
+  current_debate_id?: string
+}
+
+// Server response shape for GET /api/topics.
 export interface TopicsResponse {
-  mode: Mode
-  items: Session[]
+  channels: ChannelInfo[]
 }
 
 export interface TopicEvent {

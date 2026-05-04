@@ -11,13 +11,30 @@ import (
 )
 
 // Transcript is the orchestrator-wide append-only log of completed turns.
+// store is optional: when set, every appended line is also persisted to
+// sqlite so reloads after the orchestrator exits can recover the full chat
+// history.
 type Transcript struct {
 	mu    sync.RWMutex
 	lines []agent.TranscriptLine
+	store *Store
 }
 
-// NewTranscript constructs an empty Transcript.
+// NewTranscript constructs an empty Transcript with no persistence.
 func NewTranscript() *Transcript { return &Transcript{} }
+
+// NewTranscriptWithStore constructs a Transcript backed by the given Store.
+// On construction, any lines already in the store are loaded so a reload
+// after a server restart (or tuning into a finished debate) preserves the
+// chat history. If the load fails the transcript starts empty — the live
+// debate is still usable, just without recovered history.
+func NewTranscriptWithStore(s *Store) *Transcript {
+	t := &Transcript{store: s}
+	if existing, err := s.Snapshot(); err == nil {
+		t.lines = existing
+	}
+	return t
+}
 
 // Snapshot returns a copy of all current lines.
 func (t *Transcript) Snapshot() []agent.TranscriptLine {
@@ -63,16 +80,33 @@ func (t *Transcript) AppendFromTurn(tn *Turn) agent.TranscriptLine {
 	t.mu.Lock()
 	t.lines = append(t.lines, line)
 	t.mu.Unlock()
+	t.store.Append(line)
 	return line
+}
+
+// AppendLine inserts a fully-formed line — used by tests and by callers
+// that already have an agent.TranscriptLine in hand (e.g. replaying a
+// recovered transcript). Production code should prefer AppendFromTurn /
+// AppendUser so the same input → output mapping is exercised in tests.
+func (t *Transcript) AppendLine(line agent.TranscriptLine) {
+	t.mu.Lock()
+	t.lines = append(t.lines, line)
+	t.mu.Unlock()
+	t.store.Append(line)
 }
 
 // AppendUser inserts a synthetic user line so the user's input shows up
 // alongside agent turns in the transcript. Marked Pending until the host
 // addresses it on-air, which keeps it out of agent prompts in the meantime
 // (so already-buffered candidate turns don't prematurely respond to it).
-func (t *Transcript) AppendUser(text string) agent.TranscriptLine {
+// speaker carries the viewer's display name (cookie-issued); empty falls
+// back to "user" so old clients still render reasonably.
+func (t *Transcript) AppendUser(speaker, text string) agent.TranscriptLine {
+	if speaker == "" {
+		speaker = "user"
+	}
 	line := agent.TranscriptLine{
-		Speaker: "user",
+		Speaker: speaker,
 		Role:    "user",
 		Text:    text,
 		At:      time.Now(),
@@ -81,6 +115,7 @@ func (t *Transcript) AppendUser(text string) agent.TranscriptLine {
 	t.mu.Lock()
 	t.lines = append(t.lines, line)
 	t.mu.Unlock()
+	t.store.Append(line)
 	return line
 }
 

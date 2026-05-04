@@ -9,14 +9,17 @@ import {
 } from '@phosphor-icons/react'
 import type { ChatLine } from '@/lib/types'
 
-function speakerName({ speaker, role }: ChatLine): string {
+function speakerName({ speaker, role }: ChatLine, localUsername?: string): string {
   switch (role) {
     case 'host':
       return 'host'
     case 'judge':
       return 'judge'
     case 'user':
-      return 'you'
+      // Multiple viewers can be in the same channel; only label the message
+      // as "you" when its speaker matches this browser's stored username.
+      if (localUsername && speaker === localUsername) return 'you'
+      return speaker || 'viewer'
     default:
       return speaker || '?'
   }
@@ -83,27 +86,37 @@ const roleConfig: Record<string, RoleConfig> = {
 
 const fixedIconRoles = new Set(['host', 'judge', 'user'])
 
-export function ChatMessage({ line }: { line: ChatLine }) {
+export function ChatMessage({
+  line,
+  localUsername,
+}: {
+  line: ChatLine
+  localUsername?: string
+}) {
   const cfg = roleConfig[line.role] ?? roleConfig.user
-  const isUser = line.role === 'user'
-  const useIcon = fixedIconRoles.has(line.role)
+  // Right-align bubbles only for the local viewer's own messages, so other
+  // viewers' messages render on the left like every other speaker.
+  const isMine = line.role === 'user' && !!localUsername && line.speaker === localUsername
+  // Use the generic person icon for the local viewer (their identity is
+  // implicit "you"); other viewers get their initial so they're distinguishable.
+  const useIcon = fixedIconRoles.has(line.role) && (line.role !== 'user' || isMine)
   const Icon = cfg.icon
   const initial = (line.speaker || '?').charAt(0).toUpperCase()
   const subtitle = roleSubtitle(line.role)
 
   return (
-    <li className={`flex gap-2.5 ${isUser ? 'flex-row-reverse' : ''}`}>
+    <li className={`flex gap-2.5 ${isMine ? 'flex-row-reverse' : ''}`}>
       <div
         className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold ring-1 ${cfg.ring} ${cfg.text}`}
       >
         {useIcon && Icon ? <Icon weight="bold" className="h-4 w-4" /> : initial}
       </div>
       <div
-        className={`min-w-0 flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} max-w-[85%]`}
+        className={`min-w-0 flex flex-col gap-1 ${isMine ? 'items-end' : 'items-start'} max-w-[85%]`}
       >
         <div className="flex items-baseline gap-1.5 px-1 text-[11px] leading-none">
           <span className={`font-semibold ${cfg.text}`}>
-            {speakerName(line)}
+            {speakerName(line, localUsername)}
           </span>
           {subtitle && (
             <span className="text-muted-foreground/80">· {subtitle}</span>

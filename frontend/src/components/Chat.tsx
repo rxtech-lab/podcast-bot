@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChatCircleDots, PaperPlaneTilt } from '@phosphor-icons/react'
+import { ChatCircleDots, PaperPlaneTilt, User } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { ChatMessage } from '@/components/ChatMessage'
-import { sendMessage } from '@/lib/api'
+import { loadMe, sendMessage, updateMe } from '@/lib/api'
 import type { ChatLine } from '@/lib/types'
 
 // Soft cap on the textarea height: about 6 lines of body text. Anything
@@ -12,15 +12,30 @@ const TEXTAREA_MAX_HEIGHT_PX = 160
 
 interface ChatProps {
   history: ChatLine[]
-  // channelId is set in parallel mode so user messages are routed to the right
-  // orchestrator. Empty in sequential mode (server uses the active topic).
+  // channelId is the active channel — user messages route to that channel's
+  // orchestrator.
   channelId?: string
 }
 
 export function Chat({ history, channelId }: ChatProps) {
   const [draft, setDraft] = useState('')
+  // Username comes from the server (GET /api/me sets a cookie on first call).
+  // Empty string until the request resolves; chat input stays usable either
+  // way because the cookie is what authenticates the message server-side.
+  const [username, setUsername] = useState<string>('')
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    loadMe()
+      .then((me) => {
+        setUsername(me.username)
+        setNameDraft(me.username)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -48,6 +63,23 @@ export function Chat({ history, channelId }: ChatProps) {
     }
   }
 
+  const commitName = async () => {
+    const trimmed = nameDraft.trim()
+    setEditingName(false)
+    if (!trimmed || trimmed === username) {
+      setNameDraft(username)
+      return
+    }
+    try {
+      const me = await updateMe(trimmed)
+      setUsername(me.username)
+      setNameDraft(me.username)
+    } catch {
+      // revert on failure
+      setNameDraft(username)
+    }
+  }
+
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     void submit()
@@ -70,13 +102,43 @@ export function Chat({ history, channelId }: ChatProps) {
             className="h-4 w-4 text-primary"
           />
         </div>
-        <div className="flex flex-col leading-tight">
+        <div className="flex flex-col leading-tight flex-1 min-w-0">
           <span className="text-sm font-semibold">chat</span>
           <span className="text-[10px] text-muted-foreground">
             {history.length}{' '}
             {history.length === 1 ? 'message' : 'messages'}
           </span>
         </div>
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitName()
+              if (e.key === 'Escape') {
+                setNameDraft(username)
+                setEditingName(false)
+              }
+            }}
+            maxLength={24}
+            className="w-32 rounded-md border border-input bg-input/30 px-2 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/50"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setNameDraft(username)
+              setEditingName(true)
+            }}
+            title="click to change your display name"
+            className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 hover:bg-primary/20 transition-colors px-2 py-1 text-[11px] font-medium text-primary ring-1 ring-primary/30"
+          >
+            <User weight="bold" className="h-3 w-3" />
+            <span className="max-w-[120px] truncate">{username || '…'}</span>
+          </button>
+        )}
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4">
@@ -101,7 +163,7 @@ export function Chat({ history, channelId }: ChatProps) {
         ) : (
           <ol className="m-0 p-0 list-none flex flex-col gap-3">
             {history.map((line, i) => (
-              <ChatMessage key={i} line={line} />
+              <ChatMessage key={i} line={line} localUsername={username} />
             ))}
           </ol>
         )}

@@ -1,21 +1,43 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
-import { SpeakerHigh, WarningCircle } from '@phosphor-icons/react'
+import {
+  CheckCircle,
+  Circle,
+  SpeakerHigh,
+  Television,
+  WarningCircle,
+} from '@phosphor-icons/react'
+import type { SessionStatus } from '@/lib/types'
 
 type Mode = 'warming' | 'video' | 'audio-fallback'
 
 const WARMUP_MS = 60_000
 const POLL_MS = 1500
 
+interface OffAirInfo {
+  // The selected (off-air) channel — what the user clicked.
+  selectedTitle: string
+  selectedStatus: SessionStatus
+  // The currently-airing channel (sequential mode only). Helps the user
+  // understand why the video isn't showing the channel they tuned to.
+  airingTitle?: string
+  airingChannelId?: string
+  onTuneToAiring?: () => void
+}
+
 interface VideoStageProps {
   phase: string
   // channelId is set in parallel mode so /api/video/<id>/stream.m3u8 and the
   // matching audio fallback URL point at this channel's encoder. Empty in
-  // sequential mode.
+  // sequential mode (single shared stream).
   channelId?: string
+  // offAir, when set, replaces the video+audio with a "this debate isn't
+  // airing" placeholder. Used in sequential mode when the user has tuned to
+  // a channel that isn't the currently-airing one.
+  offAir?: OffAirInfo
 }
 
-export function VideoStage({ phase, channelId }: VideoStageProps) {
+export function VideoStage({ phase, channelId, offAir }: VideoStageProps) {
   const hlsUrl = channelId
     ? `/api/video/${encodeURIComponent(channelId)}/stream.m3u8`
     : '/api/video/stream.m3u8'
@@ -44,8 +66,10 @@ export function VideoStage({ phase, channelId }: VideoStageProps) {
   // Phase 1: poll the manifest until ffmpeg has produced segments, then flip
   // mode to 'video'. This effect does not touch the <video> element itself —
   // attaching hls.js here is racy (videoRef.current is still null because the
-  // <video> isn't mounted until after the next React commit).
+  // <video> isn't mounted until after the next React commit). Skip entirely
+  // when off-air so we don't pollute the network log with 404s.
   useEffect(() => {
+    if (offAir) return
     let cancelled = false
     const start = async () => {
       const deadline = Date.now() + WARMUP_MS
@@ -81,7 +105,7 @@ export function VideoStage({ phase, channelId }: VideoStageProps) {
       cancelled = true
     }
     // Re-warm when the channel changes so the new manifest gets polled.
-  }, [hlsUrl])
+  }, [hlsUrl, offAir])
 
   // Phase 2: when the <video> element is mounted (mode==='video'), attach
   // hls.js. We do this in a separate effect so it runs *after* React commits
@@ -141,6 +165,10 @@ export function VideoStage({ phase, channelId }: VideoStageProps) {
   }, [mode, hlsUrl])
 
   const isLive = phase !== 'setup' && phase !== 'ended'
+
+  if (offAir) {
+    return <OffAirStage info={offAir} />
+  }
 
   return (
     <section className="flex-1 min-h-0 flex items-center justify-center bg-black/80 rounded-2xl overflow-hidden border border-border/50 shadow-2xl shadow-black/50 relative">
@@ -207,6 +235,63 @@ export function VideoStage({ phase, channelId }: VideoStageProps) {
           live
         </div>
       )}
+    </section>
+  )
+}
+
+const statusCopy: Record<SessionStatus, string> = {
+  pending: "this debate hasn't started yet",
+  running: 'this debate is airing on another channel',
+  done: 'this debate has finished',
+  error: "this debate didn't run to completion",
+}
+
+function OffAirStage({ info }: { info: OffAirInfo }) {
+  const Icon =
+    info.selectedStatus === 'done'
+      ? CheckCircle
+      : info.selectedStatus === 'error'
+        ? WarningCircle
+        : Circle
+
+  return (
+    <section className="flex-1 min-h-0 flex items-center justify-center bg-black/80 rounded-2xl overflow-hidden border border-border/50 shadow-2xl shadow-black/50 relative">
+      <div className="flex flex-col items-center gap-5 p-8 max-w-md text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/40 ring-1 ring-border/60">
+          <Icon weight="duotone" className="h-7 w-7 text-muted-foreground/80" />
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-bold tracking-widest uppercase text-muted-foreground">
+            off air
+          </p>
+          <p className="text-base font-medium text-foreground/90">
+            {info.selectedTitle}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {statusCopy[info.selectedStatus]}
+          </p>
+        </div>
+        {info.airingTitle && info.airingChannelId && (
+          <button
+            type="button"
+            onClick={info.onTuneToAiring}
+            className="group inline-flex items-center gap-2 rounded-xl bg-primary/15 hover:bg-primary/25 transition-colors px-3 py-2 ring-1 ring-primary/30"
+          >
+            <Television
+              weight="duotone"
+              className="h-4 w-4 text-primary"
+            />
+            <span className="flex flex-col items-start leading-tight text-left">
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                now airing
+              </span>
+              <span className="text-xs font-medium text-foreground/90 max-w-[260px] truncate">
+                {info.airingTitle}
+              </span>
+            </span>
+          </button>
+        )}
+      </div>
     </section>
   )
 }

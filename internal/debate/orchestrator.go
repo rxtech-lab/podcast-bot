@@ -31,6 +31,7 @@ type Orchestrator struct {
 
 	Registry   *agent.Registry
 	Transcript *Transcript
+	Store      *Store
 	Tracker    *Tracker
 	Queue      *userQueue
 	Send       func(any)
@@ -56,6 +57,15 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 	ttsRegistry := tools.New()
 	tools.RegisterBuiltins(ttsRegistry)
 
+	// Per-debate sqlite db: lives next to debate.mp3 / transcript.txt so
+	// the whole debate is portable as one folder. Failure to open the db
+	// is a hard error — without persistence, reload-after-end shows nothing,
+	// and the user explicitly asked for that to work.
+	store, err := OpenStore(filepath.Join(env.OutDir, "session.db"), log)
+	if err != nil {
+		return nil, fmt.Errorf("transcript store: %w", err)
+	}
+
 	o := &Orchestrator{
 		Env:        env,
 		Topic:      topic,
@@ -64,7 +74,8 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 		MemStore:   memStore,
 		Compressor: compressor,
 		TTS:        ttsClient,
-		Transcript: NewTranscript(),
+		Transcript: NewTranscriptWithStore(store),
+		Store:      store,
 		Tracker:    NewTracker(time.Duration(topic.TotalMinutes) * time.Minute),
 		Queue:      &userQueue{},
 		Send:       send,
@@ -216,18 +227,31 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown stops MCP subprocesses.
+// Shutdown stops MCP subprocesses and closes the per-debate sqlite handle.
+// The DB file is left in place so a viewer who reloads after the debate
+// ends still sees the chat history.
 func (o *Orchestrator) Shutdown() {
 	debatemcp.StopAll(context.Background(), o.MCPSrvs)
+	if err := o.Store.Close(); err != nil {
+		o.Log.Warn("transcript store close failed", "err", err)
+	}
 }
 
-// PushUserMessage queues user input into the planner.
-func (o *Orchestrator) PushUserMessage(text string) {
-	o.Queue.push(text)
-	if text != "/end" {
-		o.Transcript.AppendUser(text)
-		o.Send(TranscriptMsg{Speaker: "user", Role: "user", Text: text, Done: true})
+// PushUserMessage queues user input into the planner. username is the
+// viewer's chosen handle (typically a random name persisted in localStorage
+// on the frontend); empty string falls back to "user" for the speaker tag so
+// past clients without a username still render reasonably.
+func (o *Orchestrator) PushUserMessage(text, username string) {
+	o.Queue.push(userMessage{Username: username, Text: text})
+	if text == "/end" {
+		return
 	}
+	speaker := username
+	if speaker == "" {
+		speaker = "user"
+	}
+	o.Transcript.AppendUser(speaker, text)
+	o.Send(TranscriptMsg{Speaker: speaker, Role: "user", Text: text, Done: true})
 }
 
 // EnsureOutDir makes sure the output dir exists (called before logger setup).
