@@ -135,7 +135,12 @@ func (p *PuzzlePlanner) Next(ctx context.Context) (*Turn, bool) {
 func (p *PuzzlePlanner) planSurface() (*Turn, bool) {
 	if !p.state.surfaceSent {
 		p.state.surfaceSent = true
-		return p.makeTurn(p.registry.PuzzleHost, "surface", p.budgetSeconds(45)), true
+		// Wide budget: prepared 湯面 stories run multi-paragraph and the host
+		// is now instructed to narrate them in full using the original
+		// wording. A 45s hint pushed the LLM to summarize down to 3–4
+		// sentences and invent details (titles, causes of death). 240s gives
+		// it room to actually read the story through.
+		return p.makeTurn(p.registry.PuzzleHost, "surface", p.budgetSeconds(240)), true
 	}
 	p.state.phase = agent.PhaseFreeSpeech
 	return p.planQA(context.Background())

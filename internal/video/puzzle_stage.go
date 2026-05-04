@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
@@ -36,6 +37,11 @@ type PuzzleStage struct {
 	curSpeaker string
 	curRole    string
 	body       strings.Builder
+	// bodyDuration is the cumulative TTS audio length of every sentence
+	// dispatched for the current speaker. Passed to the renderer so its
+	// scroll-clock alignment uses the full turn's playback length, not
+	// just the latest sentence. Reset whenever the speaker changes.
+	bodyDuration time.Duration
 
 	// Scene backgrounds for the active puzzle topic. Generated async by
 	// the caller (cmd/debate-bot) via internal/video/scenes and handed
@@ -128,6 +134,7 @@ func (s *PuzzleStage) idle() {
 	s.curSpeaker, s.curRole = "", ""
 	s.curScene = ""
 	s.body.Reset()
+	s.bodyDuration = 0
 	s.mu.Unlock()
 	// Reset puzzle layout so a subsequent debate topic on the same encoder
 	// renders with the standard CNN chrome.
@@ -230,6 +237,7 @@ func (s *PuzzleStage) handleTopic(m debate.TopicMsg) {
 	s.mu.Lock()
 	s.curSpeaker, s.curRole = "", ""
 	s.body.Reset()
+	s.bodyDuration = 0
 	s.mu.Unlock()
 	s.enc.SetSpeaker("", "", "")
 	s.enc.SetBody("", 0)
@@ -265,13 +273,26 @@ func (s *PuzzleStage) handleTranscript(m debate.TranscriptMsg) {
 		s.curSpeaker = m.Speaker
 		s.curRole = string(m.Role)
 		s.body.Reset()
+		s.bodyDuration = 0
 		s.enc.SetSpeaker(m.Speaker, string(m.Role), "")
 		s.enc.SetBody("", 0)
 	}
 
 	if m.Text != "" {
-		s.body.Reset()
+		// Accumulate within a turn. Each TranscriptMsg is scheduled by
+		// the producer to fire when its sentence's first audio byte
+		// reaches the listener; appending (instead of replacing) keeps
+		// the prior sentence visible while its audio finishes playing
+		// and pulls the new sentence in alongside it. The renderer's
+		// multi-line scroll handles overflow once the body grows past
+		// the quote card. bodyDuration tracks cumulative audio so the
+		// scroll dwell aligns with the full turn, not just the latest
+		// sentence.
+		if s.body.Len() > 0 {
+			s.body.WriteString(" ")
+		}
 		s.body.WriteString(m.Text)
-		s.enc.SetBody(s.body.String(), m.AudioDuration)
+		s.bodyDuration += m.AudioDuration
+		s.enc.SetBody(s.body.String(), s.bodyDuration)
 	}
 }

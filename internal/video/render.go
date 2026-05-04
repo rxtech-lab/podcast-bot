@@ -392,10 +392,19 @@ func (r *Renderer) SetState(speaker, role, side, body string, audioDuration time
 	r.role = role
 	r.side = side
 	if body != r.body {
-		// New sentence (or speaker changeover that cleared the body) — restart
-		// the scroll clock so a long passage begins at line 0 rather than
-		// wherever the previous body had scrolled to.
-		r.bodyStartedAt = time.Now()
+		// Restart the scroll clock when the body is a fresh passage —
+		// either the very first chunk after a speaker change (old body
+		// empty) or a wholly different string (replace, not extension).
+		// When a stage accumulates per-sentence chunks within a single
+		// turn the new body is a prefix-extension of the old one; in
+		// that case keep bodyStartedAt so scroll dwell still aligns with
+		// the original utterance start instead of resetting on every
+		// new sentence. bodyAudioDuration always tracks the latest
+		// (cumulative) length the caller passes in.
+		isExtension := r.body != "" && strings.HasPrefix(body, r.body)
+		if !isExtension {
+			r.bodyStartedAt = time.Now()
+		}
 		r.bodyAudioDuration = audioDuration
 	}
 	r.body = body

@@ -78,6 +78,21 @@ type Pipeline struct {
 	// nil means no music is configured; produce() falls through to writing
 	// directly into LiveStream.
 	sessionMixer *musicmixer.Mixer
+
+	// nextPlayAt is the wall-clock moment the next-to-be-synthesized
+	// sentence's first audio byte is expected to reach the listener.
+	// Advanced by each sentence's audio duration after synth so
+	// back-to-back sentences within a turn schedule serially even when
+	// the bytes are still buffered inside the music mixer (the mixer's
+	// internal ffmpeg pipeline holds many seconds of audio that
+	// LiveStream.BytesAhead can't see, so naïvely deriving targetSend
+	// from BytesAhead alone makes every sentence fire at roughly
+	// now+clientLatency and the subtitle jumps speakers before the
+	// previous speaker's audio drains). Resynced at each call against
+	// LiveStream.BytesAhead so any silence-pad the pump inserted during
+	// inter-turn idle still counts toward when the next chunk plays.
+	playheadMu sync.Mutex
+	nextPlayAt time.Time
 }
 
 // NewPipeline creates a Pipeline.
@@ -294,7 +309,13 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	sink := io.MultiWriter(turnFile, liveSink)
 	wroteAny := false
 
-	splitter := &audio.SentenceSplitter{}
+	// MinChars=6 coalesces sub-6-rune sentences with the next one so the
+	// puzzle host's "是。" / "不是。" / "與此無關。" answer prefix doesn't get
+	// its own ~0.5s audio clip + flickering subtitle. The clarifying
+	// clause that always follows pulls the combined text well past the
+	// threshold. Long debate prose is unaffected — its sentences are
+	// already long enough to emit on their own.
+	splitter := &audio.SentenceSplitter{MinChars: 6}
 	defer close(t.TextOut)
 	for d := range stream.Deltas() {
 		if d.Done {
@@ -355,21 +376,24 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	default:
 	}
 
-	// Bus event drives the live UI subtitle. The producer races up to the
-	// LiveStream's input buffer ahead of realtime playback; emitting the bus
-	// event synchronously makes the subtitle race ahead of the audio. Capture
-	// the target wall-clock send moment now (bytesAhead is the playback offset
-	// of the *next* byte we're about to write), then synthesize so we can
-	// stamp the message with the resulting audio duration before dispatch.
-	//
-	// We also add subtitleClientLatency to account for buffering downstream of
-	// ffmpeg (browser MediaSource source buffer, ffplay decode pipeline, OS
-	// audio buffer). Without it the subtitle still beats the audio by
-	// roughly that amount because BytesAhead can't see past stdout.
+	// Schedule subtitle dispatch for when this sentence's first audio
+	// byte will reach the listener. p.nextPlayAt is the running playhead
+	// (advanced after synth by each sentence's audioDuration); resync
+	// here against LiveStream.BytesAhead so any silence-pad the pump
+	// inserted between turns still counts. We always pick the LATER of
+	// the two so the playhead never goes backwards. subtitleClientLatency
+	// covers downstream buffering (browser MediaSource buffer, OS audio
+	// buffer) that BytesAhead can't see past stdout.
+	p.playheadMu.Lock()
 	bytesAhead := p.d.LiveStream.BytesAhead()
-	targetSend := time.Now().Add(
+	nowSync := time.Now().Add(
 		time.Duration(float64(bytesAhead)/float64(audio.AudioBytesPerSec)*float64(time.Second)) +
 			subtitleClientLatency)
+	if nowSync.After(p.nextPlayAt) {
+		p.nextPlayAt = nowSync
+	}
+	targetSend := p.nextPlayAt
+	p.playheadMu.Unlock()
 
 	body, err := p.d.TTS.SynthesizeStream(ctx, t.Speaker.Voice().ShortName, sent, p.d.Language)
 	if err != nil {
@@ -381,11 +405,16 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		return n, err
 	}
 
+	audioDuration := time.Duration(float64(n) /
+		float64(audio.AudioBytesPerSec) * float64(time.Second))
+	p.playheadMu.Lock()
+	p.nextPlayAt = p.nextPlayAt.Add(audioDuration)
+	p.playheadMu.Unlock()
+
 	msg := TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
 		Side: t.Speaker.Side(), Text: sent,
-		AudioDuration: time.Duration(float64(n) /
-			float64(audio.AudioBytesPerSec) * float64(time.Second)),
+		AudioDuration: audioDuration,
 	}
 	if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
 		p.d.Send(msg)

@@ -184,7 +184,7 @@ func (o *Orchestrator) buildAgents() error {
 		case agent.RolePlayer:
 			return agent.NewPlayer(base)
 		case agent.RolePuzzleHost:
-			return agent.NewPuzzleHost(base, o.Topic.Truth)
+			return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth)
 		}
 		return nil
 	}
