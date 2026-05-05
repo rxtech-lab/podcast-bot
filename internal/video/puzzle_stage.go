@@ -623,16 +623,38 @@ func (s *PuzzleStage) accepts(v any) bool {
 // right); AffPosition carries the soup-surface (湯面) so viewers can read the
 // scenario the whole round. We deliberately do NOT pass the truth (湯底) to
 // any rendering surface — only the puzzle host's LLM prompt sees it.
+//
+// Scene state is reset before reapplying so a puzzle→puzzle handoff doesn't
+// keep painting the previous topic's surface frames while the new puzzle's
+// scene generation is still running. idle() handles the puzzle→non-puzzle
+// case the same way; this branch covers same-type sequential transitions.
 func (s *PuzzleStage) handleTopic(m contentcreator.TopicMsg) {
 	s.enc.SetTopic(m.Title)
 	s.enc.SetSides(m.AffNames, m.NegNames)
 	s.enc.SetPositions(m.AffPosition, m.NegPosition)
+	// Stop any rotation from the previous topic before clearing state — a
+	// stale tick mid-clear would race with applyScene below and re-paint a
+	// previous-puzzle frame after we've cleared the bank.
+	s.stopSceneRotation()
 	s.mu.Lock()
 	s.curSpeaker, s.curRole = "", ""
 	s.body.Reset()
+	// Drop the previous puzzle's pre-generated scene bank. cmd/debate-bot
+	// kicks off scene gen async on topic admission and calls AttachScenes
+	// when each frame lands; until then, having no bank lets the renderer
+	// fall back to its blank/default bg instead of replaying the previous
+	// puzzle's first surface frame.
+	s.sceneScenes = nil
+	s.surfaceAnimations = nil
+	s.curScene = ""
+	s.curSceneIdx = 0
+	s.qaSurfaceMode = false
 	s.mu.Unlock()
 	s.enc.SetSpeaker("", "", "")
 	s.enc.SetBody("", 0)
+	// Wipe the on-encoder background too; SetSceneBackground(nil) tells the
+	// renderer to stop crossfading from the prior scene image.
+	s.enc.SetSceneBackground(nil)
 	// Default to the surface scene on topic admission. If scenes haven't
 	// been generated yet, this no-ops and PhaseMsg/AttachScenes pick it up.
 	s.setSceneFor(scenes.SceneSurface)

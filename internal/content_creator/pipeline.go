@@ -209,9 +209,64 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		p.updateMemories(ctx, t)
 	}
 
+	// Drain audio before returning so the next debate's TopicMsg (published
+	// by runChannel as soon as Run returns) doesn't flip the visuals while
+	// this debate's last 10–15s of TTS is still in the LiveStream's
+	// realtime-paced output buffer. Two stages:
+	//   1. Close the music mixer here (idempotent — the deferred Close is a
+	//      no-op via closeOnce). This pumps any unmixed TTS PCM out of the
+	//      mixer and into LiveStream.
+	//   2. Poll LiveStream.BytesAhead until it drops to ~0, capped by a
+	//      generous timeout so a stuck pump can't pin the channel forever.
+	if p.sessionMixer != nil {
+		if cerr := p.sessionMixer.Close(); cerr != nil {
+			p.d.Log.Warn("session music mixer close (drain)", "err", cerr)
+		}
+	}
+	p.waitAudioDrained(ctx)
+
 	filesMu.Lock()
 	defer filesMu.Unlock()
 	return append([]string(nil), files...), nil
+}
+
+// waitAudioDrained polls LiveStream.BytesAhead until the producer-vs-playback
+// delta is small enough that the listener has heard substantially all of the
+// produced audio. Bounded by audioDrainTimeout so a hung output pipeline can't
+// pin the channel runner — at the timeout we return regardless and accept a
+// small audible cut at the handoff (better than freezing the channel).
+//
+// audioDrainEpsilon (~0.5s of mp3 bytes) is the threshold rather than 0
+// because LiveStream's bytesPlayed counter advances in 4 KB pump reads; the
+// last fraction of a chunk may show a non-zero BytesAhead even when the
+// listener has effectively heard everything.
+func (p *Pipeline) waitAudioDrained(ctx context.Context) {
+	if p.d.LiveStream == nil {
+		return
+	}
+	const (
+		audioDrainTimeout = 30 * time.Second
+		audioDrainEpsilon = audio.AudioBytesPerSec / 2 // ~0.5s of mp3
+		pollInterval      = 100 * time.Millisecond
+	)
+	deadline := time.Now().Add(audioDrainTimeout)
+	for {
+		ahead := p.d.LiveStream.BytesAhead()
+		if ahead <= int64(audioDrainEpsilon) {
+			return
+		}
+		if time.Now().After(deadline) {
+			p.d.Log.Warn("audio drain timed out — proceeding with handoff",
+				"bytes_ahead", ahead,
+				"approx_seconds", float64(ahead)/float64(audio.AudioBytesPerSec))
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 // dispatchPhaseMsg defers a phase change so it lands on the listener's

@@ -153,6 +153,16 @@ type Mixer struct {
 	pumpErr    error
 	mixErr     error
 
+	// drainCh signals the mix loop to exit once every queued TTS PCM
+	// chunk has been mixed into output. Close()'s old SIGINT-the-music-
+	// then-wait-for-mixDone sequence dropped any TTS PCM still sitting
+	// in ttsCh / residual at session end (audible as the previous
+	// debate's last sentence cutting mid-word at sequential handoffs).
+	// Close() closes drainCh AFTER readerDone so mixLoop knows TTS is
+	// fully queued, and mixLoop polls drainCh + ttsCh==nil + len(residual)==0
+	// at the top of each iteration to decide when it's safe to exit.
+	drainCh chan struct{}
+
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -280,6 +290,7 @@ func NewSession(musicPath string, sink io.Writer) (*Mixer, error) {
 		pumpDone:   make(chan struct{}),
 		mixDone:    make(chan struct{}),
 		readerDone: make(chan struct{}),
+		drainCh:    make(chan struct{}),
 	}
 	go m.pump(sink)
 	go m.ttsReader()
@@ -300,10 +311,19 @@ func (m *Mixer) Write(p []byte) (int, error) {
 }
 
 // Close finalises the session: signals EOF to the TTS decoder so
-// its remaining PCM drains through the mix loop; closes the
-// encoder's stdin to flush its mp3 muxer trailer; SIGINTs the music
-// decoder (it would otherwise loop forever); and waits for the
-// goroutines + processes to exit. Safe to call multiple times.
+// its remaining PCM drains through the mix loop; signals mixLoop to
+// exit once that PCM has actually been mixed into output (the music
+// decoder keeps running at realtime cadence during this drain so the
+// listener hears every TTS sample); SIGINTs the music decoder; closes
+// the encoder's stdin to flush its mp3 muxer trailer; and waits for
+// the goroutines + processes to exit. Safe to call multiple times.
+//
+// The drain step replaced the original "SIGINT music immediately,
+// then wait for mixDone" sequence — that path made mixLoop exit on
+// musicOut EOF as soon as music was killed, which dropped whatever
+// TTS PCM was still queued in ttsCh / residual. At sequential debate
+// handoffs the dropped tail was the previous debate's last 1–3 s of
+// audio, which presented as a sentence cutting mid-word.
 func (m *Mixer) Close() error {
 	m.closeOnce.Do(func() {
 		var firstErr error
@@ -316,30 +336,35 @@ func (m *Mixer) Close() error {
 		}
 		<-m.readerDone
 
-		// 2. Stop the music decoder. -re/-stream_loop -1 means it
-		//    would otherwise run forever; SIGINT makes it exit
-		//    cleanly so the mix loop sees musicOut EOF and stops.
-		//    The mix loop itself owns m.musicCmd / m.musicOut after
-		//    a ReplaceMusic — it may have already been swapped to a
-		//    different process — so we read the pointer directly.
+		// 2. Tell mixLoop it can exit once the queued TTS PCM has
+		//    been fully mixed in. Music keeps running at realtime
+		//    cadence during this window so the bed plays under the
+		//    final TTS bytes; mixLoop's drainCh check exits the loop
+		//    once ttsCh is closed-drained AND residual is empty.
+		close(m.drainCh)
+		<-m.mixDone
+
+		// 3. Stop the music decoder now that mixLoop has exited.
+		//    -re/-stream_loop -1 means it would otherwise run
+		//    forever. The mix loop owns m.musicCmd / m.musicOut
+		//    after a ReplaceMusic — read the pointer directly.
 		if m.musicCmd != nil && m.musicCmd.Process != nil {
 			_ = m.musicCmd.Process.Signal(syscall.SIGINT)
 		}
-		<-m.mixDone
 
-		// 3. Close the encoder's stdin so it writes the mp3 muxer
+		// 4. Close the encoder's stdin so it writes the mp3 muxer
 		//    trailer; pump finishes copying the tail to the sink.
 		if m.encIn != nil {
 			_ = m.encIn.Close()
 		}
 		<-m.pumpDone
 
-		// 4. Reap subprocesses. Non-zero exits from SIGINT'd
+		// 5. Reap subprocesses. Non-zero exits from SIGINT'd
 		//    music ffmpeg are expected and not surfaced.
 		_ = m.musicCmd.Wait()
 		_ = m.ttsCmd.Wait()
 		_ = m.encCmd.Wait()
-		// 5. Reap any overlay clips still in flight at session end.
+		// 6. Reap any overlay clips still in flight at session end.
 		m.overlaysMu.Lock()
 		for _, ov := range m.overlays {
 			if ov.cmd != nil && ov.cmd.Process != nil {
@@ -554,6 +579,22 @@ func (m *Mixer) mixLoop() {
 	bedScale := float32(1)
 
 	for {
+		// Drain-and-exit check. Close() closes drainCh AFTER readerDone,
+		// which guarantees ttsCh has been closed and every TTS PCM byte
+		// is either sitting in ttsCh or already in residual. Once both
+		// are empty, mixing more music chunks would just produce silence
+		// past the end of the session, so exit cleanly here. Without
+		// this check Close() used to SIGINT music immediately, which
+		// dropped the unmixed tail of TTS audio (audible as a clipped
+		// final sentence at sequential debate handoffs).
+		select {
+		case <-m.drainCh:
+			if m.ttsCh == nil && len(residual) == 0 {
+				return
+			}
+		default:
+		}
+
 		// Pick up a pending music-swap request before reading the next
 		// chunk. We drain at most one — the channel is single-buffered
 		// so a second swap during a fade waits for ReplaceMusic to

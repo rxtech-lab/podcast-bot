@@ -290,6 +290,13 @@ export function useDebateEvents() {
           }),
         )
         .catch(() => {})
+      // Refetch channels so the schedule's current_debate_id, status badges,
+      // and "now: <title>" strip flip to the new debate. Without this, the
+      // schedule strip stays pinned on the previous debate until the user
+      // changes channels — which is the entire trigger we'd need.
+      loadTopics()
+        .then((resp) => dispatch({ kind: 'channels', channels: resp.channels }))
+        .catch(() => {})
     })
 
     // The folder watcher discovered a new debate.md and queued it. Refetch
