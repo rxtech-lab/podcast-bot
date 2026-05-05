@@ -162,11 +162,11 @@ func (s *PuzzleStage) idle() {
 // call before or after the topic activates — the active scene is applied
 // immediately if the stage is currently active.
 //
-// Additive merge: each call updates only the non-empty fields on sc into
-// the stage's accumulated PuzzleScenes. This lets the caller stream the
-// assets in (surface first to unblock show start, then qa + reveal +
-// conclusion in the background) without later attaches clobbering
-// earlier ones.
+// Additive merge: each call writes only the non-nil entries of sc into
+// the stage's accumulated PuzzleScenes. Per-index merge for the slice
+// fields (Surface / Conclusion) so a streaming caller that already
+// installed individual frames via AttachSurfaceFrame doesn't have those
+// frames clobbered by a later wholesale attach with mostly-nil slots.
 func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
 	if sc == nil {
 		return
@@ -175,8 +175,17 @@ func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
 	if s.sceneScenes == nil {
 		s.sceneScenes = &scenes.PuzzleScenes{}
 	}
-	if len(sc.Surface) > 0 {
-		s.sceneScenes.Surface = sc.Surface
+	if n := len(sc.Surface); n > 0 {
+		if n > len(s.sceneScenes.Surface) {
+			grown := make([]*image.RGBA, n)
+			copy(grown, s.sceneScenes.Surface)
+			s.sceneScenes.Surface = grown
+		}
+		for i, img := range sc.Surface {
+			if img != nil {
+				s.sceneScenes.Surface[i] = img
+			}
+		}
 	}
 	if sc.QA != nil {
 		s.sceneScenes.QA = sc.QA
@@ -184,21 +193,72 @@ func (s *PuzzleStage) AttachScenes(sc *scenes.PuzzleScenes) {
 	if sc.Reveal != nil {
 		s.sceneScenes.Reveal = sc.Reveal
 	}
-	if len(sc.Conclusion) > 0 {
-		s.sceneScenes.Conclusion = sc.Conclusion
+	if n := len(sc.Conclusion); n > 0 {
+		if n > len(s.sceneScenes.Conclusion) {
+			grown := make([]*image.RGBA, n)
+			copy(grown, s.sceneScenes.Conclusion)
+			s.sceneScenes.Conclusion = grown
+		}
+		for i, img := range sc.Conclusion {
+			if img != nil {
+				s.sceneScenes.Conclusion[i] = img
+			}
+		}
 	}
 	active := s.active
 	cur := s.curScene
+	curIdx := s.curSceneIdx
 	s.mu.Unlock()
 	if active {
 		// Apply the appropriate scene for the current phase. If a phase
 		// has already been seen, use it; otherwise default to surface.
+		// Preserve curSceneIdx — resetting to 0 here would yank the
+		// surface scene back to its first variant every time a downstream
+		// phase's images stream in, producing a visible jump-cut and
+		// crossfade-flicker mid-narration.
 		name := cur
 		if name == "" {
 			name = scenes.SceneSurface
 		}
-		s.applyScene(name, 0)
+		idx := curIdx
+		if name != cur {
+			idx = 0
+		}
+		s.applyScene(name, idx)
 		s.maybeStartSceneRotation(name)
+	}
+}
+
+// AttachSurfaceFrame installs a single surface variant produced by the
+// streaming gen path. Used by cmd/debate-bot to hand frames to the stage as
+// they finish so the show can start once the first N priority variants land
+// without waiting for the slowest frames in the tail. Out-of-range indices
+// grow the underlying slice (subsequent indices remain nil — ByNameIdx skips
+// them, ByNameIdxExact returns nil so applySceneAdvance leaves the current
+// background in place). No-op for a nil image.
+func (s *PuzzleStage) AttachSurfaceFrame(variant int, img *image.RGBA) {
+	if img == nil || variant < 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.sceneScenes == nil {
+		s.sceneScenes = &scenes.PuzzleScenes{}
+	}
+	if variant >= len(s.sceneScenes.Surface) {
+		grown := make([]*image.RGBA, variant+1)
+		copy(grown, s.sceneScenes.Surface)
+		s.sceneScenes.Surface = grown
+	}
+	s.sceneScenes.Surface[variant] = img
+	active := s.active
+	cur := s.curScene
+	curIdx := s.curSceneIdx
+	s.mu.Unlock()
+	// If the renderer is currently parked on this exact slot (because an
+	// earlier <scene N/> marker landed before the image had finished
+	// generating), repaint now that the frame is available.
+	if active && cur == scenes.SceneSurface && curIdx == variant {
+		s.applyScene(scenes.SceneSurface, variant)
 	}
 }
 
@@ -214,7 +274,18 @@ func (s *PuzzleStage) AttachConclusion(imgs []*image.RGBA) {
 	if s.sceneScenes == nil {
 		s.sceneScenes = &scenes.PuzzleScenes{}
 	}
-	s.sceneScenes.Conclusion = imgs
+	if n := len(imgs); n > 0 {
+		if n > len(s.sceneScenes.Conclusion) {
+			grown := make([]*image.RGBA, n)
+			copy(grown, s.sceneScenes.Conclusion)
+			s.sceneScenes.Conclusion = grown
+		}
+		for i, img := range imgs {
+			if img != nil {
+				s.sceneScenes.Conclusion[i] = img
+			}
+		}
+	}
 	active := s.active
 	cur := s.curScene
 	s.mu.Unlock()
@@ -282,7 +353,17 @@ func (s *PuzzleStage) applySceneAdvance(idx int) {
 	}
 	applyIdx := s.curSceneIdx
 	s.mu.Unlock()
-	s.applyScene(name, applyIdx)
+	// Honour the exact requested slot. When streaming surface gen is
+	// still running the targeted frame may not exist yet — in that case
+	// keep whatever background is currently on screen instead of jumping
+	// to a different beat. AttachSurfaceFrame repaints once the frame
+	// lands.
+	if img := sc.ByNameIdxExact(name, applyIdx); img != nil {
+		s.enc.SetPuzzleSceneName(name)
+		s.enc.SetSceneBackground(img)
+	} else {
+		s.enc.SetPuzzleSceneName(name)
+	}
 }
 
 // applyScene blits the indexed variant of the named scene through the

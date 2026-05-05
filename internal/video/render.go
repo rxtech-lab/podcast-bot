@@ -178,9 +178,11 @@ const (
 const stageTransitionDuration = 600 * time.Millisecond
 
 // sceneTransitionDuration is the crossfade window when SetSceneBackground
-// swaps in a new puzzle scene image. A touch slower than the stage move so
-// the bg change reads as a scene cut rather than a UI tweak.
-const sceneTransitionDuration = 800 * time.Millisecond
+// swaps in a new puzzle scene image. Tuned long enough that a back-to-back
+// crossfade (two scene swaps within the previous fade's window) doesn't
+// read as a flash — the eye sees a continuous dissolve instead of an
+// interrupted one.
+const sceneTransitionDuration = 1500 * time.Millisecond
 
 // NewRendererForTest is an exported constructor for the render-smoke harness.
 // Production code uses the unexported newRenderer via Encoder.

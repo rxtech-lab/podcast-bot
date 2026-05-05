@@ -17,16 +17,12 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/audio"
-	"github.com/sirily11/debate-bot/internal/audio/musicgen"
 	"github.com/sirily11/debate-bot/internal/config"
-	"github.com/sirily11/debate-bot/internal/content_creator"
+	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
-	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/util"
 	"github.com/sirily11/debate-bot/internal/video"
-	"github.com/sirily11/debate-bot/internal/video/imagegen"
-	"github.com/sirily11/debate-bot/internal/video/scenes"
 	"github.com/sirily11/debate-bot/internal/watcher"
 )
 
@@ -748,77 +744,8 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		// staring at a stale frame from the previous topic.
 		send(buildTopicMsg(d, i, total))
 
-		// Situation-puzzle: BLOCK on the assets the host needs to start
-		// narrating — surface + qa + reveal scenes plus the music bed —
-		// then kick off the conclusion-image generation in the background.
-		// The conclusion only paints at the end of the show, so deferring
-		// it shaves up to ~30s off the start-of-podcast wait on a first
-		// run. Cached runs hit disk in <100ms so even the conclusion lands
-		// before the user notices.
 		if d.topic.Type == config.ContentTypeSituationPuzzle && ch.puzzleStage != nil {
-			scenesCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-bgs")
-			musicCacheDir := filepath.Join(debateEnv.OutDir, "puzzle-music")
-			fmt.Fprintf(os.Stdout, "▶ ch %d [%s] planning + generating scenes + music in parallel (this can take ~30-60s on first run; conclusion runs concurrently)\n",
-				ch.def.Number, ch.def.ID)
-
-			// Music generation does not depend on the scene plan, so kick
-			// it off immediately — runs concurrently with planning AND
-			// scene generation below. Saves the plan latency (~4s) off the
-			// music critical path.
-			musicCh := make(chan *musicgen.PuzzleMusic, 1)
-			go func() {
-				musicCh <- generatePuzzleMusic(r.ctx, r.log, d.topic, musicCacheDir)
-			}()
-
-			// Plan synchronously; phase-1 + conclusion both need it.
-			plan := planPuzzleScenes(r.ctx, r.log, &debateEnv, d.topic)
-			// Hand the host the planner's per-frame direction lists so
-			// its system prompt can enumerate beats and emit numbered
-			// "<scene N/>" markers locked to the cached images. The
-			// anchor list is parallel to Surface and gives the host a
-			// verbatim string-match trigger for each marker — without
-			// it the host counts paragraph breaks and drifts off the
-			// planner's intent. Must happen before orch.Run, which
-			// constructs the host agent in Setup. No-op when plan is
-			// nil.
-			if plan != nil {
-				orch.SetSurfacePlan(plan.Surface)
-				orch.SetSurfaceAnchors(plan.SurfaceAnchors)
-				orch.SetConclusionPlan(plan.Conclusion)
-			}
-
-			// Surface scenes are the only phase-gated dependency for the
-			// show start — the host narrates surface for several minutes
-			// before any qa/reveal/conclusion phase, so qa + reveal +
-			// conclusion can attach in the background as they land
-			// (AttachScenes is additive). This trims show-start latency
-			// when one of the non-surface gens hits a slow retry.
-			surfaceDone := make(chan struct{})
-			go func() {
-				defer close(surfaceDone)
-				generatePuzzleScenePhases(r.ctx, r.log, ch.puzzleStage,
-					d.topic, plan, scenesCacheDir, "surface", scenes.SceneSurface)
-			}()
-			go generatePuzzleScenePhases(r.ctx, r.log, ch.puzzleStage,
-				d.topic, plan, scenesCacheDir, "qa+reveal",
-				scenes.SceneQA, scenes.SceneReveal)
-			go generatePuzzleConclusion(r.ctx, r.log, ch.puzzleStage, d.topic, plan, scenesCacheDir)
-
-			// Block on the assets the podcast needs to actually start —
-			// surface scenes + music. Everything else is allowed to lag.
-			music := <-musicCh
-			<-surfaceDone
-
-			if music != nil {
-				m := map[string]string{}
-				if music.SurfacePath != "" {
-					m[musicgen.PhaseSurface] = music.SurfacePath
-				}
-				if music.RevealPath != "" {
-					m[musicgen.PhaseReveal] = music.RevealPath
-				}
-				orch.SetPuzzleMusic(m)
-			}
+			preparePuzzleAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
 		}
 
 		runErr := orch.Run(r.ctx)
@@ -1015,181 +942,8 @@ func agentNames(specs []config.AgentSpec) []string {
 	return out
 }
 
-// generatePuzzleScenePhases generates the listed scene phases and attaches
-// them to the channel's PuzzleStage as they land (AttachScenes is now
-// additive, so partial fills don't clobber prior attaches). Blocks until
-// generation finishes — caller decides whether to await this goroutine
-// or let it run in the background.
-//
-// Used in two roles by main.go:
-//   - "surface only" — blocks the show start so the host has imagery for
-//     the opening narration.
-//   - "qa + reveal" — runs in the background; attaches when ready, well
-//     before the qa/reveal phases of the show begin (the surface
-//     narration runs ~3-5 min, plenty of slack).
-//
-// Logs but never propagates errors — missing scenes leave the renderer on
-// its default bg, which is acceptable degradation.
-func generatePuzzleScenePhases(ctx context.Context, log *slog.Logger,
-	ps *video.PuzzleStage, topic *config.DebateTopic, plan *scenes.ScenePlan,
-	scenesCacheDir, label string, phases ...string) {
-	client, err := imagegen.New("")
-	if err != nil {
-		log.Warn("puzzle scene gen disabled", "label", label, "err", err)
-		return
-	}
-	t0 := time.Now()
-	sc, err := scenes.GenerateWithPlan(ctx, client, topic, plan, scenesCacheDir, phases...)
-	if err != nil {
-		log.Warn("puzzle scene gen partial",
-			"label", label,
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond),
-			"err", err)
-	} else {
-		log.Info("puzzle scenes ready",
-			"label", label,
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond))
-	}
-	if sc != nil {
-		ps.AttachScenes(sc)
-	}
-}
-
-// generatePuzzleMusic generates the music bed for a puzzle topic. Returns
-// the music paths or nil if generation failed. Designed to run as a
-// goroutine — the caller publishes the result via orch.SetPuzzleMusic
-// once both music and phase-1 scenes are ready.
-//
-// Music does NOT depend on the scene plan, so this can start as soon as
-// the topic is admitted, in parallel with planPuzzleScenes. That trims
-// the planning latency (~4s) off the music critical path on first runs.
-func generatePuzzleMusic(ctx context.Context, log *slog.Logger,
-	topic *config.DebateTopic, musicCacheDir string) *musicgen.PuzzleMusic {
-	client, err := musicgen.New("")
-	if err != nil {
-		log.Warn("puzzle music gen disabled", "err", err)
-		return nil
-	}
-	t0 := time.Now()
-	pm, err := musicgen.Generate(ctx, client, topic, musicCacheDir)
-	if err != nil {
-		log.Warn("puzzle music gen partial",
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond),
-			"err", err)
-	} else {
-		log.Info("puzzle music ready",
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond))
-	}
-	return pm
-}
-
-// planPuzzleScenes asks the host LLM to design the variant-direction list
-// for the surface and conclusion image phases — see scenes.Plan. Returns
-// nil on any failure, in which case the downstream generators fall back to
-// the static SurfaceVariantCount / ConclusionVariantCount and the built-in
-// rotation directions. Reuses the host model + endpoint so we don't need a
-// separate API key wired through env.
-func planPuzzleScenes(ctx context.Context, log *slog.Logger, env *config.Env, topic *config.DebateTopic) *scenes.ScenePlan {
-	if env == nil || env.OpenAIBaseURL == "" || env.OpenAIKey == "" {
-		// No LLM creds → skip the LLM path entirely and use the heuristic
-		// fallback so the surface still gets story-ordered chunks.
-		if fb := scenes.FallbackPlan(topic); fb != nil {
-			log.Info("scene plan fallback ready (no LLM creds)",
-				"title", topic.Title,
-				"surface_frames", fb.SurfaceCount(),
-				"conclusion_frames", fb.ConclusionCount())
-			return fb
-		}
-		return nil
-	}
-	// Prefer the dedicated scene-planner model (SCENE_PLANNER_MODEL) when
-	// configured; LoadEnv falls back to HostModel if unset. The planner
-	// only runs once per puzzle so a higher-quality model is cheap here.
-	model := env.ScenePlannerModel
-	if model == "" {
-		model = env.HostModel
-	}
-	if model == "" {
-		if fb := scenes.FallbackPlan(topic); fb != nil {
-			log.Info("scene plan fallback ready (no model configured)",
-				"title", topic.Title,
-				"surface_frames", fb.SurfaceCount(),
-				"conclusion_frames", fb.ConclusionCount())
-			return fb
-		}
-		return nil
-	}
-	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
-	log.Info("scene plan llm",
-		"title", topic.Title,
-		"model", model)
-	t0 := time.Now()
-	plan, err := scenes.Plan(ctx, client, topic)
-	if err != nil || plan == nil {
-		log.Warn("scene plan llm call failed, using heuristic fallback",
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond),
-			"err", err)
-		if fb := scenes.FallbackPlan(topic); fb != nil {
-			log.Info("scene plan fallback ready",
-				"title", topic.Title,
-				"surface_frames", fb.SurfaceCount(),
-				"conclusion_frames", fb.ConclusionCount())
-			return fb
-		}
-		return nil
-	}
-	log.Info("scene plan ready",
-		"title", topic.Title,
-		"surface_frames", plan.SurfaceCount(),
-		"conclusion_frames", plan.ConclusionCount(),
-		"elapsed", time.Since(t0).Round(time.Millisecond))
-	return plan
-}
-
-// generatePuzzleConclusion runs the conclusion image generation that
-// generatePuzzleAssets deliberately deferred. Called from a background
-// goroutine after the podcast has started; on completion the rendered
-// images are handed to the channel's PuzzleStage via AttachConclusion so
-// the conclusion phase paints with fresh frames if/when the show reaches
-// it. Errors are logged but never bubbled up — the conclusion phase
-// gracefully falls back to the renderer's default bg.
-func generatePuzzleConclusion(ctx context.Context, log *slog.Logger,
-	ps *video.PuzzleStage, topic *config.DebateTopic, plan *scenes.ScenePlan,
-	scenesCacheDir string) {
-	client, err := imagegen.New("")
-	if err != nil {
-		log.Warn("puzzle conclusion gen disabled", "err", err)
-		return
-	}
-	t0 := time.Now()
-	sc, err := scenes.GenerateWithPlan(ctx, client, topic, plan, scenesCacheDir, scenes.SceneConclusion)
-	if err != nil {
-		log.Warn("puzzle conclusion gen partial",
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond),
-			"err", err)
-	} else {
-		log.Info("puzzle conclusion ready",
-			"title", topic.Title,
-			"elapsed", time.Since(t0).Round(time.Millisecond))
-	}
-	if sc != nil {
-		ps.AttachConclusion(sc.Conclusion)
-	}
-}
-
 // buildTopicMsg shapes the per-content-type TopicMsg the video stage consumes.
-// Debate fills aff/neg roster + position statements as today. Situation-puzzle
-// repurposes the same panels: the puzzle host appears alone on the left
-// (AffNames), players on the right (NegNames), and the surface story doubles
-// as the left-panel position text so on-screen viewers see the puzzle prompt
-// while the host is reading it. Truth (湯底) is intentionally NOT sent — that
-// would defeat the game.
+// Dispatches to the type-specific builder in puzzle.go / debate.go.
 func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
 	msg := contentcreator.TopicMsg{
 		ID:    d.id,
@@ -1199,21 +953,9 @@ func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
 		Total: total,
 	}
 	if d.topic.Type == config.ContentTypeSituationPuzzle {
-		hostName := d.topic.PuzzleHost.Name
-		if hostName == "" {
-			hostName = "Host"
-		}
-		msg.AffNames = []string{hostName}
-		msg.NegNames = agentNames(d.topic.Players)
-		msg.AffPosition = d.topic.Surface
-		msg.NegPosition = ""
-		return msg
+		return buildPuzzleTopicMsg(d, msg)
 	}
-	msg.AffNames = agentNames(d.topic.Affirmative)
-	msg.NegNames = agentNames(d.topic.Negative)
-	msg.AffPosition = d.topic.AffirmativePos
-	msg.NegPosition = d.topic.NegativePos
-	return msg
+	return buildDebateTopicMsg(d, msg)
 }
 
 // serverCmd: HTTP server hosting the web UI + per-channel HLS video + audio.

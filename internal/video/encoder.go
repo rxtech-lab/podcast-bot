@@ -140,6 +140,15 @@ func New(ctx context.Context, sessionDir string, res Resolution, log *slog.Logge
 	}
 	args = append(args,
 		"-pix_fmt", "yuv420p",
+		// Force constant frame rate end-to-end. Without -r on the output
+		// side and without -fps_mode cfr, ffmpeg can pass the input PTS
+		// through verbatim: a Go-side ticker stall (GC pause, scheduler
+		// jitter) becomes a missed frame that the muxer encodes as a
+		// longer gap, which on a crossfade reads as a one-frame freeze /
+		// blink. Pinning the output framerate makes ffmpeg duplicate or
+		// drop frames as needed so the dissolve is paced uniformly.
+		"-r", fmt.Sprintf("%d", videoFPS),
+		"-fps_mode", "cfr",
 		"-g", fmt.Sprintf("%d", videoFPS*hlsSegmentSec),
 		"-c:a", "aac",
 		"-b:a", "64k",

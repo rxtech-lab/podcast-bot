@@ -18,10 +18,42 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/video/imagegen"
 )
+
+// DefaultPerFrameTimeout is the default budget for one image-gen call when
+// GenerateOptions.PerFrameTimeout is zero. Long enough to cover a slow
+// gateway round-trip plus a couple of internal retries; short enough that a
+// single hung frame can't stall the surface batch indefinitely (the failure
+// mode that left a debate "pending" for 8 minutes waiting on surface-v33).
+const DefaultPerFrameTimeout = 120 * time.Second
+
+// GenerateOptions tunes per-frame behaviour for GenerateWithOptions.
+//
+// PerFrameTimeout caps how long a single loadOrGenerate call may run; zero
+// means use DefaultPerFrameTimeout. OnFrame, if non-nil, is invoked after
+// every job completes — caller can attach successful frames to a live stage
+// as they arrive instead of waiting for the whole batch. err is non-nil
+// when the frame failed (timeout / permanent / exhausted retries) and img
+// is nil in that case. OnFrame must be non-blocking — it runs on the
+// gen goroutine for that frame.
+//
+// SurfacePriorityCount, when > 0, gates non-priority surface variants from
+// starting until every variant in [0, SurfacePriorityCount) has completed
+// (success or failure). The host narrates surface frames in strict order and
+// emits `<scene N/>` markers tied to specific variant indices, so blocking
+// the show on "first N specific variants" rather than "any N% complete"
+// prevents a low-index straggler from making the host emit a marker for a
+// frame that hasn't arrived yet. Other phases (qa, reveal, conclusion) are
+// unaffected.
+type GenerateOptions struct {
+	PerFrameTimeout      time.Duration
+	OnFrame              func(name string, variant int, img *image.RGBA, err error)
+	SurfacePriorityCount int
+}
 
 // Scene names used for cache filenames and prompt selection.
 const (
@@ -121,6 +153,36 @@ func (s *PuzzleScenes) ByNameIdx(name string, idx int) *image.RGBA {
 	return nil
 }
 
+// ByNameIdxExact returns the image at the EXACT slot — unlike ByNameIdx,
+// it does NOT fall through to the next non-nil variant when the requested
+// slot is empty. Use this when the caller wants to honour the host's
+// explicit `<scene N/>` marker but tolerate the frame not being generated
+// yet (PuzzleStage falls back to leaving the current background in place,
+// rather than jumping to a different beat). For QA/Reveal singletons this
+// is identical to ByNameIdx.
+func (s *PuzzleScenes) ByNameIdxExact(name string, idx int) *image.RGBA {
+	if s == nil {
+		return nil
+	}
+	pickExact := func(xs []*image.RGBA) *image.RGBA {
+		if idx < 0 || idx >= len(xs) {
+			return nil
+		}
+		return xs[idx]
+	}
+	switch name {
+	case SceneSurface:
+		return pickExact(s.Surface)
+	case SceneQA:
+		return s.QA
+	case SceneReveal:
+		return s.Reveal
+	case SceneConclusion:
+		return pickExact(s.Conclusion)
+	}
+	return nil
+}
+
 // VariantCount reports how many variants were generated for the named scene
 // (1 for singleton scenes, the slice length for rotating ones, 0 if unknown).
 // PuzzleStage uses this to decide whether to start a rotation goroutine.
@@ -178,6 +240,21 @@ func Generate(ctx context.Context, client *imagegen.Client, topic *config.Debate
 func GenerateWithPlan(ctx context.Context, client *imagegen.Client, topic *config.DebateTopic,
 	plan *ScenePlan, cacheDir string, phases ...string,
 ) (*PuzzleScenes, error) {
+	return GenerateWithOptions(ctx, client, topic, plan, cacheDir, GenerateOptions{}, phases...)
+}
+
+// GenerateWithOptions is GenerateWithPlan with extra knobs (per-frame
+// timeout, per-frame completion callback). See GenerateOptions. Existing
+// callers should keep using GenerateWithPlan; new callers that want
+// streaming attach or a tighter per-frame budget reach for this entry
+// point.
+func GenerateWithOptions(ctx context.Context, client *imagegen.Client, topic *config.DebateTopic,
+	plan *ScenePlan, cacheDir string, opts GenerateOptions, phases ...string,
+) (*PuzzleScenes, error) {
+	perFrame := opts.PerFrameTimeout
+	if perFrame <= 0 {
+		perFrame = DefaultPerFrameTimeout
+	}
 	if cacheDir != "" {
 		_ = os.MkdirAll(cacheDir, 0o755)
 	}
@@ -262,6 +339,37 @@ func GenerateWithPlan(ctx context.Context, client *imagegen.Client, topic *confi
 	// bounded.
 	surfaceSem := make(chan struct{}, surfaceBatchSize)
 
+	// Priority gate: non-priority surface variants block on priorityDone
+	// until every variant in [0, priorityN) has completed (success OR
+	// failure — counting both avoids a deadlock when the gateway returns
+	// a permanent failure for a priority slot). priorityJobs is the
+	// actual priority count after intersecting with the active phase
+	// set, so a phases=[SceneConclusion] call doesn't dangle on a
+	// never-decremented counter.
+	priorityN := opts.SurfacePriorityCount
+	if priorityN < 0 {
+		priorityN = 0
+	}
+	priorityJobs := 0
+	if priorityN > 0 {
+		for _, j := range jobs {
+			if j.name == SceneSurface && j.variant < priorityN {
+				priorityJobs++
+			}
+		}
+	}
+	priorityDone := make(chan struct{})
+	var priorityWg sync.WaitGroup
+	if priorityJobs > 0 {
+		priorityWg.Add(priorityJobs)
+		go func() {
+			priorityWg.Wait()
+			close(priorityDone)
+		}()
+	} else {
+		close(priorityDone)
+	}
+
 	var (
 		wg     sync.WaitGroup
 		errsMu sync.Mutex
@@ -271,19 +379,46 @@ func GenerateWithPlan(ctx context.Context, client *imagegen.Client, topic *confi
 		wg.Add(1)
 		go func(j job) {
 			defer wg.Done()
+			isPrioritySurface := j.name == SceneSurface && j.variant < priorityN
+			if isPrioritySurface {
+				defer priorityWg.Done()
+			} else if j.name == SceneSurface && priorityJobs > 0 {
+				// Hold non-priority surface variants out of the gateway
+				// queue entirely until the priority batch finishes — this
+				// is what gives the first N variants real scheduling
+				// priority, not just bookkeeping priority.
+				select {
+				case <-ctx.Done():
+					if opts.OnFrame != nil {
+						opts.OnFrame(j.name, j.variant, nil, ctx.Err())
+					}
+					return
+				case <-priorityDone:
+				}
+			}
 			if j.name == SceneSurface {
 				surfaceSem <- struct{}{}
 				defer func() { <-surfaceSem }()
 			}
 			prompt := buildPromptVariantWithPlan(j.name, topic, j.variant, plan)
-			img, err := loadOrGenerate(ctx, client, j.cacheName, prompt, cacheDir)
+			// Per-frame timeout caps any single hung gen call. Derived
+			// from ctx so a parent cancel still aborts immediately.
+			frameCtx, cancel := context.WithTimeout(ctx, perFrame)
+			img, err := loadOrGenerate(frameCtx, client, j.cacheName, prompt, cacheDir)
+			cancel()
 			if err != nil {
 				errsMu.Lock()
 				errs = append(errs, fmt.Sprintf("%s: %v", j.cacheName, err))
 				errsMu.Unlock()
+				if opts.OnFrame != nil {
+					opts.OnFrame(j.name, j.variant, nil, err)
+				}
 				return
 			}
 			j.assign(img)
+			if opts.OnFrame != nil {
+				opts.OnFrame(j.name, j.variant, img, nil)
+			}
 		}(j)
 	}
 	wg.Wait()

@@ -74,14 +74,6 @@ type Deps struct {
 // dominant offset and 2300ms wasn't enough.
 const subtitleClientLatency = 3100 * time.Millisecond
 
-// surfaceSubtitleExtraDelay is an additional offset applied ONLY to the
-// puzzle host's surface-narration subtitle dispatch. Surface turns are
-// long, slow, and music-bedded — the subtitle was landing slightly ahead
-// of the spoken audio on listener-side playback, breaking the late-night
-// storyteller feel. Scene markers are NOT delayed (they remain tied to
-// the audio start), only the on-screen caption shifts.
-const surfaceSubtitleExtraDelay = 1500 * time.Millisecond
-
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
@@ -168,7 +160,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		defer close(producedCh)
 		for t := range turnCh {
 			if t.Phase != lastPhase {
-				p.d.Send(PhaseMsg{
+				p.dispatchPhaseMsg(PhaseMsg{
 					Phase: t.Phase,
 					Type:  p.d.ContentType,
 					Label: PhaseLabel(p.d.ContentType, t.Phase),
@@ -204,6 +196,30 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	filesMu.Lock()
 	defer filesMu.Unlock()
 	return append([]string(nil), files...), nil
+}
+
+// dispatchPhaseMsg defers a phase change so it lands on the listener's
+// timeline instead of the producer's. Without this, the visual phase chip
+// + scene background flip the instant the planner emits the first turn of
+// the new phase — but the previous phase's audio is still draining out of
+// the LiveStream / music-mixer / browser source buffer (often 10-15s
+// worth on long surface narrations), so the audience sees the QA scene
+// while still hearing the tail of the surface story. We use the same
+// playhead nextPlayAt that synthSentence maintains: that value is the
+// listener-side wall-clock time when the *next* sentence will be heard,
+// which is also where the new phase's audio will start. AfterFunc-fire
+// the PhaseMsg at that moment so picture and sound flip together.
+func (p *Pipeline) dispatchPhaseMsg(msg PhaseMsg) {
+	p.playheadMu.Lock()
+	target := p.nextPlayAt
+	p.playheadMu.Unlock()
+	send := p.d.Send
+	remaining := time.Until(target)
+	if remaining <= 50*time.Millisecond {
+		send(msg)
+		return
+	}
+	time.AfterFunc(remaining, func() { send(msg) })
 }
 
 func (p *Pipeline) tickLoop(ctx context.Context) {
@@ -506,14 +522,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		AudioDuration: audioDuration,
 	}
 	send := p.d.Send
-	// Subtitle dispatch is offset on surface turns only — see
-	// surfaceSubtitleExtraDelay. Scene markers (leading + trailing)
-	// stay locked to the audio timeline so the picture doesn't drift
-	// even when the caption is held.
 	subtitleAt := targetSend
-	if strings.HasPrefix(t.Directive, "surface") {
-		subtitleAt = subtitleAt.Add(surfaceSubtitleExtraDelay)
-	}
 	fireSubtitle := func() { send(msg) }
 	fireLeadingScenes := func() {
 		for _, idx := range leadAdvances {
