@@ -116,3 +116,106 @@ func parseMarkerIdx(s string, loc []int) int {
 	}
 	return markerIdxNoNumber
 }
+
+// SoundCueMode is the dispatch mode embedded in a `<sound-…/>` marker.
+// Overlap mixes the planner-generated clip on top of the running music
+// bed (atmospheric stinger). Replace cross-fades the bed itself over to
+// the new clip so the underlying texture changes (e.g. tonal shift at a
+// key beat).
+type SoundCueMode string
+
+const (
+	SoundCueOverlap SoundCueMode = "overlap"
+	SoundCueReplace SoundCueMode = "replace"
+)
+
+// SoundMarker is one parsed sound-cue token. Mode comes from the
+// marker's verb ("overlapped" → overlap, "replace" → replace) and Index
+// is the 0-based slot the planner assigned to the underlying clip; the
+// pipeline emits one SoundCueMsg per marker so the mixer can dispatch.
+type SoundMarker struct {
+	Mode  SoundCueMode
+	Index int
+}
+
+// soundMarkerRe matches `<sound-overlapped-N/>` and `<sound-replace-N/>`
+// (plus tolerant variants — same drift handling as sceneMarkerRe).
+// Capture group 1 is the verb ("overlapped" | "replace"), group 2 is the
+// numeric index. Index is required: an unindexed sound marker has no
+// clip to play, so the pipeline drops malformed forms silently.
+var soundMarkerRe = regexp.MustCompile(
+	`(?i)<\s*/?\s*sound-(overlapped|replace)-(\d+)\s*/?\s*>|\[\s*sound-(overlapped|replace)-(\d+)\s*\]`)
+
+// parseSoundMarker pulls the verb + index out of one regex submatch
+// location. Returns ok=false when the verb is unrecognised or the index
+// fails to parse — caller drops the marker entirely in that case (the
+// raw text is still cleaned out of the sentence either way).
+func parseSoundMarker(s string, loc []int) (SoundMarker, bool) {
+	// Two alternations × (verb, index) capture groups → 4 groups total.
+	for base := 1; base <= 3; base += 2 {
+		vs, ve := loc[2*base], loc[2*base+1]
+		ns, ne := loc[2*(base+1)], loc[2*(base+1)+1]
+		if vs < 0 || ve < 0 || ns < 0 || ne < 0 {
+			continue
+		}
+		idx, err := strconv.Atoi(s[ns:ne])
+		if err != nil {
+			continue
+		}
+		verb := strings.ToLower(s[vs:ve])
+		switch verb {
+		case "overlapped":
+			return SoundMarker{Mode: SoundCueOverlap, Index: idx}, true
+		case "replace":
+			return SoundMarker{Mode: SoundCueReplace, Index: idx}, true
+		}
+	}
+	return SoundMarker{}, false
+}
+
+// stripSoundMarkers mirrors stripSceneMarkers for `<sound-…-N/>` cues.
+// Returns the cleaned text plus leading + trailing marker buckets — same
+// dispatch semantics: leading fires when the sentence's first audio byte
+// reaches the listener, trailing fires after the sentence finishes, mid-
+// sentence is folded into leading as best-effort recovery.
+func stripSoundMarkers(sent string) (clean string, leading, trailing []SoundMarker) {
+	if !soundMarkerRe.MatchString(sent) {
+		return sent, nil, nil
+	}
+	for {
+		loc := soundMarkerRe.FindStringSubmatchIndex(sent)
+		if loc == nil {
+			break
+		}
+		if strings.TrimSpace(sent[:loc[0]]) != "" {
+			break
+		}
+		if m, ok := parseSoundMarker(sent, loc); ok {
+			leading = append(leading, m)
+		}
+		sent = strings.TrimSpace(sent[loc[1]:])
+	}
+	for {
+		all := soundMarkerRe.FindAllStringSubmatchIndex(sent, -1)
+		if len(all) == 0 {
+			break
+		}
+		last := all[len(all)-1]
+		if strings.TrimSpace(sent[last[1]:]) != "" {
+			break
+		}
+		if m, ok := parseSoundMarker(sent, last); ok {
+			trailing = append([]SoundMarker{m}, trailing...)
+		}
+		sent = strings.TrimSpace(sent[:last[0]])
+	}
+	if mid := soundMarkerRe.FindAllStringSubmatchIndex(sent, -1); len(mid) > 0 {
+		for _, loc := range mid {
+			if m, ok := parseSoundMarker(sent, loc); ok {
+				leading = append(leading, m)
+			}
+		}
+		sent = strings.TrimSpace(soundMarkerRe.ReplaceAllString(sent, ""))
+	}
+	return sent, leading, trailing
+}

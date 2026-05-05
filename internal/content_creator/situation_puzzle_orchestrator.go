@@ -85,3 +85,23 @@ func (o *Orchestrator) SetConclusionPlan(plan []string) {
 	}
 	o.conclusionPlan = append([]string(nil), plan...)
 }
+
+// SetSoundPlan installs the planner's sound-cue list and the parallel
+// list of generated clip paths. Index N of either slice must describe
+// the same cue; mismatched lengths are tolerated by trimming both to
+// the shorter length so a partial generation failure (one clip out of
+// five) doesn't pin a stray index on the wrong path. No-op when either
+// list is empty — the host's prompt then omits the sound section so
+// the LLM never emits a sound marker. Caller invokes this after
+// musicgen finishes generating each clip and before Run.
+func (o *Orchestrator) SetSoundPlan(plan []SoundCueDirection, paths []string) {
+	if len(plan) == 0 || len(paths) == 0 {
+		return
+	}
+	n := len(plan)
+	if len(paths) < n {
+		n = len(paths)
+	}
+	o.soundPlan = append([]SoundCueDirection(nil), plan[:n]...)
+	o.soundPaths = append([]string(nil), paths[:n]...)
+}

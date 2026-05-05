@@ -131,3 +131,22 @@ func promptKey(s string) string {
 	h := sha1.Sum([]byte(s))
 	return hex.EncodeToString(h[:])[:12]
 }
+
+// GenerateClip produces a single sound clip for the planner's per-puzzle
+// sound list (separate from the long phase-bed clips Generate handles).
+// label is a short cache-friendly tag like "sound" — the on-disk filename
+// is "<label>-<sha1(prompt)>.mp3" so two puzzles with the same prompt
+// share the same cache file. Returns the disk path; caller hands it to
+// the mixer as an `-i` input. Empty cacheDir falls back to a tempfile.
+func GenerateClip(ctx context.Context, client *Client, prompt, cacheDir, label string) (string, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return "", fmt.Errorf("musicgen: empty prompt")
+	}
+	if label == "" {
+		label = "sound"
+	}
+	if cacheDir != "" {
+		_ = os.MkdirAll(cacheDir, 0o755)
+	}
+	return loadOrGenerate(ctx, client, label, prompt, cacheDir)
+}

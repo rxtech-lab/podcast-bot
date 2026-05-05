@@ -48,3 +48,75 @@ func TestStripSceneMarkers(t *testing.T) {
 		})
 	}
 }
+
+func TestStripSoundMarkers(t *testing.T) {
+	cases := []struct {
+		name         string
+		in           string
+		wantText     string
+		wantLeading  []SoundMarker
+		wantTrailing []SoundMarker
+	}{
+		{"none", "他走進餐廳。", "他走進餐廳。", nil, nil},
+		{
+			"leading overlap",
+			"<sound-overlapped-2/>遠方傳來雷聲。",
+			"遠方傳來雷聲。",
+			[]SoundMarker{{Mode: SoundCueOverlap, Index: 2}},
+			nil,
+		},
+		{
+			"leading replace",
+			"<sound-replace-0/>音樂改變了。",
+			"音樂改變了。",
+			[]SoundMarker{{Mode: SoundCueReplace, Index: 0}},
+			nil,
+		},
+		{
+			"trailing overlap",
+			"門鎖上了。<sound-overlapped-1/>",
+			"門鎖上了。",
+			nil,
+			[]SoundMarker{{Mode: SoundCueOverlap, Index: 1}},
+		},
+		{
+			"bracketed",
+			"[sound-replace-3]新的音軌登場。",
+			"新的音軌登場。",
+			[]SoundMarker{{Mode: SoundCueReplace, Index: 3}},
+			nil,
+		},
+		{
+			"case insensitive",
+			"暗夜降臨。<SOUND-OVERLAPPED-4/>",
+			"暗夜降臨。",
+			nil,
+			[]SoundMarker{{Mode: SoundCueOverlap, Index: 4}},
+		},
+		{
+			"middle folded into leading",
+			"前段。<sound-overlapped-2/>後段。",
+			"前段。後段。",
+			[]SoundMarker{{Mode: SoundCueOverlap, Index: 2}},
+			nil,
+		},
+		// Unknown verbs don't match the regex at all — leave the raw
+		// token in place so the operator can see the malformed cue
+		// rather than silently swallowing it.
+		{"unknown verb passes through", "<sound-fade-1/>段落。", "<sound-fade-1/>段落。", nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gotText, gotLead, gotTrail := stripSoundMarkers(c.in)
+			if gotText != c.wantText {
+				t.Errorf("text = %q, want %q", gotText, c.wantText)
+			}
+			if !reflect.DeepEqual(gotLead, c.wantLeading) {
+				t.Errorf("leading = %v, want %v", gotLead, c.wantLeading)
+			}
+			if !reflect.DeepEqual(gotTrail, c.wantTrailing) {
+				t.Errorf("trailing = %v, want %v", gotTrail, c.wantTrailing)
+			}
+		})
+	}
+}

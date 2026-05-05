@@ -63,6 +63,28 @@ type Orchestrator struct {
 	// per planned beat; the host uses numbered markers to keep the
 	// rotation locked to the plan.
 	conclusionPlan []string
+
+	// soundPlan is the planner's per-puzzle sound-cue list. soundPlan[i]
+	// describes one Lyria-generated clip; soundPaths[i] is its on-disk
+	// mp3 path (parallel slice). The host's prompt enumerates these as
+	// "Sound N: <prompt>" so it knows which clip each
+	// "<sound-overlapped-N/>" or "<sound-replace-N/>" marker refers to,
+	// and pipeline.produce hands the path to the mixer's OverlapClip /
+	// ReplaceMusic on the matching SoundCueMsg. nil disables the
+	// feature; the host omits the sound section from its system prompt
+	// so the LLM never emits a sound marker.
+	soundPlan  []SoundCueDirection
+	soundPaths []string
+}
+
+// SoundCueDirection mirrors scenes.SoundDirection but lives in
+// content_creator so the orchestrator doesn't need to import the
+// scenes package. Caller (cmd/debate-bot) translates one to the other
+// after planning + clip generation.
+type SoundCueDirection struct {
+	Mode   string
+	Prompt string
+	Anchor string
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.
@@ -206,8 +228,16 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	case agent.RolePlayer:
 		return agent.NewPlayer(base)
 	case agent.RolePuzzleHost:
+		soundForHost := make([]agent.SoundDirection, len(o.soundPlan))
+		for i, s := range o.soundPlan {
+			soundForHost[i] = agent.SoundDirection{
+				Mode:   s.Mode,
+				Prompt: s.Prompt,
+				Anchor: s.Anchor,
+			}
+		}
 		return agent.NewPuzzleHost(base, o.Topic.Surface, o.Topic.Truth,
-			o.surfacePlan, o.surfaceAnchors, o.conclusionPlan)
+			o.surfacePlan, o.surfaceAnchors, o.conclusionPlan, soundForHost)
 	}
 	return nil
 }
@@ -259,6 +289,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		MusicPaths:       o.puzzleMusic,
 		SurfaceFrames:    len(o.surfacePlan),
 		ConclusionFrames: len(o.conclusionPlan),
+		SoundPaths:       append([]string(nil), o.soundPaths...),
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -24,10 +26,33 @@ import (
 // heuristic which drifted off the planner's intended beat boundaries.
 // Empty / shorter than Surface means "no anchor for that beat" — the
 // host falls back to its own judgement for that one beat.
+//
+// Sounds lists optional pre-generated sound clips the host can trigger
+// via `<sound-overlapped-N/>` (mix the clip on top of the music bed) or
+// `<sound-replace-N/>` (cross-fade the bed itself to the new clip). Sounds
+// are independent of the scene-image rotation: planner picks beats where
+// an audio stinger or texture shift would amplify the storytelling.
+// Empty / nil disables the feature; the host's prompt then omits the
+// sound-marker section entirely so the LLM never emits one. N indexes
+// into Sounds in declaration order.
 type ScenePlan struct {
-	Surface        []string
-	SurfaceAnchors []string
-	Conclusion     []string
+	Surface        []string         `json:"surface"`
+	SurfaceAnchors []string         `json:"surface_anchors"`
+	Conclusion     []string         `json:"conclusion"`
+	Sounds         []SoundDirection `json:"sounds,omitempty"`
+}
+
+// SoundDirection is one entry in the puzzle's sound plan. Mode is either
+// "overlap" or "replace"; the host's marker verb mirrors the mode
+// (`<sound-overlapped-N/>` vs `<sound-replace-N/>`). Prompt is the Lyria
+// prompt the audio generator sends to produce the clip. Anchor mirrors
+// SurfaceAnchors — when non-empty the host should emit the marker
+// immediately before the sentence containing the anchor; when empty the
+// host falls back to its own judgement for placement.
+type SoundDirection struct {
+	Mode   string `json:"mode"`
+	Prompt string `json:"prompt"`
+	Anchor string `json:"anchor,omitempty"`
 }
 
 // SurfaceCount and ConclusionCount report how many variants the plan calls for.
@@ -55,6 +80,11 @@ const (
 	maxSurfaceFrames    = 100
 	minConclusionFrames = 3
 	maxConclusionFrames = 6
+	// maxSoundClips caps per-puzzle Lyria calls for the sound-cue feature.
+	// 0 sounds is fine — most puzzles won't need them; a generous ceiling
+	// keeps a chatty planner from burning dollars. Lower bound is 0
+	// because the feature is optional.
+	maxSoundClips = 8
 )
 
 // Plan asks the LLM to read the surface (湯面) and truth (湯底) and propose
@@ -91,7 +121,10 @@ Output strict JSON with this shape:
 {
   "surface": ["...", "...", ...],
   "surface_anchors": ["...", "...", ...],
-  "conclusion": ["...", "...", ...]
+  "conclusion": ["...", "...", ...],
+  "sounds": [
+    {"mode": "overlap" | "replace", "prompt": "...", "anchor": "..."}
+  ]
 }
 
 Rules:
@@ -141,7 +174,35 @@ Rules:
   voice tightly.
 - Conclusion count: between 3 and 6 frames.
 - Plain prose only inside each entry. No markdown, no quotes, no bullet
-  prefixes, no scene numbers.`
+  prefixes, no scene numbers.
+- "sounds" is OPTIONAL — return an empty array when no sound design
+  beats apply. Otherwise list at most 8 entries. Each entry is one
+  audio cue the host will trigger during the surface narration via a
+  marker (the host emits "<sound-overlapped-N/>" or
+  "<sound-replace-N/>" where N is the entry's 0-based index in this
+  list):
+    * "mode" is "overlap" — clip mixes additively over the running
+      music bed for the duration of the clip (ambient stinger, single
+      gust of wind, distant thunder, etc.). Use overlap for short
+      atmospheric punctuation that should not displace the main bed.
+    * "mode" is "replace" — the music bed itself cross-fades over to
+      this clip. Use replace ONLY for a deliberate tonal shift at a
+      key beat (e.g. the texture of the music should fundamentally
+      change here for the rest of the surface). Replace clips
+      should be sustained and bed-like.
+    * "prompt" is a one-sentence Lyria prompt describing the sound.
+      Always instrumental / textural — no lyrics, no spoken word.
+      Keep prompts brief but evocative. Examples:
+      "A single low cello held note swelling with a faint distant
+      train whistle." / "Soft rain on tile, distant thunder, wet
+      stone resonance — ambient texture, no rhythm."
+    * "anchor" is OPTIONAL: a short verbatim snippet from the
+      surface text (same rules as surface_anchors — copy exactly,
+      unique within surface) marking where the cue should fire.
+      Empty anchor = let the host place the marker by judgement.
+    * Sounds should be sparse: zero is the right answer for many
+      puzzles. Add a sound only when a specific moment in the
+      surface clearly benefits from one — never as filler.`
 
 	user := fmt.Sprintf(
 		"Title: %s\n\nSurface (湯面):\n%s\n\nTruth (湯底, for conclusion mood only — never visualize directly):\n%s",
@@ -157,6 +218,11 @@ Rules:
 		Surface        []string `json:"surface"`
 		SurfaceAnchors []string `json:"surface_anchors"`
 		Conclusion     []string `json:"conclusion"`
+		Sounds         []struct {
+			Mode   string `json:"mode"`
+			Prompt string `json:"prompt"`
+			Anchor string `json:"anchor"`
+		} `json:"sounds"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("unmarshal plan: %w (raw=%q)", err, truncateForLog(string(raw), 200))
@@ -175,11 +241,56 @@ Rules:
 	// hallucinated anchor degrades gracefully rather than aborting the
 	// whole puzzle.
 	parsed.SurfaceAnchors = matchAnchorLength(parsed.SurfaceAnchors, len(parsed.Surface))
+	sounds := make([]SoundDirection, 0, len(parsed.Sounds))
+	for _, s := range parsed.Sounds {
+		mode := strings.ToLower(strings.TrimSpace(s.Mode))
+		prompt := strings.TrimSpace(s.Prompt)
+		if prompt == "" {
+			continue
+		}
+		if mode != "overlap" && mode != "replace" {
+			continue
+		}
+		sounds = append(sounds, SoundDirection{
+			Mode:   mode,
+			Prompt: prompt,
+			Anchor: strings.TrimSpace(s.Anchor),
+		})
+		if len(sounds) >= maxSoundClips {
+			break
+		}
+	}
 	return &ScenePlan{
 		Surface:        parsed.Surface,
 		SurfaceAnchors: parsed.SurfaceAnchors,
 		Conclusion:     parsed.Conclusion,
+		Sounds:         sounds,
 	}, nil
+}
+
+// WritePlan serialises the scene plan as pretty-printed JSON at path so
+// a post-mortem viewer can see exactly which beats / anchors / sound
+// cues the visual director picked for this puzzle. Always writes (even
+// when the heuristic fallback was used) so the operator can tell the
+// LLM-driven path from the fallback by inspecting the file. nil plan or
+// empty path is a no-op; a write error is returned but is not fatal —
+// caller should log and continue.
+func WritePlan(plan *ScenePlan, path string) error {
+	if plan == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir scene plan: %w", err)
+	}
+	body, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal scene plan: %w", err)
+	}
+	body = append(body, '\n')
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		return fmt.Errorf("write scene plan: %w", err)
+	}
+	return nil
 }
 
 // matchAnchorLength trims/pads the anchor slice to exactly n entries.

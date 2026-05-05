@@ -33,6 +33,23 @@ type PuzzleHost struct {
 	// the conclusion is composed fresh by the host, not lifted from
 	// a source text, so there is nothing to anchor against.
 	conclusionPlan []string
+	// soundPlan is the planner's per-cue list. soundPlan[i] tells the
+	// host which audio clip "<sound-overlapped-i/>" or
+	// "<sound-replace-i/>" refers to. nil disables the feature; the
+	// system prompt then omits the sound section so the LLM never
+	// emits a sound marker.
+	soundPlan []SoundDirection
+}
+
+// SoundDirection mirrors scenes.SoundDirection. Lives in the agent
+// package so the host's system prompt can render the per-cue list
+// without importing scenes (which would cycle back into agent via
+// llm-driven planning). Caller (orchestrator) translates between the
+// two when constructing the host.
+type SoundDirection struct {
+	Mode   string
+	Prompt string
+	Anchor string
 }
 
 // NewPuzzleHost constructs a puzzle host. Both surface (湯面) and truth (湯底)
@@ -49,7 +66,7 @@ type PuzzleHost struct {
 // the planner-aligned frame (surface-vN.png) regardless of how the host
 // paragraphs the prose. Pass nil for any of these when unavailable — the
 // host falls back to soft guidance with unnumbered markers.
-func NewPuzzleHost(b *Base, surface, truth string, surfacePlan, surfaceAnchors, conclusionPlan []string) *PuzzleHost {
+func NewPuzzleHost(b *Base, surface, truth string, surfacePlan, surfaceAnchors, conclusionPlan []string, soundPlan []SoundDirection) *PuzzleHost {
 	return &PuzzleHost{
 		Base:           b,
 		surface:        surface,
@@ -57,6 +74,7 @@ func NewPuzzleHost(b *Base, surface, truth string, surfacePlan, surfaceAnchors, 
 		surfacePlan:    surfacePlan,
 		surfaceAnchors: surfaceAnchors,
 		conclusionPlan: conclusionPlan,
+		soundPlan:      soundPlan,
 	}
 }
 
@@ -88,6 +106,7 @@ Directives:
 - "reveal" — present the full truth in 3–5 sentences. Now and only now you may state it openly.
 - "conclusion" — narrate a quiet, reflective epilogue AFTER the reveal. This is NOT a brief thank-you; it is a slow, deliberate closing narration in the same voice and pacing as "surface" — late-night radio storyteller, deep, contemplative, never rushed. Walk the audience through the aftermath of the truth: the moods that linger, what the players might be feeling, a closing thought about the puzzle's themes, and a short farewell to the audience. Use "……" / "——" for breath. Length should match the planned conclusion-frame count (roughly one paragraph per planned frame, similar density to the surface). Do NOT restate the truth verbatim — the audience just heard it. Do NOT reopen yes/no questioning.
   Scene-cut markers for "conclusion" — same protocol as "surface": each conclusion beat has a 0-based index and a planned image. Emit "<scene N/>" on its own line at the START of each new beat (frame 0 paints when the conclusion phase opens, so begin with "<scene 1/>"). Use the conclusion beat list below as the structural outline of your epilogue.
+%s
 %s`
 
 // Speak emits a puzzle-host turn.
@@ -96,6 +115,7 @@ func (h *PuzzleHost) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, err
 		h.surface, h.truth,
 		surfacePlanBlock(h.surfacePlan, h.surfaceAnchors),
 		conclusionPlanBlock(h.conclusionPlan),
+		soundPlanBlock(h.soundPlan),
 	)
 	return h.runStream(ctx, system, p)
 }
@@ -126,6 +146,31 @@ func conclusionPlanBlock(plan []string) string {
 	}
 	fmt.Fprintf(&sb, "  Emit EXACTLY %d markers in order: <scene 1/>, <scene 2/>, …, <scene %d/>. Frame 0 paints automatically when the phase opens, so do NOT emit <scene 0/>. Each marker MUST be on its own line, immediately before the sentence that begins that beat — never mid-sentence, never clustered, never after the beat ends.",
 		len(plan)-1, len(plan)-1)
+	return sb.String()
+}
+
+// soundPlanBlock formats the planner's sound-cue list as part of the
+// host's system prompt. Returns an empty string when no plan is
+// available — that branch keeps the prompt free of sound-marker
+// instructions so the LLM never emits `<sound-…/>` tokens for puzzles
+// without a generated clip set.
+func soundPlanBlock(plan []SoundDirection) string {
+	if len(plan) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Sound-cue markers — the audio director has pre-generated a numbered list of sound clips you may trigger during the surface narration. Each clip is labeled with a 0-based index, a mode (overlap or replace), and a one-sentence description of the sound itself. Emit the marker on its own line, IMMEDIATELY BEFORE the sentence the cue should land on (same placement rule as scene markers). Marker syntax depends on the mode:\n")
+	sb.WriteString("  * mode=overlap → emit `<sound-overlapped-N/>` on its own line. The clip mixes additively on top of the running music bed for its natural duration (atmospheric stinger, single event), then ends; the bed continues uninterrupted.\n")
+	sb.WriteString("  * mode=replace → emit `<sound-replace-N/>` on its own line. The music bed itself cross-fades over to the new clip and stays there (looped indefinitely) until another replace marker swaps it again. Use sparingly — replace is for a deliberate tonal shift at a key beat, not punctuation.\n")
+	sb.WriteString("Sound markers are SILENT (TTS never sees them, subtitles never show them). They are OPTIONAL — emit one only when the listed cue genuinely amplifies the storytelling at that moment. If a cue has an Anchor line, fire the marker immediately before the sentence containing that anchor (verbatim substring match against your narration). If no anchor is given, place the marker at your own discretion. Each cue may be fired AT MOST ONCE per puzzle. Sound markers are valid only during the surface narration; do not emit them on any other directive.\n")
+	sb.WriteString("Sound cue list:\n")
+	for i, s := range plan {
+		mode := strings.ToLower(strings.TrimSpace(s.Mode))
+		fmt.Fprintf(&sb, "  Sound %d (mode=%s): %s\n", i, mode, strings.TrimSpace(s.Prompt))
+		if a := strings.TrimSpace(s.Anchor); a != "" {
+			fmt.Fprintf(&sb, "    Anchor (verbatim from surface, marks where to fire sound %d): %s\n", i, a)
+		}
+	}
 	return sb.String()
 }
 

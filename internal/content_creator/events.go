@@ -160,6 +160,19 @@ type SceneAdvanceMsg struct {
 	Index     int
 }
 
+// SoundCueMsg asks the audio mixer to dispatch one of the planner's
+// pre-generated sound clips. Emitted by the producer when the host
+// stream contains a `<sound-overlapped-N/>` or `<sound-replace-N/>`
+// marker. Index is the 0-based slot of the clip in the puzzle's sound
+// plan; Mode picks between additive overlay (overlap) and a cross-fade
+// of the running music bed (replace). Stages / runtimes that don't have
+// a sound mixer attached treat this as a no-op.
+type SoundCueMsg struct {
+	ChannelID string
+	Index     int
+	Mode      SoundCueMode
+}
+
 // MsgChannelID extracts the channel id from any debate event message. Returns
 // "" for unknown types (which are treated as broadcast by per-channel filters).
 func MsgChannelID(v any) string {
@@ -181,6 +194,8 @@ func MsgChannelID(v any) string {
 	case TopicsChangedMsg:
 		return ""
 	case SceneAdvanceMsg:
+		return m.ChannelID
+	case SoundCueMsg:
 		return m.ChannelID
 	}
 	return ""
@@ -217,6 +232,9 @@ func StampChannelID(v any, id string) any {
 	case TopicsChangedMsg:
 		return m
 	case SceneAdvanceMsg:
+		m.ChannelID = id
+		return m
+	case SoundCueMsg:
 		m.ChannelID = id
 		return m
 	}

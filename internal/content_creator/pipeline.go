@@ -57,7 +57,23 @@ type Deps struct {
 	// markers driving the image rotation; the pipeline caps marker count
 	// at ConclusionFrames-1.
 	ConclusionFrames int
+	// SoundPaths is the planner's per-cue clip list — index N is the
+	// on-disk mp3 path the mixer plays when the host emits
+	// "<sound-overlapped-N/>" or "<sound-replace-N/>". Nil / empty
+	// disables the feature (host's prompt omits the sound section so
+	// no markers appear in the stream). Paths that don't exist are
+	// dropped at dispatch time with a warning rather than failing the
+	// turn.
+	SoundPaths []string
 }
+
+// surfaceTTSScale is the multiplier applied to the mixer's default
+// TTS gain during a puzzle host's "surface" turn. 0.6 → speaker drops
+// to 60% so the music bed and any planner-generated sound cues sit
+// more forward in the mix while still keeping the narration
+// intelligible. Other turns (Q&A, reveal, conclusion, debate format)
+// run at full TTS volume.
+const surfaceTTSScale = 0.6
 
 // subtitleClientLatency compensates for buffering that happens after the
 // LiveStream's stdout — primarily the browser MediaSource source buffer
@@ -315,6 +331,20 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		return err
 	}
 
+	// Per-turn TTS volume contour. The puzzle host's surface narration
+	// is the long, music-driven monologue at the start of a 海龜湯
+	// round; dropping the speaker to 60% during it lets the bed sit
+	// more prominently while still keeping the voice intelligible.
+	// Restored at turn end so subsequent Q&A / reveal / conclusion
+	// turns play at full speaker volume. No-op when the session
+	// mixer isn't attached (dry TTS path).
+	if p.sessionMixer != nil {
+		if t.Directive == "surface" {
+			p.sessionMixer.SetTTSVolumeScale(surfaceTTSScale)
+			defer p.sessionMixer.SetTTSVolumeScale(1)
+		}
+	}
+
 	turnPath := filepath.Join(p.d.OutDir, fmt.Sprintf("turn_%03d.mp3", t.ID))
 	t.AudioPath = turnPath
 
@@ -440,6 +470,12 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// while paragraph N's audio is still playing — the "image one ahead
 	// of audio" bug.
 	cleaned, leadAdvances, trailAdvances := stripSceneMarkers(sent)
+	// Strip sound-cue markers next, against the already-cleaned string so
+	// scene + sound cues can coexist in one sentence. Same leading /
+	// trailing dispatch semantics — the cue lands on either the audio-start
+	// or audio-end moment of this sentence.
+	var leadSounds, trailSounds []SoundMarker
+	cleaned, leadSounds, trailSounds = stripSoundMarkers(cleaned)
 	// Drop indices that would point past the planner's frame count for
 	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
 	// the last frame for the rest of the turn. Unnumbered legacy markers
@@ -454,6 +490,14 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			"already_emitted", t.sceneAdvances,
 			"sentence_preview", truncatePreview(cleaned, 60))
 	}
+	if len(leadSounds) > 0 || len(trailSounds) > 0 {
+		p.d.Log.Info("sound marker",
+			"turn", t.ID,
+			"directive", strings.SplitN(t.Directive, ":", 2)[0],
+			"leading", len(leadSounds),
+			"trailing", len(trailSounds),
+			"sentence_preview", truncatePreview(cleaned, 60))
+	}
 	if cleaned == "" {
 		// Marker-only sentence (rare — usually only the surface narration's
 		// final paragraph break). Both buckets fire immediately; there's
@@ -463,6 +507,14 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		}
 		for _, idx := range trailAdvances {
 			p.d.Send(SceneAdvanceMsg{Index: idx})
+		}
+		for _, m := range leadSounds {
+			p.d.Send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
+			p.dispatchSoundCue(m)
+		}
+		for _, m := range trailSounds {
+			p.d.Send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
+			p.dispatchSoundCue(m)
 		}
 		t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 		return 0, nil
@@ -556,8 +608,75 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			time.AfterFunc(remaining, fireTrailing)
 		}
 	}
+	if len(leadSounds) > 0 {
+		ms := append([]SoundMarker(nil), leadSounds...)
+		fire := func() {
+			for _, m := range ms {
+				send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
+				p.dispatchSoundCue(m)
+			}
+		}
+		if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
+			fire()
+		} else {
+			time.AfterFunc(remaining, fire)
+		}
+	}
+	if len(trailSounds) > 0 {
+		ms := append([]SoundMarker(nil), trailSounds...)
+		trailAt := targetSend.Add(audioDuration)
+		fire := func() {
+			for _, m := range ms {
+				send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
+				p.dispatchSoundCue(m)
+			}
+		}
+		if remaining := time.Until(trailAt); remaining <= 50*time.Millisecond {
+			fire()
+		} else {
+			time.AfterFunc(remaining, fire)
+		}
+	}
 	t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 	return n, nil
+}
+
+// dispatchSoundCue resolves marker → on-disk clip path and asks the
+// session mixer to play it. No-ops when the mixer isn't attached
+// (session music gen failed) or when the index points outside the
+// configured SoundPaths slice; both surface as a warning so a missing
+// clip doesn't take the whole turn down.
+func (p *Pipeline) dispatchSoundCue(m SoundMarker) {
+	if p.sessionMixer == nil {
+		return
+	}
+	if m.Index < 0 || m.Index >= len(p.d.SoundPaths) {
+		p.d.Log.Warn("sound cue index out of range",
+			"index", m.Index,
+			"have", len(p.d.SoundPaths),
+			"mode", string(m.Mode))
+		return
+	}
+	path := p.d.SoundPaths[m.Index]
+	if path == "" {
+		p.d.Log.Warn("sound cue path empty", "index", m.Index, "mode", string(m.Mode))
+		return
+	}
+	switch m.Mode {
+	case SoundCueOverlap:
+		if err := p.sessionMixer.OverlapClip(path, 0); err != nil {
+			p.d.Log.Warn("sound overlap failed",
+				"index", m.Index, "path", path, "err", err)
+		}
+	case SoundCueReplace:
+		if err := p.sessionMixer.ReplaceMusic(path); err != nil {
+			p.d.Log.Warn("sound replace failed",
+				"index", m.Index, "path", path, "err", err)
+		}
+	default:
+		p.d.Log.Warn("sound cue unknown mode",
+			"index", m.Index, "mode", string(m.Mode))
+	}
 }
 
 // truncatePreview clips s to n runes for log lines so a long sentence

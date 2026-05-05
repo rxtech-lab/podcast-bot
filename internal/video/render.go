@@ -476,15 +476,60 @@ func (r *Renderer) SetPuzzleSceneName(name string) {
 // clear (renderer falls back to bgPlate / procedural bg). Idempotent: a
 // repeat call with the same pointer is a no-op so PhaseMsg storms don't
 // re-trigger the fade.
+//
+// When the previous fade is still in flight, the in-progress composite
+// (prev*α + cur*(1-α) for the relevant blend) is rendered into a fresh
+// snapshot RGBA and that snapshot becomes the next "prev". Without this,
+// the alpha resets to 0 at the moment of swap, so the screen jumps from
+// "partial old → mid-fade" straight to "old fully painted" before the
+// new fade starts — which the eye reads as a flicker on back-to-back
+// scene swaps.
 func (r *Renderer) SetSceneBackground(img *image.RGBA) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sceneBg == img {
 		return
 	}
-	r.prevSceneBg = r.sceneBg
+	r.prevSceneBg = r.captureCurrentBackgroundLocked()
 	r.sceneBg = img
 	r.sceneTransitionStart = time.Now()
+}
+
+// captureCurrentBackgroundLocked composites whatever the renderer is
+// painting for the bg layer right now into a fresh RGBA so it can be
+// reused as `prevSceneBg` for the next crossfade. Mirrors drawBackground
+// pixel-for-pixel; the two MUST stay in sync. Returns the existing
+// sceneBg unchanged when no fade is in progress (alpha == 1) so we don't
+// pay the allocation cost in the common case.
+//
+// Caller must hold r.mu.
+func (r *Renderer) captureCurrentBackgroundLocked() *image.RGBA {
+	if r.sceneBg == nil {
+		return nil
+	}
+	alpha := sceneFadeFrac(r.sceneTransitionStart)
+	if alpha >= 1 {
+		return r.sceneBg
+	}
+	bounds := image.Rect(0, 0, r.width, r.height)
+	snap := image.NewRGBA(bounds)
+	switch {
+	case r.prevSceneBg != nil:
+		drawScaledOver(snap, r.prevSceneBg, bounds)
+	case r.bgPlate != nil:
+		draw.Draw(snap, bounds, r.bgPlate, image.Point{}, draw.Src)
+	default:
+		drawGradientBackground(snap,
+			color.RGBA{0x12, 0x14, 0x1f, 0xff},
+			color.RGBA{0x07, 0x08, 0x0e, 0xff},
+		)
+	}
+	if alpha > 0 {
+		tmp := image.NewRGBA(bounds)
+		drawScaledOver(tmp, r.sceneBg, bounds)
+		blitWithGlobalAlpha(snap, tmp, alpha)
+	}
+	return snap
 }
 
 // SetSides loads the affirmative / negative speaker rosters into the side

@@ -54,6 +54,32 @@ const musicVolume = 0.10
 // when peaks stack with the music. Tuned by ear.
 const ttsVolume = 0.80
 
+// overlayVolume is the linear gain applied to one-shot overlay clips
+// dispatched via OverlapClip. Sits between musicVolume and ttsVolume —
+// stingers should be clearly audible alongside narration without
+// burying the speaker. Tunable per call via OverlapClip's volume arg
+// (zero falls back to this default).
+const overlayVolume = 0.35
+
+// musicDuckFactor is how much the bed is attenuated while at least one
+// overlay clip is in flight. 0.4 → bed drops to 40% of musicVolume
+// (~−8 dB relative) so the overlay sits clearly on top without losing
+// the bed entirely. Restored to musicVolume once all overlays drain.
+const musicDuckFactor = 0.4
+
+// musicDuckRampPerChunk caps how much the bed gain may move per mix
+// iteration when ducking attacks / releases. 0.05 → reaches the duck
+// floor in ~12 chunks (~600 ms at 50 ms/chunk) which reads as a smooth
+// dip rather than a click. Same constant used for both attack and
+// release; symmetric ramps avoid pumping artefacts.
+const musicDuckRampPerChunk = 0.05
+
+// musicCrossfadeChunks is how many mixLoop iterations the bed cross-
+// fade takes on a ReplaceMusic call. chunkDuration × this constant
+// = total fade window — kept around 1 s so the texture transition is
+// clearly perceptible without dragging.
+const musicCrossfadeChunks = 20 // 20 × 50 ms = 1 s
+
 // pcmSampleRate / pcmChannels / pcmSampleBytes describe the PCM
 // format passed between the three ffmpeg processes and the Go
 // mixer. The output mp3 is re-encoded to the same sample rate
@@ -96,6 +122,31 @@ type Mixer struct {
 	// unbounded memory.
 	ttsCh chan []byte
 
+	// overlaysMu guards overlays — the slice of in-flight overlay
+	// streams started by OverlapClip. The mix loop drains every entry
+	// each iteration; a goroutine per clip pushes PCM into its channel
+	// and closes the channel at EOF. The mix loop sweeps closed entries
+	// out of the slice between iterations.
+	overlaysMu sync.Mutex
+	overlays   []*overlayStream
+
+	// ttsScaleMu guards ttsScale — the per-turn TTS volume multiplier
+	// applied on top of ttsVolume. Pipeline sets this to <1.0 during
+	// turns where the speaker should sit lower under the bed (e.g.
+	// puzzle surface narration), and restores to 1.0 between turns.
+	// 0 / unset is treated as 1.0 by the mix loop.
+	ttsScaleMu sync.Mutex
+	ttsScale   float32
+
+	// swapCh requests a music-bed cross-fade from ReplaceMusic. The
+	// mix loop picks up the request at the next chunk boundary, spawns
+	// a decoder for the new path, fades the old bed out / new bed in
+	// over musicCrossfadeChunks iterations, then promotes the new
+	// decoder to be the active musicCmd / musicOut. Single-buffered
+	// so an in-flight swap blocks a second swap attempt — keeps the
+	// fade-state machine simple.
+	swapCh chan musicSwap
+
 	pumpDone   chan struct{}
 	mixDone    chan struct{}
 	readerDone chan struct{}
@@ -104,6 +155,26 @@ type Mixer struct {
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// overlayStream tracks one in-flight clip dispatched via OverlapClip.
+// The decoder ffmpeg subprocess writes PCM into pcmCh; the reader
+// goroutine closes pcmCh at EOF; the mix loop sweeps the closed entry
+// out of Mixer.overlays between iterations.
+type overlayStream struct {
+	cmd    *exec.Cmd
+	out    io.ReadCloser
+	pcmCh  chan []byte
+	volume float32
+	done   chan struct{}
+}
+
+// musicSwap is one ReplaceMusic request. The new ffmpeg subprocess is
+// already started by ReplaceMusic so the mix loop can read from out
+// immediately on cross-fade entry.
+type musicSwap struct {
+	cmd *exec.Cmd
+	out io.ReadCloser
 }
 
 // NewSession spawns the three ffmpeg processes and the goroutines
@@ -204,6 +275,8 @@ func NewSession(musicPath string, sink io.Writer) (*Mixer, error) {
 		encIn:      encIn,
 		encOut:     encOut,
 		ttsCh:      make(chan []byte, ttsBufferChunks),
+		swapCh:     make(chan musicSwap, 1),
+		ttsScale:   1,
 		pumpDone:   make(chan struct{}),
 		mixDone:    make(chan struct{}),
 		readerDone: make(chan struct{}),
@@ -246,6 +319,9 @@ func (m *Mixer) Close() error {
 		// 2. Stop the music decoder. -re/-stream_loop -1 means it
 		//    would otherwise run forever; SIGINT makes it exit
 		//    cleanly so the mix loop sees musicOut EOF and stops.
+		//    The mix loop itself owns m.musicCmd / m.musicOut after
+		//    a ReplaceMusic — it may have already been swapped to a
+		//    different process — so we read the pointer directly.
 		if m.musicCmd != nil && m.musicCmd.Process != nil {
 			_ = m.musicCmd.Process.Signal(syscall.SIGINT)
 		}
@@ -263,6 +339,16 @@ func (m *Mixer) Close() error {
 		_ = m.musicCmd.Wait()
 		_ = m.ttsCmd.Wait()
 		_ = m.encCmd.Wait()
+		// 5. Reap any overlay clips still in flight at session end.
+		m.overlaysMu.Lock()
+		for _, ov := range m.overlays {
+			if ov.cmd != nil && ov.cmd.Process != nil {
+				_ = ov.cmd.Process.Signal(syscall.SIGINT)
+				_ = ov.cmd.Wait()
+			}
+		}
+		m.overlays = nil
+		m.overlaysMu.Unlock()
 
 		if m.mixErr != nil && firstErr == nil {
 			firstErr = m.mixErr
@@ -273,6 +359,144 @@ func (m *Mixer) Close() error {
 		m.closeErr = firstErr
 	})
 	return m.closeErr
+}
+
+// OverlapClip kicks off a one-shot overlay stream: an ffmpeg decoder
+// reads path, emits PCM at the pipeline format, and the mix loop
+// additively layers it on top of the music + TTS. The clip plays
+// once (no looping) — short atmospheric stingers, single events. The
+// clip's natural duration ends the overlay; reaped automatically.
+//
+// volume is the linear gain applied to the overlay's PCM; pass 0 to
+// fall back to overlayVolume. Returns an error only on subprocess-
+// start failure; a missing / unreadable file surfaces later as the
+// overlay producing zero PCM (logged but not fatal). Safe to call
+// concurrently — multiple overlays mix simultaneously.
+func (m *Mixer) OverlapClip(path string, volume float32) error {
+	if m == nil {
+		return errors.New("musicmixer: nil mixer")
+	}
+	if path == "" {
+		return errors.New("musicmixer: empty overlay path")
+	}
+	if volume <= 0 {
+		volume = overlayVolume
+	}
+	cmd := exec.Command("ffmpeg",
+		"-loglevel", "quiet",
+		"-i", path,
+		"-f", "s16le",
+		"-ar", fmt.Sprintf("%d", pcmSampleRate),
+		"-ac", fmt.Sprintf("%d", pcmChannels),
+		"pipe:1",
+	)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("overlay stdout: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start overlay ffmpeg: %w", err)
+	}
+	ov := &overlayStream{
+		cmd:    cmd,
+		out:    out,
+		pcmCh:  make(chan []byte, ttsBufferChunks),
+		volume: volume,
+		done:   make(chan struct{}),
+	}
+	m.overlaysMu.Lock()
+	m.overlays = append(m.overlays, ov)
+	m.overlaysMu.Unlock()
+	go func() {
+		defer close(ov.pcmCh)
+		buf := make([]byte, chunkBytes)
+		for {
+			n, err := io.ReadFull(out, buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				ov.pcmCh <- chunk
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+// SetTTSVolumeScale multiplies the mixer's default ttsVolume by scale
+// for subsequent mix iterations until reset. Use cases: per-turn
+// volume contouring (e.g. puzzle surface narration sits lower under
+// the music bed than ordinary Q&A turns). Pass 1 (or any value <= 0,
+// which is normalised to 1) to restore the default. Safe to call from
+// any goroutine — the mix loop reads the current value at each chunk.
+func (m *Mixer) SetTTSVolumeScale(scale float32) {
+	if m == nil {
+		return
+	}
+	if scale <= 0 {
+		scale = 1
+	}
+	m.ttsScaleMu.Lock()
+	m.ttsScale = scale
+	m.ttsScaleMu.Unlock()
+}
+
+// currentTTSScale reads the active TTS scale under the lock. Returns
+// 1 when uninitialised so a zero-value scale doesn't silence the
+// speaker.
+func (m *Mixer) currentTTSScale() float32 {
+	m.ttsScaleMu.Lock()
+	defer m.ttsScaleMu.Unlock()
+	if m.ttsScale <= 0 {
+		return 1
+	}
+	return m.ttsScale
+}
+
+// ReplaceMusic cross-fades the active background bed over to a new
+// looping clip at path. The new decoder uses the same -re /
+// -stream_loop -1 contract as the session's original bed, so the
+// replacement plays forever once the fade settles. The fade itself
+// runs over musicCrossfadeChunks mix iterations (~1 s); during the
+// window both beds play at proportional gains so there's no audible
+// gap or flicker. A second ReplaceMusic call while a fade is still in
+// flight blocks until the in-flight fade completes — keeps the
+// state machine simple and avoids double-fade artifacts.
+//
+// Returns an error only on subprocess-start failure; mid-fade decoder
+// failures are logged inside mixLoop and the old bed continues
+// uninterrupted.
+func (m *Mixer) ReplaceMusic(path string) error {
+	if m == nil {
+		return errors.New("musicmixer: nil mixer")
+	}
+	if path == "" {
+		return errors.New("musicmixer: empty replacement music path")
+	}
+	cmd := exec.Command("ffmpeg",
+		"-loglevel", "quiet",
+		"-re",
+		"-stream_loop", "-1",
+		"-i", path,
+		"-f", "s16le",
+		"-ar", fmt.Sprintf("%d", pcmSampleRate),
+		"-ac", fmt.Sprintf("%d", pcmChannels),
+		"pipe:1",
+	)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("replace stdout: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start replace ffmpeg: %w", err)
+	}
+	// Block on the swap channel until the mix loop picks up an in-
+	// flight fade — single-buffered, so a back-to-back ReplaceMusic
+	// waits here rather than racing the fade state machine.
+	m.swapCh <- musicSwap{cmd: cmd, out: out}
+	return nil
 }
 
 // ttsReader copies TTS PCM out of the decoder into a buffered
@@ -297,20 +521,87 @@ func (m *Mixer) ttsReader() {
 
 // mixLoop is the heart of the mixer. It reads music PCM at the
 // rate the music ffmpeg emits it (1× realtime, paced by -re),
-// mixes any currently-buffered TTS PCM on top, and writes the
-// result to the encoder. Music alone flows through during gaps —
-// no silence frames, no amix stalls.
+// mixes any currently-buffered TTS PCM on top, plus any in-flight
+// overlay streams and the cross-fade tail of a pending music swap,
+// and writes the result to the encoder. Music alone flows through
+// during gaps — no silence frames, no amix stalls.
 func (m *Mixer) mixLoop() {
 	defer close(m.mixDone)
 	music := make([]byte, chunkBytes)
 	var residual []byte // TTS PCM left over from a previous chunk
 
+	// fadeState is non-zero while a ReplaceMusic cross-fade is in
+	// progress. The new bed reads happen from `nextOut`; once
+	// fadeRemaining hits zero the new decoder is promoted and the old
+	// one is reaped.
+	type fadeState struct {
+		nextCmd *exec.Cmd
+		nextOut io.ReadCloser
+		// remaining counts down from musicCrossfadeChunks. The current
+		// chunk's blend factor is (1 - remaining/musicCrossfadeChunks),
+		// so the new bed ramps 0→1 across the window.
+		remaining int
+	}
+	var fade *fadeState
+	nextChunk := make([]byte, chunkBytes)
+	mixBuf := make([]byte, chunkBytes)
+
+	// bedScale is the running duck multiplier applied to the music bed
+	// gains. Starts at 1 (no duck) and ramps toward musicDuckFactor
+	// while any overlay is in flight, then back to 1 once they all
+	// drain. Smooth ramps (musicDuckRampPerChunk per iteration) keep
+	// the attack/release inaudible.
+	bedScale := float32(1)
+
 	for {
+		// Pick up a pending music-swap request before reading the next
+		// chunk. We drain at most one — the channel is single-buffered
+		// so a second swap during a fade waits for ReplaceMusic to
+		// re-signal once this fade completes.
+		if fade == nil {
+			select {
+			case swap := <-m.swapCh:
+				fade = &fadeState{
+					nextCmd:   swap.cmd,
+					nextOut:   swap.out,
+					remaining: musicCrossfadeChunks,
+				}
+			default:
+			}
+		}
+
 		if _, err := io.ReadFull(m.musicOut, music); err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 				m.mixErr = fmt.Errorf("read music: %w", err)
 			}
 			return
+		}
+		// Compute the linear cross-fade gains for this chunk. Without
+		// an active fade, oldGain = musicVolume and newGain = 0 (no
+		// next bed read). Mid-fade the two gains sum to musicVolume so
+		// the perceived bed level stays constant through the swap.
+		oldGain := float32(musicVolume)
+		newGain := float32(0)
+		if fade != nil {
+			t := float32(musicCrossfadeChunks-fade.remaining+1) / float32(musicCrossfadeChunks)
+			if t > 1 {
+				t = 1
+			}
+			oldGain = float32(musicVolume) * (1 - t)
+			newGain = float32(musicVolume) * t
+			if _, err := io.ReadFull(fade.nextOut, nextChunk); err != nil {
+				// New bed died unexpectedly mid-fade — abandon the swap
+				// rather than killing the whole session. The old bed
+				// keeps playing; ReplaceMusic can be retried.
+				_ = fade.nextOut.Close()
+				if fade.nextCmd != nil && fade.nextCmd.Process != nil {
+					_ = fade.nextCmd.Process.Signal(syscall.SIGINT)
+					_ = fade.nextCmd.Wait()
+				}
+				fade = nil
+				oldGain = float32(musicVolume)
+				newGain = 0
+			}
 		}
 
 		// Drain whatever TTS PCM is queued without blocking, so
@@ -329,18 +620,159 @@ func (m *Mixer) mixLoop() {
 			break
 		}
 
-		mixInto(music, residual, musicVolume, ttsVolume)
-		if len(residual) >= len(music) {
-			residual = residual[len(music):]
+		// Duck the bed while any overlay is in flight: ramp bedScale
+		// toward musicDuckFactor when overlays exist, back to 1 when
+		// they don't. Snapshot first so the same overlay slice drives
+		// both the duck decision and the actual mix; otherwise the
+		// duck would lag the overlay by one chunk.
+		overlays := m.snapshotOverlays()
+		duckTarget := float32(1)
+		if len(overlays) > 0 {
+			duckTarget = float32(musicDuckFactor)
+		}
+		switch {
+		case bedScale > duckTarget:
+			bedScale -= float32(musicDuckRampPerChunk)
+			if bedScale < duckTarget {
+				bedScale = duckTarget
+			}
+		case bedScale < duckTarget:
+			bedScale += float32(musicDuckRampPerChunk)
+			if bedScale > duckTarget {
+				bedScale = duckTarget
+			}
+		}
+		oldGain *= bedScale
+		newGain *= bedScale
+
+		// Build the chunk: bed (with cross-fade if active, ducked when
+		// overlays are present) attenuated by oldGain + newGain, plus
+		// TTS at ttsVolume, plus each in-flight overlay at its own
+		// volume.
+		composeChunk(mixBuf, music, nextChunk, fade != nil, oldGain, newGain)
+		mixInto(mixBuf, residual, 1.0, ttsVolume*m.currentTTSScale())
+		if len(overlays) > 0 {
+			for _, ov := range overlays {
+				ovChunk := drainOverlayChunk(ov, len(mixBuf))
+				if len(ovChunk) > 0 {
+					mixInto(mixBuf, ovChunk, 1.0, ov.volume)
+				}
+			}
+			m.sweepClosedOverlays()
+		}
+		if len(residual) >= len(mixBuf) {
+			residual = residual[len(mixBuf):]
 		} else {
 			residual = nil
 		}
 
-		if _, err := m.encIn.Write(music); err != nil {
+		if fade != nil {
+			fade.remaining--
+			if fade.remaining <= 0 {
+				// Promote the new bed: SIGINT the old, swap pointers,
+				// reap. mixLoop's next iteration reads from the new
+				// musicOut at full musicVolume.
+				if m.musicCmd != nil && m.musicCmd.Process != nil {
+					_ = m.musicCmd.Process.Signal(syscall.SIGINT)
+				}
+				_ = m.musicOut.Close()
+				if m.musicCmd != nil {
+					_ = m.musicCmd.Wait()
+				}
+				m.musicCmd = fade.nextCmd
+				m.musicOut = fade.nextOut
+				fade = nil
+			}
+		}
+
+		if _, err := m.encIn.Write(mixBuf); err != nil {
 			m.mixErr = fmt.Errorf("write enc: %w", err)
 			return
 		}
 	}
+}
+
+// composeChunk writes the bed contribution into dst. Without a fade,
+// dst = music * oldGain. Mid-fade, dst = music * oldGain + next * newGain.
+// All buffers are s16le mono PCM at chunkBytes — caller guarantees lengths
+// match.
+func composeChunk(dst, music, next []byte, fading bool, oldGain, newGain float32) {
+	for i := 0; i+1 < len(dst); i += 2 {
+		m := int16(binary.LittleEndian.Uint16(music[i:]))
+		mixed := int32(float32(m) * oldGain)
+		if fading && i+1 < len(next) {
+			n := int16(binary.LittleEndian.Uint16(next[i:]))
+			mixed += int32(float32(n) * newGain)
+		}
+		if mixed > 32767 {
+			mixed = 32767
+		} else if mixed < -32768 {
+			mixed = -32768
+		}
+		binary.LittleEndian.PutUint16(dst[i:], uint16(mixed))
+	}
+}
+
+// snapshotOverlays returns a stable view of the active overlay slice
+// for one mix-loop iteration. Holding overlaysMu only for the copy
+// keeps OverlapClip / sweepClosedOverlays from blocking on the per-
+// chunk drain.
+func (m *Mixer) snapshotOverlays() []*overlayStream {
+	m.overlaysMu.Lock()
+	defer m.overlaysMu.Unlock()
+	if len(m.overlays) == 0 {
+		return nil
+	}
+	out := make([]*overlayStream, len(m.overlays))
+	copy(out, m.overlays)
+	return out
+}
+
+// drainOverlayChunk pulls up to n bytes of PCM out of one overlay
+// stream's pcmCh. Concatenates back-to-back chunks until n is met or
+// the channel is empty / closed. Closing the channel is the clip's
+// EOF signal — caller relies on sweepClosedOverlays to drop the entry
+// from m.overlays once the channel is closed AND the residual buffer
+// is empty.
+func drainOverlayChunk(ov *overlayStream, n int) []byte {
+	if ov == nil || ov.pcmCh == nil {
+		return nil
+	}
+	var buf []byte
+	for len(buf) < n {
+		select {
+		case chunk, ok := <-ov.pcmCh:
+			if !ok {
+				ov.pcmCh = nil
+				return buf
+			}
+			buf = append(buf, chunk...)
+		default:
+			return buf
+		}
+	}
+	return buf
+}
+
+// sweepClosedOverlays drops overlay entries whose pcmCh has been nil'd
+// out by drainOverlayChunk after observing EOF. Reaps the decoder
+// subprocess synchronously so a long-running session doesn't leak
+// zombie ffmpegs.
+func (m *Mixer) sweepClosedOverlays() {
+	m.overlaysMu.Lock()
+	defer m.overlaysMu.Unlock()
+	out := m.overlays[:0]
+	for _, ov := range m.overlays {
+		if ov.pcmCh != nil {
+			out = append(out, ov)
+			continue
+		}
+		if ov.cmd != nil {
+			_ = ov.cmd.Wait()
+		}
+		close(ov.done)
+	}
+	m.overlays = out
 }
 
 // mixInto attenuates `music` by `musicVol` in place and additively
