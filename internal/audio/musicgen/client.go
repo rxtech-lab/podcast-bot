@@ -53,12 +53,14 @@ func New(apiKey string) (*Client, error) {
 	}, nil
 }
 
-// Request is one music-generation request. Only the prompt is required;
-// the model decides duration. We always ask for mp3 because the rest of
-// the pipeline already speaks mp3 — saving us a transcode pass before
-// the amix stage.
+// Request is one music-generation request. Only the prompt is required.
+// DurationSeconds, when > 0, is folded into the prompt as an explicit
+// length hint Lyria honours when picking output length. We always ask
+// for mp3 because the rest of the pipeline already speaks mp3 — saving
+// us a transcode pass before the amix stage.
 type Request struct {
-	Prompt string
+	Prompt          string
+	DurationSeconds int
 }
 
 // Generate POSTs the request and returns mp3 bytes. The response shape
@@ -135,11 +137,16 @@ func (c *Client) generateOnce(ctx context.Context, req Request) ([]byte, error) 
 	// application/json, etc.). The only valid override for this model is
 	// "audio/wav", which we don't want. So omit it entirely and rely on
 	// the AUDIO modality to signal binary output.
+	prompt := req.Prompt
+	if req.DurationSeconds > 0 {
+		prompt = strings.TrimRight(prompt, "\n ") +
+			fmt.Sprintf("\n\nTarget length: approximately %d seconds.", req.DurationSeconds)
+	}
 	body := map[string]any{
 		"contents": []any{
 			map[string]any{
 				"parts": []any{
-					map[string]any{"text": req.Prompt},
+					map[string]any{"text": prompt},
 				},
 			},
 		},

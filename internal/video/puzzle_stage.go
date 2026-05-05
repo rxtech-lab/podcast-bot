@@ -54,6 +54,14 @@ type PuzzleStage struct {
 	curScene    string
 	curSceneIdx int
 
+	// surfaceAnimations is the planner's per-surface-frame camera move
+	// list (parallel to sceneScenes.Surface). applySceneAdvance reads
+	// the slot at the new index and forwards the value to the encoder
+	// so each surface beat's image plays with its planned pan / zoom.
+	// Empty / shorter than Surface means "no plan for that beat" — the
+	// renderer holds the still image (stall semantics).
+	surfaceAnimations []string
+
 	// rotateCancel stops the goroutine that swaps multi-variant scenes
 	// (surface, conclusion) on a timer. nil when no rotation is active.
 	// rotateGen is bumped on every (re)start so a stale goroutine that
@@ -358,9 +366,11 @@ func (s *PuzzleStage) applySceneAdvance(idx int) {
 	// keep whatever background is currently on screen instead of jumping
 	// to a different beat. AttachSurfaceFrame repaints once the frame
 	// lands.
+	anim := s.animationFor(name, applyIdx)
 	if img := sc.ByNameIdxExact(name, applyIdx); img != nil {
 		s.enc.SetPuzzleSceneName(name)
 		s.enc.SetSceneBackground(img)
+		s.enc.SetSceneAnimation(anim)
 	} else {
 		s.enc.SetPuzzleSceneName(name)
 	}
@@ -370,7 +380,8 @@ func (s *PuzzleStage) applySceneAdvance(idx int) {
 // encoder. Silently no-ops if scenes haven't been attached yet or the
 // variant slot is empty. Also forwards the scene name so the renderer
 // can apply scene-specific subtitle treatment (surface = black-outline
-// caption with no slab; others = HBO quote card).
+// caption with no slab; others = HBO quote card) and the per-beat
+// camera-move animation when one is configured for this slot.
 func (s *PuzzleStage) applyScene(name string, idx int) {
 	s.mu.Lock()
 	sc := s.sceneScenes
@@ -384,6 +395,41 @@ func (s *PuzzleStage) applyScene(name string, idx int) {
 		return
 	}
 	s.enc.SetSceneBackground(img)
+	s.enc.SetSceneAnimation(s.animationFor(name, idx))
+}
+
+// animationFor returns the planner-supplied animation kind for the
+// given scene + variant index. Today only the surface phase has a
+// per-beat plan; other phases (qa, reveal, conclusion) hold their
+// still image (empty string → renderer treats as stall). Out-of-range
+// indices fall back to stall as well.
+func (s *PuzzleStage) animationFor(name string, idx int) string {
+	if name != scenes.SceneSurface {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < 0 || idx >= len(s.surfaceAnimations) {
+		return ""
+	}
+	return s.surfaceAnimations[idx]
+}
+
+// AttachSurfaceAnimations records the planner's per-surface-frame
+// camera-move list. Caller (cmd/debate-bot) hands this to the stage
+// alongside the scene plan so each surface beat's image plays with
+// its planned pan / zoom move when the host emits the matching
+// `<scene N/>` marker. Empty / nil disables the feature; the
+// renderer holds the still image instead. Safe to call before or
+// after AttachScenes — the next applyScene / applySceneAdvance picks
+// up the new list.
+func (s *PuzzleStage) AttachSurfaceAnimations(anims []string) {
+	if len(anims) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.surfaceAnimations = append(s.surfaceAnimations[:0], anims...)
+	s.mu.Unlock()
 }
 
 // maybeStartSceneRotation kicks off a goroutine that swaps to the next

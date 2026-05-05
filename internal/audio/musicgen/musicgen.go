@@ -135,10 +135,14 @@ func promptKey(s string) string {
 // GenerateClip produces a single sound clip for the planner's per-puzzle
 // sound list (separate from the long phase-bed clips Generate handles).
 // label is a short cache-friendly tag like "sound" — the on-disk filename
-// is "<label>-<sha1(prompt)>.mp3" so two puzzles with the same prompt
-// share the same cache file. Returns the disk path; caller hands it to
-// the mixer as an `-i` input. Empty cacheDir falls back to a tempfile.
-func GenerateClip(ctx context.Context, client *Client, prompt, cacheDir, label string) (string, error) {
+// is "<label>-<sha1(prompt+duration)>.mp3" so two puzzles with the same
+// prompt + duration share the same cache file (a different requested
+// duration cuts a fresh clip). Returns the disk path; caller hands it
+// to the mixer as an `-i` input. Empty cacheDir falls back to a tempfile.
+//
+// durationSeconds, when > 0, is forwarded to Lyria as an explicit length
+// hint via Request.DurationSeconds. 0 lets the model decide.
+func GenerateClip(ctx context.Context, client *Client, prompt, cacheDir, label string, durationSeconds int) (string, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", fmt.Errorf("musicgen: empty prompt")
 	}
@@ -148,5 +152,41 @@ func GenerateClip(ctx context.Context, client *Client, prompt, cacheDir, label s
 	if cacheDir != "" {
 		_ = os.MkdirAll(cacheDir, 0o755)
 	}
-	return loadOrGenerate(ctx, client, label, prompt, cacheDir)
+	cacheKey := prompt
+	if durationSeconds > 0 {
+		cacheKey = fmt.Sprintf("%s|dur=%d", prompt, durationSeconds)
+	}
+	cachePath := ""
+	if cacheDir != "" {
+		cachePath = filepath.Join(cacheDir, label+"-"+promptKey(cacheKey)+".mp3")
+		if _, err := os.Stat(cachePath); err == nil {
+			return cachePath, nil
+		}
+	}
+	if client == nil {
+		return "", fmt.Errorf("no musicgen client and cache miss")
+	}
+	raw, err := client.Generate(ctx, Request{
+		Prompt:          prompt,
+		DurationSeconds: durationSeconds,
+	})
+	if err != nil {
+		return "", err
+	}
+	if cachePath == "" {
+		f, terr := os.CreateTemp("", label+"-*.mp3")
+		if terr != nil {
+			return "", fmt.Errorf("tempfile: %w", terr)
+		}
+		if _, werr := f.Write(raw); werr != nil {
+			f.Close()
+			return "", werr
+		}
+		_ = f.Close()
+		return f.Name(), nil
+	}
+	if err := os.WriteFile(cachePath, raw, 0o644); err != nil {
+		return "", fmt.Errorf("write cache: %w", err)
+	}
+	return cachePath, nil
 }

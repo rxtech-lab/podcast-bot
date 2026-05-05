@@ -82,9 +82,10 @@ type Orchestrator struct {
 // scenes package. Caller (cmd/debate-bot) translates one to the other
 // after planning + clip generation.
 type SoundCueDirection struct {
-	Mode   string
-	Prompt string
-	Anchor string
+	Mode            string
+	Prompt          string
+	Anchor          string
+	DurationSeconds int
 }
 
 // New constructs an Orchestrator after loaders + .env are validated.

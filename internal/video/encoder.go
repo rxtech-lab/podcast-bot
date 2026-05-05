@@ -291,6 +291,13 @@ func (e *Encoder) SetSceneBackground(img *image.RGBA) { e.rend.SetSceneBackgroun
 // lockstep with SetSceneBackground.
 func (e *Encoder) SetPuzzleSceneName(name string) { e.rend.SetPuzzleSceneName(name) }
 
+// SetSceneAnimation forwards the per-beat camera move name (one of
+// scenes.Animation*) to the renderer so the still scene image plays
+// with a Ken-Burns-style pan / zoom. Pass "" or "stall" to hold the
+// still image. PuzzleStage calls this immediately after every
+// SetSceneBackground so the trajectory is locked to the new image.
+func (e *Encoder) SetSceneAnimation(kind string) { e.rend.SetSceneAnimation(kind) }
+
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).
 // Calling with empty speaker hides the subtitle (idle state).

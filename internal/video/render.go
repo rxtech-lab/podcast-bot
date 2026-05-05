@@ -133,6 +133,23 @@ type Renderer struct {
 	sceneBg              *image.RGBA
 	prevSceneBg          *image.RGBA
 	sceneTransitionStart time.Time
+
+	// sceneMove is the active per-scene camera move (Ken-Burns-style
+	// pan / zoom). prev retains the outgoing scene's move across a
+	// crossfade so drawBackground composes both layers with their own
+	// trajectories. sceneMoveStart anchors the elapsed-time computation
+	// for the current scene; prevSceneMoveStart for the outgoing one.
+	// Reset together with sceneBg / prevSceneBg in SetSceneBackground.
+	//
+	// On a back-to-back swap (a new SetSceneBackground while the prior
+	// fade is still running), the outgoing layer's move is replaced
+	// with MoveStall and prevSceneBg is replaced with a one-time
+	// composited snapshot — that freezes the outgoing motion at its
+	// current frame so the in-flight crossfade doesn't visibly leap.
+	sceneMove          CameraMovement
+	prevSceneMove      CameraMovement
+	sceneMoveStart     time.Time
+	prevSceneMoveStart time.Time
 }
 
 // pendingUserMsg is one viewer message buffered during the debounce window.
@@ -477,59 +494,110 @@ func (r *Renderer) SetPuzzleSceneName(name string) {
 // repeat call with the same pointer is a no-op so PhaseMsg storms don't
 // re-trigger the fade.
 //
-// When the previous fade is still in flight, the in-progress composite
-// (prev*α + cur*(1-α) for the relevant blend) is rendered into a fresh
-// snapshot RGBA and that snapshot becomes the next "prev". Without this,
-// the alpha resets to 0 at the moment of swap, so the screen jumps from
-// "partial old → mid-fade" straight to "old fully painted" before the
-// new fade starts — which the eye reads as a flicker on back-to-back
-// scene swaps.
+// Two cases for the prev layer:
+//
+//  1. No fade in flight (sceneFadeFrac == 1 at swap time): the live
+//     outgoing source is moved into prevSceneBg verbatim along with its
+//     CameraMovement and start time. During the new crossfade both
+//     layers keep animating on their own clocks — that's the cinematic
+//     "two cams in motion through the dissolve" look.
+//
+//  2. Fade still in flight (back-to-back swap): rendering the outgoing
+//     source with its still-running move would visibly leap when the
+//     fresh fade starts (the in-progress composite snaps back to
+//     "outgoing fully painted at α=1"). To avoid that, snapshot the
+//     current composite into a fresh RGBA and swap that in as
+//     prevSceneBg with MoveStall — so it holds its current frame for
+//     the duration of the new fade.
+//
+// Resets the per-scene move to MoveStall — caller chains a
+// SetSceneAnimation right after when a non-stall move is wanted.
 func (r *Renderer) SetSceneBackground(img *image.RGBA) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sceneBg == img {
 		return
 	}
-	r.prevSceneBg = r.captureCurrentBackgroundLocked()
+	now := time.Now()
+	fadeFrac := sceneFadeFrac(r.sceneTransitionStart)
+	if fadeFrac < 1 && (r.sceneBg != nil || r.prevSceneBg != nil) {
+		// Back-to-back: bake the in-progress composite into a still and
+		// stall it for the new fade.
+		bounds := image.Rect(0, 0, r.width, r.height)
+		snap := image.NewRGBA(bounds)
+		Transition{Kind: "crossfade"}.Render(snap,
+			r.prevSceneBg, r.prevSceneMove, r.moveProgressLocked(r.prevSceneMoveStart),
+			r.sceneBg, r.sceneMove, r.moveProgressLocked(r.sceneMoveStart),
+			fadeFrac)
+		r.prevSceneBg = snap
+		r.prevSceneMove = CameraMovement{Kind: MoveStall}
+		r.prevSceneMoveStart = now
+	} else {
+		r.prevSceneBg = r.sceneBg
+		r.prevSceneMove = r.sceneMove
+		r.prevSceneMoveStart = r.sceneMoveStart
+	}
 	r.sceneBg = img
-	r.sceneTransitionStart = time.Now()
+	r.sceneTransitionStart = now
+	r.sceneMove = CameraMovement{Kind: MoveStall}
+	r.sceneMoveStart = now
 }
 
-// captureCurrentBackgroundLocked composites whatever the renderer is
-// painting for the bg layer right now into a fresh RGBA so it can be
-// reused as `prevSceneBg` for the next crossfade. Mirrors drawBackground
-// pixel-for-pixel; the two MUST stay in sync. Returns the existing
-// sceneBg unchanged when no fade is in progress (alpha == 1) so we don't
-// pay the allocation cost in the common case.
+// SetSceneAnimation sets the camera move applied to the current scene
+// background as it plays. Pass "" or "stall" for no motion. Safe to
+// call before or after SetSceneBackground; the animation clock is
+// anchored to the moment of this call so the trajectory always begins
+// at t=0 from the caller's perspective. Stale values from a previous
+// scene are blown away by SetSceneBackground (which resets the move
+// to stall before this is called again).
+func (r *Renderer) SetSceneAnimation(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sceneMove = CameraMovement{Kind: parseMovementKind(kind)}
+	r.sceneMoveStart = time.Now()
+}
+
+// parseMovementKind normalises a free-form animation token into one of
+// the supported MovementKind values. Unknown / empty values map to
+// MoveStall so the renderer holds the still image instead of crashing
+// or freezing.
+func parseMovementKind(s string) MovementKind {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case string(MovePanLeft):
+		return MovePanLeft
+	case string(MovePanRight):
+		return MovePanRight
+	case string(MovePanTop):
+		return MovePanTop
+	case string(MovePanBottom):
+		return MovePanBottom
+	case string(MoveZoomIn):
+		return MoveZoomIn
+	case string(MoveZoomOut):
+		return MoveZoomOut
+	default:
+		return MoveStall
+	}
+}
+
+// moveProgressLocked maps a per-layer move start time into eased 0..1
+// progress. Identical curve to sceneFadeFrac so transitions and camera
+// moves share the same feel. Returns 1 (held end-frame) when start is
+// the zero value — for layers that never received a move kind.
 //
 // Caller must hold r.mu.
-func (r *Renderer) captureCurrentBackgroundLocked() *image.RGBA {
-	if r.sceneBg == nil {
-		return nil
+func (r *Renderer) moveProgressLocked(start time.Time) float64 {
+	if start.IsZero() {
+		return 1
 	}
-	alpha := sceneFadeFrac(r.sceneTransitionStart)
-	if alpha >= 1 {
-		return r.sceneBg
+	t := time.Since(start).Seconds() / sceneAnimDuration.Seconds()
+	if t < 0 {
+		t = 0
 	}
-	bounds := image.Rect(0, 0, r.width, r.height)
-	snap := image.NewRGBA(bounds)
-	switch {
-	case r.prevSceneBg != nil:
-		drawScaledOver(snap, r.prevSceneBg, bounds)
-	case r.bgPlate != nil:
-		draw.Draw(snap, bounds, r.bgPlate, image.Point{}, draw.Src)
-	default:
-		drawGradientBackground(snap,
-			color.RGBA{0x12, 0x14, 0x1f, 0xff},
-			color.RGBA{0x07, 0x08, 0x0e, 0xff},
-		)
+	if t > 1 {
+		t = 1
 	}
-	if alpha > 0 {
-		tmp := image.NewRGBA(bounds)
-		drawScaledOver(tmp, r.sceneBg, bounds)
-		blitWithGlobalAlpha(snap, tmp, alpha)
-	}
-	return snap
+	return easeInOutCubic(t)
 }
 
 // SetSides loads the affirmative / negative speaker rosters into the side
@@ -765,44 +833,54 @@ func (r *Renderer) Frame() []byte {
 }
 
 // drawBackground paints the bg layer that's visible in every frame regardless
-// of stage mode. When a scene bg is set (puzzle mode), it crossfades from
-// the previous scene to the current one over sceneTransitionDuration.
+// of stage mode. When a scene bg is set (puzzle mode) it delegates to the
+// shared Transition primitive: prev scene at its own move/progress crossfaded
+// into the current scene at its own move/progress over sceneTransitionDuration.
+// When no scene bg is set, falls back to the static plate or procedural
+// gradient.
 func (r *Renderer) drawBackground(img *image.RGBA) {
-	if r.sceneBg != nil {
-		// Paint the prev scene first (or fall back to the static plate /
-		// procedural gradient if there isn't one), then composite the new
-		// scene on top with eased alpha.
-		switch {
-		case r.prevSceneBg != nil:
-			drawScaledOver(img, r.prevSceneBg, img.Bounds())
-		case r.bgPlate != nil:
+	if r.sceneBg == nil && r.prevSceneBg == nil {
+		if r.bgPlate != nil {
 			draw.Draw(img, img.Bounds(), r.bgPlate, image.Point{}, draw.Src)
-		default:
+			return
+		}
+		drawGradientBackground(img,
+			color.RGBA{0x12, 0x14, 0x1f, 0xff},
+			color.RGBA{0x07, 0x08, 0x0e, 0xff},
+		)
+		return
+	}
+	// Paint the static fallback first so a half-faded incoming scene with
+	// no outgoing layer still renders against something other than zeroed
+	// pixels at the edges (when the camera move shrinks the viewport
+	// inside the dst, the surrounding area would otherwise be transparent).
+	if r.prevSceneBg == nil {
+		if r.bgPlate != nil {
+			draw.Draw(img, img.Bounds(), r.bgPlate, image.Point{}, draw.Src)
+		} else {
 			drawGradientBackground(img,
 				color.RGBA{0x12, 0x14, 0x1f, 0xff},
 				color.RGBA{0x07, 0x08, 0x0e, 0xff},
 			)
 		}
-		alpha := sceneFadeFrac(r.sceneTransitionStart)
-		if alpha >= 1 {
-			drawScaledOver(img, r.sceneBg, img.Bounds())
-		} else if alpha > 0 {
-			// Build a same-size buffer of the new scene, then blit at alpha.
-			tmp := image.NewRGBA(img.Bounds())
-			drawScaledOver(tmp, r.sceneBg, img.Bounds())
-			blitWithGlobalAlpha(img, tmp, alpha)
-		}
-		return
 	}
-	if r.bgPlate != nil {
-		draw.Draw(img, img.Bounds(), r.bgPlate, image.Point{}, draw.Src)
-		return
-	}
-	drawGradientBackground(img,
-		color.RGBA{0x12, 0x14, 0x1f, 0xff},
-		color.RGBA{0x07, 0x08, 0x0e, 0xff},
-	)
+	prevP := r.moveProgressLocked(r.prevSceneMoveStart)
+	curP := r.moveProgressLocked(r.sceneMoveStart)
+	alpha := sceneFadeFrac(r.sceneTransitionStart)
+	Transition{Kind: "crossfade"}.Render(img,
+		r.prevSceneBg, r.prevSceneMove, prevP,
+		r.sceneBg, r.sceneMove, curP,
+		alpha)
 }
+
+// sceneAnimDuration is how long each per-scene camera move takes to
+// complete its trajectory. Beyond this window the source rect stays
+// at its end position (still image) until the next SceneAdvance swaps
+// in a fresh scene with a fresh trajectory. 12 s matches the typical
+// per-beat narration length in a 海龜湯 surface story; shorter beats
+// catch only the opening of the move (pleasant) while longer beats
+// see a slower drift toward the still endpoint.
+const sceneAnimDuration = 12 * time.Second
 
 // sceneFadeFrac maps the time since SetSceneBackground was called into a
 // 0..1 fraction with cubic ease in/out. Identical curve to stageActiveFrac

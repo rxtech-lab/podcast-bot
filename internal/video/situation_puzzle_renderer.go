@@ -171,14 +171,17 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 		}
 
 		ltAlpha := 1.0
+		ltDy := 0
 		if isCinematic {
 			// Cinematic narration: lower-third name plate fades out after
-			// the first 30s so the imagery has the screen for the rest of
-			// the storytelling. Hold full alpha for 25s, fade over 5s.
-			ltAlpha = surfaceLowerThirdAlpha(speakerStart)
+			// the first ~22 s so the imagery has the screen for the rest
+			// of the storytelling. Eased curve + a small lift so the
+			// plate departs upward rather than dimming in place.
+			ltAlpha, ltDy = surfaceLowerThirdFade(speakerStart)
 		}
 		if ltAlpha > 0 {
-			drawHBOLowerThirdAlpha(img, ltLeft, ltTop, ltLeft+ltW, ltTop+ltH,
+			drawHBOLowerThirdAlpha(img,
+				ltLeft, ltTop+ltDy, ltLeft+ltW, ltTop+ltH+ltDy,
 				ltGoldW, speaker, hboPuzzleRoleLabel(role),
 				r.tagFace, r.panelPosFace, ltAlpha)
 		}
@@ -553,32 +556,57 @@ func drawHBOLowerThirdAlpha(dst *image.RGBA, x0, y0, x1, y1, goldW int,
 // plate stays at full opacity before it begins to fade. The audience gets
 // a clean read of "who's narrating · HOST" early in the surface story,
 // then the chrome dissolves so the imagery has the screen.
-const surfaceFadeHoldDuration = 25 * time.Second
+const surfaceFadeHoldDuration = 22 * time.Second
 
-// surfaceFadeOutDuration is the linear fade-out window applied immediately
+// surfaceFadeOutDuration is the eased fade-out window applied immediately
 // after surfaceFadeHoldDuration. Combined with the hold, the plate is
-// fully gone at speakerStart + 30s. A 5s fade reads as a deliberate
-// dissolve rather than a hard cut.
-const surfaceFadeOutDuration = 5 * time.Second
+// fully gone at speakerStart + ~30 s. Lengthened from 5 s → 8 s so the
+// dissolve has room to breathe; the curve below distributes the work
+// non-linearly so the plate doesn't plateau in the middle.
+const surfaceFadeOutDuration = 8 * time.Second
 
-// surfaceLowerThirdAlpha returns the global alpha [0,1] for the surface-
-// scene name plate at the current frame given when the speaker first
-// appeared. A zero speakerStart (no speaker / not yet recorded) returns
-// 1 so the chrome shows from the first frame and the fade clock starts
+// surfaceFadeSlideUp is the maximum upward displacement the plate
+// gathers as it fades. The final pixel offset is `surfaceFadeSlideUp *
+// (1 - α)` so the slide is locked to the same easing curve as the
+// alpha — feels like the plate is being lifted away rather than just
+// dimmed in place. 14 px is enough to read as motion without leaving
+// the safe area.
+const surfaceFadeSlideUp = 14
+
+// surfaceLowerThirdFade returns (alpha, dy) for the surface-scene name
+// plate at the current frame given when the speaker first appeared.
+// alpha is in [0,1] with cubic ease-in-out applied so the dissolve
+// starts gently, accelerates through the middle, and settles smoothly
+// rather than the previous linear ramp (which clipped at the start /
+// end and read as a flat slide). dy is the vertical offset (positive =
+// move upward / negative numbers in the canvas Y axis); rendered
+// alongside the fade so the plate departs as it dims.
+//
+// A zero speakerStart (no speaker / not yet recorded) returns (1, 0)
+// so the chrome shows from the first frame and the fade clock starts
 // once SetState records a real time.
-func surfaceLowerThirdAlpha(speakerStart time.Time) float64 {
+func surfaceLowerThirdFade(speakerStart time.Time) (alpha float64, dy int) {
 	if speakerStart.IsZero() {
-		return 1
+		return 1, 0
 	}
 	elapsed := time.Since(speakerStart)
 	if elapsed < surfaceFadeHoldDuration {
-		return 1
+		return 1, 0
 	}
 	if elapsed >= surfaceFadeHoldDuration+surfaceFadeOutDuration {
-		return 0
+		return 0, -surfaceFadeSlideUp
 	}
-	t := elapsed - surfaceFadeHoldDuration
-	return 1 - float64(t)/float64(surfaceFadeOutDuration)
+	t := float64(elapsed-surfaceFadeHoldDuration) / float64(surfaceFadeOutDuration)
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	eased := easeInOutCubic(t)
+	alpha = 1 - eased
+	dy = -int(float64(surfaceFadeSlideUp)*eased + 0.5)
+	return alpha, dy
 }
 
 // drawHBOSubtitleBodyOutlined paints the puzzle subtitle text directly

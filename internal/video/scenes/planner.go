@@ -36,10 +36,11 @@ import (
 // sound-marker section entirely so the LLM never emits one. N indexes
 // into Sounds in declaration order.
 type ScenePlan struct {
-	Surface        []string         `json:"surface"`
-	SurfaceAnchors []string         `json:"surface_anchors"`
-	Conclusion     []string         `json:"conclusion"`
-	Sounds         []SoundDirection `json:"sounds,omitempty"`
+	Surface           []string         `json:"surface"`
+	SurfaceAnchors    []string         `json:"surface_anchors"`
+	SurfaceAnimations []string         `json:"surface_animations,omitempty"`
+	Conclusion        []string         `json:"conclusion"`
+	Sounds            []SoundDirection `json:"sounds,omitempty"`
 }
 
 // SoundDirection is one entry in the puzzle's sound plan. Mode is either
@@ -50,9 +51,10 @@ type ScenePlan struct {
 // immediately before the sentence containing the anchor; when empty the
 // host falls back to its own judgement for placement.
 type SoundDirection struct {
-	Mode   string `json:"mode"`
-	Prompt string `json:"prompt"`
-	Anchor string `json:"anchor,omitempty"`
+	Mode            string `json:"mode"`
+	Prompt          string `json:"prompt"`
+	Anchor          string `json:"anchor,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
 }
 
 // SurfaceCount and ConclusionCount report how many variants the plan calls for.
@@ -121,9 +123,10 @@ Output strict JSON with this shape:
 {
   "surface": ["...", "...", ...],
   "surface_anchors": ["...", "...", ...],
+  "surface_animations": ["stall" | "panleft" | "panright" | "pantop" | "panbottom" | "zoomin" | "zoomout", ...],
   "conclusion": ["...", "...", ...],
   "sounds": [
-    {"mode": "overlap" | "replace", "prompt": "...", "anchor": "..."}
+    {"mode": "overlap" | "replace", "prompt": "...", "anchor": "...", "duration_seconds": 0}
   ]
 }
 
@@ -157,6 +160,23 @@ Rules:
     * Must be in narration order (anchor i appears after anchor i-1 in the
       surface text) and non-overlapping.
     * No leading whitespace, no quote marks, no markdown.
+- "surface_animations" is REQUIRED and MUST be a parallel array of EXACTLY
+  the same length as "surface". Entry animations[i] picks the camera move
+  applied to frame i while it is on screen. Allowed values:
+    * "stall"     — no animation, the still image holds.
+    * "panleft"   — camera pans to the left (content drifts right).
+    * "panright"  — camera pans to the right (content drifts left).
+    * "pantop"    — camera pans upward (content drifts down).
+    * "panbottom" — camera pans downward (content drifts up).
+    * "zoomin"    — camera pushes in ~30% over the beat.
+    * "zoomout"   — camera pulls back ~30% over the beat.
+  Pick the move that matches the framing direction in the corresponding
+  "surface" entry — e.g. an establishing wide → "zoomin" toward the
+  subject; an object detail → "stall"; a "camera tracks the figure
+  walking right" → "panright". Keep the rhythm varied across consecutive
+  beats; long stretches of "stall" will read as static. Default to
+  "stall" only when the framing is so tight that any motion would make
+  the composition fall apart.
 - "conclusion" lists frames for the quiet aftermath after the truth has been
   revealed. Same one-sentence format. The conclusion narration is composed
   fresh by the host (not lifted from a source text), so it does NOT need
@@ -200,6 +220,11 @@ Rules:
       surface text (same rules as surface_anchors — copy exactly,
       unique within surface) marking where the cue should fire.
       Empty anchor = let the host place the marker by judgement.
+    * "duration_seconds" is OPTIONAL. When set, it is forwarded
+      to the music model as an explicit length target. Reasonable
+      ranges: 5–15 s for an "overlap" stinger; 60–120 s for a
+      "replace" sustained bed. Omit (or set 0) to let the model
+      pick the natural length for the prompt.
     * Sounds should be sparse: zero is the right answer for many
       puzzles. Add a sound only when a specific moment in the
       surface clearly benefits from one — never as filler.`
@@ -215,13 +240,15 @@ Rules:
 	raw = unwrapJSONFences(raw)
 
 	var parsed struct {
-		Surface        []string `json:"surface"`
-		SurfaceAnchors []string `json:"surface_anchors"`
-		Conclusion     []string `json:"conclusion"`
-		Sounds         []struct {
-			Mode   string `json:"mode"`
-			Prompt string `json:"prompt"`
-			Anchor string `json:"anchor"`
+		Surface           []string `json:"surface"`
+		SurfaceAnchors    []string `json:"surface_anchors"`
+		SurfaceAnimations []string `json:"surface_animations"`
+		Conclusion        []string `json:"conclusion"`
+		Sounds            []struct {
+			Mode            string `json:"mode"`
+			Prompt          string `json:"prompt"`
+			Anchor          string `json:"anchor"`
+			DurationSeconds int    `json:"duration_seconds"`
 		} `json:"sounds"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -241,6 +268,7 @@ Rules:
 	// hallucinated anchor degrades gracefully rather than aborting the
 	// whole puzzle.
 	parsed.SurfaceAnchors = matchAnchorLength(parsed.SurfaceAnchors, len(parsed.Surface))
+	parsed.SurfaceAnimations = normaliseAnimations(parsed.SurfaceAnimations, len(parsed.Surface))
 	sounds := make([]SoundDirection, 0, len(parsed.Sounds))
 	for _, s := range parsed.Sounds {
 		mode := strings.ToLower(strings.TrimSpace(s.Mode))
@@ -251,21 +279,65 @@ Rules:
 		if mode != "overlap" && mode != "replace" {
 			continue
 		}
+		dur := s.DurationSeconds
+		if dur < 0 {
+			dur = 0
+		}
 		sounds = append(sounds, SoundDirection{
-			Mode:   mode,
-			Prompt: prompt,
-			Anchor: strings.TrimSpace(s.Anchor),
+			Mode:            mode,
+			Prompt:          prompt,
+			Anchor:          strings.TrimSpace(s.Anchor),
+			DurationSeconds: dur,
 		})
 		if len(sounds) >= maxSoundClips {
 			break
 		}
 	}
 	return &ScenePlan{
-		Surface:        parsed.Surface,
-		SurfaceAnchors: parsed.SurfaceAnchors,
-		Conclusion:     parsed.Conclusion,
-		Sounds:         sounds,
+		Surface:           parsed.Surface,
+		SurfaceAnchors:    parsed.SurfaceAnchors,
+		SurfaceAnimations: parsed.SurfaceAnimations,
+		Conclusion:        parsed.Conclusion,
+		Sounds:            sounds,
 	}, nil
+}
+
+// AnimationStall and friends are the canonical animation kinds the
+// planner emits per surface frame. The renderer maps each name to a
+// camera-move trajectory at draw time; an unrecognised value (including
+// the empty string) is treated as AnimationStall so the show degrades
+// gracefully on a planner / config drift.
+const (
+	AnimationStall     = "stall"
+	AnimationPanLeft   = "panleft"
+	AnimationPanRight  = "panright"
+	AnimationPanTop    = "pantop"
+	AnimationPanBottom = "panbottom"
+	AnimationZoomIn    = "zoomin"
+	AnimationZoomOut   = "zoomout"
+)
+
+// normaliseAnimations trims / pads the per-beat animation slice to
+// exactly n entries. Each entry is lowercased, trimmed, and validated
+// against the allowed set; anything outside it (or blank) collapses to
+// AnimationStall. Padding short slices with AnimationStall keeps the
+// output usable when the LLM omits the field entirely.
+func normaliseAnimations(anims []string, n int) []string {
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = AnimationStall
+	}
+	for i := 0; i < n && i < len(anims); i++ {
+		v := strings.ToLower(strings.TrimSpace(anims[i]))
+		switch v {
+		case AnimationStall,
+			AnimationPanLeft, AnimationPanRight,
+			AnimationPanTop, AnimationPanBottom,
+			AnimationZoomIn, AnimationZoomOut:
+			out[i] = v
+		}
+	}
+	return out
 }
 
 // WritePlan serialises the scene plan as pretty-printed JSON at path so
@@ -376,10 +448,34 @@ func FallbackPlan(topic *config.DebateTopic) *ScenePlan {
 
 	clampedSurface := clampSlice(surfaceDirs, minSurfaceFrames, maxSurfaceFrames)
 	return &ScenePlan{
-		Surface:        clampedSurface,
-		SurfaceAnchors: matchAnchorLength(surfaceAnchors, len(clampedSurface)),
-		Conclusion:     clampSlice(conclusionDirs, minConclusionFrames, maxConclusionFrames),
+		Surface:           clampedSurface,
+		SurfaceAnchors:    matchAnchorLength(surfaceAnchors, len(clampedSurface)),
+		SurfaceAnimations: fallbackAnimations(len(clampedSurface)),
+		Conclusion:        clampSlice(conclusionDirs, minConclusionFrames, maxConclusionFrames),
 	}
+}
+
+// fallbackAnimations rotates through a small palette of camera moves so
+// the heuristic-fallback path (LLM unavailable) still gets a varied
+// motion plan. The cycle is deliberately mixed — pan, zoom, stall — so
+// consecutive beats don't repeat the same direction. AnimationStall
+// every 4th slot keeps the rhythm from feeling perpetual.
+func fallbackAnimations(n int) []string {
+	cycle := []string{
+		AnimationZoomIn,
+		AnimationPanRight,
+		AnimationStall,
+		AnimationZoomOut,
+		AnimationPanLeft,
+		AnimationPanBottom,
+		AnimationStall,
+		AnimationPanTop,
+	}
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = cycle[i%len(cycle)]
+	}
+	return out
 }
 
 // fallbackAnchor extracts a short verbatim anchor (the first ~20 chars of
