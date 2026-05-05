@@ -4,6 +4,12 @@
 // variants each so the renderer can rotate between them and keep the visual
 // story moving; the short pivot phases (qa, reveal) get a single image. All
 // images are cached on disk so a re-run hits the cache instead of regenerating.
+//
+// Q&A defaults to the dedicated QA mood image but can be transiently
+// switched to a surface variant when the puzzle host emits a `<scene N/>`
+// marker mid-question — that lookup is implemented in PuzzleStage rather
+// than this package; the scenes layer just exposes Surface as a sibling
+// bank on PuzzleScenes for the stage to read from.
 package scenes
 
 import (

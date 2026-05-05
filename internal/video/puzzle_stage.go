@@ -54,6 +54,14 @@ type PuzzleStage struct {
 	curScene    string
 	curSceneIdx int
 
+	// qaSurfaceMode is true once a `<scene N/>` marker during the QA
+	// phase has switched the displayed background from the dedicated QA
+	// mood image to a surface-bank variant. The default on QA entry is
+	// false (show s.QA); the host flips it by emitting a marker tied to
+	// the current question's topic. setSceneFor resets it on every
+	// phase change so re-entering QA later starts from the default again.
+	qaSurfaceMode bool
+
 	// surfaceAnimations is the planner's per-surface-frame camera move
 	// list (parallel to sceneScenes.Surface). applySceneAdvance reads
 	// the slot at the new index and forwards the value to the encoder
@@ -156,6 +164,7 @@ func (s *PuzzleStage) idle() {
 	s.curSpeaker, s.curRole = "", ""
 	s.curScene = ""
 	s.curSceneIdx = 0
+	s.qaSurfaceMode = false
 	s.body.Reset()
 	s.mu.Unlock()
 	// Reset puzzle layout so a subsequent debate topic on the same encoder
@@ -261,12 +270,21 @@ func (s *PuzzleStage) AttachSurfaceFrame(variant int, img *image.RGBA) {
 	active := s.active
 	cur := s.curScene
 	curIdx := s.curSceneIdx
+	qaSurface := s.qaSurfaceMode
 	s.mu.Unlock()
+	if !active {
+		return
+	}
 	// If the renderer is currently parked on this exact slot (because an
 	// earlier <scene N/> marker landed before the image had finished
-	// generating), repaint now that the frame is available.
-	if active && cur == scenes.SceneSurface && curIdx == variant {
+	// generating), repaint now that the frame is available. Same logic
+	// applies during QA-surface-mode: a marker may have parked QA on
+	// surface[variant] before that frame finished generating.
+	if cur == scenes.SceneSurface && curIdx == variant {
 		s.applyScene(scenes.SceneSurface, variant)
+	}
+	if cur == scenes.SceneQA && qaSurface && curIdx == variant {
+		s.applyScene(scenes.SceneQA, variant)
 	}
 }
 
@@ -320,6 +338,7 @@ func (s *PuzzleStage) setSceneFor(name string) {
 	}
 	s.curScene = name
 	s.curSceneIdx = 0
+	s.qaSurfaceMode = false
 	s.mu.Unlock()
 	s.stopSceneRotation()
 	s.applyScene(name, 0)
@@ -332,14 +351,20 @@ func (s *PuzzleStage) setSceneFor(name string) {
 // on the planner-aligned frame even if the host skips, repeats, or
 // reorders beats. When idx < 0 (legacy unnumbered marker) the stage
 // falls back to incrementing the current variant by one — preserving
-// the original "advance by one" semantics. Single-image scenes (qa,
-// reveal) ignore the call.
+// the original "advance by one" semantics. The Reveal singleton ignores
+// the call. The QA scene routes the marker into the surface bank so the
+// host can switch the background to track the current question's topic
+// (see applyQASurfaceAdvance).
 func (s *PuzzleStage) applySceneAdvance(idx int) {
 	s.mu.Lock()
 	sc := s.sceneScenes
 	name := s.curScene
 	s.mu.Unlock()
 	if sc == nil || name == "" {
+		return
+	}
+	if name == scenes.SceneQA {
+		s.applyQASurfaceAdvance(idx, sc)
 		return
 	}
 	count := sc.VariantCount(name)
@@ -376,18 +401,73 @@ func (s *PuzzleStage) applySceneAdvance(idx int) {
 	}
 }
 
+// applyQASurfaceAdvance switches the QA background from the dedicated
+// QA mood image to surface-bank variant idx. The Q&A loop runs minutes
+// long; without this the same atmospheric still sits behind every
+// question. The host (or orchestrator) emits `<scene N/>` when the
+// question shifts to a new aspect of the scenario and the renderer
+// jumps to that surface variant, then sticks until the next marker.
+//
+// idx < 0 (legacy unnumbered marker) advances by one through the
+// surface bank. Out-of-range explicit indices are clamped. The puzzle
+// scene name stays "qa" so the renderer keeps the slab-and-rule
+// subtitle treatment — only the picture changes. Surface camera-move
+// animations are not applied during QA: the bank's pan/zoom is paced
+// for the surface narration's tempo, which doesn't fit the shorter
+// question/answer beats.
+func (s *PuzzleStage) applyQASurfaceAdvance(idx int, sc *scenes.PuzzleScenes) {
+	count := len(sc.Surface)
+	if count == 0 {
+		return
+	}
+	s.mu.Lock()
+	switch {
+	case idx >= 0:
+		if idx >= count {
+			idx = count - 1
+		}
+		s.curSceneIdx = idx
+	default:
+		// Wrap forward through the surface bank. Resets to slot 0 when
+		// we've already iterated through every variant — keeps the
+		// rotation closed even on a long Q&A loop.
+		s.curSceneIdx = (s.curSceneIdx + 1) % count
+	}
+	s.qaSurfaceMode = true
+	applyIdx := s.curSceneIdx
+	s.mu.Unlock()
+	s.enc.SetPuzzleSceneName(scenes.SceneQA)
+	if img := sc.ByNameIdxExact(scenes.SceneSurface, applyIdx); img != nil {
+		s.enc.SetSceneBackground(img)
+		s.enc.SetSceneAnimation("")
+	}
+}
+
 // applyScene blits the indexed variant of the named scene through the
 // encoder. Silently no-ops if scenes haven't been attached yet or the
 // variant slot is empty. Also forwards the scene name so the renderer
 // can apply scene-specific subtitle treatment (surface = black-outline
 // caption with no slab; others = HBO quote card) and the per-beat
 // camera-move animation when one is configured for this slot.
+//
+// QA-in-surface-mode: once a `<scene N/>` marker has flipped QA into
+// surface-mode, subsequent re-applies (e.g. a late AttachSurfaceFrame
+// streaming in slot N after applyQASurfaceAdvance parked on it) source
+// the image from the surface bank rather than the dedicated QA still.
 func (s *PuzzleStage) applyScene(name string, idx int) {
 	s.mu.Lock()
 	sc := s.sceneScenes
+	qaSurface := s.qaSurfaceMode
 	s.mu.Unlock()
 	s.enc.SetPuzzleSceneName(name)
 	if sc == nil {
+		return
+	}
+	if name == scenes.SceneQA && qaSurface {
+		if img := sc.ByNameIdxExact(scenes.SceneSurface, idx); img != nil {
+			s.enc.SetSceneBackground(img)
+			s.enc.SetSceneAnimation("")
+		}
 		return
 	}
 	img := sc.ByNameIdx(name, idx)
