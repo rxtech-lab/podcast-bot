@@ -738,6 +738,27 @@ func (r *Renderer) flushPendingUserLocked() {
 	}
 }
 
+// advanceSceneFadeLocked retires the prev-scene layer once the active
+// crossfade has completed. Without this, drawBackground keeps treating
+// the renderer as "two layers, one fully opaque on top" and pays for an
+// unnecessary CameraMovement.Render of the prev source plus a per-frame
+// temp allocation in Transition.Render — visible as a 30 fps frame loop
+// that misses its tick budget under CPU pressure (audio plays first
+// because ffmpeg can't seal video segments at the manifest cadence).
+//
+// Caller must hold r.mu.
+func (r *Renderer) advanceSceneFadeLocked() {
+	if r.prevSceneBg == nil {
+		return
+	}
+	if sceneFadeFrac(r.sceneTransitionStart) < 1 {
+		return
+	}
+	r.prevSceneBg = nil
+	r.prevSceneMove = CameraMovement{}
+	r.prevSceneMoveStart = time.Time{}
+}
+
 // advanceUserTickerLocked drives the ticker state machine forward by one
 // frame: flush the pending batch if the debounce window has elapsed, then
 // pop expired heads off the queue (advancing to the next entry, if any, so
@@ -795,6 +816,7 @@ func (r *Renderer) Frame() []byte {
 	// per-frame mutation, so the brief exclusive section is acceptable.
 	r.mu.Lock()
 	r.advanceUserTickerLocked()
+	r.advanceSceneFadeLocked()
 	topic, phase := r.topic, r.phase
 	speaker, role, body := r.speaker, r.role, r.body
 	clockE, clockT := r.clockElapsed, r.clockTotal

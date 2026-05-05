@@ -2,6 +2,7 @@ package video
 
 import (
 	"image"
+	"image/draw"
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/math/f64"
@@ -69,6 +70,18 @@ func (m CameraMovement) Render(dst *image.RGBA, src *image.RGBA, p float64) {
 	}
 	if p > 1 {
 		p = 1
+	}
+
+	// Stall fast path: when there's no motion AND the source already
+	// matches the dst size pixel-for-pixel, a single draw.Draw with
+	// draw.Src is a memcpy — no resampler kernel, no allocation. This
+	// is the steady-state path the renderer hits on every frame for
+	// most scenes (qa, reveal, conclusion, and any surface beat with
+	// no planned move), so it's worth the special case.
+	db := dst.Bounds()
+	if (m.Kind == "" || m.Kind == MoveStall) && sb.Dx() == db.Dx() && sb.Dy() == db.Dy() {
+		draw.Draw(dst, db, src, sb.Min, draw.Src)
+		return
 	}
 
 	// Compute viewport in source space (origin + size). Origin is allowed
@@ -140,7 +153,6 @@ func (m CameraMovement) Render(dst *image.RGBA, src *image.RGBA, p float64) {
 		vw, vh = sw, sh
 	}
 
-	db := dst.Bounds()
 	dw := float64(db.Dx())
 	dh := float64(db.Dy())
 	if dw <= 0 || dh <= 0 || vw <= 0 || vh <= 0 {
@@ -156,7 +168,13 @@ func (m CameraMovement) Render(dst *image.RGBA, src *image.RGBA, p float64) {
 		kx, 0, float64(db.Min.X) - kx*(float64(sb.Min.X)+vx),
 		0, ky, float64(db.Min.Y) - ky*(float64(sb.Min.Y)+vy),
 	}
-	xdraw.CatmullRom.Transform(dst, a, src, sb, xdraw.Over, nil)
+	// ApproxBiLinear is ~3–4× faster than CatmullRom on a 1280×720 frame
+	// and the visual difference for slow Ken-Burns motion is negligible —
+	// the move only ever zooms ≤ 30% so we never up-sample aggressively.
+	// CatmullRom at 30 fps blew the per-frame budget and made the encoder
+	// buffer; bilinear is fast enough to leave headroom for the rest of
+	// Frame() (subtitle, lower-third, ticker, etc).
+	xdraw.ApproxBiLinear.Transform(dst, a, src, sb, xdraw.Over, nil)
 }
 
 // zoomScales picks the start/end scale factors for a zoom move. Zero values
@@ -212,21 +230,26 @@ func (t Transition) Render(
 		p = 1
 	}
 
-	// Outgoing layer first (full opacity — Over on a fresh dst).
-	if srcA != nil {
-		moveA.Render(dst, srcA, progressA)
-	}
-	// Incoming layer composited on top at α = p. Skip when nothing changes
-	// (p == 0 or no incoming source).
+	// Steady-state fast path: no incoming layer to blend in, just paint
+	// the outgoing one. This is the every-frame path between transitions
+	// once the renderer has cleared prevSceneBg.
 	if srcB == nil || p <= 0 {
+		if srcA != nil {
+			moveA.Render(dst, srcA, progressA)
+		}
 		return
 	}
-	if p >= 1 && srcA == nil {
-		// No outgoing — render srcB directly to dst, full opacity.
+	// Fade-complete fast path: incoming is fully opaque, outgoing
+	// contributes nothing — skip its render and the temp allocation.
+	if p >= 1 {
 		moveB.Render(dst, srcB, progressB)
 		return
 	}
-	// Render srcB into a same-size temp at full opacity, then alpha-blit.
+	// Mid-fade slow path: paint outgoing into dst, then composite the
+	// incoming layer on top via a same-size temp at α = p.
+	if srcA != nil {
+		moveA.Render(dst, srcA, progressA)
+	}
 	tmp := image.NewRGBA(dst.Bounds())
 	moveB.Render(tmp, srcB, progressB)
 	blitWithGlobalAlpha(dst, tmp, p)

@@ -223,6 +223,73 @@ func TestTransitionCrossfadeAtOne(t *testing.T) {
 	}
 }
 
+// BenchmarkCameraMovementStall measures the steady-state cost when the
+// renderer is parked on a still scene with no camera move (qa, reveal,
+// conclusion, or any surface beat without a planned move). At 30 fps the
+// frame budget is 33.33 ms — Frame() does ~10 other things, so this single
+// call must be well under that. The post-fix path is a memcpy via
+// draw.Draw with draw.Src; pre-fix it went through xdraw.CatmullRom.Transform
+// every frame, which alone consumed enough time to make the encoder buffer.
+func BenchmarkCameraMovementStall(b *testing.B) {
+	src := makeGradientRGBA(1280, 720)
+	dst := image.NewRGBA(image.Rect(0, 0, 1280, 720))
+	move := CameraMovement{Kind: MoveStall}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		move.Render(dst, src, 1.0)
+	}
+}
+
+// BenchmarkCameraMovementZoomIn measures the cost of an animated camera
+// move — the affine-transform path. This is paid once per frame for the
+// active scene during a 12 s Ken-Burns trajectory.
+func BenchmarkCameraMovementZoomIn(b *testing.B) {
+	src := makeGradientRGBA(1280, 720)
+	dst := image.NewRGBA(image.Rect(0, 0, 1280, 720))
+	move := CameraMovement{Kind: MoveZoomIn}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		move.Render(dst, src, 0.5)
+	}
+}
+
+// BenchmarkTransitionSteadyState measures the cost of drawBackground when
+// no transition is active (prevSceneBg has been cleared by
+// advanceSceneFadeLocked). With the fix this should match the single
+// CameraMovement.Render cost — pre-fix it was 2× CameraMovement.Render +
+// a 3.7 MB temp allocation + an alpha-blit per frame.
+func BenchmarkTransitionSteadyState(b *testing.B) {
+	src := makeGradientRGBA(1280, 720)
+	dst := image.NewRGBA(image.Rect(0, 0, 1280, 720))
+	tr := Transition{Kind: "crossfade"}
+	stall := CameraMovement{Kind: MoveStall}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tr.Render(dst, nil, stall, 0, src, stall, 1.0, 1.0)
+	}
+}
+
+// BenchmarkTransitionMidFade measures the cost during an active crossfade —
+// both layers rendered, temp allocated, alpha-blitted. This window is
+// 1.5 s long per scene swap so the cost is acceptable as long as the
+// steady-state path is fast.
+func BenchmarkTransitionMidFade(b *testing.B) {
+	srcA := makeGradientRGBA(1280, 720)
+	srcB := makeGradientRGBA(1280, 720)
+	dst := image.NewRGBA(image.Rect(0, 0, 1280, 720))
+	tr := Transition{Kind: "crossfade"}
+	moveA := CameraMovement{Kind: MoveZoomIn}
+	moveB := CameraMovement{Kind: MovePanRight}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tr.Render(dst, srcA, moveA, 0.5, srcB, moveB, 0.1, 0.5)
+	}
+}
+
 func TestTransitionCrossfadeMidpointMixes(t *testing.T) {
 	srcA := makeGradientRGBA(640, 360)
 	srcB := image.NewRGBA(image.Rect(0, 0, 640, 360))
