@@ -138,7 +138,12 @@ func (h *SeriesHost) SetCharacterVoices(byName map[string]string) {
 	}
 }
 
-const seriesHostSystemTemplate = `You are the narrator of a TV-series-style podcast episode. There are NO players and NO live audience — you speak alone for the entire episode in the calm, deliberate voice of a late-night radio storyteller / documentary narrator. Hushed, contemplative, never rushed. Insert generous pauses between clauses with "……" (Chinese ellipsis) or "——" (em-dash) so the TTS engine breathes between beats. Favour shorter sentences over long compound ones; if the prepared synopsis has a long sentence, split it at natural breath points. Plain prose only — no markdown, no stage directions, no honorifics.
+const seriesHostSystemTemplate = `You are the narrator of a TV-series-style podcast episode. There are NO players and NO live audience — you speak alone for the entire episode in the calm, deliberate voice of a late-night radio storyteller / documentary narrator. Hushed, contemplative, never rushed. Favour shorter sentences over long compound ones; if the prepared synopsis has a long sentence, split it at natural breath points. Plain prose only — no markdown, no stage directions, no honorifics.
+
+Natural speech markers — these are silent controls for the audio engine and never visible to the audience:
+- Use <pause time="300ms"/>, <pause time="500ms"/>, or <pause time="800ms"/> at natural breath points when punctuation alone is not enough. Use sparingly: no more than one pause marker per sentence, and avoid back-to-back pauses.
+- Use <breath/> only for rare audible inhalations before an emotionally heavy sentence or after a long line. Maximum 2–3 times in a full episode; never use it as punctuation.
+- The markers are not words. Do not explain them, quote them, or place them inside character dialogue markers.
 
 Show: %s
 Season: %d
@@ -148,9 +153,9 @@ Per-episode synopsis (this is the prepared story you narrate from on the "narrat
 %s
 
 Directives:
-- "previously" — emit a short "previously on %s" recap covering the prior episodes. Use the recap text supplied below as the source of truth — keep its facts intact, but you may rephrase for flow. Open with a single transition line such as "上集回顧——" or "Previously, on this show," and finish with one line of segue toward the present episode (something like "現在……" or "And now,"). Length: 30 to 60 seconds of narration. Emit `+"`<scene N/>`"+` markers so the renderer paints fresh imagery as you speak; you may also re-use prior-episode imagery via the image-reuse markers described below.
+- "previously" — emit a short "previously on %s" recap covering the prior episodes. Use the recap text supplied below as the source of truth — keep its facts intact, but you may rephrase for flow. Open with a single transition line such as "上集回顧——" or "Previously, on this show," and finish with one line of segue toward the present episode (something like "現在……" or "And now,"). Length: 30 to 60 seconds of narration. Emit ` + "`<scene N/>`" + ` markers so the renderer paints fresh imagery as you speak; you may also re-use prior-episode imagery via the image-reuse markers described below.
 %s
-- "narrate" — read the synopsis above IN FULL, expanding it into the show's narration voice. Use the original wording wherever possible: keep every named detail (places, names, times, recurring objects) intact and in the original order. Do NOT compress the story into a few sentences. Do NOT invent details that aren't in the synopsis. Walk it paragraph by paragraph. Insert generous pauses for the TTS engine.
+- "narrate" — read the synopsis above IN FULL, expanding it into the show's narration voice. Use the original wording wherever possible: keep every named detail (places, names, times, recurring objects) intact and in the original order. Do NOT compress the story into a few sentences. Do NOT invent details that aren't in the synopsis. Walk it paragraph by paragraph. Use punctuation and the natural speech markers above to give the TTS engine room to breathe.
   Scene-cut markers for "narrate" — the visual director has pre-rendered a numbered set of background images, one per planned beat. Each beat is labeled with a 0-based index and a short direction describing what the image shows. Emit "<scene N/>" on its own line at the START of each new beat — the renderer uses N to jump directly to the matching cached image (narration-vN). Frame 0 paints automatically when the episode opens, so do NOT emit "<scene 0/>"; begin with "<scene 1/>" when you transition into beat 1 and so on. Place the marker IMMEDIATELY BEFORE the sentence that begins narrating that beat (not after, and never mid-sentence). Use the beat list below as your script outline so the words and images stay locked together.
 %s
   Markers are silent: the TTS engine never sees them and the on-screen subtitle never shows them.

@@ -9,6 +9,7 @@ import (
 
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/subtitleutil"
 	"github.com/sirily11/debate-bot/internal/video"
 )
 
@@ -181,6 +182,10 @@ func translateSubtitleCues(ctx context.Context, client subtitleJSONClient,
 		text := strings.TrimSpace(resp.Translations[i])
 		if text == "" {
 			return nil, fmt.Errorf("translate subtitles to %s: cue %d is empty", target.Name, i+1)
+		}
+		text = subtitleutil.StripPunct(text)
+		if text == "" {
+			return nil, fmt.Errorf("translate subtitles to %s: cue %d is empty after punctuation stripping", target.Name, i+1)
 		}
 		out[i] = contentcreator.SubtitleCue{
 			Start: cue.Start,

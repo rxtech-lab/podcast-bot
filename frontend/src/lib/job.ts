@@ -19,6 +19,17 @@ export interface JobInfo {
   updated_at: string
   has_video: boolean
   has_archive: boolean
+  elapsed_ms?: number
+  remaining_ms?: number
+  phase?: string
+  phase_label?: string
+  logs?: JobLog[]
+}
+
+export interface JobLog {
+  ts: number
+  kind: string
+  text: string
 }
 
 export type Resolution = '720p' | '1080p'

@@ -7,17 +7,18 @@
 // HLS dir; channels with no assigned debates are listed as off-air.
 //
 // Endpoints:
-//   GET  /api/topics                        — channel list (number, title, off-air, debates queue).
-//   GET  /api/transcript?channel=<id>       — JSON snapshot of that channel's live transcript.
-//   GET  /api/events[?channel=<id>]         — Server-Sent Events; channel filter is optional.
-//   GET  /api/audio/<id>/stream             — chunked MP3 audio for that channel.
-//   GET  /api/video/<id>/<file>             — HLS playlist + segments for that channel.
-//   POST /api/messages?channel=<id>         — push a user message into that channel's orchestrator
-//                                             (uses the viewer's `debate-bot-username` cookie).
-//   GET  /api/me                            — return the viewer's username; issues + sets a cookie
-//                                             on first request.
-//   POST /api/me                            — change the viewer's username (body: {username}).
-//   GET  /                                  — embedded web UI.
+//
+//	GET  /api/topics                        — channel list (number, title, off-air, debates queue).
+//	GET  /api/transcript?channel=<id>       — JSON snapshot of that channel's live transcript.
+//	GET  /api/events[?channel=<id>]         — Server-Sent Events; channel filter is optional.
+//	GET  /api/audio/<id>/stream             — chunked MP3 audio for that channel.
+//	GET  /api/video/<id>/<file>             — HLS playlist + segments for that channel.
+//	POST /api/messages?channel=<id>         — push a user message into that channel's orchestrator
+//	                                          (uses the viewer's `debate-bot-username` cookie).
+//	GET  /api/me                            — return the viewer's username; issues + sets a cookie
+//	                                          on first request.
+//	POST /api/me                            — change the viewer's username (body: {username}).
+//	GET  /                                  — embedded web UI.
 package server
 
 import (
@@ -335,6 +336,9 @@ func envelope(v any) (eventEnvelope, bool) {
 			"type":       m.Type,
 			"index":      m.Index,
 			"total":      m.Total,
+			"show":       m.Show,
+			"season":     m.Season,
+			"episode":    m.Episode,
 		}}, true
 	case contentcreator.TopicsChangedMsg:
 		_ = m

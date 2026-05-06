@@ -659,6 +659,18 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if hadCharMarkers {
 		cleaned = charClean
 	}
+	naturalChunks := []naturalChunk{{spans: charSpans}}
+	if isSeriesNaturalTurn(t) {
+		var hadPause, hadBreath bool
+		cleaned, naturalChunks, hadPause, hadBreath = splitNaturalSpeech(charSpans)
+		if hadPause || hadBreath {
+			p.d.Log.Info("series natural speech marker",
+				"turn", t.ID,
+				"pause", hadPause,
+				"breath", hadBreath,
+				"sentence_preview", truncatePreview(cleaned, 60))
+		}
+	}
 	// Drop indices that would point past the planner's frame count for
 	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
 	// the last frame for the rest of the turn. Unnumbered legacy markers
@@ -689,7 +701,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			"trailing", len(trailImageRefs),
 			"sentence_preview", truncatePreview(cleaned, 60))
 	}
-	if cleaned == "" {
+	if cleaned == "" && !naturalChunksHaveAudio(naturalChunks) {
 		// Marker-only sentence (rare — usually only the surface narration's
 		// final paragraph break). Both buckets fire immediately; there's
 		// no audio gap to defer trailing advances against.
@@ -722,12 +734,14 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// rendered text via FullText() once produce() returns. Distinct from the
 	// TextOut channel, which AppendFromTurn drains into the transcript and
 	// has a bounded buffer that drops sentences when full.
-	t.AppendText(sent)
-	// Push transcript chunk to per-turn channel synchronously (used to build
-	// the persisted transcript line in updateMemories — order matters there).
-	select {
-	case t.TextOut <- sent:
-	default:
+	if sent != "" {
+		t.AppendText(sent)
+		// Push transcript chunk to per-turn channel synchronously (used to build
+		// the persisted transcript line in updateMemories — order matters there).
+		select {
+		case t.TextOut <- sent:
+		default:
+		}
 	}
 
 	// Schedule subtitle dispatch for when this sentence's first audio
@@ -749,12 +763,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	targetSend := p.nextPlayAt
 	p.playheadMu.Unlock()
 
-	body, err := p.synthVoice(ctx, t, sent, hadCharMarkers, charSpans)
-	if err != nil {
-		return 0, err
-	}
-	defer body.Close()
-	n, err := io.Copy(sink, body)
+	n, err := p.synthNaturalChunks(ctx, t, sent, naturalChunks, hadCharMarkers, sink)
 	if err != nil {
 		return n, err
 	}
@@ -793,7 +802,9 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if firstWrite := p.d.LiveStream.FirstWriteAt(); !firstWrite.IsZero() {
 		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + vttBias
 	}
-	p.vtt.Append(sent, cueStart, audioDuration)
+	if sent != "" {
+		p.vtt.Append(sent, cueStart, audioDuration)
+	}
 
 	msg := TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
@@ -813,10 +824,12 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			send(SceneAdvanceMsg{Index: idx})
 		}
 	}
-	if remaining := time.Until(subtitleAt); remaining <= 50*time.Millisecond {
-		fireSubtitle()
-	} else {
-		time.AfterFunc(remaining, fireSubtitle)
+	if sent != "" {
+		if remaining := time.Until(subtitleAt); remaining <= 50*time.Millisecond {
+			fireSubtitle()
+		} else {
+			time.AfterFunc(remaining, fireSubtitle)
+		}
 	}
 	if len(leadAdvances) > 0 {
 		if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {

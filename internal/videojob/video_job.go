@@ -31,6 +31,11 @@ import (
 	"github.com/sirily11/debate-bot/internal/video"
 )
 
+// Queue is the small subset of goqueue.Queue that Submit needs.
+type Queue interface {
+	Add(context.Context, func(context.Context))
+}
+
 // Deps wires the runner to long-lived process state. Env is the
 // LoadEnv-produced config (its OutDir is the session root, not the
 // per-job dir — the runner appends jobs/<id>/). MCPCfg is forwarded
@@ -41,11 +46,12 @@ type Deps struct {
 	MCPCfg *config.MCPConfig
 	Bus    *eventbus.Bus
 	Jobs   *server.JobRegistry
+	Queue  Queue
 	Log    *slog.Logger
 }
 
-// Submit validates the request synchronously and spawns the run
-// goroutine. Returns nil on accept; returns an error when the upload
+// Submit validates the request synchronously and enqueues the run.
+// Returns nil on accept; returns an error when the upload
 // is malformed (bad frontmatter, subtitle flag on non-series, etc.)
 // so the HTTP layer can surface the reason.
 //
@@ -54,12 +60,13 @@ type Deps struct {
 //   - the JobRegistry entry stays in JobError state with a descriptive
 //     message, so a user retrying through the UI gets feedback fast.
 //
-// The actual heavy work (asset gen, ffmpeg, zip) runs in a goroutine
-// the runner spawns; jobs proceed concurrently if multiple uploads
-// arrive, on the assumption that ffmpeg + the imagegen pool can
-// handle parallel jobs the same way they handle parallel channels in
-// stream mode.
+// The actual heavy work (asset gen, ffmpeg, zip) runs through the
+// process-wide goqueue worker pool so video mode cannot start
+// unbounded parallel encoders.
 func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmission) error {
+	if deps.Queue == nil {
+		return errors.New("video job queue is not configured")
+	}
 	topic, err := config.LoadTopic(sub.ScriptPath)
 	if err != nil {
 		return fmt.Errorf("script.md: %w", err)
@@ -110,8 +117,18 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 		j.Season = topic.Season
 		j.Episode = topic.Episode
 	})
+	deps.Jobs.AppendLog(jobID, "status",
+		fmt.Sprintf("job queued · type=%s · resolution=%s", topic.Type, topic.Resolution), nil)
 
-	go run(ctx, deps, jobID, sub, topic)
+	deps.Queue.Add(ctx, func(runCtx context.Context) {
+		defer func() {
+			if v := recover(); v != nil {
+				fail(deps, jobID, deps.Log.With("job", jobID),
+					fmt.Errorf("video job panic: %v", v))
+			}
+		}()
+		run(runCtx, deps, jobID, sub, topic)
+	})
 	return nil
 }
 
@@ -127,7 +144,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 	send := func(v any) {
 		// Stamp jobID as channelID so existing SSE filtering /
 		// envelope plumbing routes events to the right SPA client.
-		deps.Bus.Publish(contentcreator.StampChannelID(v, jobID))
+		stamped := contentcreator.StampChannelID(v, jobID)
+		persistEvent(deps.Jobs, jobID, stamped)
+		deps.Bus.Publish(stamped)
 	}
 	// status pushes a one-line progress note onto the SSE stream so
 	// the SPA log shows job-runner milestones (priors extracted,
@@ -406,6 +425,49 @@ func fail(deps Deps, jobID string, log *slog.Logger, err error) {
 		j.Status = server.JobError
 		j.Error = err.Error()
 	})
+	deps.Jobs.AppendLog(jobID, "error", err.Error(), nil)
+}
+
+func persistEvent(jobs *server.JobRegistry, jobID string, v any) {
+	switch m := v.(type) {
+	case contentcreator.StatusMsg:
+		jobs.AppendLog(jobID, "status", m.Text, m)
+	case contentcreator.PhaseMsg:
+		text := m.Label
+		if text == "" {
+			text = m.Phase.String()
+		}
+		jobs.Update(jobID, func(j *server.Job) {
+			j.Phase = m.Phase.String()
+			j.PhaseLabel = m.Label
+		})
+		jobs.AppendLog(jobID, "phase", text, m)
+	case contentcreator.TranscriptMsg:
+		if m.Done && m.Text != "" {
+			prefix := m.Speaker
+			if prefix != "" {
+				prefix += ": "
+			}
+			jobs.AppendLog(jobID, "transcript", prefix+m.Text, m)
+		}
+	case contentcreator.ErrorMsg:
+		if m.Err != nil {
+			jobs.AppendLog(jobID, "error", m.Err.Error(), m)
+		}
+	case contentcreator.TickMsg:
+		jobs.Update(jobID, func(j *server.Job) {
+			j.ElapsedMS = m.Elapsed.Milliseconds()
+			j.RemainingMS = m.Remaining.Milliseconds()
+		})
+	case contentcreator.TopicMsg:
+		head := m.Title
+		if m.Show != "" {
+			head = fmt.Sprintf("%s · S%d E%d", m.Show, m.Season, m.Episode)
+		}
+		jobs.AppendLog(jobID, "topic", head, m)
+	case contentcreator.EndedMsg:
+		jobs.AppendLog(jobID, "ended", "orchestrator ended - finalising mp4...", m)
+	}
 }
 
 func pluralS(n int) string {

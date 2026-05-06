@@ -13,9 +13,11 @@ type View = 'form' | 'running' | 'done' | 'error'
 
 interface LogLine {
   ts: number
-  kind: 'status' | 'phase' | 'transcript' | 'error' | 'info' | 'topic' | 'ended'
+  kind: LogKind
   text: string
 }
+
+type LogKind = 'status' | 'phase' | 'transcript' | 'error' | 'info' | 'topic' | 'ended'
 
 // RenderClock tracks the orchestrator's tick events so the SPA can
 // show how many seconds of show-time have been rendered so far. The
@@ -124,6 +126,26 @@ export function VideoJobView() {
     }
   }, [isSeries, softSubs, topicLanguage])
 
+  useEffect(() => {
+    const restoredID = new URLSearchParams(window.location.search).get('job')
+    if (!restoredID) return
+    let cancelled = false
+    loadJob(restoredID).then((restored) => {
+      if (cancelled || !restored) return
+      setJobID(restored.id)
+      setJob(restored)
+      setLog(logsFromJob(restored))
+      setClock({
+        elapsedMs: restored.elapsed_ms ?? 0,
+        remainingMs: restored.remaining_ms ?? 0,
+      })
+      setView(viewForJob(restored))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // SSE + final-state polling: subscribe once we have a jobID. The
   // event stream piggy-backs on /api/events with a channel filter
   // matching the jobID (the server stamps every published message
@@ -191,6 +213,10 @@ export function VideoJobView() {
       const j = await loadJob(jobID)
       if (!j) return
       setJob(j)
+      setClock({
+        elapsedMs: j.elapsed_ms ?? 0,
+        remainingMs: j.remaining_ms ?? 0,
+      })
       if (j.status === 'done') {
         setView('done')
         clearInterval(poll)
@@ -225,6 +251,10 @@ export function VideoJobView() {
         resolution,
       })
       setJobID(id)
+      setJob(null)
+      setLog([])
+      setClock({ elapsedMs: 0, remainingMs: 0 })
+      setJobQuery(id)
       setView('running')
     } catch (err) {
       setSubmitErr(err instanceof Error ? err.message : String(err))
@@ -293,6 +323,7 @@ export function VideoJobView() {
               setSoftSubs(false)
               setBurnSubs(false)
               setSubtitleLanguages([])
+              clearJobQuery()
             }}
           />
         )}
@@ -633,6 +664,36 @@ function logLineClass(kind: LogLine['kind']): string {
     case 'ended':
       return 'text-emerald-300'
   }
+}
+
+function viewForJob(job: JobInfo): View {
+  if (job.status === 'done') return 'done'
+  if (job.status === 'error') return 'error'
+  return 'running'
+}
+
+function logsFromJob(job: JobInfo): LogLine[] {
+  return (job.logs ?? []).map((l) => ({
+    ts: l.ts,
+    kind: isLogKind(l.kind) ? l.kind : 'info',
+    text: l.text,
+  }))
+}
+
+function isLogKind(kind: string): kind is LogKind {
+  return ['status', 'phase', 'transcript', 'error', 'info', 'topic', 'ended'].includes(kind)
+}
+
+function setJobQuery(id: string) {
+  const url = new URL(window.location.href)
+  url.searchParams.set('job', id)
+  window.history.replaceState(null, '', url)
+}
+
+function clearJobQuery() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('job')
+  window.history.replaceState(null, '', url)
 }
 
 // fmtSeconds renders milliseconds as MM:SS (or HH:MM:SS over an

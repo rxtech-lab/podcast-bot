@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	goqueue "github.com/michaelginalick/go-queue"
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
@@ -677,10 +678,14 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 // channels.json + topic .md preloading are intentionally skipped — in
 // video mode the user-facing surface is browser uploads, not a watched
 // directory.
-func bootstrapVideo(mcpPath, outOverride, addr string) (*runtime, int) {
+func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
+	}
+	if maxConcurrency < 1 {
+		fmt.Fprintln(os.Stderr, "--max-concurrency must be >= 1")
+		return nil, 2
 	}
 
 	env, err := config.LoadEnv()
@@ -719,7 +724,18 @@ func bootstrapVideo(mcpPath, outOverride, addr string) (*runtime, int) {
 	}()
 
 	bus := eventbus.New(log)
-	jobs := server.NewJobRegistry()
+	jobs, err := server.NewJobRegistry(filepath.Join(env.OutDir, "jobs.db"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "jobs db:", err)
+		cancel()
+		return nil, 1
+	}
+	queue, err := goqueue.NewQueue(maxConcurrency)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "job queue:", err)
+		cancel()
+		return nil, 1
+	}
 
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
@@ -755,6 +771,7 @@ func bootstrapVideo(mcpPath, outOverride, addr string) (*runtime, int) {
 				MCPCfg: mcpCfg,
 				Bus:    bus,
 				Jobs:   jobs,
+				Queue:  queue,
 				Log:    log,
 			}, jobID, req)
 		},
@@ -1188,17 +1205,25 @@ func serverCmd(args []string) int {
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", ":3000", "HTTP listen address")
+	maxConcurrency := fs.Int("max-concurrency", 2, "video mode: maximum number of video generations to run concurrently")
 	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+	if *maxConcurrency < 1 {
+		fmt.Fprintln(os.Stderr, "--max-concurrency must be >= 1")
 		return 2
 	}
 	switch *mode {
 	case modeStream:
+		if *maxConcurrency != 2 {
+			fmt.Fprintln(os.Stderr, "warning: --max-concurrency is ignored unless --mode=video")
+		}
 		return serverCmdStream(specs, *channelsPath, *mcpPath, *outDir, *addr)
 	case modeVideo:
 		if len(specs) > 0 {
 			fmt.Fprintln(os.Stderr, "warning: --content is ignored in --mode=video (uploads come from the browser)")
 		}
-		return serverCmdVideo(*mcpPath, *outDir, *addr)
+		return serverCmdVideo(*mcpPath, *outDir, *addr, *maxConcurrency)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown --mode %q (want stream|video)\n", *mode)
 		return 2
@@ -1279,8 +1304,8 @@ func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr string)
 // waiting for /api/jobs requests; each one runs end-to-end in
 // internal/content_creator/video_job.go and writes its artefacts under
 // <session>/jobs/<jobID>/.
-func serverCmdVideo(mcpPath, outDir, addr string) int {
-	rt, code := bootstrapVideo(mcpPath, outDir, addr)
+func serverCmdVideo(mcpPath, outDir, addr string, maxConcurrency int) int {
+	rt, code := bootstrapVideo(mcpPath, outDir, addr, maxConcurrency)
 	if code != 0 {
 		return code
 	}

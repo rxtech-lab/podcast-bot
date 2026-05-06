@@ -101,6 +101,7 @@ func (s *Server) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 			j.Status = JobError
 			j.Error = err.Error()
 		})
+		s.d.Jobs.AppendLog(jobID, "error", err.Error(), nil)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

@@ -9,20 +9,25 @@ import (
 // BuildSSML produces an Azure TTS SSML envelope for one voice + plain text body.
 // Lang defaults to en-US when empty.
 func BuildSSML(voice, text, lang string) string {
+	return BuildSSMLNodes(voice, []SpeechNode{{Text: text}}, lang)
+}
+
+// BuildSSMLNodes produces an Azure TTS SSML envelope for one voice plus
+// structured text/break nodes. Lang defaults to en-US when empty.
+func BuildSSMLNodes(voice string, nodes []SpeechNode, lang string) string {
 	if lang == "" {
 		lang = "en-US"
 	}
 	if voice == "" {
 		voice = "en-US-JennyNeural"
 	}
-	var escaped strings.Builder
-	if err := xml.EscapeText(&escaped, []byte(text)); err != nil {
-		// xml.EscapeText only fails on writer errors; strings.Builder never does.
+	rendered := renderSpeechNodes(nodes)
+	if rendered == "" {
 		return ""
 	}
 	return fmt.Sprintf(
 		`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="%s"><voice name="%s">%s</voice></speak>`,
-		lang, voice, escaped.String(),
+		lang, voice, rendered,
 	)
 }
 
@@ -34,6 +39,15 @@ func BuildSSML(voice, text, lang string) string {
 type VoicePart struct {
 	Voice string
 	Text  string
+	Nodes []SpeechNode
+}
+
+// SpeechNode is one renderable SSML child. Text nodes are XML-escaped;
+// break nodes are emitted as Azure/W3C <break> tags. A VoicePart may use
+// either Text or Nodes. Nodes are preferred when present.
+type SpeechNode struct {
+	Text    string
+	BreakMS int
 }
 
 // BuildMultiVoiceSSML emits an Azure SSML envelope with one <voice>
@@ -47,11 +61,15 @@ func BuildMultiVoiceSSML(parts []VoicePart, lang string) string {
 	}
 	merged := make([]VoicePart, 0, len(parts))
 	for _, p := range parts {
-		if p.Text == "" {
+		if voicePartEmpty(p) {
 			continue
 		}
 		if len(merged) > 0 && merged[len(merged)-1].Voice == p.Voice {
-			merged[len(merged)-1].Text += p.Text
+			merged[len(merged)-1].Nodes = append(
+				voicePartNodes(merged[len(merged)-1]),
+				voicePartNodes(p)...,
+			)
+			merged[len(merged)-1].Text = ""
 			continue
 		}
 		merged = append(merged, p)
@@ -65,14 +83,50 @@ func BuildMultiVoiceSSML(parts []VoicePart, lang string) string {
 		if voice == "" {
 			voice = "en-US-JennyNeural"
 		}
-		var escaped strings.Builder
-		if err := xml.EscapeText(&escaped, []byte(p.Text)); err != nil {
+		rendered := renderSpeechNodes(voicePartNodes(p))
+		if rendered == "" {
 			return ""
 		}
-		fmt.Fprintf(&body, `<voice name="%s">%s</voice>`, voice, escaped.String())
+		fmt.Fprintf(&body, `<voice name="%s">%s</voice>`, voice, rendered)
 	}
 	return fmt.Sprintf(
 		`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="%s">%s</speak>`,
 		lang, body.String(),
 	)
+}
+
+func voicePartEmpty(p VoicePart) bool {
+	for _, n := range voicePartNodes(p) {
+		if n.Text != "" || n.BreakMS > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func voicePartNodes(p VoicePart) []SpeechNode {
+	if len(p.Nodes) > 0 {
+		return p.Nodes
+	}
+	if p.Text == "" {
+		return nil
+	}
+	return []SpeechNode{{Text: p.Text}}
+}
+
+func renderSpeechNodes(nodes []SpeechNode) string {
+	var body strings.Builder
+	for _, n := range nodes {
+		if n.Text != "" {
+			var escaped strings.Builder
+			if err := xml.EscapeText(&escaped, []byte(n.Text)); err != nil {
+				return ""
+			}
+			body.WriteString(escaped.String())
+		}
+		if n.BreakMS > 0 {
+			fmt.Fprintf(&body, `<break time="%dms"/>`, n.BreakMS)
+		}
+	}
+	return body.String()
 }

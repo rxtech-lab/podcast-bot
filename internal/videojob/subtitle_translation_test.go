@@ -47,6 +47,19 @@ func TestTranslateSubtitleCuesRejectsBadJSON(t *testing.T) {
 	}
 }
 
+func TestTranslateSubtitleCuesStripsPunctuation(t *testing.T) {
+	source := []contentcreator.SubtitleCue{{Start: 0, End: time.Second, Text: "hello"}}
+	cues, err := translateSubtitleCues(context.Background(),
+		fakeSubtitleJSONClient{raw: []byte(`{"translations":["Hello, world!"]}`)},
+		source, subtitleLanguage{Code: "en", Name: "English"})
+	if err != nil {
+		t.Fatalf("translateSubtitleCues: %v", err)
+	}
+	if got, want := cues[0].Text, "Hello world"; got != want {
+		t.Fatalf("translated text = %q, want %q", got, want)
+	}
+}
+
 func TestSubtitleTracksForJobWritesDistinctLanguageFiles(t *testing.T) {
 	source := []contentcreator.SubtitleCue{
 		{Start: 0, End: time.Second, Text: "hello"},
