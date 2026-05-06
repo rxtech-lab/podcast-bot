@@ -298,6 +298,16 @@ func (e *Encoder) SetPuzzleSceneName(name string) { e.rend.SetPuzzleSceneName(na
 // SetSceneBackground so the trajectory is locked to the new image.
 func (e *Encoder) SetSceneAnimation(kind string) { e.rend.SetSceneAnimation(kind) }
 
+// SetSeriesLabel records the show / season / episode / host quadruple
+// painted as a small top-left identification label in series narration
+// mode. Three rows: show name, season-episode, host name. The renderer
+// fades the label out shortly after activation, mirroring how regular
+// TV episodes show their identification at the start of an episode.
+// Empty show clears the label.
+func (e *Encoder) SetSeriesLabel(show string, season, episode int, host string) {
+	e.rend.SetSeriesLabel(show, season, episode, host)
+}
+
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).
 // Calling with empty speaker hides the subtitle (idle state).

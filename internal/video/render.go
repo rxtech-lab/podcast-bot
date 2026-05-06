@@ -150,6 +150,18 @@ type Renderer struct {
 	prevSceneMove      CameraMovement
 	sceneMoveStart     time.Time
 	prevSceneMoveStart time.Time
+
+	// Series identification label. Painted top-left in narration mode and
+	// faded out shortly after seriesLabelStart so the imagery owns the
+	// rest of the frame. seriesShow == "" disables the label entirely.
+	// seriesHost is the narrator's name, painted as the third line of
+	// the label so the audience reads who's narrating without needing a
+	// separate lower-third name plate.
+	seriesShow       string
+	seriesSeason     int
+	seriesEpisode    int
+	seriesHost       string
+	seriesLabelStart time.Time
 }
 
 // pendingUserMsg is one viewer message buffered during the debounce window.
@@ -486,6 +498,29 @@ func (r *Renderer) SetPuzzleSceneName(name string) {
 	r.mu.Lock()
 	r.puzzleSceneName = name
 	r.mu.Unlock()
+}
+
+// SetSeriesLabel records the series identification label painted top-left
+// during narration mode. Three rows: show name, season/episode, host
+// name. Repeated calls with identical values are no-ops so a redundant
+// TopicMsg doesn't restart the fade. Setting an empty show clears the
+// label (and resets the fade clock).
+func (r *Renderer) SetSeriesLabel(show string, season, episode int, host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.seriesShow == show && r.seriesSeason == season &&
+		r.seriesEpisode == episode && r.seriesHost == host {
+		return
+	}
+	r.seriesShow = show
+	r.seriesSeason = season
+	r.seriesEpisode = episode
+	r.seriesHost = host
+	if show == "" {
+		r.seriesLabelStart = time.Time{}
+	} else {
+		r.seriesLabelStart = time.Now()
+	}
 }
 
 // SetSceneBackground swaps in a new scene background, retaining the
@@ -849,9 +884,26 @@ func (r *Renderer) Frame() []byte {
 	speakerStart := r.speakerStartedAt
 	puzzleMode := r.puzzleMode
 	puzzleScene := r.puzzleSceneName
+	seriesShow := r.seriesShow
+	seriesSeason := r.seriesSeason
+	seriesEpisode := r.seriesEpisode
+	seriesHost := r.seriesHost
+	seriesLabelStart := r.seriesLabelStart
 	r.mu.Unlock()
 
 	if puzzleMode {
+		// Series narration runs its own renderer (full-bleed scene, no
+		// letterbox, no caption slab) so the puzzle chrome stays
+		// untouched. Detected via the dedicated narration scene name —
+		// SeriesStage is the only producer of that name.
+		if puzzleScene == "narration" {
+			return r.frameSeries(speaker, role, body,
+				bodyStart, bodyDur,
+				clockE, clockT,
+				userName, userMsg, userStart, userExpiry,
+				seriesShow, seriesSeason, seriesEpisode, seriesHost,
+				seriesLabelStart)
+		}
 		return r.framePuzzle(topic, phase, puzzleScene, speaker, role, body,
 			affPos, /* surface text shown in idle subtitle */
 			bodyStart, bodyDur, speakerStart,

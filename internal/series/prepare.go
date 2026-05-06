@@ -500,5 +500,8 @@ func BuildTopicMsg(topic *config.DebateTopic, id, title string, index, total int
 		Total:       total,
 		AffNames:    []string{hostName},
 		AffPosition: topic.Surface,
+		Show:        topic.Show,
+		Season:      topic.Season,
+		Episode:     topic.Episode,
 	}
 }

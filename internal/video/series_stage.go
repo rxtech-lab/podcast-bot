@@ -125,6 +125,7 @@ func (s *SeriesStage) idle() {
 	s.mu.Unlock()
 	s.enc.SetPuzzleMode(false)
 	s.enc.SetSceneBackground(nil)
+	s.enc.SetSeriesLabel("", 0, 0, "")
 }
 
 func (s *SeriesStage) isActive() bool {
@@ -145,6 +146,15 @@ func (s *SeriesStage) handleTopic(m contentcreator.TopicMsg) {
 	s.enc.SetTopic(m.Title)
 	s.enc.SetSides(m.AffNames, m.NegNames)
 	s.enc.SetPositions(m.AffPosition, m.NegPosition)
+	// Hand the show / season / episode + host name to the renderer so
+	// it can paint the small top-left identification label that fades
+	// out a few seconds in (the regular-TV-episode look). Host name is
+	// the first AffNames entry, populated by buildSeriesTopicMsg.
+	var hostName string
+	if len(m.AffNames) > 0 {
+		hostName = m.AffNames[0]
+	}
+	s.enc.SetSeriesLabel(m.Show, m.Season, m.Episode, hostName)
 	s.mu.Lock()
 	s.curSpeaker, s.curRole = "", ""
 	s.body.Reset()

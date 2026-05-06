@@ -134,6 +134,14 @@ type TopicMsg struct {
 	// May be empty when the topic .md omits the section.
 	AffPosition string
 	NegPosition string
+
+	// Series-only metadata. The renderer paints "Show\nS{Season} · E{Episode}"
+	// as a small top-left label that fades out a few seconds in, mirroring
+	// the way regular TV episodes show their identification. Empty / zero
+	// for non-series content.
+	Show    string
+	Season  int
+	Episode int
 }
 
 // TopicsChangedMsg signals that the channel/debate list has changed (e.g. a
