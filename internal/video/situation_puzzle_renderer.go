@@ -170,20 +170,38 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 			ltTop = bottomBarTop - 18 - ltH
 		}
 
-		ltAlpha := 1.0
-		ltDy := 0
-		if isCinematic {
-			// Cinematic narration: lower-third name plate fades out after
-			// the first ~22 s so the imagery has the screen for the rest
-			// of the storytelling. Eased curve + a small lift so the
-			// plate departs upward rather than dimming in place.
-			ltAlpha, ltDy = surfaceLowerThirdFade(speakerStart)
+		// Lower-third name plate. Render to an offscreen at full opacity
+		// first, then blit the whole composite to img with one global
+		// alpha — so when the plate is fading, the slab+flag+text stay
+		// internally consistent (no scene-bg noise bleeding through the
+		// slab and muddying the text strokes mid-fade). The drawer
+		// closure paints onto the offscreen once with α=1; fadeIn /
+		// fadeOut compute the global alpha and blit the cached buffer.
+		ltBuf := image.NewRGBA(image.Rect(0, 0, ltW, ltH))
+		drawHBOLowerThirdAlpha(ltBuf, 0, 0, ltW, ltH,
+			ltGoldW, speaker, hboPuzzleRoleLabel(role),
+			r.tagFace, r.panelPosFace, 1)
+		drawLowerThird := func(alpha float64) {
+			blitWithGlobalAlphaAt(img, ltBuf, ltLeft, ltTop, alpha)
 		}
-		if ltAlpha > 0 {
-			drawHBOLowerThirdAlpha(img,
-				ltLeft, ltTop+ltDy, ltLeft+ltW, ltTop+ltH+ltDy,
-				ltGoldW, speaker, hboPuzzleRoleLabel(role),
-				r.tagFace, r.panelPosFace, ltAlpha)
+		if isCinematic {
+			// Cinematic narration: ease the plate in (~300 ms) when the
+			// speaker first appears so it doesn't pop, hold for ~22 s so
+			// the audience reads "who's narrating · HOST", then fade out
+			// so the imagery owns the rest of the screen.
+			elapsed := time.Since(speakerStart)
+			switch {
+			case speakerStart.IsZero():
+				drawLowerThird(1)
+			case elapsed < surfaceFadeInDuration:
+				fadeIn(drawLowerThird, speakerStart, surfaceFadeInDuration)
+			default:
+				fadeOut(drawLowerThird,
+					speakerStart.Add(surfaceFadeHoldDuration),
+					surfaceFadeOutDuration)
+			}
+		} else {
+			drawLowerThird(1)
 		}
 
 	case topic != "":
@@ -552,61 +570,71 @@ func drawHBOLowerThirdAlpha(dst *image.RGBA, x0, y0, x1, y1, goldW int,
 	}
 }
 
+// surfaceFadeInDuration is the smoothstep window the cinematic lower-
+// third uses to ease in when the speaker first appears so the plate
+// doesn't pop. Short — the entrance should feel quick but not instant.
+const surfaceFadeInDuration = 300 * time.Millisecond
+
 // surfaceFadeHoldDuration is how long the surface-scene lower-third name
 // plate stays at full opacity before it begins to fade. The audience gets
 // a clean read of "who's narrating · HOST" early in the surface story,
 // then the chrome dissolves so the imagery has the screen.
 const surfaceFadeHoldDuration = 22 * time.Second
 
-// surfaceFadeOutDuration is the eased fade-out window applied immediately
-// after surfaceFadeHoldDuration. Combined with the hold, the plate is
-// fully gone at speakerStart + ~30 s. Lengthened from 5 s → 8 s so the
-// dissolve has room to breathe; the curve below distributes the work
-// non-linearly so the plate doesn't plateau in the middle.
-const surfaceFadeOutDuration = 8 * time.Second
+// surfaceFadeOutDuration is the smoothstep fade-out window applied right
+// after surfaceFadeHoldDuration. Kept short (1.2 s) so the dissolve feels
+// snappy at 30 fps — longer windows produced visible alpha-step banding
+// because the per-frame delta was too small to read as motion.
+const surfaceFadeOutDuration = 1200 * time.Millisecond
 
-// surfaceFadeSlideUp is the maximum upward displacement the plate
-// gathers as it fades. The final pixel offset is `surfaceFadeSlideUp *
-// (1 - α)` so the slide is locked to the same easing curve as the
-// alpha — feels like the plate is being lifted away rather than just
-// dimmed in place. 14 px is enough to read as motion without leaving
-// the safe area.
-const surfaceFadeSlideUp = 14
+// alphaDrawer paints a UI component with a global alpha multiplier in
+// [0..1]. fadeOut / fadeIn call it with the current animation alpha so
+// the same draw closure can be wrapped in either direction without the
+// caller needing to know which way the dissolve runs.
+type alphaDrawer = func(alpha float64)
 
-// surfaceLowerThirdFade returns (alpha, dy) for the surface-scene name
-// plate at the current frame given when the speaker first appeared.
-// alpha is in [0,1] with cubic ease-in-out applied so the dissolve
-// starts gently, accelerates through the middle, and settles smoothly
-// rather than the previous linear ramp (which clipped at the start /
-// end and read as a flat slide). dy is the vertical offset (positive =
-// move upward / negative numbers in the canvas Y axis); rendered
-// alongside the fade so the plate departs as it dims.
-//
-// A zero speakerStart (no speaker / not yet recorded) returns (1, 0)
-// so the chrome shows from the first frame and the fade clock starts
-// once SetState records a real time.
-func surfaceLowerThirdFade(speakerStart time.Time) (alpha float64, dy int) {
-	if speakerStart.IsZero() {
-		return 1, 0
+// fadeOut paints `content` with a smoothstep alpha that drops from 1 → 0
+// across [start, start+duration]. Before `start` the content is fully
+// visible; after `start+duration` it is skipped (drawer not invoked).
+// A zero `start` or non-positive `duration` paints at full opacity so
+// callers can disable the fade by passing a zero start. Smoothstep
+// (3t² − 2t³) eases both endpoints so the dissolve doesn't clip flat
+// at the start or end.
+func fadeOut(content alphaDrawer, start time.Time, duration time.Duration) {
+	if start.IsZero() || duration <= 0 {
+		content(1)
+		return
 	}
-	elapsed := time.Since(speakerStart)
-	if elapsed < surfaceFadeHoldDuration {
-		return 1, 0
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		content(1)
+		return
 	}
-	if elapsed >= surfaceFadeHoldDuration+surfaceFadeOutDuration {
-		return 0, -surfaceFadeSlideUp
+	if elapsed >= duration {
+		return
 	}
-	t := float64(elapsed-surfaceFadeHoldDuration) / float64(surfaceFadeOutDuration)
-	if t < 0 {
-		t = 0
+	t := float64(elapsed) / float64(duration)
+	content(1 - t*t*(3-2*t))
+}
+
+// fadeIn is the mirror of fadeOut: alpha rises from 0 → 1 across
+// [start, start+duration]. Before `start` the drawer is skipped; after
+// `start+duration` it paints at full opacity.
+func fadeIn(content alphaDrawer, start time.Time, duration time.Duration) {
+	if start.IsZero() || duration <= 0 {
+		content(1)
+		return
 	}
-	if t > 1 {
-		t = 1
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return
 	}
-	eased := easeInOutCubic(t)
-	alpha = 1 - eased
-	dy = -int(float64(surfaceFadeSlideUp)*eased + 0.5)
-	return alpha, dy
+	if elapsed >= duration {
+		content(1)
+		return
+	}
+	t := float64(elapsed) / float64(duration)
+	content(t * t * (3 - 2*t))
 }
 
 // drawHBOSubtitleBodyOutlined paints the puzzle subtitle text directly

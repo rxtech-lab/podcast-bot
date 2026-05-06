@@ -2,7 +2,7 @@
 // writes them as PNGs so we can eyeball that the layout (topic title, phase,
 // subtitle box) and CJK glyphs render correctly.
 //
-// Two modes:
+// Three modes:
 //
 //	--mode debate (default): the original CNN-style debate cases, output to
 //	  out/render-smoke/.
@@ -11,9 +11,14 @@
 //	  fetched (and disk-cached). Otherwise the smoke test falls back to a
 //	  procedural noise bg so the layout is still reviewable. Output goes to
 //	  out/puzzle-render-smoke/.
+//	--mode puzzle-fade: emits an mp4 that demonstrates the cinematic name-
+//	  plate fade-in / hold / fade-out so we can eyeball the smoothstep
+//	  curve without having to wait the full 22 s hold in real time. Output
+//	  goes to out/puzzle-fade-smoke/fade.mp4.
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -22,6 +27,7 @@ import (
 	"image/png"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -53,6 +59,15 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "puzzle-fade":
+		dir := *out
+		if dir == "" {
+			dir = "out/puzzle-fade-smoke"
+		}
+		if err := runPuzzleFade(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "debate", "":
 		dir := *out
 		if dir == "" {
@@ -63,7 +78,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown mode %q (expected debate | puzzle)\n", *mode)
+		fmt.Fprintf(os.Stderr, "unknown mode %q (expected debate | puzzle | puzzle-fade)\n", *mode)
 		os.Exit(1)
 	}
 }
@@ -589,4 +604,151 @@ func clip(v int) uint8 {
 		return 255
 	}
 	return uint8(v)
+}
+
+// ---------- puzzle-fade mode ----------
+
+// runPuzzleFade renders a short MP4 demonstrating the cinematic name-plate
+// animation: pop-on fade-in (~300 ms) → 1 s steady hold → 22 s hold
+// compressed to 0 by AdvanceSpeakerForTest → 1.2 s smoothstep fade-out
+// → ~500 ms tail with the plate gone. Frames are piped raw RGBA into
+// ffmpeg so we get a real mp4 to scrub through, not just a stack of
+// PNGs. AdvanceSpeakerForTest jumps the renderer's internal clock per
+// frame so the smoke runs in roughly real time (~3 s) regardless of the
+// underlying 22 s hold the production renderer enforces.
+func runPuzzleFade(out string) error {
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return err
+	}
+
+	const (
+		width  = 1280
+		height = 720
+		fps    = 30
+	)
+
+	// puzzle topic. Try the canonical sample first, fall back to whatever
+	// situation-puzzle file happens to exist so the smoke test isn't tied
+	// to a specific committed topic file.
+	topicPath := puzzleTopicPath
+	if _, err := os.Stat(topicPath); err != nil {
+		matches, _ := filepath.Glob("channels/situation-puzzle/*.md")
+		if len(matches) == 0 {
+			return fmt.Errorf("no situation-puzzle topic files found")
+		}
+		topicPath = matches[0]
+	}
+	topic, err := config.LoadTopic(topicPath)
+	if err != nil {
+		return fmt.Errorf("load %s: %w", topicPath, err)
+	}
+	bgsDir := filepath.Join(out, "bgs")
+	if err := os.MkdirAll(bgsDir, 0o755); err != nil {
+		return err
+	}
+	puzzleScenes := buildPuzzleScenes(topic, bgsDir)
+
+	rend, err := video.NewRendererForTest(width, height)
+	if err != nil {
+		return err
+	}
+	rend.SetPuzzleMode(true)
+	rend.SetTopic(topic.Title)
+	rend.SetPhase("出題")
+	rend.SetPositions(topic.Surface, "")
+	// SetPuzzleSceneName must come before SetState — framePuzzle reads it
+	// to decide whether the lower-third runs through the cinematic
+	// fade-in/hold/fade-out animation. Surface is the canonical
+	// cinematic scene. Without this the plate just sits at full opacity.
+	rend.SetPuzzleSceneName(scenes.SceneSurface)
+	if img := puzzleScenes.ByName(scenes.SceneSurface); img != nil {
+		rend.SetSceneBackground(img)
+	}
+	rend.SetState("出題者", "puzzle-host", "",
+		"一名男子走進一家海邊的高級餐廳，點了一碗海龜湯。", 0)
+	rend.SetClock(30*time.Second, 25*time.Minute)
+	// Park the scene crossfade so we don't capture a transitional bg.
+	rend.AdvanceSceneForTest(2 * time.Second)
+
+	// Timeline (synthetic — backdated speakerStart drives the fade so we
+	// don't have to wait the production 22 s hold in real time):
+	//
+	//   0 — 0.30 s   plate fades IN (live)
+	//   0.30 s tail  ~0.7 s of steady hold so the eye reads the plate
+	//   ~1.0 s       jump speakerStart so it's ε before fade-out start
+	//   1.0 — 2.2 s  plate fades OUT (live, smoothstep)
+	//   2.2 — 2.7 s  tail with the plate gone
+	stage := []struct {
+		name     string
+		duration time.Duration
+		// jumpAtStart, when non-zero, is added to the renderer's perceived
+		// speaker age the instant we enter this stage (via
+		// AdvanceSpeakerForTest). Lets us skip the 22 s production hold.
+		jumpAtStart time.Duration
+	}{
+		{name: "fade-in", duration: 300 * time.Millisecond},
+		{name: "hold", duration: 700 * time.Millisecond},
+		// Jump speakerStart so the next frame sits just before the fade-out
+		// trigger. We subtract the hold/fade-in we already rendered so the
+		// effective elapsed is exactly surfaceFadeHoldDuration on entry.
+		{name: "fade-out", duration: 1200 * time.Millisecond,
+			jumpAtStart: 22*time.Second - (300+700)*time.Millisecond},
+		{name: "post", duration: 500 * time.Millisecond},
+	}
+
+	mp4Path := filepath.Join(out, "fade.mp4")
+	frameInterval := time.Second / time.Duration(fps)
+	args := []string{
+		"-y",
+		"-loglevel", "error",
+		"-f", "rawvideo",
+		"-pix_fmt", "rgba",
+		"-s", fmt.Sprintf("%dx%d", width, height),
+		"-r", fmt.Sprintf("%d", fps),
+		"-i", "pipe:0",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-movflags", "+faststart",
+		mp4Path,
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	cmd.Stdout = os.Stdout
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("ffmpeg stdin: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ffmpeg start: %w", err)
+	}
+
+	frameCount := 0
+	for _, st := range stage {
+		if st.jumpAtStart > 0 {
+			rend.AdvanceSpeakerForTest(st.jumpAtStart)
+		}
+		nFrames := int(st.duration / frameInterval)
+		for i := 0; i < nFrames; i++ {
+			pix := rend.Frame()
+			if _, err := stdin.Write(pix); err != nil {
+				_ = stdin.Close()
+				_ = cmd.Wait()
+				return fmt.Errorf("write frame %d (%s): %w", frameCount, st.name, err)
+			}
+			rend.AdvanceSpeakerForTest(frameInterval)
+			frameCount++
+		}
+	}
+
+	if err := stdin.Close(); err != nil {
+		return fmt.Errorf("close ffmpeg stdin: %w", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("ffmpeg wait: %w\n%s", err, stderr.String())
+	}
+
+	abs, _ := filepath.Abs(mp4Path)
+	fmt.Printf("wrote %d frames → %s\n", frameCount, abs)
+	return nil
 }

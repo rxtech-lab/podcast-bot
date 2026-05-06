@@ -663,6 +663,18 @@ func (r *Renderer) AdvanceSceneForTest(d time.Duration) {
 	r.mu.Unlock()
 }
 
+// AdvanceSpeakerForTest backdates speakerStartedAt by d so the next Frame()
+// sees the speaker as having been on screen for that much longer. Lets
+// the smoke harness step the cinematic lower-third fade-out frame by
+// frame without waiting real-time. Test-only.
+func (r *Renderer) AdvanceSpeakerForTest(d time.Duration) {
+	r.mu.Lock()
+	if !r.speakerStartedAt.IsZero() {
+		r.speakerStartedAt = r.speakerStartedAt.Add(-d)
+	}
+	r.mu.Unlock()
+}
+
 // ShowUserMessage queues a viewer/chat message for the scrolling ticker.
 // Messages are debounced into batches: rapid-fire sends collect in
 // userPending and only commit to the ticker queue once userMsgDebounceWindow
