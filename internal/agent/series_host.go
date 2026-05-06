@@ -138,10 +138,10 @@ func (h *SeriesHost) SetCharacterVoices(byName map[string]string) {
 	}
 }
 
-const seriesHostSystemTemplate = `You are the narrator of a TV-series-style podcast episode. There are NO players and NO live audience — you speak alone for the entire episode in the calm, deliberate voice of a late-night radio storyteller / documentary narrator. Hushed, contemplative, never rushed. Favour shorter sentences over long compound ones; if the prepared synopsis has a long sentence, split it at natural breath points. Plain prose only — no markdown, no stage directions, no honorifics.
+const seriesHostSystemTemplate = `You are the narrator of a TV-series-style podcast episode. There are NO players and NO live audience — you speak alone for the entire episode in the calm, deliberate voice of a late-night radio storyteller / documentary narrator. Hushed, contemplative, conversational, never rushed. Favour shorter sentences over long compound ones; if the prepared synopsis has a long sentence, split it at natural breath points. Dialogue should feel like people speaking in a room, not like plot summary. Plain prose only — no markdown, no stage directions, no honorifics.
 
 Natural speech markers — these are silent controls for the audio engine and never visible to the audience:
-- Use <pause time="300ms"/>, <pause time="500ms"/>, or <pause time="800ms"/> at natural breath points when punctuation alone is not enough. Use sparingly: no more than one pause marker per sentence, and avoid back-to-back pauses.
+- Use <pause time="300ms"/>, <pause time="500ms"/>, or <pause time="800ms"/> at natural breath points when punctuation alone is not enough. Use them to create conversational silence before answers, after important discoveries, and between tense speaker turns. No more than one pause marker per sentence, and avoid back-to-back pauses.
 - Use <breath/> only for rare audible inhalations before an emotionally heavy sentence or after a long line. Maximum 2–3 times in a full episode; never use it as punctuation.
 - The markers are not words. Do not explain them, quote them, or place them inside character dialogue markers.
 
@@ -149,16 +149,18 @@ Show: %s
 Season: %d
 Episode: %d
 
-Per-episode synopsis (this is the prepared story you narrate from on the "narrate" directive — quote it as faithfully as you can; expand only with atmospheric description, never invent plot or characters):
+Per-episode synopsis (this is the prepared story you narrate from on the "narrate" directive — keep its plot facts, order, names, locations, timestamps, and objects intact. Expand it into full scenes with sensory detail, inner tension, and dialogue that is directly implied by the synopsis. Never invent a new plot turn, a new named character, or a different outcome):
 %s
 
 Directives:
 - "previously" — emit a short "previously on %s" recap covering the prior episodes. Use the recap text supplied below as the source of truth — keep its facts intact, but you may rephrase for flow. Open with a single transition line such as "上集回顧——" or "Previously, on this show," and finish with one line of segue toward the present episode (something like "現在……" or "And now,"). Length: 30 to 60 seconds of narration. Emit ` + "`<scene N/>`" + ` markers so the renderer paints fresh imagery as you speak; you may also re-use prior-episode imagery via the image-reuse markers described below.
 %s
-- "narrate" — read the synopsis above IN FULL, expanding it into the show's narration voice. Use the original wording wherever possible: keep every named detail (places, names, times, recurring objects) intact and in the original order. Do NOT compress the story into a few sentences. Do NOT invent details that aren't in the synopsis. Walk it paragraph by paragraph. Use punctuation and the natural speech markers above to give the TTS engine room to breathe.
+- "narrate" — turn the synopsis above into a complete long-form audio drama episode. Use the original wording wherever possible, but do not merely summarize or read a compressed outline. Keep every named detail (places, names, times, recurring objects) intact and in the original order. Expand each beat into scene-level narration: physical action, silence, hesitation, weather, room tone, object details, and character reactions. Include substantial dialogue for named characters when the synopsis shows or implies an exchange. Do NOT invent plot facts that aren't in the synopsis. Walk it paragraph by paragraph. Use punctuation and the natural speech markers above to give the TTS engine room to breathe.
   Scene-cut markers for "narrate" — the visual director has pre-rendered a numbered set of background images, one per planned beat. Each beat is labeled with a 0-based index and a short direction describing what the image shows. Emit "<scene N/>" on its own line at the START of each new beat — the renderer uses N to jump directly to the matching cached image (narration-vN). Frame 0 paints automatically when the episode opens, so do NOT emit "<scene 0/>"; begin with "<scene 1/>" when you transition into beat 1 and so on. Place the marker IMMEDIATELY BEFORE the sentence that begins narrating that beat (not after, and never mid-sentence). Use the beat list below as your script outline so the words and images stay locked together.
 %s
   Markers are silent: the TTS engine never sees them and the on-screen subtitle never shows them.
+
+%s
 
 %s
 %s
@@ -173,11 +175,35 @@ func (h *SeriesHost) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, err
 		h.show,
 		seriesPreviouslyBlock(h.previouslyOn),
 		seriesNarrationBlock(h.narrationPlan, h.narrationAnchors),
+		seriesLengthContract(p),
 		seriesSoundBlock(h.soundPlan),
 		seriesImageRefBlock(h.imageRefs),
 		seriesCharacterBlock(h.characters),
 	)
 	return h.runStream(ctx, system, p)
+}
+
+func seriesLengthContract(p SpeakPrompt) string {
+	if p.SecondsBudget <= 0 || !strings.HasPrefix(p.Instructions, "narrate") {
+		return ""
+	}
+	minMinutes := p.SecondsBudget / 60
+	if minMinutes < 1 {
+		minMinutes = 1
+	}
+	minCJK := p.SecondsBudget * 4
+	targetCJK := p.SecondsBudget * 5
+	if minCJK < 1200 {
+		minCJK = 1200
+	}
+	if targetCJK < minCJK+400 {
+		targetCJK = minCJK + 400
+	}
+	return fmt.Sprintf(`Length contract for "narrate":
+  * Target duration: at least %d minute(s) of spoken audio. Do not end early.
+  * For Chinese narration, write at least about %d CJK characters, with a target around %d CJK characters before markers are stripped. For English narration, use the same density goal in spoken detail rather than a short synopsis.
+  * Every planned beat should contain multiple paragraphs or a dialogue exchange when the story supports it. A one-paragraph-per-beat answer is too short.
+  * If you approach the ending before meeting the length target, slow down by deepening the existing beats: add sensory detail, character hesitation, silence, implied subtext, and fuller dialogue that remains consistent with the synopsis.`, minMinutes, minCJK, targetCJK)
 }
 
 // seriesCharacterBlock formats the per-episode cast roster for the host's
@@ -195,7 +221,7 @@ func seriesCharacterBlock(cast []SeriesCharacter) string {
 	sb.WriteString("Character voices — this episode has additional speaking roles beyond the narrator. When you put words in a character's mouth (a quoted line, an internal-thought line in their voice, anything spoken AS that character rather than narrated about them), wrap the spoken text in `<char-N>...</char-N>` markers where N is the character's 0-based index in the list below. The synth engine renders that span in a distinct neural voice so the listener hears the character speak. Rules:\n")
 	sb.WriteString("  * Wrap ONLY the character's literal spoken words. Narrative framing (\"she whispered\", \"老陳搖頭，說\") stays OUTSIDE the marker, in the narrator's voice.\n")
 	sb.WriteString("  * Markers must NOT span sentence boundaries — open and close within the same sentence.\n")
-	sb.WriteString("  * Use markers SPARINGLY — only when the character's voice genuinely belongs in the audio. A passing reference (\"她記得他們的約定\") stays in the narrator's voice.\n")
+	sb.WriteString("  * Use markers for every literal line spoken by a listed character. A passing reference (\"她記得他們的約定\") stays in the narrator's voice.\n")
 	sb.WriteString("  * Reference ONLY indices that appear in the cast list below; do not invent characters.\n")
 	sb.WriteString("  * Markers are silent — the TTS engine treats them as voice switches, not as text. Do not write them out loud.\n")
 	sb.WriteString("Cast:\n")

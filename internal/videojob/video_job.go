@@ -322,6 +322,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 		Language:    topic.Language,
 		StartOffset: enc.AudioStartOffset(),
 	}
+	if topic.Type == config.ContentTypeSeries {
+		stitchOpts.AudioFadeOut = 5 * time.Second
+	}
 	subPath := filepath.Join(jobOutDir, "subtitles.vtt")
 	if stitchOpts.SoftSubs {
 		if _, err := os.Stat(subPath); err != nil {
@@ -363,6 +366,10 @@ func run(ctx context.Context, deps Deps, jobID string,
 		stitchLabel += fmt.Sprintf(" (trimming %s prep)",
 			stitchOpts.StartOffset.Round(time.Second))
 	}
+	if stitchOpts.AudioFadeOut > 0 {
+		stitchLabel += fmt.Sprintf(" (audio fade-out %s)",
+			stitchOpts.AudioFadeOut.Round(time.Second))
+	}
 	status(stitchLabel + "…")
 	tStitch := time.Now()
 	if err := video.StitchMP4(enc.HLSDir(), mp4Path, stitchOpts); err != nil {
@@ -372,7 +379,8 @@ func run(ctx context.Context, deps Deps, jobID string,
 	logger.Info("video stitched", "path", mp4Path,
 		"soft_subs", stitchOpts.SoftSubs,
 		"burn_in_captions", sub.BurnSubs,
-		"start_offset", stitchOpts.StartOffset.Round(time.Millisecond))
+		"start_offset", stitchOpts.StartOffset.Round(time.Millisecond),
+		"audio_fade_out", stitchOpts.AudioFadeOut.Round(time.Millisecond))
 	if info, err := os.Stat(mp4Path); err == nil {
 		status(fmt.Sprintf("mp4 ready · %.1f MB · %s",
 			float64(info.Size())/(1024*1024),

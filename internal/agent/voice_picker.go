@@ -9,6 +9,13 @@ import (
 	"github.com/sirily11/debate-bot/internal/tts"
 )
 
+var cinematicVoicePriority = []string{
+	"xiaochendragonhdflashlatest",
+	"xiaochendragonhdlatest",
+	"yunfandragonhdlatest",
+	"yunyedragonhdflashlatest",
+}
+
 // AssignVoices assigns one Azure neural voice to every agent. Voices are
 // filtered by the topic language (locale prefix), then ranked so HD voices
 // (e.g. "...DragonHDFlashLatestNeural") and standard un-accented locales
@@ -149,6 +156,7 @@ func pickCharacterVoice(pool []tts.Voice, wantGender string, used map[string]boo
 //  2. unused voice with no gender match
 //  3. used voice whose Gender matches (recycled to keep gender right)
 //  4. any voice (recycled)
+//
 // Returns ok=false only if pool is empty.
 func pickVoiceFor(pool []tts.Voice, agentName string, used map[string]bool) (tts.Voice, bool) {
 	if len(pool) == 0 {
@@ -186,11 +194,18 @@ func pickVoiceFor(pool []tts.Voice, agentName string, used map[string]bool) (tts
 }
 
 // voiceScore ranks a voice for assignment. Higher = preferred.
-//   +2 for HD voices (Azure's high-fidelity DragonHD family).
-//   +1 for an exact locale match (un-accented base locale, e.g. "zh-CN"
-//      rather than a regional variant like "zh-CN-shaanxi").
+//
+//	+100+ for the curated cinematic narration voices:
+//	  Xiaochen Dragon HD Flash Latest, Xiaochen Dragon HD Latest,
+//	  Yunfan Dragon HD Latest, Yunye Dragon HD Flash Latest.
+//	+2 for HD voices (Azure's high-fidelity DragonHD family).
+//	+1 for an exact locale match (un-accented base locale, e.g. "zh-CN"
+//	   rather than a regional variant like "zh-CN-shaanxi").
 func voiceScore(v tts.Voice, language string) int {
 	s := 0
+	if p := cinematicVoiceRank(v); p > 0 {
+		s += 100 + p
+	}
 	if strings.Contains(v.ShortName, "HD") {
 		s += 2
 	}
@@ -198,4 +213,27 @@ func voiceScore(v tts.Voice, language string) int {
 		s += 1
 	}
 	return s
+}
+
+func cinematicVoiceRank(v tts.Voice) int {
+	name := compactVoiceName(v.ShortName)
+	if name == "" {
+		return 0
+	}
+	for i, want := range cinematicVoicePriority {
+		if strings.Contains(name, want) {
+			return len(cinematicVoicePriority) - i
+		}
+	}
+	return 0
+}
+
+func compactVoiceName(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

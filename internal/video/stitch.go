@@ -34,6 +34,10 @@ import (
 // Zero (default) keeps the full HLS timeline. Stitch rounds the
 // offset down to the nearest HLS segment boundary so -c:v copy can
 // seek without an out-of-keyframe freeze.
+//
+// AudioFadeOut, when positive, applies a fade to the final span of the
+// stitched audio track. Video remains stream-copied, but audio is
+// re-encoded because ffmpeg filters cannot run with -c:a copy.
 type StitchOpts struct {
 	SoftSubs       bool
 	BurnSubs       bool // ignored; see doc comment
@@ -41,6 +45,7 @@ type StitchOpts struct {
 	Language       string
 	SubtitleTracks []SubtitleTrack
 	StartOffset    time.Duration
+	AudioFadeOut   time.Duration
 }
 
 // SubtitleTrack is one WebVTT input to mux into the stitched MP4.
@@ -127,17 +132,28 @@ func buildStitchArgs(hlsDir, outPath string, opts StitchOpts) ([]string, error) 
 		}
 	}
 
-	// Stream-copy both tracks: the renderer already painted any
-	// burned-in captions into the HLS frames (when its
-	// BurnInSeriesCaptions flag is set), and the encoder's audio
-	// pipeline already produced AAC at the desired bitrate, so any
-	// re-encode here would only degrade fidelity.
+	// Stream-copy video. Audio is also copied on the default path: the
+	// renderer already painted any burned-in captions into the HLS frames
+	// (when its BurnInSeriesCaptions flag is set), and the encoder's audio
+	// pipeline already produced AAC at the desired bitrate. Opt-in audio
+	// filters (currently final fade-out for series episodes) require
+	// re-encoding the audio track while leaving video untouched.
 	args = append(args,
 		"-map", "0:v",
 		"-map", "0:a",
 		"-c:v", "copy",
-		"-c:a", "copy",
 	)
+	if opts.AudioFadeOut > 0 {
+		args = append(args,
+			"-af", finalAudioFadeFilter(opts.AudioFadeOut),
+			"-c:a", "aac",
+			"-b:a", "64k",
+			"-ar", "24000",
+			"-ac", "1",
+		)
+	} else {
+		args = append(args, "-c:a", "copy")
+	}
 
 	if opts.SoftSubs {
 		for i := range tracks {
@@ -178,6 +194,10 @@ func buildStitchArgs(hlsDir, outPath string, opts StitchOpts) ([]string, error) 
 // both forms) — keeps the formatting deterministic for tests.
 func formatSeconds(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', 3, 64)
+}
+
+func finalAudioFadeFilter(d time.Duration) string {
+	return "areverse,afade=t=in:st=0:d=" + formatSeconds(d) + ",areverse"
 }
 
 // normalizeSubtitleLang maps a topic.Language value (typically a BCP-47

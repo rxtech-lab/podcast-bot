@@ -25,6 +25,20 @@ const (
 	maxCharacters = 6
 )
 
+func seriesFrameFloor(totalMinutes int) int {
+	if totalMinutes <= 0 {
+		return minNarrationFrames
+	}
+	n := totalMinutes * 2
+	if n < minNarrationFrames {
+		return minNarrationFrames
+	}
+	if n > maxNarrationFrames {
+		return maxNarrationFrames
+	}
+	return n
+}
+
 // SeriesImageRefCandidate is one entry in the cross-episode reuse catalog
 // supplied to PlanSeries. The planner returns a subset of these (by Key)
 // in the resulting ScenePlan.ImageReuse slice — entries the LLM picked as
@@ -58,6 +72,7 @@ func PlanSeries(ctx context.Context, llmC *llm.Client, topic *config.DebateTopic
 	if synopsis == "" {
 		return nil, fmt.Errorf("empty synopsis (## Surface section)")
 	}
+	minFrames := seriesFrameFloor(topic.TotalMinutes)
 
 	system := `You are the visual director planning the cut sequence for a
 TV-series-style narrated podcast episode. The host narrates the synopsis
@@ -86,8 +101,10 @@ Rules:
   MUST appear in the same order as the synopsis — entry i depicts the
   visual beat for the i-th paragraph or scene chunk. Walk the synopsis
   paragraph by paragraph and produce one entry for each distinct visual
-  beat in the order it appears. Do NOT reorder, do NOT shuffle for
-  variety.
+  beat in the order it appears. For long-form episodes, split paragraphs
+  into multiple cinematic beats when the location, action, object focus,
+  emotional turn, or dialogue exchange changes. Do NOT reorder, do NOT
+  shuffle for variety.
 - Each entry is ONE short sentence (≤ 30 English words or ≤ 60 CJK
   characters) describing what the camera shows.
 - "narration_anchors" is REQUIRED, parallel to narration, same length:
@@ -132,10 +149,14 @@ Rules:
   with no spoken dialogue, leave the array empty.
 - "sounds" follows the same shape as the puzzle planner's sound list.
 
-Narration count: between %d and %d frames, scaled to synopsis length and
-distinct beats. Prefer one frame per paragraph or scene shift.`
+Narration count: between %d and %d frames. This episode is configured
+for %d minute(s), so produce AT LEAST %d narration frames unless the
+synopsis is physically too short to support that many unique anchors.
+Prefer one frame per scene action, object reveal, suspense turn, or
+dialogue exchange. A 10-minute dramatic episode should normally have
+about 18-28 frames, not 6.`
 
-	system = fmt.Sprintf(system, maxCharacters, minNarrationFrames, maxNarrationFrames)
+	system = fmt.Sprintf(system, maxCharacters, minFrames, maxNarrationFrames, topic.TotalMinutes, minFrames)
 
 	var catalog string
 	if len(candidates) > 0 {
@@ -179,7 +200,14 @@ distinct beats. Prefer one frame per paragraph or scene shift.`
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("unmarshal series plan: %w (raw=%q)", err, truncateForLog(string(raw), 200))
 	}
-	parsed.Narration = clampSlice(parsed.Narration, minNarrationFrames, maxNarrationFrames)
+	if nonEmptyStringCount(parsed.Narration) < minFrames {
+		if fb := FallbackSeriesPlan(topic); fb != nil && len(fb.Narration) >= minFrames {
+			parsed.Narration = fb.Narration
+			parsed.NarrationAnchors = fb.NarrationAnchors
+			parsed.NarrationAnimations = fb.NarrationAnimations
+		}
+	}
+	parsed.Narration = clampSlice(parsed.Narration, minFrames, maxNarrationFrames)
 	if len(parsed.Narration) == 0 {
 		return nil, fmt.Errorf("series plan empty after clamp")
 	}
@@ -290,7 +318,8 @@ func FallbackSeriesPlan(topic *config.DebateTopic) *ScenePlan {
 	if synopsis == "" {
 		return nil
 	}
-	chunks := splitSurfaceIntoChunks(synopsis, minNarrationFrames, maxNarrationFrames)
+	minFrames := seriesFrameFloor(topic.TotalMinutes)
+	chunks := splitSurfaceIntoChunks(synopsis, minFrames, maxNarrationFrames)
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -300,11 +329,21 @@ func FallbackSeriesPlan(topic *config.DebateTopic) *ScenePlan {
 		dirs = append(dirs, fallbackSurfaceDirection(i, c))
 		anchors = append(anchors, fallbackAnchor(c))
 	}
-	clamped := clampSlice(dirs, minNarrationFrames, maxNarrationFrames)
+	clamped := clampSlice(dirs, minFrames, maxNarrationFrames)
 	return &ScenePlan{
 		Narration:           clamped,
 		NarrationAnchors:    matchAnchorLength(anchors, len(clamped)),
 		NarrationAnimations: fallbackAnimations(len(clamped)),
 		ImageReuse:          make([]string, len(clamped)),
 	}
+}
+
+func nonEmptyStringCount(xs []string) int {
+	n := 0
+	for _, s := range xs {
+		if strings.TrimSpace(s) != "" {
+			n++
+		}
+	}
+	return n
 }

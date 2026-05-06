@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sirily11/debate-bot/internal/config"
 )
 
 // jobScriptName / jobPriorsName are the filenames the handler saves
@@ -132,8 +134,11 @@ func (s *Server) handleJobGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	j := s.d.Jobs.Get(id)
 	if j == nil {
-		http.NotFound(w, r)
-		return
+		j = s.recoverJob(id)
+		if j == nil {
+			http.NotFound(w, r)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(j)
@@ -150,8 +155,11 @@ func (s *Server) handleJobVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	j := s.d.Jobs.Get(id)
 	if j == nil {
-		http.NotFound(w, r)
-		return
+		j = s.recoverJob(id)
+		if j == nil {
+			http.NotFound(w, r)
+			return
+		}
 	}
 	if j.Status != JobDone || j.VideoPath == "" {
 		http.Error(w, "video not ready", http.StatusTooEarly)
@@ -174,8 +182,11 @@ func (s *Server) handleJobArchive(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	j := s.d.Jobs.Get(id)
 	if j == nil {
-		http.NotFound(w, r)
-		return
+		j = s.recoverJob(id)
+		if j == nil {
+			http.NotFound(w, r)
+			return
+		}
 	}
 	if j.Status != JobDone || j.ArchivePath == "" {
 		http.Error(w, "archive not ready", http.StatusTooEarly)
@@ -195,6 +206,55 @@ func saveUpload(src io.Reader, dst string) error {
 	defer f.Close()
 	_, err = io.Copy(f, src)
 	return err
+}
+
+func (s *Server) recoverJob(id string) *Job {
+	if s.d.Jobs == nil || s.d.UploadRoot == "" {
+		return nil
+	}
+	jobOutDir := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id)
+	mp4Path := filepath.Join(jobOutDir, "video.mp4")
+	archivePath := filepath.Join(jobOutDir, "archive.zip")
+
+	mp4Info, mp4Err := os.Stat(mp4Path)
+	archiveInfo, archiveErr := os.Stat(archivePath)
+	if mp4Err != nil && archiveErr != nil {
+		return nil
+	}
+
+	j := s.d.Jobs.Add(id)
+	s.d.Jobs.Update(id, func(j *Job) {
+		j.Status = JobDone
+		if mp4Err == nil {
+			j.VideoPath = mp4Path
+			j.HasVideo = true
+		}
+		if archiveErr == nil {
+			j.ArchivePath = archivePath
+			j.HasArchive = true
+		}
+		if topic, err := config.LoadTopic(filepath.Join(s.d.UploadRoot, id, jobScriptName)); err == nil {
+			j.Title = topic.Title
+			j.Type = topic.Type
+			j.Show = topic.Show
+			j.Season = topic.Season
+			j.Episode = topic.Episode
+		}
+	})
+	if mp4Err == nil {
+		s.d.Jobs.AppendLog(id, "status", fmt.Sprintf("recovered mp4 · %.1f MB",
+			float64(mp4Info.Size())/(1024*1024)), nil)
+	}
+	if archiveErr == nil {
+		s.d.Jobs.AppendLog(id, "status", fmt.Sprintf("recovered archive · %.1f MB",
+			float64(archiveInfo.Size())/(1024*1024)), nil)
+	}
+	s.d.Jobs.AppendLog(id, "status", "done", nil)
+
+	if recovered := s.d.Jobs.Get(id); recovered != nil {
+		return recovered
+	}
+	return j
 }
 
 func formBool(r *http.Request, name string) bool {

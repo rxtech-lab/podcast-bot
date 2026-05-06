@@ -2,11 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // JobStatus is the lifecycle of a video-mode upload job.
@@ -83,6 +89,7 @@ type JobSubmission struct {
 type JobRegistry struct {
 	db       *gorm.DB
 	logLimit int
+	mu       sync.Mutex
 }
 
 type videoJobRecord struct {
@@ -121,14 +128,34 @@ func (videoJobLogRecord) TableName() string { return "video_job_logs" }
 
 // NewJobRegistry opens or creates a SQLite-backed registry at dbPath.
 func NewJobRegistry(dbPath string) (*JobRegistry, error) {
-	db, err := gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{})
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, err
+	}
+	db, err := gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&videoJobRecord{}, &videoJobLogRecord{}); err != nil {
+	sqlDB, err := db.DB()
+	if err != nil {
 		return nil, err
 	}
-	return &JobRegistry{db: db, logLimit: 500}, nil
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
+		return nil, err
+	}
+	if err := db.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
+		return nil, err
+	}
+	r := &JobRegistry{db: db, logLimit: 500}
+	if err := r.ensureSchema(); err != nil {
+		return nil, err
+	}
+	if !db.Migrator().HasTable(&videoJobRecord{}) || !db.Migrator().HasTable(&videoJobLogRecord{}) {
+		return nil, errors.New("jobs db migration did not create required tables")
+	}
+	return r, nil
 }
 
 func sqliteDSN(dbPath string) string {
@@ -136,7 +163,23 @@ func sqliteDSN(dbPath string) string {
 	if strings.Contains(dbPath, "?") {
 		sep = "&"
 	}
-	return dbPath + sep + "_busy_timeout=5000&_journal_mode=WAL"
+	return dbPath + sep + "_busy_timeout=5000"
+}
+
+func (r *JobRegistry) ensureSchema() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.db.AutoMigrate(&videoJobRecord{}, &videoJobLogRecord{})
+}
+
+func (r *JobRegistry) retryMissingTable(err error, op func() error) error {
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "no such table") {
+		return err
+	}
+	if migrateErr := r.ensureSchema(); migrateErr != nil {
+		return fmt.Errorf("%w; remigrate: %v", err, migrateErr)
+	}
+	return op()
 }
 
 // Add inserts a fresh pending job. Caller picks the id.
@@ -148,7 +191,11 @@ func (r *JobRegistry) Add(id string) *Job {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	_ = r.db.Create(&rec).Error
+	if err := r.db.Create(&rec).Error; err != nil {
+		_ = r.retryMissingTable(err, func() error {
+			return r.db.Create(&rec).Error
+		})
+	}
 	j := jobFromRecord(rec)
 	return &j
 }
@@ -156,8 +203,14 @@ func (r *JobRegistry) Add(id string) *Job {
 // Get returns a snapshot of the named job, or nil when unknown.
 func (r *JobRegistry) Get(id string) *Job {
 	var rec videoJobRecord
-	if err := r.db.First(&rec, "id = ?", id).Error; err != nil {
-		return nil
+	query := func() error {
+		return r.db.First(&rec, "id = ?", id).Error
+	}
+	if err := query(); err != nil {
+		err = r.retryMissingTable(err, query)
+		if err != nil {
+			return nil
+		}
 	}
 	j := jobFromRecord(rec)
 	j.Logs = r.logs(id)
@@ -168,14 +221,27 @@ func (r *JobRegistry) Get(id string) *Job {
 // unknown.
 func (r *JobRegistry) Update(id string, fn func(j *Job)) {
 	var rec videoJobRecord
-	if err := r.db.First(&rec, "id = ?", id).Error; err != nil {
+	query := func() error {
+		return r.db.First(&rec, "id = ?", id).Error
+	}
+	if err := query(); err != nil {
+		err = r.retryMissingTable(err, query)
+		if err != nil {
+			return
+		}
+	}
+	if rec.ID == "" {
 		return
 	}
 	j := jobFromRecord(rec)
 	fn(&j)
 	j.UpdatedAt = time.Now()
 	rec = recordFromJob(j)
-	_ = r.db.Save(&rec).Error
+	if err := r.db.Save(&rec).Error; err != nil {
+		_ = r.retryMissingTable(err, func() error {
+			return r.db.Save(&rec).Error
+		})
+	}
 }
 
 // AppendLog persists one user-visible progress line for a job.
@@ -189,12 +255,17 @@ func (r *JobRegistry) AppendLog(jobID, kind, text string, payload any) {
 			payloadJSON = string(b)
 		}
 	}
-	_ = r.db.Create(&videoJobLogRecord{
+	rec := videoJobLogRecord{
 		JobID:   jobID,
 		Kind:    kind,
 		Text:    text,
 		Payload: payloadJSON,
-	}).Error
+	}
+	if err := r.db.Create(&rec).Error; err != nil {
+		_ = r.retryMissingTable(err, func() error {
+			return r.db.Create(&rec).Error
+		})
+	}
 }
 
 // List returns a stable-order snapshot of every known job (newest first by
@@ -202,7 +273,12 @@ func (r *JobRegistry) AppendLog(jobID, kind, text string, payload any) {
 // own job by id today.
 func (r *JobRegistry) List() []Job {
 	var recs []videoJobRecord
-	_ = r.db.Order("created_at desc").Find(&recs).Error
+	query := func() error {
+		return r.db.Order("created_at desc").Find(&recs).Error
+	}
+	if err := query(); err != nil {
+		_ = r.retryMissingTable(err, query)
+	}
 	out := make([]Job, 0, len(recs))
 	for _, rec := range recs {
 		out = append(out, jobFromRecord(rec))
@@ -212,11 +288,16 @@ func (r *JobRegistry) List() []Job {
 
 func (r *JobRegistry) logs(jobID string) []JobLog {
 	var recs []videoJobLogRecord
-	_ = r.db.
-		Where("job_id = ?", jobID).
-		Order("id desc").
-		Limit(r.logLimit).
-		Find(&recs).Error
+	query := func() error {
+		return r.db.
+			Where("job_id = ?", jobID).
+			Order("id desc").
+			Limit(r.logLimit).
+			Find(&recs).Error
+	}
+	if err := query(); err != nil {
+		_ = r.retryMissingTable(err, query)
+	}
 	out := make([]JobLog, len(recs))
 	for i := range recs {
 		rec := recs[len(recs)-1-i]
