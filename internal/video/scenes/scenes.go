@@ -67,6 +67,10 @@ const (
 	SceneQA         = "qa"
 	SceneReveal     = "reveal"
 	SceneConclusion = "conclusion"
+	// SceneNarration is the series content type's single scene phase. One
+	// frame per planned beat — there is no qa/reveal/conclusion split for
+	// a TV-series episode, so the planner emits exactly one slice.
+	SceneNarration = "narration"
 )
 
 // SurfaceVariantCount and ConclusionVariantCount are the static-fallback
@@ -103,14 +107,21 @@ const (
 
 // PuzzleScenes is the set of pre-generated bgs for one puzzle topic. Surface
 // and Conclusion are slices because those phases rotate through several
-// distinct frames; QA and Reveal are single images. Any field/element may be
-// nil if generation failed — callers should fall back to the renderer's
-// default bg in that case.
+// distinct frames; QA and Reveal are single images. Narration is the series
+// content type's single rotating slice (one per planned beat). Any field /
+// element may be nil if generation failed — callers should fall back to
+// the renderer's default bg in that case.
+//
+// The struct is shared across content types so the imagegen plumbing
+// (cache hits, priority gating, OnFrame streaming) does not have to fork
+// per format. The stage subscribes only to the slices its content type
+// uses; unused slices stay nil and cost nothing.
 type PuzzleScenes struct {
 	Surface    []*image.RGBA
 	QA         *image.RGBA
 	Reveal     *image.RGBA
 	Conclusion []*image.RGBA
+	Narration  []*image.RGBA
 }
 
 // ByName returns the first available image for the given scene name, or nil.
@@ -155,6 +166,8 @@ func (s *PuzzleScenes) ByNameIdx(name string, idx int) *image.RGBA {
 		return s.Reveal
 	case SceneConclusion:
 		return pickFromSlice(s.Conclusion)
+	case SceneNarration:
+		return pickFromSlice(s.Narration)
 	}
 	return nil
 }
@@ -185,6 +198,8 @@ func (s *PuzzleScenes) ByNameIdxExact(name string, idx int) *image.RGBA {
 		return s.Reveal
 	case SceneConclusion:
 		return pickExact(s.Conclusion)
+	case SceneNarration:
+		return pickExact(s.Narration)
 	}
 	return nil
 }
@@ -211,6 +226,8 @@ func (s *PuzzleScenes) VariantCount(name string) int {
 		return 0
 	case SceneConclusion:
 		return len(s.Conclusion)
+	case SceneNarration:
+		return len(s.Narration)
 	}
 	return 0
 }
@@ -273,10 +290,12 @@ func GenerateWithOptions(ctx context.Context, client *imagegen.Client, topic *co
 	if n := plan.ConclusionCount(); n > 0 {
 		conclusionN = n
 	}
+	narrationN := plan.NarrationCount()
 
 	out := &PuzzleScenes{
 		Surface:    make([]*image.RGBA, surfaceN),
 		Conclusion: make([]*image.RGBA, conclusionN),
+		Narration:  make([]*image.RGBA, narrationN),
 	}
 
 	type job struct {
@@ -330,6 +349,17 @@ func GenerateWithOptions(ctx context.Context, client *imagegen.Client, topic *co
 				variant:   i,
 				cacheName: fmt.Sprintf("%s-v%d", SceneConclusion, i),
 				assign:    func(img *image.RGBA) { out.Conclusion[i] = img },
+			})
+		}
+	}
+	if wantPhase(SceneNarration) {
+		for i := 0; i < narrationN; i++ {
+			i := i
+			jobs = append(jobs, job{
+				name:      SceneNarration,
+				variant:   i,
+				cacheName: fmt.Sprintf("%s-v%d", SceneNarration, i),
+				assign:    func(img *image.RGBA) { out.Narration[i] = img },
 			})
 		}
 	}
@@ -530,6 +560,8 @@ func buildPromptVariantWithPlan(name string, topic *config.DebateTopic, variant 
 			directions = plan.Surface
 		case SceneConclusion:
 			directions = plan.Conclusion
+		case SceneNarration:
+			directions = plan.Narration
 		}
 		if variant >= 0 && variant < len(directions) && strings.TrimSpace(directions[variant]) != "" {
 			return buildPromptWithDirection(name, topic, directions[variant])
@@ -580,6 +612,19 @@ specific variant visually distinct from the others):
 
 Soft warm golden-hour light, gentle stillness, sense of closure. The
 mystery has been revealed and the moment lingers.
+%s`, surface, direction, styleSuffix))
+
+	case SceneNarration:
+		return strings.TrimSpace(fmt.Sprintf(`
+Anime cinematic illustration for one beat of a TV-series episode:
+
+%s
+
+Per-frame direction (one beat in a serialised show; make this beat
+visually distinct from neighbouring beats while staying in continuity):
+%s
+
+Cinematic, episodic, evocative. No on-screen text or UI.
 %s`, surface, direction, styleSuffix))
 	}
 	return buildPromptVariant(name, topic, 0)
@@ -691,6 +736,28 @@ specific variant visually distinct from the others):
 
 Soft warm golden-hour light, gentle stillness, sense of closure. The
 mystery has been revealed and the moment lingers.
+%s`, surface, direction, styleSuffix))
+
+	case SceneNarration:
+		// Series fallback prompt — used when the LLM didn't supply a
+		// direction sentence for this beat. Reads like the puzzle's
+		// surface variant but in the show's narrator voice. Variant 0
+		// is special-cased upstream so the show always opens on a fresh
+		// frame; for any variant index the visual is grounded in the
+		// per-episode synopsis.
+		direction := surfaceVariantDirections[((variant%len(surfaceVariantDirections))+len(surfaceVariantDirections))%len(surfaceVariantDirections)]
+		return strings.TrimSpace(fmt.Sprintf(`
+Anime cinematic illustration for one beat of a TV-series episode synopsis:
+
+%s
+
+Per-frame direction (this is one of several frames cut together — make this
+specific variant visually distinct from the others):
+%s
+
+Cinematic, episodic, evocative. Capture the beat as a frame in a
+serialised show — moody when the beat is moody, warm when the beat is
+warm. No on-screen text or UI.
 %s`, surface, direction, styleSuffix))
 	}
 	return ""

@@ -4,7 +4,7 @@ FRONTEND  := frontend
 EMBED_DIR := internal/server/web-dist
 BIN_DIR   := bin
 
-.PHONY: all build frontend backend run dev clean tidy gen-assets
+.PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke
 
 all: build
 
@@ -44,3 +44,14 @@ gen-assets:
 
 clean:
 	rm -rf $(BIN_DIR) $(EMBED_DIR) $(FRONTEND)/dist $(FRONTEND)/node_modules
+
+# Run the single-episode series smoke (s01e01 by default). Writes the
+# stitched mp4 to out/series-smoke/<show>-s01e01.mp4.
+series-smoke:
+	go run ./cmd/series-smoke
+
+# Run the cross-episode smoke (s01e01 → s01e02). Validates the recap +
+# image-reuse plumbing and writes out/series-recap-smoke/<show>-ep1-s01e01.mp4
+# and <show>-ep2-s01e02.mp4.
+series-recap-smoke:
+	go run ./cmd/series-recap-smoke

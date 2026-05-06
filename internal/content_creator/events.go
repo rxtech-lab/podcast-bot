@@ -160,6 +160,19 @@ type SceneAdvanceMsg struct {
 	Index     int
 }
 
+// ImageRefMsg asks the active stage to swap to a specific cross-episode
+// archived image. Emitted by the producer when the series host stream
+// contains a `<season-S-episode-E-image-N/>` marker. Key is the canonical
+// image-reference id (see contentcreator.ImageRefKey) — the stage holds a
+// resolver map from key → in-memory *image.RGBA loaded from the prior
+// episode's archive at startup. Stages without that resolver populated
+// (debate, situation-puzzle, or a series stage that didn't preload any
+// prior imagery) treat this as a no-op.
+type ImageRefMsg struct {
+	ChannelID string
+	Key       string
+}
+
 // SoundCueMsg asks the audio mixer to dispatch one of the planner's
 // pre-generated sound clips. Emitted by the producer when the host
 // stream contains a `<sound-overlapped-N/>` or `<sound-replace-N/>`
@@ -196,6 +209,8 @@ func MsgChannelID(v any) string {
 	case SceneAdvanceMsg:
 		return m.ChannelID
 	case SoundCueMsg:
+		return m.ChannelID
+	case ImageRefMsg:
 		return m.ChannelID
 	}
 	return ""
@@ -235,6 +250,9 @@ func StampChannelID(v any, id string) any {
 		m.ChannelID = id
 		return m
 	case SoundCueMsg:
+		m.ChannelID = id
+		return m
+	case ImageRefMsg:
 		m.ChannelID = id
 		return m
 	}

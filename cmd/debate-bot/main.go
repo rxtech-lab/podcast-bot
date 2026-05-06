@@ -190,6 +190,7 @@ type channelRuntime struct {
 	live        *audio.LiveStream
 	enc         *video.Encoder
 	puzzleStage *video.PuzzleStage // retained so scene generators can call AttachScenes
+	seriesStage *video.SeriesStage // retained for series episodes (preparation hooks reach in)
 
 	// counterMu protects total + started, which feed the live TopicMsg.Total
 	// and Index values. Both grow over the channel's lifetime: total
@@ -595,8 +596,11 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 			debateStage := video.NewDebateChannelStage(enc, ch.ID)
 			puzzleStage := video.NewPuzzleChannelStage(enc, ch.ID)
 			cr.puzzleStage = puzzleStage
+			seriesStage := video.NewSeriesChannelStage(enc, ch.ID)
+			cr.seriesStage = seriesStage
 			go debateStage.Run(ctx, bus)
 			go puzzleStage.Run(ctx, bus)
+			go seriesStage.Run(ctx, bus)
 		}
 
 		rt.channels = append(rt.channels, cr)
@@ -747,8 +751,18 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		if d.topic.Type == config.ContentTypeSituationPuzzle && ch.puzzleStage != nil {
 			preparePuzzleAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
 		}
+		if d.topic.Type == config.ContentTypeSeries && ch.seriesStage != nil {
+			prepareSeriesAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
+		}
 
 		runErr := orch.Run(r.ctx)
+		// Series episodes archive their per-run output (script, audio,
+		// subtitles) into the persistent show directory so the next
+		// episode's recap engine can read them. Best-effort — failure
+		// here doesn't fail the run.
+		if d.topic.Type == config.ContentTypeSeries {
+			finishSeriesEpisode(r.log, &debateEnv, d)
+		}
 		orch.Shutdown()
 		r.sessions.SetCurrentOrch(ch.def.ID, "", nil)
 		// Release the loadedDebates entry now that the debate has reached
@@ -954,6 +968,9 @@ func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
 	}
 	if d.topic.Type == config.ContentTypeSituationPuzzle {
 		return buildPuzzleTopicMsg(d, msg)
+	}
+	if d.topic.Type == config.ContentTypeSeries {
+		return buildSeriesTopicMsg(d, msg)
 	}
 	return buildDebateTopicMsg(d, msg)
 }

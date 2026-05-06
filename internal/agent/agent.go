@@ -19,6 +19,11 @@ const (
 	RoleViewer      Role = "viewer"
 	RolePuzzleHost  Role = "puzzle-host"
 	RolePlayer      Role = "player"
+	// RoleSeriesHost is the single narrator on a host-only TV-series episode.
+	// Series episodes have no debate, no Q&A, no audience interjection — the
+	// host reads the prepared synopsis and (optionally) a "previously on …"
+	// preamble. See agent/series_host.go.
+	RoleSeriesHost Role = "series-host"
 )
 
 // Side returns "affirmative" or "negative" for candidate roles, otherwise "".
@@ -123,6 +128,11 @@ type Registry struct {
 	PuzzleHost Agent
 	Players    []Agent
 
+	// SeriesHost is the single narrator agent for a TV-series episode.
+	// Series content uses this role exclusively — no players, no judge,
+	// no other speakers.
+	SeriesHost Agent
+
 	Viewers []Agent
 }
 
@@ -137,6 +147,9 @@ func (r *Registry) All() []Agent {
 	}
 	if r.PuzzleHost != nil {
 		out = append(out, r.PuzzleHost)
+	}
+	if r.SeriesHost != nil {
+		out = append(out, r.SeriesHost)
 	}
 	out = append(out, r.Affirmatve...)
 	out = append(out, r.Negative...)

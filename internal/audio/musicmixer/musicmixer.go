@@ -386,6 +386,29 @@ func (m *Mixer) Close() error {
 	return m.closeErr
 }
 
+// OverlapMusic is a free-standing wrapper around (*Mixer).OverlapClip with
+// the default overlay volume. Mirrors ReplaceMusic so the dispatch surface
+// reads symmetrically: overlapMusic(source) / replaceMusic(source). Kept as a
+// thin shim so existing callers of (*Mixer).OverlapClip — and any operator
+// that wants a non-default volume — keep working unchanged.
+func OverlapMusic(m *Mixer, source string) error {
+	if m == nil {
+		return errors.New("musicmixer: nil mixer")
+	}
+	return m.OverlapClip(source, 0)
+}
+
+// ReplaceMusic is a free-standing companion to OverlapMusic. Cross-fades the
+// active background bed over to source and keeps the new clip looped. Same
+// behaviour as (*Mixer).ReplaceMusic — the package-level form just keeps the
+// API symmetric with OverlapMusic at the dispatch sites.
+func ReplaceMusic(m *Mixer, source string) error {
+	if m == nil {
+		return errors.New("musicmixer: nil mixer")
+	}
+	return m.ReplaceMusic(source)
+}
+
 // OverlapClip kicks off a one-shot overlay stream: an ffmpeg decoder
 // reads path, emits PCM at the pipeline format, and the mix loop
 // additively layers it on top of the music + TTS. The clip plays

@@ -38,6 +38,16 @@ const (
 const (
 	ContentTypeDebate          = "debate"
 	ContentTypeSituationPuzzle = "situation-puzzle"
+	// ContentTypeSeries is a host-only narrated TV-style episode. Episodes
+	// declare show + season + episode in frontmatter; the pipeline writes
+	// every episode's assets (scene plan, generated PNGs, music, recap-
+	// ready script) into a stable on-disk archive at
+	// `<persistent-root>/tv-series/<show>/s<season>/e<episode>/`. Episode
+	// N+1 reads that archive to (a) build a "previously on …" preamble
+	// via the compression LLM and (b) re-use specific past beats by
+	// emitting `<season-S-episode-E-image-N/>` markers in the host's
+	// stream.
+	ContentTypeSeries = "series"
 )
 
 // DebateTopic is the full topic.md content: YAML frontmatter + named markdown
@@ -68,6 +78,17 @@ type DebateTopic struct {
 	// Players are 解題者 trying to deduce the truth.
 	PuzzleHost AgentSpec   `yaml:"puzzle_host,omitempty"`
 	Players    []AgentSpec `yaml:"players,omitempty"`
+
+	// Series-only roster + metadata. Show is the human-readable show name
+	// (slugified for the on-disk archive directory). Season + Episode are
+	// 1-based; the recap engine treats lexicographic (season, episode)
+	// order as canonical "before this episode" (so s2e1 follows s1e9).
+	// SeriesHost is the single narrator agent; series episodes are
+	// non-interactive (no players, no Q&A, no live audience).
+	Show       string    `yaml:"show,omitempty"`
+	Season     int       `yaml:"season,omitempty"`
+	Episode    int       `yaml:"episode,omitempty"`
+	SeriesHost AgentSpec `yaml:"series_host,omitempty"`
 
 	// Shared across both content types.
 	Viewers []AgentSpec `yaml:"viewers,omitempty"`
@@ -148,12 +169,19 @@ func splitFrontmatter(s string) (front, body string, err error) {
 }
 
 func parseSections(body string, t *DebateTopic) {
+	// Series content can name its synopsis section "Surface" (matches the
+	// puzzle convention) or "Series" / "Series summary" (more idiomatic
+	// for a TV-series episode). Both feed the same Surface field — the
+	// downstream pipeline doesn't care about the heading text.
 	sections := map[string]*string{
 		"background":           &t.Background,
 		"affirmative position": &t.AffirmativePos,
 		"negative position":    &t.NegativePos,
 		"rules":                &t.Rules,
 		"surface":              &t.Surface,
+		"series":               &t.Surface,
+		"series summary":       &t.Surface,
+		"synopsis":             &t.Surface,
 		"truth":                &t.Truth,
 	}
 	var current *string
@@ -188,10 +216,10 @@ func validateTopic(t *DebateTopic) error {
 		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
 	switch t.Type {
-	case ContentTypeDebate, ContentTypeSituationPuzzle:
+	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries:
 	default:
-		return fmt.Errorf("type must be one of %q, %q (got %q)",
-			ContentTypeDebate, ContentTypeSituationPuzzle, t.Type)
+		return fmt.Errorf("type must be one of %q, %q, %q (got %q)",
+			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, t.Type)
 	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:
@@ -215,6 +243,40 @@ func validateTopic(t *DebateTopic) error {
 		return validateDebate(t)
 	case ContentTypeSituationPuzzle:
 		return validateSituationPuzzle(t)
+	case ContentTypeSeries:
+		return validateSeries(t)
+	}
+	return nil
+}
+
+func validateSeries(t *DebateTopic) error {
+	// Series episodes are host-only — no debaters, no judge, no puzzle host,
+	// no players. Reject those fields with a clear message rather than
+	// silently ignoring them; otherwise a copy-paste from a debate fixture
+	// would build extra agents that never speak.
+	if len(t.Affirmative) > 0 || len(t.Negative) > 0 || t.Judge.Model != "" {
+		return fmt.Errorf("type=series must not declare affirmative/negative/judge — series uses series_host only")
+	}
+	if t.PuzzleHost.Model != "" || len(t.Players) > 0 {
+		return fmt.Errorf("type=series must not declare puzzle_host or players — series uses series_host only")
+	}
+	if t.SeriesHost.Model == "" {
+		return fmt.Errorf("series_host.model is required for type=series")
+	}
+	if strings.TrimSpace(t.Show) == "" {
+		return fmt.Errorf("type=series requires a non-empty `show` frontmatter field (used to namespace the on-disk archive)")
+	}
+	if t.Season < 1 {
+		return fmt.Errorf("type=series requires `season` >= 1 (got %d)", t.Season)
+	}
+	if t.Episode < 1 {
+		return fmt.Errorf("type=series requires `episode` >= 1 (got %d)", t.Episode)
+	}
+	if strings.TrimSpace(t.Surface) == "" {
+		return fmt.Errorf("type=series requires a synopsis section — `## Surface`, `## Series`, `## Series summary`, or `## Synopsis`")
+	}
+	if strings.TrimSpace(t.Truth) != "" {
+		return fmt.Errorf("type=series must not declare a `## Truth` section — series episodes are not puzzles")
 	}
 	return nil
 }

@@ -236,6 +236,123 @@ Some surface text.
 	}
 }
 
+func TestLoadTopicSeriesValid(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "ep1.md")
+	if err := os.WriteFile(good, []byte(`---
+title: "Ep 1"
+type: series
+language: en-US
+channel: tech
+show: "Night Walk"
+season: 1
+episode: 1
+series_host: { name: "Narrator", model: "gpt-4o" }
+---
+
+## Surface
+
+A late autumn night. The narrator walks home through the fog and finds a letter.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tp, err := config.LoadTopic(good)
+	if err != nil {
+		t.Fatalf("load valid series: %v", err)
+	}
+	if tp.Type != config.ContentTypeSeries {
+		t.Errorf("Type = %q, want %q", tp.Type, config.ContentTypeSeries)
+	}
+	if tp.Show != "Night Walk" {
+		t.Errorf("Show = %q, want Night Walk", tp.Show)
+	}
+	if tp.Season != 1 || tp.Episode != 1 {
+		t.Errorf("Season/Episode = %d/%d, want 1/1", tp.Season, tp.Episode)
+	}
+	if tp.SeriesHost.Model != "gpt-4o" {
+		t.Errorf("SeriesHost.Model = %q", tp.SeriesHost.Model)
+	}
+	if !strings.Contains(tp.Surface, "fog") {
+		t.Errorf("Surface missing expected text; got %q", tp.Surface)
+	}
+}
+
+func TestLoadTopicSeriesMissingShow(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "no-show.md")
+	if err := os.WriteFile(bad, []byte(`---
+title: "x"
+type: series
+language: en-US
+channel: tech
+season: 1
+episode: 1
+series_host: { name: "N", model: "m" }
+---
+
+## Surface
+s
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadTopic(bad); err == nil {
+		t.Fatalf("expected error when show is missing")
+	}
+}
+
+func TestLoadTopicSeriesRejectsPuzzleRoster(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "mixed.md")
+	if err := os.WriteFile(bad, []byte(`---
+title: "x"
+type: series
+language: en-US
+channel: tech
+show: "S"
+season: 1
+episode: 1
+series_host: { name: "N", model: "m" }
+puzzle_host: { model: "p" }
+players: [{ name: "P", model: "m" }]
+---
+
+## Surface
+s
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadTopic(bad); err == nil {
+		t.Fatalf("expected error when series declares puzzle roster")
+	}
+}
+
+func TestLoadTopicSeriesRejectsTruthSection(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "with-truth.md")
+	if err := os.WriteFile(bad, []byte(`---
+title: "x"
+type: series
+language: en-US
+channel: tech
+show: "S"
+season: 1
+episode: 1
+series_host: { name: "N", model: "m" }
+---
+
+## Surface
+s
+
+## Truth
+hidden!
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadTopic(bad); err == nil {
+		t.Fatalf("expected error when series declares Truth section")
+	}
+}
+
 func TestLoadTopicSituationPuzzleRejectsDebateRoster(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "mixed.md")

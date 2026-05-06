@@ -75,6 +75,34 @@ type Orchestrator struct {
 	// so the LLM never emits a sound marker.
 	soundPlan  []SoundCueDirection
 	soundPaths []string
+
+	// seriesPreviouslyOn is the compression-LLM-generated recap fed to the
+	// series host on its `previously` turn. Empty → planner skips the recap
+	// turn (episode 1, or compression LLM unavailable).
+	seriesPreviouslyOn string
+	// seriesNarrationPlan / Anchors / Animations mirror surfacePlan /
+	// surfaceAnchors / (per-frame surface animations) for the series
+	// content type. Set via SetSeriesPlan before Run.
+	seriesNarrationPlan    []string
+	seriesNarrationAnchors []string
+	seriesNarrationAnims   []string
+	// seriesImageRefCatalog is the cross-episode reuse catalog the series
+	// host receives in its prompt. Each entry corresponds to one
+	// reusable archived image. nil → host never emits image-reuse markers.
+	seriesImageRefCatalog []agent.ImageRefCatalogEntry
+	// seriesImageRefPaths maps canonical image-ref keys (s<S>e<E>i<N>)
+	// to absolute on-disk PNG paths. Threaded through to the stage so
+	// it can resolve `<season-S-episode-E-image-N/>` markers at render
+	// time. nil disables the resolver.
+	seriesImageRefPaths map[string]string
+	// seriesMusicPath is the optional looping bed path for series
+	// episodes. Empty → dry TTS (no music).
+	seriesMusicPath string
+	// seriesSoundPlan / seriesSoundPaths mirror soundPlan / soundPaths
+	// but apply to series episodes. Kept separate so the puzzle setter
+	// stays unchanged.
+	seriesSoundPlan  []SoundCueDirection
+	seriesSoundPaths []string
 }
 
 // SoundCueDirection mirrors scenes.SoundDirection but lives in
@@ -228,6 +256,23 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 		return agent.NewViewer(base)
 	case agent.RolePlayer:
 		return agent.NewPlayer(base)
+	case agent.RoleSeriesHost:
+		// Translate the orchestrator-side sound plan to the agent-side
+		// SoundDirection (mirrors the puzzle host construction).
+		soundForHost := make([]agent.SoundDirection, len(o.seriesSoundPlan))
+		for i, s := range o.seriesSoundPlan {
+			soundForHost[i] = agent.SoundDirection{
+				Mode:   s.Mode,
+				Prompt: s.Prompt,
+				Anchor: s.Anchor,
+			}
+		}
+		return agent.NewSeriesHost(base,
+			o.Topic.Show, o.Topic.Season, o.Topic.Episode,
+			o.Topic.Surface, o.seriesPreviouslyOn,
+			o.seriesNarrationPlan, o.seriesNarrationAnchors,
+			soundForHost, o.seriesImageRefCatalog,
+		)
 	case agent.RolePuzzleHost:
 		soundForHost := make([]agent.SoundDirection, len(o.soundPlan))
 		for i, s := range o.soundPlan {
@@ -255,6 +300,8 @@ func (o *Orchestrator) buildAgents() error {
 	switch o.Topic.Type {
 	case config.ContentTypeSituationPuzzle:
 		return o.buildPuzzleAgents()
+	case config.ContentTypeSeries:
+		return o.buildSeriesAgents()
 	default:
 		// Debate is also the implicit fallback if a future content type is
 		// added before its branch lands here; config validation rejects
@@ -264,11 +311,14 @@ func (o *Orchestrator) buildAgents() error {
 }
 
 // newPlanner picks the per-content-type planner. Today: debate vs situation-
-// puzzle. Adding a third content type means adding a branch here AND a
-// matching newXPlanner method in its own file.
+// puzzle vs series. Adding a fourth content type means adding a branch here
+// AND a matching newXPlanner method in its own file.
 func (o *Orchestrator) newPlanner() Planner {
-	if o.Topic.Type == config.ContentTypeSituationPuzzle {
+	switch o.Topic.Type {
+	case config.ContentTypeSituationPuzzle:
 		return o.newPuzzlePlanner()
+	case config.ContentTypeSeries:
+		return o.newSeriesPlanner()
 	}
 	return o.newDebatePlanner()
 }
@@ -279,6 +329,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		return err
 	}
 	planner := o.newPlanner()
+	musicPaths := o.puzzleMusic
+	soundPaths := append([]string(nil), o.soundPaths...)
+	// For series content the music + sound dispatch wiring is set on
+	// dedicated fields (puzzle_music / sound_paths stay empty). Fold them
+	// into the pipeline's existing MusicPaths / SoundPaths surfaces so the
+	// session-mixer + sound-cue dispatch paths can be reused unchanged.
+	if o.Topic.Type == config.ContentTypeSeries {
+		if o.seriesMusicPath != "" {
+			musicPaths = map[string]string{"session": o.seriesMusicPath}
+		}
+		if len(o.seriesSoundPaths) > 0 {
+			soundPaths = append([]string(nil), o.seriesSoundPaths...)
+		}
+	}
 	pipe := NewPipeline(Deps{
 		Planner: planner, Tracker: o.Tracker, Registry: o.Registry,
 		TTS: o.TTS, OutDir: o.Env.OutDir,
@@ -287,10 +351,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		ContentType:      o.Topic.Type,
 		Transcript:       o.Transcript,
 		LiveStream:       o.LiveStream,
-		MusicPaths:       o.puzzleMusic,
+		MusicPaths:       musicPaths,
 		SurfaceFrames:    len(o.surfacePlan),
 		ConclusionFrames: len(o.conclusionPlan),
-		SoundPaths:       append([]string(nil), o.soundPaths...),
+		NarrationFrames:  len(o.seriesNarrationPlan),
+		SoundPaths:       soundPaths,
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

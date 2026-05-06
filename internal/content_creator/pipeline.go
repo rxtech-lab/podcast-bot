@@ -57,6 +57,13 @@ type Deps struct {
 	// markers driving the image rotation; the pipeline caps marker count
 	// at ConclusionFrames-1.
 	ConclusionFrames int
+	// NarrationFrames is the visual director's per-episode narration-frame
+	// count for the series content type. Mirrors SurfaceFrames. The pipeline
+	// caps SceneAdvanceMsg events emitted from a `narrate` directive at
+	// NarrationFrames-1 so excess markers from the host LLM don't wrap the
+	// rotation back to frame 0 mid-episode. 0 disables the cap.
+	NarrationFrames int
+
 	// SoundPaths is the planner's per-cue clip list — index N is the
 	// on-disk mp3 path the mixer plays when the host emits
 	// "<sound-overlapped-N/>" or "<sound-replace-N/>". Nil / empty
@@ -99,6 +106,14 @@ type Pipeline struct {
 	// directly into LiveStream.
 	sessionMixer *musicmixer.Mixer
 
+	// vtt accumulates one WebVTT cue per synthesised sentence so the run
+	// emits a sidecar subtitles.vtt next to debate.mp3. Allows clients to
+	// toggle captions off in their player while the burn-in subtitle the
+	// renderer paints stays unchanged. Always non-nil; WriteTo no-ops on
+	// an empty cue list (no caption file is written for an audio-only
+	// run with zero TTS output).
+	vtt *vttWriter
+
 	// nextPlayAt is the wall-clock moment the next-to-be-synthesized
 	// sentence's first audio byte is expected to reach the listener.
 	// Advanced by each sentence's audio duration after synth so
@@ -116,7 +131,7 @@ type Pipeline struct {
 }
 
 // NewPipeline creates a Pipeline.
-func NewPipeline(d Deps) *Pipeline { return &Pipeline{d: d} }
+func NewPipeline(d Deps) *Pipeline { return &Pipeline{d: d, vtt: newVTTWriter()} }
 
 // Run boots all stages and blocks until the planner stops emitting turns
 // AND every stage drains. Returns the produced audio file paths in order.
@@ -224,6 +239,15 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		}
 	}
 	p.waitAudioDrained(ctx)
+
+	// Sidecar WebVTT next to the run's audio archive. WriteTo no-ops on
+	// an empty cue list, so a run that produced no TTS output (degenerate
+	// planner / setup failure) doesn't leave a malformed file behind.
+	if vttPath := filepath.Join(p.d.OutDir, "subtitles.vtt"); p.vtt != nil {
+		if err := p.vtt.WriteTo(vttPath); err != nil {
+			p.d.Log.Warn("subtitles.vtt write failed", "path", vttPath, "err", err)
+		}
+	}
 
 	filesMu.Lock()
 	defer filesMu.Unlock()
@@ -531,6 +555,13 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// or audio-end moment of this sentence.
 	var leadSounds, trailSounds []SoundMarker
 	cleaned, leadSounds, trailSounds = stripSoundMarkers(cleaned)
+	// Strip cross-episode image-reference markers (series content type only
+	// emits them; the regex no-ops on streams without any). Same lead /
+	// trail semantics as scene + sound markers — leading swaps the renderer
+	// to the prior-episode imagery on audio-start; trailing fires after
+	// audio-end.
+	var leadImageRefs, trailImageRefs []string
+	cleaned, leadImageRefs, trailImageRefs = stripImageRefMarkers(cleaned)
 	// Drop indices that would point past the planner's frame count for
 	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
 	// the last frame for the rest of the turn. Unnumbered legacy markers
@@ -553,6 +584,14 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			"trailing", len(trailSounds),
 			"sentence_preview", truncatePreview(cleaned, 60))
 	}
+	if len(leadImageRefs) > 0 || len(trailImageRefs) > 0 {
+		p.d.Log.Info("image-ref marker",
+			"turn", t.ID,
+			"directive", strings.SplitN(t.Directive, ":", 2)[0],
+			"leading", len(leadImageRefs),
+			"trailing", len(trailImageRefs),
+			"sentence_preview", truncatePreview(cleaned, 60))
+	}
 	if cleaned == "" {
 		// Marker-only sentence (rare — usually only the surface narration's
 		// final paragraph break). Both buckets fire immediately; there's
@@ -570,6 +609,12 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		for _, m := range trailSounds {
 			p.d.Send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
 			p.dispatchSoundCue(m)
+		}
+		for _, k := range leadImageRefs {
+			p.d.Send(ImageRefMsg{Key: k})
+		}
+		for _, k := range trailImageRefs {
+			p.d.Send(ImageRefMsg{Key: k})
 		}
 		t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 		return 0, nil
@@ -622,6 +667,13 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	p.playheadMu.Lock()
 	p.nextPlayAt = p.nextPlayAt.Add(audioDuration)
 	p.playheadMu.Unlock()
+
+	// Sidecar WebVTT cue for this sentence. The cursor inside vttWriter
+	// runs cumulatively over the encoded-stream timeline (sum of audio
+	// durations), independent of the listener-clock playhead — which
+	// folds in browser/OS buffering latencies we do NOT want baked into
+	// a static subtitle file. See subtitle.go.
+	p.vtt.Append(sent, audioDuration)
 
 	msg := TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
@@ -692,6 +744,33 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			time.AfterFunc(remaining, fire)
 		}
 	}
+	if len(leadImageRefs) > 0 {
+		ks := append([]string(nil), leadImageRefs...)
+		fire := func() {
+			for _, k := range ks {
+				send(ImageRefMsg{Key: k})
+			}
+		}
+		if remaining := time.Until(targetSend); remaining <= 50*time.Millisecond {
+			fire()
+		} else {
+			time.AfterFunc(remaining, fire)
+		}
+	}
+	if len(trailImageRefs) > 0 {
+		ks := append([]string(nil), trailImageRefs...)
+		trailAt := targetSend.Add(audioDuration)
+		fire := func() {
+			for _, k := range ks {
+				send(ImageRefMsg{Key: k})
+			}
+		}
+		if remaining := time.Until(trailAt); remaining <= 50*time.Millisecond {
+			fire()
+		} else {
+			time.AfterFunc(remaining, fire)
+		}
+	}
 	t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 	return n, nil
 }
@@ -719,12 +798,12 @@ func (p *Pipeline) dispatchSoundCue(m SoundMarker) {
 	}
 	switch m.Mode {
 	case SoundCueOverlap:
-		if err := p.sessionMixer.OverlapClip(path, 0); err != nil {
+		if err := musicmixer.OverlapMusic(p.sessionMixer, path); err != nil {
 			p.d.Log.Warn("sound overlap failed",
 				"index", m.Index, "path", path, "err", err)
 		}
 	case SoundCueReplace:
-		if err := p.sessionMixer.ReplaceMusic(path); err != nil {
+		if err := musicmixer.ReplaceMusic(p.sessionMixer, path); err != nil {
 			p.d.Log.Warn("sound replace failed",
 				"index", m.Index, "path", path, "err", err)
 		}
@@ -778,6 +857,9 @@ func (p *Pipeline) phaseFrameCount(t *Turn) int {
 		return p.d.SurfaceFrames
 	case strings.HasPrefix(t.Directive, "conclusion"):
 		return p.d.ConclusionFrames
+	case strings.HasPrefix(t.Directive, "narrate"),
+		strings.HasPrefix(t.Directive, "previously"):
+		return p.d.NarrationFrames
 	}
 	// Other directives (answer, evaluate-solution, …) don't cut scenes;
 	// 0 disables the per-marker clamp so any future marker-emitting

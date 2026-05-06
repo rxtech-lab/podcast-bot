@@ -1,6 +1,7 @@
 package contentcreator
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -171,6 +172,92 @@ func parseSoundMarker(s string, loc []int) (SoundMarker, bool) {
 		}
 	}
 	return SoundMarker{}, false
+}
+
+// imageRefMarkerRe matches the cross-episode image-reuse marker the series
+// host emits during narration: `<season-S-episode-E-image-N/>`. Capture
+// groups (1, 2, 3) are season/episode/beat. Same drift tolerance as the
+// scene + sound regexes — case-insensitive, optional whitespace, paired or
+// self-closing forms, and the bracketed `[season ... ]` variant.
+var imageRefMarkerRe = regexp.MustCompile(
+	`(?i)<\s*/?\s*season-(\d+)-episode-(\d+)-image-(\d+)\s*/?\s*>` +
+		`|\[\s*season-(\d+)-episode-(\d+)-image-(\d+)\s*\]`)
+
+// parseImageRefMarker pulls the (season, episode, beat) triple out of one
+// regex submatch location. Returns "", false when any group fails to parse —
+// caller drops the marker entirely in that case (the raw text is still
+// stripped from the sentence either way). The two alternations cover the
+// `<...>` and `[...]` forms; at most one alternation fires per match.
+func parseImageRefMarker(s string, loc []int) (string, bool) {
+	// Two alternations × 3 capture groups each → 6 groups total.
+	for base := 1; base <= 4; base += 3 {
+		ss, se := loc[2*base], loc[2*base+1]
+		es, ee := loc[2*(base+1)], loc[2*(base+1)+1]
+		bs, be := loc[2*(base+2)], loc[2*(base+2)+1]
+		if ss < 0 || se < 0 || es < 0 || ee < 0 || bs < 0 || be < 0 {
+			continue
+		}
+		var season, episode, beat int
+		if _, err := fmt.Sscanf(s[ss:se], "%d", &season); err != nil {
+			continue
+		}
+		if _, err := fmt.Sscanf(s[es:ee], "%d", &episode); err != nil {
+			continue
+		}
+		if _, err := fmt.Sscanf(s[bs:be], "%d", &beat); err != nil {
+			continue
+		}
+		return ImageRefKey(season, episode, beat), true
+	}
+	return "", false
+}
+
+// stripImageRefMarkers mirrors stripSceneMarkers / stripSoundMarkers for
+// `<season-S-episode-E-image-N/>` cues. Returns cleaned text + leading /
+// trailing key buckets — same dispatch semantics as the scene / sound
+// markers (leading fires when the sentence's first audio byte reaches the
+// listener; trailing fires after the sentence finishes; mid-sentence is
+// folded into leading as best-effort recovery).
+func stripImageRefMarkers(sent string) (clean string, leading, trailing []string) {
+	if !imageRefMarkerRe.MatchString(sent) {
+		return sent, nil, nil
+	}
+	for {
+		loc := imageRefMarkerRe.FindStringSubmatchIndex(sent)
+		if loc == nil {
+			break
+		}
+		if strings.TrimSpace(sent[:loc[0]]) != "" {
+			break
+		}
+		if k, ok := parseImageRefMarker(sent, loc); ok {
+			leading = append(leading, k)
+		}
+		sent = strings.TrimSpace(sent[loc[1]:])
+	}
+	for {
+		all := imageRefMarkerRe.FindAllStringSubmatchIndex(sent, -1)
+		if len(all) == 0 {
+			break
+		}
+		last := all[len(all)-1]
+		if strings.TrimSpace(sent[last[1]:]) != "" {
+			break
+		}
+		if k, ok := parseImageRefMarker(sent, last); ok {
+			trailing = append([]string{k}, trailing...)
+		}
+		sent = strings.TrimSpace(sent[:last[0]])
+	}
+	if mid := imageRefMarkerRe.FindAllStringSubmatchIndex(sent, -1); len(mid) > 0 {
+		for _, loc := range mid {
+			if k, ok := parseImageRefMarker(sent, loc); ok {
+				leading = append(leading, k)
+			}
+		}
+		sent = strings.TrimSpace(imageRefMarkerRe.ReplaceAllString(sent, ""))
+	}
+	return sent, leading, trailing
 }
 
 // stripSoundMarkers mirrors stripSceneMarkers for `<sound-…-N/>` cues.

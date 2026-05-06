@@ -40,6 +40,17 @@ type Env struct {
 	GeminiAPIKey string
 
 	OutDir string
+
+	// PersistentRoot is the non-session base directory for cross-run
+	// archives — today only the series content type uses it (every
+	// episode writes its assets to
+	// `<PersistentRoot>/tv-series/<show>/s<NN>/e<NN>/` so episode N+1 can
+	// re-use prior images and synthesise a "previously on …" recap).
+	// Defaults to OUT_DIR's value at LoadEnv time, BEFORE bootstrap appends
+	// `session-<stamp>`. Override via the SERIES_ROOT env var when you
+	// want the archive to live in a different location than the per-run
+	// session output.
+	PersistentRoot string
 }
 
 // LoadEnv reads .env (if present) then env vars, validates, and freezes config.
@@ -64,6 +75,7 @@ func LoadEnv() (*Env, error) {
 		ElevenLabsAPIKey:   strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
 		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		OutDir:             strings.TrimSpace(os.Getenv("OUT_DIR")),
+		PersistentRoot:     strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 	}
 
 	if e.CompressionBaseURL == "" {
@@ -77,6 +89,13 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.OutDir == "" {
 		e.OutDir = "./out"
+	}
+	if e.PersistentRoot == "" {
+		// Default the cross-session archive root to the user's OUT_DIR so
+		// out-of-the-box runs put `tv-series/...` next to `session-<stamp>/...`.
+		// This is captured BEFORE bootstrap appends the session stamp so
+		// archived episodes survive across runs.
+		e.PersistentRoot = e.OutDir
 	}
 
 	var missing []string

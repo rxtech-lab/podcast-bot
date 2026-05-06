@@ -41,6 +41,21 @@ type ScenePlan struct {
 	SurfaceAnimations []string         `json:"surface_animations,omitempty"`
 	Conclusion        []string         `json:"conclusion"`
 	Sounds            []SoundDirection `json:"sounds,omitempty"`
+
+	// Narration is the series content type's single beat list. Surface /
+	// Conclusion stay empty for series; Narration stays empty for puzzle.
+	// Anchors / Animations / ImageReuse are parallel to Narration with
+	// the same length contract as SurfaceAnchors / SurfaceAnimations.
+	// ImageReuse[i] non-empty means: "for narration beat i, the planner
+	// proposes re-using the prior-episode image identified by this
+	// canonical key (s<S>e<E>i<N>)" — the host MAY emit
+	// `<season-S-episode-E-image-N/>` to swap to that frame and the local
+	// PNG generation for beat i is skipped. Empty entries mean "generate
+	// a fresh image for this beat".
+	Narration           []string `json:"narration,omitempty"`
+	NarrationAnchors    []string `json:"narration_anchors,omitempty"`
+	NarrationAnimations []string `json:"narration_animations,omitempty"`
+	ImageReuse          []string `json:"image_reuse,omitempty"`
 }
 
 // SoundDirection is one entry in the puzzle's sound plan. Mode is either
@@ -71,6 +86,16 @@ func (p *ScenePlan) ConclusionCount() int {
 		return 0
 	}
 	return len(p.Conclusion)
+}
+
+// NarrationCount reports how many beats the series-content plan calls for.
+// 0 means "no narration plan" (puzzle plan, or series fallback that
+// produced an empty list).
+func (p *ScenePlan) NarrationCount() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.Narration)
 }
 
 // Bounds for the plan. The lower bound keeps a documentary-style cut sequence;
