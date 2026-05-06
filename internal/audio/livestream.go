@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // inputBufferBytes is how many bytes of mp3 we let the producer race ahead of
@@ -42,6 +43,15 @@ type LiveStream struct {
 	// bytesWritten can be delayed by (bytesWritten-bytesPlayed)/audioBytesPerSec.
 	bytesWritten atomic.Uint64
 	bytesPlayed  atomic.Uint64
+
+	// firstWriteAt records the wall-clock instant the producer first
+	// wrote a non-empty byte chunk. The encoder's audio pump reaches
+	// "first real audio" within milliseconds of this (just the ffmpeg
+	// -re pacer's startup latency), so it doubles as the anchor the
+	// stitched mp4's t=0 lines up with after the StartOffset trim.
+	// Stays zero until the first non-empty Write.
+	firstWriteMu sync.Mutex
+	firstWriteAt time.Time
 
 	mu     sync.RWMutex
 	subs   map[uint64]*lsSub
@@ -107,8 +117,27 @@ func (l *LiveStream) Write(p []byte) (int, error) {
 	n, err := l.inBuf.Write(p)
 	if n > 0 {
 		l.bytesWritten.Add(uint64(n))
+		l.firstWriteMu.Lock()
+		if l.firstWriteAt.IsZero() {
+			l.firstWriteAt = time.Now()
+		}
+		l.firstWriteMu.Unlock()
 	}
 	return n, err
+}
+
+// FirstWriteAt returns the wall-clock instant the first non-empty Write
+// arrived. Zero until any byte has been written. The pipeline uses this
+// to anchor sidecar VTT timestamps to the same moment the encoder's
+// pump observes "first real audio" — i.e. mp4 t=0 after StartOffset
+// trim. Anchoring on the first sentence's synth-completion (the older
+// approach) leaves the music-bed-only prefix unaccounted for and the
+// first cue lands at 00:00 even though speech doesn't start for several
+// seconds.
+func (l *LiveStream) FirstWriteAt() time.Time {
+	l.firstWriteMu.Lock()
+	defer l.firstWriteMu.Unlock()
+	return l.firstWriteAt
 }
 
 // BytesAhead returns how many bytes the producer is ahead of playback. Used

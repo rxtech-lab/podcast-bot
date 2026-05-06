@@ -258,6 +258,23 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// last segment and writes #EXT-X-ENDLIST. Without this, stitch
 	// runs against a still-mutating playlist and either races on
 	// segment deletion or produces a truncated mp4.
+	//
+	// Mirror the streaming pipeline's tail-grace behavior here: after
+	// the orchestrator's own 20s producer-drain inside pipeline.Run,
+	// the encoder still has realtime-paced audio + video frames
+	// queued in its ffmpeg pipeline that haven't been muxed into the
+	// final HLS segment yet. Closing immediately would truncate the
+	// last sentence (and the music bed's natural fadeout) right at
+	// the moment the show was about to end. Hold the live input open
+	// for an extra grace window so the encoder consumes those tail
+	// bytes at realtime; only then signal EOF and let ffmpeg flush.
+	const encoderTailGrace = 20 * time.Second
+	status(fmt.Sprintf("holding encoder for tail playback (%s)…",
+		encoderTailGrace.Round(time.Second)))
+	select {
+	case <-time.After(encoderTailGrace):
+	case <-ctx.Done():
+	}
 	status("finalising encoder output…")
 	_ = live.CloseInput()
 	liveClosed = true
@@ -266,11 +283,14 @@ func run(ctx context.Context, deps Deps, jobID string,
 	}
 	encClosed = true
 
-	// Stitch HLS + audio into the downloadable mp4. Burn-in is
-	// already baked into the HLS frames by the renderer when
-	// sub.BurnSubs is set (Encoder.Options.BurnInSeriesCaptions),
-	// so stitch only handles soft-subs muxing + the front trim that
-	// drops the silent prep prefix.
+	// Stitch the HLS playlist into the downloadable mp4. Both video
+	// and audio come straight from HLS — the encoder already mixed
+	// the music bed underneath every TTS turn, so the resulting mp4
+	// matches what the live channel listener heard. Burn-in is
+	// already baked into the HLS frames when sub.BurnSubs is set
+	// (Encoder.Options.BurnInSeriesCaptions), so stitch only handles
+	// soft-subs muxing + the front trim that drops the silent prep
+	// prefix.
 	mp4Path := filepath.Join(jobOutDir, "video.mp4")
 	stitchOpts := video.StitchOpts{
 		SoftSubs:    sub.SoftSubs,
@@ -287,7 +307,6 @@ func run(ctx context.Context, deps Deps, jobID string,
 			stitchOpts.SubtitlesPath = subPath
 		}
 	}
-	audioPath := filepath.Join(jobOutDir, "debate.mp3")
 	stitchLabel := "stitching mp4"
 	if stitchOpts.SoftSubs {
 		stitchLabel += " (with soft subtitle track)"
@@ -298,7 +317,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	}
 	status(stitchLabel + "…")
 	tStitch := time.Now()
-	if err := video.StitchMP4(enc.HLSDir(), audioPath, mp4Path, stitchOpts); err != nil {
+	if err := video.StitchMP4(enc.HLSDir(), mp4Path, stitchOpts); err != nil {
 		fail(deps, jobID, logger, fmt.Errorf("stitch mp4: %w", err))
 		return
 	}

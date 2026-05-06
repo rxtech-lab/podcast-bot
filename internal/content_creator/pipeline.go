@@ -757,12 +757,35 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	p.nextPlayAt = p.nextPlayAt.Add(audioDuration)
 	p.playheadMu.Unlock()
 
-	// Sidecar WebVTT cue for this sentence. The cursor inside vttWriter
-	// runs cumulatively over the encoded-stream timeline (sum of audio
-	// durations), independent of the listener-clock playhead — which
-	// folds in browser/OS buffering latencies we do NOT want baked into
-	// a static subtitle file. See subtitle.go.
-	p.vtt.Append(sent, audioDuration)
+	// Sidecar WebVTT cue for this sentence. The cue offset is the
+	// listener-clock playhead (targetSend) minus the wall-clock when
+	// the producer first wrote into LiveStream — that "first write"
+	// is what the encoder's audio pump treats as first-real-audio,
+	// and stitch.StartOffset trims the mp4's silent prep prefix to
+	// that same anchor. Subtracting subtitleClientLatency removes the
+	// player-side buffering the listener clock includes; the static
+	// mp4 timeline doesn't need it. The result is the encoded-stream
+	// offset of this sentence's first byte: silence padded by the
+	// pump between turns shows up as a real gap, and the music-bed
+	// pre-roll before speech keeps the first cue from collapsing
+	// onto 00:00. See subtitle.go.
+	//
+	// vttBias adds a constant offset on top — empirically the
+	// computed offset still lands ~1 s ahead of the audio in the
+	// stitched mp4 (likely the LiveStream ffmpeg `-re` pacer's
+	// startup buffering plus encoder-side input buffering between
+	// FirstWriteAt and the moment those bytes actually appear in
+	// the HLS segment that survives the StartOffset trim). A small
+	// constant nudge is far cheaper than wiring through the precise
+	// pump-side first-real-audio timestamp, and any small drift it
+	// introduces in long shows is dwarfed by the 1-2 s segment-
+	// boundary trim already in stitch.go.
+	const vttBias = 1 * time.Second
+	var cueStart time.Duration
+	if firstWrite := p.d.LiveStream.FirstWriteAt(); !firstWrite.IsZero() {
+		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + vttBias
+	}
+	p.vtt.Append(sent, cueStart, audioDuration)
 
 	msg := TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),

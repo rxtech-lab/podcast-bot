@@ -47,15 +47,17 @@ type StitchOpts struct {
 // down to a multiple of this so -ss + -c:v copy lands on a keyframe.
 const hlsSegmentDuration = 2 * time.Second
 
-// StitchMP4 runs ffmpeg to combine the HLS playlist at hlsDir/stream.m3u8
-// with audioPath into a single .mp4 at outPath. When opts is empty, the
-// behavior matches the historical helper in cmd/series-recap-smoke
-// (stream-copy video, AAC audio, -shortest).
+// StitchMP4 muxes the HLS playlist at hlsDir/stream.m3u8 into a single
+// .mp4 at outPath. Both video and audio are stream-copied straight from
+// the HLS source — the encoder already mixed the music bed underneath
+// every TTS turn into the HLS audio track, so the stitched mp4 carries
+// the same sonic mix the live stream listener heard. No separate audio
+// concat step is needed (or wanted: a sidecar `debate.mp3` would only
+// have the dry TTS without the music bed, which is why the previous
+// version's mp4 sounded unmusical compared to the live channel).
 //
 // Returns an error if the playlist is missing or ffmpeg exits non-zero.
-// audioPath is optional — when missing, the resulting mp4 has no audio
-// track.
-func StitchMP4(hlsDir, audioPath, outPath string, opts StitchOpts) error {
+func StitchMP4(hlsDir, outPath string, opts StitchOpts) error {
 	playlist := filepath.Join(hlsDir, "stream.m3u8")
 	if _, err := os.Stat(playlist); err != nil {
 		return fmt.Errorf("hls playlist missing: %w", err)
@@ -72,7 +74,9 @@ func StitchMP4(hlsDir, audioPath, outPath string, opts StitchOpts) error {
 	// Round StartOffset down to the nearest HLS segment boundary so
 	// `-ss` + `-c:v copy` lands on a keyframe instead of producing
 	// a frozen-frame head while the decoder waits for the next IDR.
-	// Dropping a few hundred ms of silence in trade is fine.
+	// Dropping a few hundred ms of silence in trade is fine. The same
+	// `-ss` also trims the audio track in lockstep, so video and music
+	// stay in sync after the prep prefix is dropped.
 	startOffset := opts.StartOffset
 	if startOffset > 0 {
 		startOffset = (startOffset / hlsSegmentDuration) * hlsSegmentDuration
@@ -86,48 +90,25 @@ func StitchMP4(hlsDir, audioPath, outPath string, opts StitchOpts) error {
 	}
 	args = append(args, "-i", playlist)
 
-	hasAudio := false
-	if audioPath != "" {
-		if _, err := os.Stat(audioPath); err == nil {
-			args = append(args, "-i", audioPath)
-			hasAudio = true
-		}
-	}
-
 	if opts.SoftSubs {
 		args = append(args, "-i", opts.SubtitlesPath)
 	}
 
-	// Video is always copied — the renderer already paints any
+	// Stream-copy both tracks: the renderer already painted any
 	// burned-in captions into the HLS frames (when its
-	// BurnInSeriesCaptions flag is set), so a re-encode here would
-	// only double up.
-	args = append(args, "-c:v", "copy")
-
-	if hasAudio {
-		args = append(args, "-c:a", "aac")
-	} else {
-		args = append(args, "-an")
-	}
+	// BurnInSeriesCaptions flag is set), and the encoder's audio
+	// pipeline already produced AAC at the desired bitrate, so any
+	// re-encode here would only degrade fidelity.
+	args = append(args,
+		"-map", "0:v",
+		"-map", "0:a",
+		"-c:v", "copy",
+		"-c:a", "copy",
+	)
 
 	if opts.SoftSubs {
-		// Soft-sub track: mov_text is the standard mp4 container codec.
-		// Stream index of the subtitle input depends on whether audio was
-		// added: video is input 0, audio (if present) is input 1, subs
-		// are last. Map all video + audio + the sub stream explicitly so
-		// ffmpeg doesn't auto-skip the subs.
-		subInputIdx := 1
-		if hasAudio {
-			subInputIdx = 2
-		}
 		args = append(args,
-			"-map", "0:v",
-		)
-		if hasAudio {
-			args = append(args, "-map", "1:a")
-		}
-		args = append(args,
-			"-map", fmt.Sprintf("%d:s", subInputIdx),
+			"-map", "1:s",
 			"-c:s", "mov_text",
 		)
 		// AVPlayer (iOS / macOS QuickTime) needs three things to display
@@ -149,9 +130,6 @@ func StitchMP4(hlsDir, audioPath, outPath string, opts StitchOpts) error {
 		)
 	}
 
-	if hasAudio {
-		args = append(args, "-shortest")
-	}
 	args = append(args, outPath)
 
 	cmd := exec.Command("ffmpeg", args...)

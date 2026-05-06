@@ -84,3 +84,65 @@ func isWordRune(r rune) bool {
 // and that path needs to stay byte-identical with the strip pass to
 // keep the rendered caption layout aligned with the stripped text.
 func IsWordRune(r rune) bool { return isWordRune(r) }
+
+// WrapByRunes splits text into chunks of at most maxRunes runes,
+// preferring a break at the last whitespace seen on the current chunk
+// (matching wrapLines' Latin-friendly behavior in internal/video). When
+// no whitespace is available — typical for CJK passages whose
+// punctuation has already been stripped to spaces by StripPunct, then
+// trimmed — the split falls back to a hard rune-count cut so a single
+// long Chinese sentence still gets broken into chunks instead of
+// overflowing one cue.
+//
+// Used by the WebVTT writer to mirror what the burned-in caption
+// renderer does (one wrapped line at a time, scrolled in lockstep with
+// the spoken audio): each chunk becomes its own cue with a slice of the
+// total audio duration weighted by its rune count.
+func WrapByRunes(text string, maxRunes int) []string {
+	if maxRunes <= 0 {
+		return []string{text}
+	}
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= maxRunes {
+		if len(runes) == 0 {
+			return nil
+		}
+		return []string{string(runes)}
+	}
+	var out []string
+	start := 0
+	for start < len(runes) {
+		// Skip leading spaces left over from the previous break.
+		for start < len(runes) && runes[start] == ' ' {
+			start++
+		}
+		if start >= len(runes) {
+			break
+		}
+		end := start + maxRunes
+		if end >= len(runes) {
+			chunk := strings.TrimSpace(string(runes[start:]))
+			if chunk != "" {
+				out = append(out, chunk)
+			}
+			break
+		}
+		// Look for a space within [start, end] to break on.
+		breakAt := end
+		for i := end; i > start; i-- {
+			if runes[i] == ' ' {
+				breakAt = i
+				break
+			}
+		}
+		chunk := strings.TrimSpace(string(runes[start:breakAt]))
+		if chunk != "" {
+			out = append(out, chunk)
+		}
+		start = breakAt
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

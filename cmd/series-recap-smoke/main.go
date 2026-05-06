@@ -184,7 +184,7 @@ func runEpisode(envBase *config.Env, topicPath, label, outRoot string, makeMP4 b
 
 	if makeMP4 {
 		mp4Path := filepath.Join(outRoot, fmt.Sprintf("%s-%s-s%02de%02d.mp4", contentcreator.SlugifyShow(tp.Show), label, tp.Season, tp.Episode))
-		if err := video.StitchMP4(enc.HLSDir(), filepath.Join(episodeDir, "episode.mp3"), mp4Path, video.StitchOpts{}); err != nil {
+		if err := video.StitchMP4(enc.HLSDir(), mp4Path, video.StitchOpts{}); err != nil {
 			fmt.Fprintf(os.Stderr, "series-recap-smoke: %s mp4 stitch failed: %v\n", label, err)
 		} else {
 			abs, _ := filepath.Abs(mp4Path)
