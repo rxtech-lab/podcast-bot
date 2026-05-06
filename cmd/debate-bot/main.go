@@ -23,6 +23,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/util"
 	"github.com/sirily11/debate-bot/internal/video"
+	"github.com/sirily11/debate-bot/internal/videojob"
 	"github.com/sirily11/debate-bot/internal/watcher"
 )
 
@@ -201,19 +202,40 @@ type channelRuntime struct {
 	started   int
 }
 
+// Server modes.
+//
+// modeStream is the default: the process airs every queued debate over
+// per-channel HLS video + MP3 audio streams and the embedded SPA shows
+// the TV-tuner UI.
+//
+// modeVideo skips channel/queue bootstrap entirely. The HTTP server
+// instead exposes a job API: a browser uploads a script.md (and, for
+// series, a zip of prior generations); the server runs one orchestrator,
+// stitches the resulting HLS into a downloadable .mp4, and (for series)
+// re-zips the persistent show archive so the next generation can chain.
+const (
+	modeStream = "stream"
+	modeVideo  = "video"
+)
+
 // runtime owns every cross-channel resource: the shared event bus, server,
 // session registry, and the per-channel encoders/livestreams.
+//
+// In modeVideo, channels / channelByID stay empty and the orchestrator
+// is invoked per-job (see internal/content_creator/video_job.go).
 type runtime struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	log    *slog.Logger
 	closer interface{ Close() error }
 
+	mode        string
 	env         *config.Env
 	mcpCfg      *config.MCPConfig
 	bus         *eventbus.Bus
 	srv         *server.Server
 	sessions    *server.SessionRegistry
+	jobs        *server.JobRegistry
 	channels    []*channelRuntime
 	channelByID map[string]*channelRuntime
 	addr        string
@@ -488,7 +510,8 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
-		env: env, mcpCfg: mcpCfg, bus: bus, sessions: sessions,
+		mode: modeStream,
+		env:  env, mcpCfg: mcpCfg, bus: bus, sessions: sessions,
 		addr: addr, stopSig: stopSig,
 		channelByID:   map[string]*channelRuntime{},
 		loadedDebates: map[string]loadedRef{},
@@ -636,9 +659,105 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 	}
 
 	rt.srv = server.New(server.Deps{
+		Mode:     modeStream,
 		Bus:      bus,
 		Sessions: sessions,
 		Log:      log,
+	})
+
+	return rt, 0
+}
+
+// bootstrapVideo is the modeVideo counterpart to bootstrap. It loads env,
+// stamps a session OutDir, opens the file logger and event bus, and stands
+// up the HTTP server with the JobRegistry mounted but no per-channel
+// encoders or queues. Topics are uploaded at runtime via /api/jobs and
+// each job spins its own short-lived encoder + livestream + stage.
+//
+// channels.json + topic .md preloading are intentionally skipped — in
+// video mode the user-facing surface is browser uploads, not a watched
+// directory.
+func bootstrapVideo(mcpPath, outOverride, addr string) (*runtime, int) {
+	if err := audio.VerifyTools(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, 1
+	}
+
+	env, err := config.LoadEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "env:", err)
+		return nil, 1
+	}
+	if outOverride != "" {
+		env.OutDir = outOverride
+	}
+	sessionStamp := time.Now().Format("2006-01-02_15-04-05")
+	env.OutDir = filepath.Join(env.OutDir, "session-"+sessionStamp)
+	if err := contentcreator.EnsureOutDir(env.OutDir); err != nil {
+		fmt.Fprintln(os.Stderr, "out dir:", err)
+		return nil, 1
+	}
+	fmt.Fprintln(os.Stdout, "session output:", env.OutDir)
+
+	mcpCfg, err := config.LoadMCPConfig(mcpPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mcp:", err)
+		return nil, 1
+	}
+
+	log, closer, err := util.NewFileLogger(env.OutDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "logger init warning:", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopSig := make(chan os.Signal, 1)
+	signal.Notify(stopSig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-stopSig
+		cancel()
+	}()
+
+	bus := eventbus.New(log)
+	jobs := server.NewJobRegistry()
+
+	rt := &runtime{
+		ctx: ctx, cancel: cancel, log: log, closer: closer,
+		mode: modeVideo,
+		env:  env, mcpCfg: mcpCfg, bus: bus, jobs: jobs,
+		addr: addr, stopSig: stopSig,
+		channelByID:   map[string]*channelRuntime{},
+		loadedDebates: map[string]loadedRef{},
+		usedIDs:       map[string]int{},
+	}
+
+	uploadRoot := filepath.Join(env.OutDir, "uploads")
+	if err := os.MkdirAll(uploadRoot, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, "upload dir:", err)
+		cancel()
+		return nil, 1
+	}
+
+	rt.srv = server.New(server.Deps{
+		Mode:       modeVideo,
+		Bus:        bus,
+		Jobs:       jobs,
+		Log:        log,
+		UploadRoot: uploadRoot,
+		// SubmitJob runs one upload through the orchestrator + stitch +
+		// (for series) zip pipeline. Defined as a closure so it can
+		// reach the env / bus / log without cycling the import graph.
+		// Returns synchronously after validation; the heavy work runs
+		// in a goroutine the runner spawns.
+		SubmitJob: func(jobID string, req server.JobSubmission) error {
+			return videojob.Submit(rt.ctx, videojob.Deps{
+				Env:    env,
+				MCPCfg: mcpCfg,
+				Bus:    bus,
+				Jobs:   jobs,
+				Log:    log,
+			}, jobID, req)
+		},
 	})
 
 	return rt, 0
@@ -1050,7 +1169,10 @@ func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
 	return buildDebateTopicMsg(d, msg)
 }
 
-// serverCmd: HTTP server hosting the web UI + per-channel HLS video + audio.
+// serverCmd: HTTP server hosting the web UI + per-channel HLS video + audio
+// (modeStream) OR a job-driven /api/jobs upload-and-render flow that yields
+// a downloadable .mp4 (modeVideo). Default is modeStream so existing
+// invocations keep working unchanged.
 func serverCmd(args []string) int {
 	specs, rest, deprecated := extractContentArgs(args)
 	if deprecated.debate {
@@ -1061,6 +1183,7 @@ func serverCmd(args []string) int {
 	}
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	fs.Var((*stringSlice)(&specs), "content", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --content are also accepted")
+	mode := fs.String("mode", modeStream, "stream|video — stream (default) airs HLS channels; video accepts uploaded scripts and renders downloadable mp4s")
 	channelsPath := fs.String("channel", "./channels.json", "path to channels.json — array of {id, number, title} channel definitions")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
@@ -1068,12 +1191,30 @@ func serverCmd(args []string) int {
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
+	switch *mode {
+	case modeStream:
+		return serverCmdStream(specs, *channelsPath, *mcpPath, *outDir, *addr)
+	case modeVideo:
+		if len(specs) > 0 {
+			fmt.Fprintln(os.Stderr, "warning: --content is ignored in --mode=video (uploads come from the browser)")
+		}
+		return serverCmdVideo(*mcpPath, *outDir, *addr)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown --mode %q (want stream|video)\n", *mode)
+		return 2
+	}
+}
+
+// serverCmdStream runs the long-running TV-channel mode: per-channel
+// encoders, fsnotify watching for new topic .md files, browser-side TV
+// tuner UI.
+func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr string) int {
 	if len(specs) == 0 {
 		fmt.Fprintln(os.Stderr, "missing --content")
 		return 2
 	}
 
-	rt, code := bootstrap(*channelsPath, specs, *mcpPath, *outDir, *addr)
+	rt, code := bootstrap(channelsPath, specs, mcpPath, outDir, addr)
 	if code != 0 {
 		return code
 	}
@@ -1127,6 +1268,32 @@ func serverCmd(args []string) int {
 	// after the initial seed drains). Wait on signal / ctx cancellation
 	// only, and let rt.run() unwind naturally during shutdown.
 	go func() { _ = rt.run() }()
+	<-rt.ctx.Done()
+	rt.cancel()
+	<-srvErrCh
+	return 0
+}
+
+// serverCmdVideo runs the upload-and-render mode: no channels, no
+// fsnotify watcher, no preloaded topics. The HTTP server stays up
+// waiting for /api/jobs requests; each one runs end-to-end in
+// internal/content_creator/video_job.go and writes its artefacts under
+// <session>/jobs/<jobID>/.
+func serverCmdVideo(mcpPath, outDir, addr string) int {
+	rt, code := bootstrapVideo(mcpPath, outDir, addr)
+	if code != 0 {
+		return code
+	}
+	defer rt.shutdown()
+
+	srvErrCh := make(chan error, 1)
+	go func() {
+		srvErrCh <- rt.srv.ListenAndServe(rt.ctx, rt.addr, func(a *net.TCPAddr) {
+			fmt.Fprintln(os.Stdout, "server listening at http://"+a.String()+
+				"  (video mode — upload script.md via the web UI)")
+		})
+	}()
+
 	<-rt.ctx.Done()
 	rt.cancel()
 	<-srvErrCh

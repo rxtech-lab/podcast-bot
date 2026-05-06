@@ -62,6 +62,16 @@ const priorityCount = 6
 func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 	stage *video.SeriesStage, topic *config.DebateTopic, orch *contentcreator.Orchestrator,
 ) {
+	// status pushes a one-line note onto the bus so the SPA progress
+	// log can render scene-prep milestones interleaved with the
+	// orchestrator's events. No-op when the orchestrator was built
+	// without a Send callback (defensive — production wires one).
+	status := func(text string) {
+		if orch != nil && orch.Send != nil {
+			orch.Send(contentcreator.StatusMsg{Text: text})
+		}
+	}
+
 	episodeDir, err := contentcreator.EnsureEpisodeDir(env.PersistentRoot, topic.Show, topic.Season, topic.Episode)
 	if err != nil {
 		log.Warn("series episode dir prep failed", "err", err)
@@ -75,34 +85,48 @@ func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 		_ = os.MkdirAll(p, 0o755)
 	}
 
+	status("loading prior episodes…")
 	priors, perr := contentcreator.LoadPriorEpisodes(env.PersistentRoot, topic.Show, topic.Season, topic.Episode)
 	if perr != nil {
 		log.Warn("series prior-episode load failed", "err", perr)
+	}
+	if len(priors) == 0 {
+		status("no prior episodes (starting fresh)")
+	} else {
+		status(fmt.Sprintf("found %d prior episode(s)", len(priors)))
 	}
 	candidates := buildImageRefCandidates(priors)
 
 	var recap string
 	var highlightIDs []string
 	if len(priors) > 0 && env.CompressionBaseURL != "" && env.CompressionKey != "" && env.CompressionModel != "" {
+		status("generating recap narrative (compression LLM)…")
 		comp := llm.New(env.CompressionBaseURL, env.CompressionKey, env.CompressionModel)
 		t0 := time.Now()
 		r, ids, rerr := contentcreator.BuildRecap(ctx, comp, priors, topic.Show)
 		if rerr != nil {
 			log.Warn("series recap failed", "elapsed", time.Since(t0).Round(time.Millisecond), "err", rerr)
+			status("recap narrative failed (continuing without)")
 		} else {
 			log.Info("series recap ready", "len", len(r), "highlights", len(ids),
 				"elapsed", time.Since(t0).Round(time.Millisecond))
 			recap = r
 			highlightIDs = ids
+			status(fmt.Sprintf("recap narrative ready · %d chars · %d highlights · %s",
+				len(r), len(ids), time.Since(t0).Round(time.Second)))
 		}
 	}
 
+	status("planning narration scenes…")
 	plan := planScenes(ctx, log, env, topic, candidates)
 	if plan != nil {
 		planPath := filepath.Join(episodeDir, "scene-plan.json")
 		if err := scenes.WritePlan(plan, planPath); err != nil {
 			log.Warn("series scene plan write failed", "path", planPath, "err", err)
 		}
+		status(fmt.Sprintf("scene plan generated · %d narration frame(s)", plan.NarrationCount()))
+	} else {
+		status("scene plan unavailable (using fallback)")
 	}
 
 	catalog, refPaths := buildArchiveCatalog(priors)
@@ -157,22 +181,33 @@ func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 	}
 	orch.SetSeriesImageRefs(catalog, refPaths)
 
+	status("starting music + narration audio bed generation…")
 	musicCh := make(chan string, 1)
 	go func() { musicCh <- generateMusic(ctx, log, topic, musicCacheDir) }()
 
+	if plan != nil && len(plan.Sounds) > 0 {
+		status(fmt.Sprintf("generating %d sound clip(s)…", len(plan.Sounds)))
+	}
 	if soundDirs, soundPaths := generateSounds(ctx, log, topic, plan, soundsCacheDir); len(soundDirs) > 0 {
 		orch.SetSeriesSoundPlan(soundDirs, soundPaths)
+		status(fmt.Sprintf("sound clips generated (%d)", len(soundPaths)))
 	}
 
+	if plan != nil && plan.NarrationCount() > 0 {
+		status(fmt.Sprintf("starting image generation · %d narration frame(s)", plan.NarrationCount()))
+	}
 	readyCh := make(chan struct{})
 	go func() {
-		generateNarrationStreaming(ctx, log, stage, topic, plan, scenesCacheDir, readyCh)
+		generateNarrationStreaming(ctx, log, status, stage, topic, plan, scenesCacheDir, readyCh)
 	}()
 
 	music := <-musicCh
 	<-readyCh
 	if music != "" {
 		orch.SetSeriesMusic(music)
+		status("music bed ready")
+	} else {
+		status("music bed unavailable (continuing dry)")
 	}
 }
 
@@ -394,6 +429,7 @@ func generateSounds(ctx context.Context, log *slog.Logger, topic *config.DebateT
 }
 
 func generateNarrationStreaming(ctx context.Context, log *slog.Logger,
+	status func(string),
 	stage *video.SeriesStage, topic *config.DebateTopic, plan *scenes.ScenePlan,
 	scenesCacheDir string, readyCh chan<- struct{},
 ) {
@@ -401,9 +437,14 @@ func generateNarrationStreaming(ctx context.Context, log *slog.Logger,
 	signalReady := func() { readyOnce.Do(func() { close(readyCh) }) }
 	defer signalReady()
 
+	if status == nil {
+		status = func(string) {}
+	}
+
 	client, err := imagegen.New("")
 	if err != nil {
 		log.Warn("series narration gen disabled", "err", err)
+		status("image generation disabled (no Gemini creds)")
 		return
 	}
 	target := 0
@@ -412,6 +453,7 @@ func generateNarrationStreaming(ctx context.Context, log *slog.Logger,
 	}
 	if target <= 0 {
 		log.Warn("series narration plan empty — skipping image gen")
+		status("narration plan empty — skipping image gen")
 		return
 	}
 	priority := priorityCount
@@ -422,6 +464,7 @@ func generateNarrationStreaming(ctx context.Context, log *slog.Logger,
 		mu              sync.Mutex
 		succeeded       int
 		priorityDoneSet = make(map[int]bool, priority)
+		priorityHit     bool
 	)
 	t0 := time.Now()
 	opts := scenes.GenerateOptions{
@@ -442,7 +485,23 @@ func generateNarrationStreaming(ctx context.Context, log *slog.Logger,
 				priorityDoneSet[variant] = true
 			}
 			hit := len(priorityDoneSet) >= priority
+			done := succeeded
+			justHit := hit && !priorityHit
+			if hit {
+				priorityHit = true
+			}
 			mu.Unlock()
+			// Per-frame status would flood the SSE stream; throttle
+			// to: priority-batch hit (show start) + every 5th image
+			// + the final image. Keeps the SPA log readable.
+			if img != nil {
+				if justHit {
+					status(fmt.Sprintf("priority images ready (%d/%d) — show can start",
+						done, target))
+				} else if done == target || done%5 == 0 {
+					status(fmt.Sprintf("generated %d/%d narration image(s)", done, target))
+				}
+			}
 			if hit {
 				signalReady()
 			}
@@ -453,10 +512,14 @@ func generateNarrationStreaming(ctx context.Context, log *slog.Logger,
 		log.Warn("series narration gen partial",
 			"succeeded", succeeded, "target", target,
 			"elapsed", time.Since(t0).Round(time.Millisecond), "err", err)
+		status(fmt.Sprintf("image generation partial · %d/%d · %s",
+			succeeded, target, time.Since(t0).Round(time.Second)))
 	} else {
 		log.Info("series narration ready",
 			"succeeded", succeeded, "target", target,
 			"elapsed", time.Since(t0).Round(time.Millisecond))
+		status(fmt.Sprintf("image generation done · %d/%d · %s",
+			succeeded, target, time.Since(t0).Round(time.Second)))
 	}
 	if sc != nil && stage != nil {
 		stage.AttachScenes(sc)

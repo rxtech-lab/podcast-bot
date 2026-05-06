@@ -89,10 +89,30 @@ type Encoder struct {
 	curBodyDuration time.Duration
 }
 
-// New starts the encoder. sessionDir is where HLS segments + the ffmpeg
-// stderr log are written. res selects the output resolution; the renderer
-// always composites at 1280×720 and ffmpeg's scale filter upsamples.
+// Options configures encoder construction. Archival switches the HLS
+// muxer from sliding-window (live) mode to retain-everything mode, so
+// the playlist + segments survive long enough for an offline stitch
+// pass to read them. Used by modeVideo (cmd/debate-bot --mode=video)
+// where the entire show is post-processed into a downloadable mp4 —
+// the live HLS sliding window would otherwise delete the earliest
+// segments before stitch can reach them.
+type Options struct {
+	Archival bool
+}
+
+// New starts the encoder in live (sliding-window HLS) mode. Equivalent
+// to NewWithOptions with default Options. Kept as a wrapper so
+// existing callers don't need to be retrofitted.
 func New(ctx context.Context, sessionDir string, res Resolution, log *slog.Logger) (*Encoder, error) {
+	return NewWithOptions(ctx, sessionDir, res, Options{}, log)
+}
+
+// NewWithOptions starts the encoder. sessionDir is where HLS segments +
+// the ffmpeg stderr log are written. res selects the output resolution;
+// the renderer always composites at 1280×720 and ffmpeg's scale filter
+// upsamples. opts.Archival flips the HLS muxer into VOD mode so
+// segments are retained for a downstream stitch.
+func NewWithOptions(ctx context.Context, sessionDir string, res Resolution, opts Options, log *slog.Logger) (*Encoder, error) {
 	outW, outH := outputDims(res)
 	hlsDir := filepath.Join(sessionDir, "hls")
 	if err := os.MkdirAll(hlsDir, 0o755); err != nil {
@@ -158,12 +178,27 @@ func New(ctx context.Context, sessionDir string, res Resolution, log *slog.Logge
 		"-map", "1:a:0",
 		"-f", "hls",
 		"-hls_time", fmt.Sprintf("%d", hlsSegmentSec),
-		"-hls_list_size", fmt.Sprintf("%d", hlsListSize),
-		"-hls_flags", "delete_segments+append_list+independent_segments",
 		"-hls_segment_type", "mpegts",
 		"-hls_segment_filename", filepath.Join(hlsDir, "seg_%03d.ts"),
-		filepath.Join(hlsDir, "stream.m3u8"),
 	)
+	if opts.Archival {
+		// VOD-style HLS: keep every segment + emit #EXT-X-ENDLIST on
+		// close. Required for the modeVideo stitch pass — the live
+		// sliding window deletes segments older than ~12s and
+		// ffmpeg never closes the playlist, so a copy stitch on a
+		// long episode would be missing the bulk of the show.
+		args = append(args,
+			"-hls_list_size", "0",
+			"-hls_flags", "append_list+independent_segments",
+			"-hls_playlist_type", "vod",
+		)
+	} else {
+		args = append(args,
+			"-hls_list_size", fmt.Sprintf("%d", hlsListSize),
+			"-hls_flags", "delete_segments+append_list+independent_segments",
+		)
+	}
+	args = append(args, filepath.Join(hlsDir, "stream.m3u8"))
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	videoIn, err := cmd.StdinPipe()

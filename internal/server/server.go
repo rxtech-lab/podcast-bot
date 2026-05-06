@@ -42,10 +42,28 @@ import (
 // Deps wires the server to the event bus and the registry that tracks every
 // channel + its current orchestrator. Per-channel streaming resources
 // (LiveStream, HLS dir) are reached through Sessions.ChannelResources(id).
+//
+// Mode selects the HTTP surface: "stream" (default) mounts the channel /
+// HLS / live-chat routes; "video" mounts /api/jobs/* on top of the same
+// embedded SPA so a browser can upload a script.md and receive a
+// downloadable mp4 + (for series) a zip archive.
+//
+// Jobs / SubmitJob are only consulted when Mode == "video". SubmitJob
+// is a closure provided by main; the handler creates the job id, saves
+// the upload files under UploadRoot/<jobID>/, registers the pending
+// job, and hands off to SubmitJob which runs the orchestrator pipeline
+// asynchronously and updates JobRegistry as the run progresses.
+//
+// UploadRoot is the directory where uploaded scripts + priors zips
+// land. Each job gets its own subdirectory keyed by jobID.
 type Deps struct {
-	Bus      *eventbus.Bus
-	Sessions *SessionRegistry
-	Log      *slog.Logger
+	Mode       string
+	Bus        *eventbus.Bus
+	Sessions   *SessionRegistry
+	Jobs       *JobRegistry
+	Log        *slog.Logger
+	UploadRoot string
+	SubmitJob  func(jobID string, sub JobSubmission) error
 }
 
 // Server is the HTTP front-end.
@@ -57,17 +75,43 @@ type Server struct {
 // New builds a Server with all routes mounted.
 func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux()}
-	s.mux.HandleFunc("GET /api/topics", s.handleTopics)
-	s.mux.HandleFunc("GET /api/transcript", s.handleTranscript)
+	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
-	s.mux.HandleFunc("GET /api/audio/", s.handleAudio)
-	s.mux.HandleFunc("GET /api/video/", s.handleVideo)
-	s.mux.HandleFunc("POST /api/messages", s.handleMessages)
 	s.mux.HandleFunc("GET /api/me", s.handleGetMe)
 	s.mux.HandleFunc("POST /api/me", s.handlePostMe)
 	s.mux.HandleFunc("GET /api/debug", s.handleDebug)
+
+	// Stream-mode routes (channel queues, HLS, live chat).
+	if d.Mode != "video" {
+		s.mux.HandleFunc("GET /api/topics", s.handleTopics)
+		s.mux.HandleFunc("GET /api/transcript", s.handleTranscript)
+		s.mux.HandleFunc("GET /api/audio/", s.handleAudio)
+		s.mux.HandleFunc("GET /api/video/", s.handleVideo)
+		s.mux.HandleFunc("POST /api/messages", s.handleMessages)
+	}
+
+	// Video-mode routes (upload-and-render jobs).
+	if d.Mode == "video" {
+		s.mux.HandleFunc("POST /api/jobs", s.handleJobSubmit)
+		s.mux.HandleFunc("GET /api/jobs", s.handleJobList)
+		s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
+		s.mux.HandleFunc("GET /api/jobs/{id}/video", s.handleJobVideo)
+		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
+	}
+
 	s.mux.Handle("/", staticHandler())
 	return s
+}
+
+// handleConfig surfaces the server-side mode so the SPA can pick which
+// view to render. The frontend hits this once on mount.
+func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	mode := s.d.Mode
+	if mode == "" {
+		mode = "stream"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"mode": mode})
 }
 
 // Handler exposes the underlying mux (useful for tests / custom mounting).

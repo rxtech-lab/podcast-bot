@@ -59,30 +59,18 @@ func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 
 	// Outlined caption: paint straight onto the scene, bottom-anchored.
 	// Reuses the same wrapper / scroll math as the surface scene's
-	// outlined caption so phrasing and timing match. Each new body
-	// fades in via the same fadeIn helper the puzzle lower-third uses,
-	// so swapping sentences doesn't pop. The caption is rendered onto
-	// an offscreen buffer at α=1 first and the global alpha is applied
-	// in one blit so the outline strokes stay internally consistent
-	// mid-fade (the same trick puzzleSurface uses for its name plate).
+	// outlined caption so phrasing and timing match. Drawn at full
+	// opacity with no fade — narrated drama reads cleaner with hard
+	// sentence cuts than a 250 ms cross-dissolve on every swap.
 	if strings.TrimSpace(body) != "" {
 		qcLeft := marginX
 		qcRight := r.width - marginX
 		cardH := subtitleCardHeight(r.bodyFace, body, qcLeft, qcRight)
 		qcBot := r.height - captionBottomMargin
 		qcTop := qcBot - cardH
-		bufW := qcRight - qcLeft
-		bufH := qcBot - qcTop
-		if bufW > 0 && bufH > 0 {
-			capBuf := image.NewRGBA(image.Rect(0, 0, bufW, bufH))
-			drawHBOSubtitleBodyOutlined(capBuf, r.bodyFace, body,
-				0, 0, bufW, bufH,
-				bodyFG, bodyStart, bodyDur)
-			drawCaption := func(alpha float64) {
-				blitWithGlobalAlphaAt(img, capBuf, qcLeft, qcTop, alpha)
-			}
-			fadeIn(drawCaption, bodyStart, seriesCaptionFadeIn)
-		}
+		drawHBOSubtitleBodyOutlined(img, r.bodyFace, body,
+			qcLeft, qcTop, qcRight, qcBot,
+			bodyFG, bodyStart, bodyDur)
 	}
 
 	// Character name + role tag. The narrator (role == "series-host") is
@@ -146,10 +134,6 @@ func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 			userStart)
 	}
 }
-
-// seriesCaptionFadeIn is the smoothstep window the outlined caption
-// uses when a new body appears so swapping sentences doesn't pop.
-const seriesCaptionFadeIn = 250 * time.Millisecond
 
 // seriesLabelTotalDuration is the full lifetime of the top-left
 // identification label — fade-in + hold + fade-out all complete within

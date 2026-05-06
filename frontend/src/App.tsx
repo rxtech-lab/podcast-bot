@@ -7,11 +7,30 @@ import {
   ChannelSwitcherToggle,
 } from '@/components/ChannelSwitcher'
 import { VideoStage } from '@/components/VideoStage'
+import { VideoJobView } from '@/components/VideoJobView'
 import { useDebateEvents } from '@/lib/sse'
+import { loadConfig, type ServerMode } from '@/lib/config'
 
 const CHANNELS_OPEN_KEY = 'debate-bot:channels-open'
 
 function App() {
+  // Server-reported mode. Defaults to "stream" so the SPA renders the
+  // existing tuner UI even on a flake response. The fetch is fire-and-
+  // forget on mount; no loading screen — the stream UI is the safe
+  // baseline.
+  const [mode, setMode] = useState<ServerMode>('stream')
+  useEffect(() => {
+    loadConfig().then((c) => setMode(c.mode))
+  }, [])
+
+  if (mode === 'video') {
+    return <VideoJobView />
+  }
+
+  return <StreamView />
+}
+
+function StreamView() {
   const [channelsOpen, setChannelsOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
     const v = window.localStorage.getItem(CHANNELS_OPEN_KEY)

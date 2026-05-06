@@ -217,11 +217,32 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 				})
 				lastPhase = t.Phase
 			}
+			// Per-turn status milestones: gives the SPA log a clear
+			// narrative of which speaker / directive is being
+			// generated and how long the resulting audio took. Two
+			// events per turn keep the stream readable; the
+			// orchestrator's TranscriptMsg events still stream the
+			// actual text inline.
+			directive := strings.TrimSpace(t.Directive)
+			if len(directive) > 60 {
+				directive = directive[:57] + "…"
+			}
+			startStatus := fmt.Sprintf("turn %d · %s · narrating",
+				t.ID, t.Speaker.Name())
+			if directive != "" {
+				startStatus += " (" + directive + ")"
+			}
+			p.d.Send(StatusMsg{Text: startStatus})
 			start := time.Now()
 			if err := p.produce(ctx, t); err != nil {
 				p.d.Log.Warn("produce error", "turn", t.ID, "err", err)
 				t.SetErr(err)
 				p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d produce: %w", t.ID, err)})
+			} else {
+				p.d.Send(StatusMsg{Text: fmt.Sprintf(
+					"turn %d audio ready · %s · %s",
+					t.ID, t.Speaker.Name(),
+					time.Since(start).Round(time.Second))})
 			}
 			p.d.Tracker.AddSpeaking(t.Speaker.Name(), time.Since(start))
 			t.MarkPlayed()

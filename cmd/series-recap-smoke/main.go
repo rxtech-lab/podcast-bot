@@ -35,7 +35,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -185,7 +184,7 @@ func runEpisode(envBase *config.Env, topicPath, label, outRoot string, makeMP4 b
 
 	if makeMP4 {
 		mp4Path := filepath.Join(outRoot, fmt.Sprintf("%s-%s-s%02de%02d.mp4", contentcreator.SlugifyShow(tp.Show), label, tp.Season, tp.Episode))
-		if err := stitchMP4(enc.HLSDir(), filepath.Join(episodeDir, "episode.mp3"), mp4Path); err != nil {
+		if err := video.StitchMP4(enc.HLSDir(), filepath.Join(episodeDir, "episode.mp3"), mp4Path, video.StitchOpts{}); err != nil {
 			fmt.Fprintf(os.Stderr, "series-recap-smoke: %s mp4 stitch failed: %v\n", label, err)
 		} else {
 			abs, _ := filepath.Abs(mp4Path)
@@ -228,19 +227,3 @@ func logArtefacts(log *slog.Logger, episodeDir string) {
 	}
 }
 
-func stitchMP4(hlsDir, audioPath, outPath string) error {
-	playlist := filepath.Join(hlsDir, "stream.m3u8")
-	if _, err := os.Stat(playlist); err != nil {
-		return fmt.Errorf("hls playlist missing: %w", err)
-	}
-	args := []string{"-y", "-i", playlist}
-	if _, err := os.Stat(audioPath); err == nil {
-		args = append(args, "-i", audioPath, "-c:v", "copy", "-c:a", "aac", "-shortest")
-	} else {
-		args = append(args, "-c:v", "copy", "-an")
-	}
-	args = append(args, outPath)
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
