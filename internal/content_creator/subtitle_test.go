@@ -101,6 +101,38 @@ func TestVTTWriter_WriteToProducesValidVTT(t *testing.T) {
 	}
 }
 
+func TestVTTWriter_CuesSnapshotAndWriteSubtitleCues(t *testing.T) {
+	w := newVTTWriter()
+	w.Append("hello world.", 500*time.Millisecond, 1500*time.Millisecond)
+	cues := w.Cues()
+	if len(cues) != 1 {
+		t.Fatalf("Cues length = %d, want 1", len(cues))
+	}
+	cues[0].Text = "bonjour & bienvenue"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subtitles.fr.vtt")
+	if err := WriteSubtitleCues(path, cues); err != nil {
+		t.Fatalf("WriteSubtitleCues: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "00:00:00.500 --> 00:00:02.000") {
+		t.Errorf("translated cue timing wrong; body=%q", body)
+	}
+	if !strings.Contains(body, "bonjour &amp; bienvenue") {
+		t.Errorf("translated cue text was not escaped; body=%q", body)
+	}
+
+	orig := w.Cues()
+	if got := orig[0].Text; got != "hello world" {
+		t.Errorf("Cues should return a copy; original text = %q", got)
+	}
+}
+
 // TestVTTWriter_StripsPunct asserts that CJK punctuation (the project's
 // primary content language) is removed from cue text so the sidecar
 // matches what drawHBOSubtitleBodyOutlined paints on the burned-in

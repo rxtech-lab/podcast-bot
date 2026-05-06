@@ -28,6 +28,7 @@ const (
 //   - priors    (optional, file): zip archive of prior series generations
 //   - soft_subs ("true"/"false"): mux a mov_text subtitle track
 //   - burn_subs ("true"/"false"): hardcode subtitles (forces video re-encode)
+//   - subtitle_languages (optional, repeated): translated soft-sub target codes
 //
 // Subtitle flags and a priors zip are gated to type=series at the runner
 // level since the handler can't parse the .md frontmatter cheaply. The
@@ -82,11 +83,12 @@ func (s *Server) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub := JobSubmission{
-		ScriptPath:    scriptPath,
-		PriorsZipPath: priorsPath,
-		SoftSubs:      formBool(r, "soft_subs"),
-		BurnSubs:      formBool(r, "burn_subs"),
-		Resolution:    strings.TrimSpace(r.FormValue("resolution")),
+		ScriptPath:        scriptPath,
+		PriorsZipPath:     priorsPath,
+		SoftSubs:          formBool(r, "soft_subs"),
+		BurnSubs:          formBool(r, "burn_subs"),
+		Resolution:        strings.TrimSpace(r.FormValue("resolution")),
+		SubtitleLanguages: formValues(r, "subtitle_languages"),
 	}
 
 	s.d.Jobs.Add(jobID)
@@ -197,6 +199,21 @@ func saveUpload(src io.Reader, dst string) error {
 func formBool(r *http.Request, name string) bool {
 	v := strings.ToLower(strings.TrimSpace(r.FormValue(name)))
 	return v == "true" || v == "1" || v == "on" || v == "yes"
+}
+
+func formValues(r *http.Request, name string) []string {
+	if r.MultipartForm == nil || r.MultipartForm.Value == nil {
+		return nil
+	}
+	raw := r.MultipartForm.Value[name]
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // newJobID returns a 16-hex-char random id. Collisions are not an

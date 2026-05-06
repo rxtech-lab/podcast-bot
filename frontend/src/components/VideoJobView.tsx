@@ -26,17 +26,44 @@ interface RenderClock {
   remainingMs: number
 }
 
+const SUBTITLE_LANGUAGES = [
+  { code: 'zh-Hans', label: 'Simplified Chinese' },
+  { code: 'zh-Hant', label: 'Traditional Chinese' },
+  { code: 'en', label: 'English' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'ko', label: 'Korean' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+] as const
+
 // peekTopicType reads the `type:` field out of a script.md file's YAML
 // frontmatter without pulling in a real YAML parser. Returns "" when
 // the file isn't readable or doesn't look like a topic file.
-async function peekTopicType(file: File): Promise<string> {
+async function peekTopicMeta(file: File): Promise<{ type: string; language: string }> {
   try {
     const head = await file.slice(0, 4096).text()
-    const m = head.match(/^type:\s*([a-z-]+)\s*$/m)
-    return m ? m[1].trim() : ''
+    const type = head.match(/^type:\s*([a-z-]+)\s*$/m)?.[1]?.trim() ?? ''
+    const language = head.match(/^language:\s*['"]?([A-Za-z0-9_-]+)['"]?\s*$/m)?.[1]?.trim() ?? ''
+    return { type, language }
   } catch {
-    return ''
+    return { type: '', language: '' }
   }
+}
+
+function languageKey(raw: string): string {
+  const normal = raw.trim().toLowerCase().replace(/_/g, '-')
+  if (['zh-hans', 'zh-cn', 'zh-sg'].includes(normal)) return 'zh-hans'
+  if (['zh-hant', 'zh-tw', 'zh-hk', 'zh-mo'].includes(normal)) return 'zh-hant'
+  const prefix = normal.split('-')[0]
+  if (['zho', 'chi', 'cmn', 'yue'].includes(prefix)) return 'zh'
+  if (prefix === 'eng') return 'en'
+  if (prefix === 'jpn') return 'ja'
+  if (prefix === 'kor') return 'ko'
+  if (prefix === 'spa') return 'es'
+  if (prefix === 'fra' || prefix === 'fre') return 'fr'
+  if (prefix === 'deu' || prefix === 'ger') return 'de'
+  return prefix
 }
 
 export function VideoJobView() {
@@ -44,8 +71,10 @@ export function VideoJobView() {
   const [scriptFile, setScriptFile] = useState<File | null>(null)
   const [priorsFile, setPriorsFile] = useState<File | null>(null)
   const [topicType, setTopicType] = useState<string>('')
+  const [topicLanguage, setTopicLanguage] = useState<string>('')
   const [softSubs, setSoftSubs] = useState(false)
   const [burnSubs, setBurnSubs] = useState(false)
+  const [subtitleLanguages, setSubtitleLanguages] = useState<string[]>([])
   const [resolution, setResolution] = useState<Resolution>('720p')
   const [submitErr, setSubmitErr] = useState<string>('')
   const [jobID, setJobID] = useState<string>('')
@@ -67,16 +96,33 @@ export function VideoJobView() {
   useEffect(() => {
     if (!scriptFile) {
       setTopicType('')
+      setTopicLanguage('')
       return
     }
     let cancelled = false
-    peekTopicType(scriptFile).then((t) => {
-      if (!cancelled) setTopicType(t)
+    peekTopicMeta(scriptFile).then((meta) => {
+      if (!cancelled) {
+        setTopicType(meta.type)
+        setTopicLanguage(meta.language)
+      }
     })
     return () => {
       cancelled = true
     }
   }, [scriptFile])
+
+  useEffect(() => {
+    if (!isSeries || !softSubs) {
+      setSubtitleLanguages([])
+      return
+    }
+    const sourceKey = languageKey(topicLanguage)
+    if (sourceKey) {
+      setSubtitleLanguages((prev) =>
+        prev.filter((code) => languageKey(code) !== sourceKey),
+      )
+    }
+  }, [isSeries, softSubs, topicLanguage])
 
   // SSE + final-state polling: subscribe once we have a jobID. The
   // event stream piggy-backs on /api/events with a channel filter
@@ -175,6 +221,7 @@ export function VideoJobView() {
         priors: isSeries ? priorsFile : null,
         softSubs: isSeries && softSubs,
         burnSubs: isSeries && burnSubs,
+        subtitleLanguages: isSeries && softSubs ? subtitleLanguages : [],
         resolution,
       })
       setJobID(id)
@@ -217,6 +264,9 @@ export function VideoJobView() {
             setSoftSubs={setSoftSubs}
             burnSubs={burnSubs}
             setBurnSubs={setBurnSubs}
+            topicLanguage={topicLanguage}
+            subtitleLanguages={subtitleLanguages}
+            setSubtitleLanguages={setSubtitleLanguages}
             resolution={resolution}
             setResolution={setResolution}
             onSubmit={onSubmit}
@@ -242,6 +292,7 @@ export function VideoJobView() {
               setPriorsFile(null)
               setSoftSubs(false)
               setBurnSubs(false)
+              setSubtitleLanguages([])
             }}
           />
         )}
@@ -261,6 +312,9 @@ interface FormViewProps {
   setSoftSubs: (b: boolean) => void
   burnSubs: boolean
   setBurnSubs: (b: boolean) => void
+  topicLanguage: string
+  subtitleLanguages: string[]
+  setSubtitleLanguages: (langs: string[]) => void
   resolution: Resolution
   setResolution: (r: Resolution) => void
   onSubmit: (e: React.FormEvent) => void
@@ -268,6 +322,16 @@ interface FormViewProps {
 }
 
 function FormView(props: FormViewProps) {
+  const sourceLanguageKey = languageKey(props.topicLanguage)
+  const translationEnabled = props.isSeries && props.softSubs
+  const toggleSubtitleLanguage = (code: string, checked: boolean) => {
+    props.setSubtitleLanguages(
+      checked
+        ? [...props.subtitleLanguages, code]
+        : props.subtitleLanguages.filter((v) => v !== code),
+    )
+  }
+
   return (
     <form onSubmit={props.onSubmit} className="flex flex-col gap-5 rounded-lg border border-border bg-card/40 p-6">
       <FieldFile
@@ -331,6 +395,25 @@ function FormView(props: FormViewProps) {
           disabled={!props.isSeries}
           hint="hardcoded — visible in any player including QuickTime, but takes longer"
         />
+        <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-3">
+          <div>
+            <div className="text-sm font-medium">Translated subtitle tracks</div>
+            <div className="text-xs text-muted-foreground">
+              added as extra selectable soft-sub tracks
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {SUBTITLE_LANGUAGES.filter((lang) => languageKey(lang.code) !== sourceLanguageKey).map((lang) => (
+              <Checkbox
+                key={lang.code}
+                label={lang.label}
+                checked={props.subtitleLanguages.includes(lang.code)}
+                onChange={(checked) => toggleSubtitleLanguage(lang.code, checked)}
+                disabled={!translationEnabled}
+              />
+            ))}
+          </div>
+        </div>
       </fieldset>
 
       {props.submitErr && (

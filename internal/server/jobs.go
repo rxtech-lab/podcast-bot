@@ -54,11 +54,12 @@ type Job struct {
 // — empty means "respect the script's declared resolution" so users
 // who don't pick from the UI still get the topic-author's intent.
 type JobSubmission struct {
-	ScriptPath    string
-	PriorsZipPath string
-	SoftSubs      bool
-	BurnSubs      bool
-	Resolution    string
+	ScriptPath        string
+	PriorsZipPath     string
+	SoftSubs          bool
+	BurnSubs          bool
+	Resolution        string
+	SubtitleLanguages []string
 }
 
 // JobRegistry holds every submitted video-mode job for the lifetime of

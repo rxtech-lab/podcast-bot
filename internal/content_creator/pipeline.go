@@ -20,15 +20,15 @@ import (
 
 // Deps are everything the pipeline needs to run.
 type Deps struct {
-	Planner    Planner
-	Tracker    *Tracker
-	Registry   *agent.Registry
-	TTS        tts.Provider
-	OutDir     string
-	Send       func(any) // event-bus publish wrapper
-	Log        *slog.Logger
-	Topic      string
-	Language   string
+	Planner  Planner
+	Tracker  *Tracker
+	Registry *agent.Registry
+	TTS      tts.Provider
+	OutDir   string
+	Send     func(any) // event-bus publish wrapper
+	Log      *slog.Logger
+	Topic    string
+	Language string
 	// ContentType is the topic.Type discriminator (config.ContentType*).
 	// Stamped onto PhaseMsg so the frontend can label phases without
 	// hardcoding the per-format mapping.
@@ -151,6 +151,14 @@ type Pipeline struct {
 
 // NewPipeline creates a Pipeline.
 func NewPipeline(d Deps) *Pipeline { return &Pipeline{d: d, vtt: newVTTWriter()} }
+
+// SubtitleCues returns the timed WebVTT cues accumulated so far.
+func (p *Pipeline) SubtitleCues() []SubtitleCue {
+	if p == nil || p.vtt == nil {
+		return nil
+	}
+	return p.vtt.Cues()
+}
 
 // Run boots all stages and blocks until the planner stops emitting turns
 // AND every stage drains. Returns the produced audio file paths in order.

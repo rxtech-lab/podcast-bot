@@ -35,11 +35,19 @@ import (
 // offset down to the nearest HLS segment boundary so -c:v copy can
 // seek without an out-of-keyframe freeze.
 type StitchOpts struct {
-	SoftSubs      bool
-	BurnSubs      bool // ignored; see doc comment
-	SubtitlesPath string
-	Language      string
-	StartOffset   time.Duration
+	SoftSubs       bool
+	BurnSubs       bool // ignored; see doc comment
+	SubtitlesPath  string
+	Language       string
+	SubtitleTracks []SubtitleTrack
+	StartOffset    time.Duration
+}
+
+// SubtitleTrack is one WebVTT input to mux into the stitched MP4.
+type SubtitleTrack struct {
+	Path     string
+	Language string
+	Default  bool
 }
 
 // hlsSegmentDuration is the segment length the encoder emits (see
@@ -58,16 +66,39 @@ const hlsSegmentDuration = 2 * time.Second
 //
 // Returns an error if the playlist is missing or ffmpeg exits non-zero.
 func StitchMP4(hlsDir, outPath string, opts StitchOpts) error {
+	args, err := buildStitchArgs(hlsDir, outPath, opts)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func buildStitchArgs(hlsDir, outPath string, opts StitchOpts) ([]string, error) {
 	playlist := filepath.Join(hlsDir, "stream.m3u8")
 	if _, err := os.Stat(playlist); err != nil {
-		return fmt.Errorf("hls playlist missing: %w", err)
+		return nil, fmt.Errorf("hls playlist missing: %w", err)
 	}
-	if opts.SoftSubs && opts.SubtitlesPath == "" {
-		return fmt.Errorf("StitchOpts: SoftSubs requires SubtitlesPath")
+	tracks := opts.SubtitleTracks
+	if opts.SoftSubs && len(tracks) == 0 && opts.SubtitlesPath != "" {
+		tracks = []SubtitleTrack{{
+			Path:     opts.SubtitlesPath,
+			Language: opts.Language,
+			Default:  true,
+		}}
+	}
+	if opts.SoftSubs && len(tracks) == 0 {
+		return nil, fmt.Errorf("StitchOpts: SoftSubs requires at least one subtitle track")
 	}
 	if opts.SoftSubs {
-		if _, err := os.Stat(opts.SubtitlesPath); err != nil {
-			return fmt.Errorf("subtitles file missing: %w", err)
+		for _, track := range tracks {
+			if track.Path == "" {
+				return nil, fmt.Errorf("subtitle track path is empty")
+			}
+			if _, err := os.Stat(track.Path); err != nil {
+				return nil, fmt.Errorf("subtitles file missing: %w", err)
+			}
 		}
 	}
 
@@ -91,7 +122,9 @@ func StitchMP4(hlsDir, outPath string, opts StitchOpts) error {
 	args = append(args, "-i", playlist)
 
 	if opts.SoftSubs {
-		args = append(args, "-i", opts.SubtitlesPath)
+		for _, track := range tracks {
+			args = append(args, "-i", track.Path)
+		}
 	}
 
 	// Stream-copy both tracks: the renderer already painted any
@@ -107,10 +140,10 @@ func StitchMP4(hlsDir, outPath string, opts StitchOpts) error {
 	)
 
 	if opts.SoftSubs {
-		args = append(args,
-			"-map", "1:s",
-			"-c:s", "mov_text",
-		)
+		for i := range tracks {
+			args = append(args, "-map", fmt.Sprintf("%d:s", i+1))
+		}
+		args = append(args, "-c:s", "mov_text")
 		// AVPlayer (iOS / macOS QuickTime) needs three things to display
 		// a soft-sub track in the picker with its proper name:
 		//   1. ISO 639-2/T 3-letter language code on the track's mp4
@@ -121,20 +154,23 @@ func StitchMP4(hlsDir, outPath string, opts StitchOpts) error {
 		//      language code.
 		//   3. `default` disposition so AVPlayer's "Auto (Recommended)"
 		//      actually picks this track instead of falling back to off.
-		iso, title := normalizeSubtitleLang(opts.Language)
-		args = append(args,
-			"-metadata:s:s:0", "language="+iso,
-			"-metadata:s:s:0", "title="+title,
-			"-metadata:s:s:0", "handler_name="+title,
-			"-disposition:s:0", "default",
-		)
+		for i, track := range tracks {
+			iso, title := normalizeSubtitleLang(track.Language)
+			disposition := "0"
+			if track.Default {
+				disposition = "default"
+			}
+			args = append(args,
+				fmt.Sprintf("-metadata:s:s:%d", i), "language="+iso,
+				fmt.Sprintf("-metadata:s:s:%d", i), "title="+title,
+				fmt.Sprintf("-metadata:s:s:%d", i), "handler_name="+title,
+				fmt.Sprintf("-disposition:s:%d", i), disposition,
+			)
+		}
 	}
 
 	args = append(args, outPath)
-
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return args, nil
 }
 
 // formatSeconds renders a Duration as a plain decimal-seconds string
@@ -160,6 +196,13 @@ func formatSeconds(d time.Duration) string {
 // least shows a non-empty row instead of the blank entry.
 func normalizeSubtitleLang(raw string) (iso, title string) {
 	prefix := strings.ToLower(strings.TrimSpace(raw))
+	normal := strings.ReplaceAll(prefix, "_", "-")
+	switch normal {
+	case "zh-hans", "zh-cn", "zh-sg":
+		return "zho", "Simplified Chinese"
+	case "zh-hant", "zh-tw", "zh-hk", "zh-mo":
+		return "zho", "Traditional Chinese"
+	}
 	// Take the first segment before `-` / `_` so "zh-CN", "zh_TW",
 	// "cmn-Hans" all collapse to their language-family key.
 	if i := strings.IndexAny(prefix, "-_"); i >= 0 {
@@ -174,6 +217,12 @@ func normalizeSubtitleLang(raw string) (iso, title string) {
 		return "jpn", "Japanese"
 	case "ko", "kor":
 		return "kor", "Korean"
+	case "es", "spa":
+		return "spa", "Spanish"
+	case "fr", "fra", "fre":
+		return "fra", "French"
+	case "de", "deu", "ger":
+		return "deu", "German"
 	default:
 		return "und", "Subtitles"
 	}

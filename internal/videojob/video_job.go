@@ -68,12 +68,18 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 	// Subtitle flags + priors zip are series-only. Reject early with
 	// a clear message rather than silently ignoring them.
 	if topic.Type != config.ContentTypeSeries {
-		if sub.SoftSubs || sub.BurnSubs {
+		if sub.SoftSubs || sub.BurnSubs || len(sub.SubtitleLanguages) > 0 {
 			return errors.New("subtitle options (soft_subs / burn_subs) are only valid for type=series")
 		}
 		if sub.PriorsZipPath != "" {
 			return errors.New("priors zip is only valid for type=series")
 		}
+	}
+	if len(sub.SubtitleLanguages) > 0 && !sub.SoftSubs {
+		return errors.New("translated subtitle languages require soft_subs=true")
+	}
+	if _, err := normalizeRequestedSubtitleLanguages(topic.Language, sub.SubtitleLanguages); err != nil {
+		return err
 	}
 
 	// Puzzle uploads are not supported in video mode yet — the puzzle
@@ -305,11 +311,34 @@ func run(ctx context.Context, deps Deps, jobID string,
 			stitchOpts.SoftSubs = false
 		} else {
 			stitchOpts.SubtitlesPath = subPath
+			stitchOpts.SubtitleTracks = []video.SubtitleTrack{{
+				Path:     subPath,
+				Language: topic.Language,
+				Default:  true,
+			}}
+		}
+	}
+	if stitchOpts.SoftSubs && len(stitchOpts.SubtitleTracks) > 0 && len(sub.SubtitleLanguages) > 0 {
+		langs, _ := normalizeRequestedSubtitleLanguages(topic.Language, sub.SubtitleLanguages)
+		if len(langs) > 0 {
+			status(fmt.Sprintf("translating subtitles (%d language%s)…",
+				len(langs), pluralS(len(langs))))
+			client := newSubtitleTranslator(deps.Env.CompressionBaseURL,
+				deps.Env.CompressionKey, deps.Env.CompressionModel)
+			tracks, err := subtitleTracksForJob(ctx, client, jobOutDir,
+				topic.Language, orch.SubtitleCues(), sub.SubtitleLanguages)
+			if err != nil {
+				fail(deps, jobID, logger, fmt.Errorf("subtitle translation: %w", err))
+				return
+			}
+			stitchOpts.SubtitleTracks = append(stitchOpts.SubtitleTracks, tracks...)
+			status(fmt.Sprintf("translated subtitle tracks ready (%d)", len(tracks)))
 		}
 	}
 	stitchLabel := "stitching mp4"
 	if stitchOpts.SoftSubs {
-		stitchLabel += " (with soft subtitle track)"
+		stitchLabel += fmt.Sprintf(" (with %d soft subtitle track%s)",
+			len(stitchOpts.SubtitleTracks), pluralS(len(stitchOpts.SubtitleTracks)))
 	}
 	if stitchOpts.StartOffset > 0 {
 		stitchLabel += fmt.Sprintf(" (trimming %s prep)",
@@ -377,6 +406,13 @@ func fail(deps Deps, jobID string, log *slog.Logger, err error) {
 		j.Status = server.JobError
 		j.Error = err.Error()
 	})
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // buildTopicMsg constructs the TopicMsg for a single-job video run.

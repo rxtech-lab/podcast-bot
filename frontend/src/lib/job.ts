@@ -31,6 +31,7 @@ export async function submitJob(opts: {
   priors?: File | null
   softSubs?: boolean
   burnSubs?: boolean
+  subtitleLanguages?: string[]
   resolution?: Resolution
 }): Promise<string> {
   const fd = new FormData()
@@ -38,6 +39,9 @@ export async function submitJob(opts: {
   if (opts.priors) fd.append('priors', opts.priors)
   fd.append('soft_subs', opts.softSubs ? 'true' : 'false')
   fd.append('burn_subs', opts.burnSubs ? 'true' : 'false')
+  for (const lang of opts.subtitleLanguages ?? []) {
+    fd.append('subtitle_languages', lang)
+  }
   if (opts.resolution) fd.append('resolution', opts.resolution)
 
   const resp = await fetch('/api/jobs', { method: 'POST', body: fd })

@@ -25,6 +25,16 @@ type vttCue struct {
 	Text  string
 }
 
+// SubtitleCue is the exported, immutable view of a generated subtitle cue.
+// It lets job-level post-processing, such as translation, reuse the exact
+// timings the live pipeline computed without parsing WebVTT text back from
+// disk.
+type SubtitleCue struct {
+	Start time.Duration
+	End   time.Duration
+	Text  string
+}
+
 // vttMaxRunesPerCue caps the visible text per cue. The burned-in
 // renderer paints one wrapped line at a time (puzzleSubtitleMaxLines = 1
 // in internal/video) and scrolls overflow lines through it weighted by
@@ -147,6 +157,16 @@ func (w *vttWriter) CueCount() int {
 	return len(w.cues)
 }
 
+// Cues returns a stable snapshot of the writer's timed cue list.
+func (w *vttWriter) Cues() []SubtitleCue {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return exportVTTCues(w.cues)
+}
+
 // WriteTo emits the WebVTT file at path. No-op when the writer holds
 // zero cues — an empty .vtt confuses some players and a missing file is
 // the "no captions available" signal we want there.
@@ -155,8 +175,15 @@ func (w *vttWriter) WriteTo(path string) error {
 		return nil
 	}
 	w.mu.Lock()
-	cues := append([]vttCue(nil), w.cues...)
+	cues := exportVTTCues(w.cues)
 	w.mu.Unlock()
+	return WriteSubtitleCues(path, cues)
+}
+
+// WriteSubtitleCues emits cues as a WebVTT file. It is shared by the live
+// writer and translated sidecar generation so all subtitle tracks keep the
+// same escaping and timestamp format.
+func WriteSubtitleCues(path string, cues []SubtitleCue) error {
 	if len(cues) == 0 {
 		return nil
 	}
@@ -170,6 +197,14 @@ func (w *vttWriter) WriteTo(path string) error {
 			i+1, formatVTT(c.Start), formatVTT(c.End), escapeVTT(c.Text))
 	}
 	return os.WriteFile(path, []byte(sb.String()), 0o644)
+}
+
+func exportVTTCues(cues []vttCue) []SubtitleCue {
+	out := make([]SubtitleCue, len(cues))
+	for i, c := range cues {
+		out[i] = SubtitleCue{Start: c.Start, End: c.End, Text: c.Text}
+	}
+	return out
 }
 
 // formatVTT renders a duration as HH:MM:SS.mmm — the canonical WebVTT
