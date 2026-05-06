@@ -1,8 +1,11 @@
 package contentcreator
 
 import (
+	"time"
+
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/tts"
 )
 
 // buildSeriesAgents constructs the single-host roster for a TV-series
@@ -123,4 +126,94 @@ func (o *Orchestrator) SetSeriesSoundPlan(plan []SoundCueDirection, paths []stri
 // stray `<scene 99/>` against a 14-frame plan doesn't pin the rotation.
 func (o *Orchestrator) SeriesNarrationFrames() int {
 	return len(o.seriesNarrationPlan)
+}
+
+// SeriesCharacter is the contentcreator-facing mirror of
+// agent.SeriesCharacter. Lets the prepare layer (internal/series) wire
+// the cast list without importing the agent package directly. AzureVoice
+// is left empty by the caller — the orchestrator fills it in after
+// FetchVoices runs in Setup, picking from the locale's voice pool.
+type SeriesCharacter struct {
+	Name        string
+	Gender      string
+	VoiceHint   string
+	Description string
+}
+
+// SetSeriesCharacters installs the planner's per-episode cast roster. The
+// orchestrator stores these as-is and assigns Azure neural voices to each
+// during Setup (after FetchVoices succeeds) so the host's prompt and the
+// pipeline's multi-voice SSML synth path see fully-populated voice IDs.
+// Empty / nil disables the feature for this episode (the host's prompt
+// omits the character section entirely).
+func (o *Orchestrator) SetSeriesCharacters(cast []SeriesCharacter) {
+	if len(cast) == 0 {
+		o.seriesCharacters = nil
+		return
+	}
+	o.seriesCharacters = make([]SeriesCharacter, len(cast))
+	copy(o.seriesCharacters, cast)
+}
+
+// SeriesCharacters returns the cast roster with Azure voice IDs already
+// assigned by the orchestrator. The pipeline reads this in synthSentence
+// to map `<char-N>` markers to voice ShortNames at synth time.
+func (o *Orchestrator) SeriesCharacters() []agent.SeriesCharacter {
+	return o.seriesCharactersForHost()
+}
+
+// assignSeriesCharacterVoices picks one Azure neural voice per cast
+// member out of the locale-filtered pool, excluding voices already
+// claimed by agents (so the narrator doesn't share a voice with a
+// character). The result is stored on the orchestrator and pushed onto
+// the host agent's roster via SetCharacterVoices so the SSML envelope
+// emitted at synth time uses the assigned voice. No-op when there are
+// no characters to assign.
+func (o *Orchestrator) assignSeriesCharacterVoices(voices []tts.Voice) {
+	if len(o.seriesCharacters) == 0 || o.Registry == nil || o.Registry.SeriesHost == nil {
+		return
+	}
+	excluded := map[string]bool{}
+	for _, a := range o.Registry.All() {
+		if v := a.Voice().ShortName; v != "" {
+			excluded[v] = true
+		}
+	}
+	names := make([]string, 0, len(o.seriesCharacters))
+	genders := map[string]string{}
+	for _, c := range o.seriesCharacters {
+		names = append(names, c.Name)
+		genders[c.Name] = c.Gender
+	}
+	o.seriesCharacterVoices = agent.AssignCharacterVoices(
+		voices, names, genders, o.Topic.Language,
+		time.Now().UnixNano(), excluded, o.Log)
+	if h, ok := o.Registry.SeriesHost.(*agent.SeriesHost); ok {
+		h.SetCharacterVoices(o.seriesCharacterVoices)
+	}
+	for _, c := range o.seriesCharacters {
+		o.Log.Info("series character voice",
+			"name", c.Name,
+			"gender", c.Gender,
+			"voice", o.seriesCharacterVoices[c.Name])
+	}
+}
+
+// seriesCharactersForHost translates the orchestrator-side cast slice
+// into the agent-package struct so makeAgent can hand it to NewSeriesHost
+// without contentcreator → agent leakage in either direction.
+func (o *Orchestrator) seriesCharactersForHost() []agent.SeriesCharacter {
+	if len(o.seriesCharacters) == 0 {
+		return nil
+	}
+	out := make([]agent.SeriesCharacter, len(o.seriesCharacters))
+	for i, c := range o.seriesCharacters {
+		out[i] = agent.SeriesCharacter{
+			Name:        c.Name,
+			Gender:      c.Gender,
+			Description: c.Description,
+			AzureVoice:  o.seriesCharacterVoices[c.Name],
+		}
+	}
+	return out
 }

@@ -56,6 +56,33 @@ type ScenePlan struct {
 	NarrationAnchors    []string `json:"narration_anchors,omitempty"`
 	NarrationAnimations []string `json:"narration_animations,omitempty"`
 	ImageReuse          []string `json:"image_reuse,omitempty"`
+
+	// Characters lists the recurring speaking roles in this episode beyond
+	// the narrator. Populated only by the series planner; empty for puzzle
+	// content. Each entry carries a name + voice hint the host's prompt
+	// uses to wrap dialogue in `<char-N/>` SSML markers (rendered through
+	// Azure's multi-voice SSML at synth time). Voice IDs are assigned
+	// later by the orchestrator after the TTS voice list is fetched —
+	// the planner only proposes the personality.
+	Characters []SeriesCharacter `json:"characters,omitempty"`
+}
+
+// SeriesCharacter is one speaking role in a TV-series episode beyond the
+// narrator. Name is the in-show display name. Gender is "Male" / "Female"
+// / "" (when unknown) — the orchestrator uses it to bias Azure voice pick.
+// VoiceHint is a short free-form description ("young, hesitant, soft
+// tenor") the planner produces; today it is informational only but kept on
+// the struct so future voice-pick heuristics have it available. AzureVoice
+// is the Azure neural voice ShortName the orchestrator assigns after
+// fetching the voice list — empty until assigned. Description is a
+// one-line role summary surfaced in the host's system prompt so the LLM
+// knows when to put a line in this character's voice.
+type SeriesCharacter struct {
+	Name        string `json:"name"`
+	Gender      string `json:"gender,omitempty"`
+	VoiceHint   string `json:"voice_hint,omitempty"`
+	Description string `json:"description,omitempty"`
+	AzureVoice  string `json:"azure_voice,omitempty"`
 }
 
 // SoundDirection is one entry in the puzzle's sound plan. Mode is either

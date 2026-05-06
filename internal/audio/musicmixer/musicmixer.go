@@ -41,7 +41,17 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 )
+
+// closeStageTimeout caps how long Close() waits at each of its three
+// blocking handoffs (TTS reader EOF, mixLoop drain, encoder pump
+// finish). A wedged subprocess or a stuck overlay would otherwise pin
+// Close forever, blocking the channel runner from advancing to the
+// next debate. On timeout Close force-kills every subprocess so the
+// reader/mixer/pump goroutines unblock; we accept a small audible cut
+// in trade for never freezing the channel.
+const closeStageTimeout = 15 * time.Second
 
 // musicVolume is the linear gain applied to the background bed
 // before TTS is summed in. 0.10 ≈ −20 dBFS, quiet enough to sit
@@ -62,10 +72,12 @@ const ttsVolume = 0.80
 const overlayVolume = 0.35
 
 // musicDuckFactor is how much the bed is attenuated while at least one
-// overlay clip is in flight. 0.4 → bed drops to 40% of musicVolume
-// (~−8 dB relative) so the overlay sits clearly on top without losing
-// the bed entirely. Restored to musicVolume once all overlays drain.
-const musicDuckFactor = 0.4
+// overlay clip is in flight. 0.30 → bed drops to 30% of musicVolume,
+// i.e. 0.10 × 0.30 = 0.03 absolute (~3% linear, ~−30 dBFS) so an
+// overlapped Lyria stinger reads as the dominant texture and the
+// original bed only ghosts underneath. Restored to musicVolume once
+// all overlays drain.
+const musicDuckFactor = 0.30
 
 // musicDuckRampPerChunk caps how much the bed gain may move per mix
 // iteration when ducking attacks / releases. 0.05 → reaches the duck
@@ -334,7 +346,10 @@ func (m *Mixer) Close() error {
 				firstErr = fmt.Errorf("close tts stdin: %w", cerr)
 			}
 		}
-		<-m.readerDone
+		if !waitWithTimeout(m.readerDone, closeStageTimeout) {
+			m.killAll()
+			<-m.readerDone
+		}
 
 		// 2. Tell mixLoop it can exit once the queued TTS PCM has
 		//    been fully mixed in. Music keeps running at realtime
@@ -342,7 +357,10 @@ func (m *Mixer) Close() error {
 		//    final TTS bytes; mixLoop's drainCh check exits the loop
 		//    once ttsCh is closed-drained AND residual is empty.
 		close(m.drainCh)
-		<-m.mixDone
+		if !waitWithTimeout(m.mixDone, closeStageTimeout) {
+			m.killAll()
+			<-m.mixDone
+		}
 
 		// 3. Stop the music decoder now that mixLoop has exited.
 		//    -re/-stream_loop -1 means it would otherwise run
@@ -357,7 +375,10 @@ func (m *Mixer) Close() error {
 		if m.encIn != nil {
 			_ = m.encIn.Close()
 		}
-		<-m.pumpDone
+		if !waitWithTimeout(m.pumpDone, closeStageTimeout) {
+			m.killAll()
+			<-m.pumpDone
+		}
 
 		// 5. Reap subprocesses. Non-zero exits from SIGINT'd
 		//    music ffmpeg are expected and not surfaced.
@@ -384,6 +405,42 @@ func (m *Mixer) Close() error {
 		m.closeErr = firstErr
 	})
 	return m.closeErr
+}
+
+// waitWithTimeout blocks until ch is closed or d elapses. Returns true
+// when ch closed in time, false on timeout. Callers escalate to
+// force-kill on false.
+func waitWithTimeout(ch <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// killAll SIGKILLs every subprocess the mixer started. Used as the
+// escalation step when one of Close's three blocking handoffs hits its
+// timeout — the goroutines waiting on subprocess pipes unblock once
+// the kernel tears the pipes down. Idempotent: kill on an already-
+// exited process is a no-op error we ignore.
+func (m *Mixer) killAll() {
+	if m.ttsCmd != nil && m.ttsCmd.Process != nil {
+		_ = m.ttsCmd.Process.Kill()
+	}
+	if m.musicCmd != nil && m.musicCmd.Process != nil {
+		_ = m.musicCmd.Process.Kill()
+	}
+	if m.encCmd != nil && m.encCmd.Process != nil {
+		_ = m.encCmd.Process.Kill()
+	}
+	m.overlaysMu.Lock()
+	for _, ov := range m.overlays {
+		if ov != nil && ov.cmd != nil && ov.cmd.Process != nil {
+			_ = ov.cmd.Process.Kill()
+		}
+	}
+	m.overlaysMu.Unlock()
 }
 
 // OverlapMusic is a free-standing wrapper around (*Mixer).OverlapClip with

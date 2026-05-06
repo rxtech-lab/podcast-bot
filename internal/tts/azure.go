@@ -27,7 +27,21 @@ func NewAzure(region, key string) *AzureClient {
 // SynthesizeStream POSTs SSML for `text` and returns the chunked MP3 body.
 // The caller MUST Close the returned reader.
 func (c *AzureClient) SynthesizeStream(ctx context.Context, voice, text, lang string) (io.ReadCloser, error) {
-	ssml := BuildSSML(voice, text, lang)
+	return c.postSSML(ctx, BuildSSML(voice, text, lang))
+}
+
+// SynthesizeSSML POSTs a caller-supplied SSML envelope verbatim. Lets the
+// pipeline emit Azure's multi-voice SSML (one <speak> with several
+// <voice> elements) so a series episode's narrator + character lines
+// render in a single TTS call.
+func (c *AzureClient) SynthesizeSSML(ctx context.Context, ssml string) (io.ReadCloser, error) {
+	if strings.TrimSpace(ssml) == "" {
+		return nil, fmt.Errorf("azure: empty ssml")
+	}
+	return c.postSSML(ctx, ssml)
+}
+
+func (c *AzureClient) postSSML(ctx context.Context, ssml string) (io.ReadCloser, error) {
 	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", c.region)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(ssml))
 	if err != nil {

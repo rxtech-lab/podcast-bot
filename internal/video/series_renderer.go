@@ -21,7 +21,6 @@ import (
 func (r *Renderer) frameSeries(
 	speaker, role, body string,
 	bodyStart time.Time, bodyDur time.Duration,
-	clockE, clockT time.Duration,
 	userName, userMsg string, userStart, userExpiry time.Time,
 	seriesShow string, seriesSeason, seriesEpisode int, seriesHost string,
 	seriesLabelStart time.Time,
@@ -30,7 +29,6 @@ func (r *Renderer) frameSeries(
 	r.drawBackground(img)
 	r.drawSeriesOverlay(img, speaker, role, body,
 		bodyStart, bodyDur,
-		clockE, clockT,
 		userName, userMsg, userStart, userExpiry,
 		seriesShow, seriesSeason, seriesEpisode, seriesHost, seriesLabelStart)
 	return img.Pix
@@ -44,13 +42,10 @@ func (r *Renderer) frameSeries(
 func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 	speaker, role, body string,
 	bodyStart time.Time, bodyDur time.Duration,
-	clockE, clockT time.Duration,
 	userName, userMsg string, userStart, userExpiry time.Time,
 	seriesShow string, seriesSeason, seriesEpisode int, seriesHost string,
 	seriesLabelStart time.Time,
 ) {
-	titleFG := color.RGBA{0xff, 0xff, 0xff, 0xff}
-	dimFG := color.RGBA{0xc8, 0xa4, 0x5a, 0xff}
 	bodyFG := color.RGBA{0xf2, 0xf4, 0xf8, 0xff}
 
 	const (
@@ -139,15 +134,11 @@ func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 		}
 	}
 
-	// Clock — bottom-right, no letterbox to anchor against so we tuck
-	// it just above the bottom edge.
-	if clockE > 0 || clockT > 0 {
-		drawClockPill(img, r.clockFace, clockE, clockT,
-			r.width-120, r.height-26, titleFG, dimFG)
-	}
+	// Series narration intentionally has no on-screen clock — episodes
+	// run for as long as the narration audio plays, with no time-up cut.
 
 	// Chat ticker rides just above the caption band so it doesn't fight
-	// with the painted captions or the clock.
+	// with the painted captions.
 	if userMsg != "" && time.Now().Before(userExpiry) {
 		tickerBot := r.height - captionBottomMargin - 8
 		drawChatTicker(img, r.tagFace, r.bodyFace, userName, userMsg,

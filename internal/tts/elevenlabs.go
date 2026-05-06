@@ -138,6 +138,13 @@ func (c *ElevenLabsClient) SynthesizeStream(ctx context.Context, voiceID, text, 
 	return encodePCMToAzureMP3(ctx, resp.Body)
 }
 
+// SynthesizeSSML is not supported by ElevenLabs — its REST API consumes
+// plain text, not SSML. Callers wanting multi-voice synthesis must check
+// for ErrSSMLUnsupported and fall back to single-voice SynthesizeStream.
+func (c *ElevenLabsClient) SynthesizeSSML(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, ErrSSMLUnsupported
+}
+
 // encodePCMToAzureMP3 wraps a PCM reader with an ffmpeg subprocess that
 // re-encodes to audio-24khz-48kbitrate-mono-mp3. The returned ReadCloser
 // closes both ffmpeg's pipes and waits for the subprocess.

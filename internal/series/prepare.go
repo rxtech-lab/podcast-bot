@@ -141,6 +141,19 @@ func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 		if stage != nil {
 			stage.AttachAnimations(plan.NarrationAnimations)
 		}
+		if len(plan.Characters) > 0 {
+			cast := make([]contentcreator.SeriesCharacter, len(plan.Characters))
+			for i, c := range plan.Characters {
+				cast[i] = contentcreator.SeriesCharacter{
+					Name:        c.Name,
+					Gender:      c.Gender,
+					VoiceHint:   c.VoiceHint,
+					Description: c.Description,
+				}
+			}
+			orch.SetSeriesCharacters(cast)
+			log.Info("series cast ready", "count", len(cast))
+		}
 	}
 	orch.SetSeriesImageRefs(catalog, refPaths)
 

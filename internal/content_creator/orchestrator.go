@@ -103,6 +103,15 @@ type Orchestrator struct {
 	// stays unchanged.
 	seriesSoundPlan  []SoundCueDirection
 	seriesSoundPaths []string
+
+	// seriesCharacters is the planner-generated cast roster surfaced to
+	// the host (one extra speaking voice per entry, beyond the narrator).
+	// Set via SetSeriesCharacters before Run; the orchestrator picks an
+	// Azure neural voice per character in Setup (after FetchVoices) and
+	// stores the assignment in seriesCharacterVoices keyed by character
+	// name. Empty disables the feature.
+	seriesCharacters      []SeriesCharacter
+	seriesCharacterVoices map[string]string
 }
 
 // SoundCueDirection mirrors scenes.SoundDirection but lives in
@@ -217,6 +226,7 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 			"model", a.Model(),
 			"voice", a.Voice().ShortName)
 	}
+	o.assignSeriesCharacterVoices(voices)
 	// Clear the setup-phase status text so the TUI status bar stops showing
 	// "starting MCP servers..." once the pipeline takes over.
 	o.Send(StatusMsg{Text: ""})
@@ -272,6 +282,7 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 			o.Topic.Surface, o.seriesPreviouslyOn,
 			o.seriesNarrationPlan, o.seriesNarrationAnchors,
 			soundForHost, o.seriesImageRefCatalog,
+			o.seriesCharactersForHost(),
 		)
 	case agent.RolePuzzleHost:
 		soundForHost := make([]agent.SoundDirection, len(o.soundPlan))

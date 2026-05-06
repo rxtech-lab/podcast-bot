@@ -281,11 +281,13 @@ func newRenderer(width, height int) (*Renderer, error) {
 	return &Renderer{
 		width: width, height: height,
 		bgPlate:         loadPlate("bg.png", width, height),
-		// series_bg ships at 1920×1080 so it survives a 1080p ffmpeg
-		// upscale crisply — 0,0 here disables the size guard, and
-		// drawBackground rescales it down to the 1280×720 composite
-		// with Catmull-Rom on each frame.
-		seriesBgPlate: loadPlate("series_bg.png", 0, 0),
+		// series_bg ships at 1920×1080 (so a high-quality master is
+		// archived). Pre-scale once to the canvas here; per-frame
+		// drawBackground then uses the same fast memcpy path as the
+		// debate bgPlate. CatmullRom-resampling 1920×1080 → 1280×720
+		// every frame stalled the encoder enough to stutter the live
+		// audio.
+		seriesBgPlate: loadPlateScaled("series_bg.png", width, height),
 		headerPlate:     loadPlate("header_bar.png", 0, 0),
 		lowerThirdPlate: loadPlate("lower_third.png", 0, 0),
 		panelAffPlate:   loadPlate("panel_aff.png", 0, 0),
@@ -337,6 +339,23 @@ func loadPlate(name string, expectedW, expectedH int) *image.RGBA {
 	}
 	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(out, out.Bounds(), src, b.Min, draw.Src)
+	return out
+}
+
+// loadPlateScaled is loadPlate followed by a one-shot Catmull-Rom rescale to
+// targetW×targetH. Use for plates whose source asset is intentionally larger
+// than the canvas — the rescale runs once at startup so per-frame paint can
+// take the fast memcpy path.
+func loadPlateScaled(name string, targetW, targetH int) *image.RGBA {
+	src := loadPlate(name, 0, 0)
+	if src == nil {
+		return nil
+	}
+	if src.Bounds().Dx() == targetW && src.Bounds().Dy() == targetH {
+		return src
+	}
+	out := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
+	xdraw.CatmullRom.Scale(out, out.Bounds(), src, src.Bounds(), xdraw.Src, nil)
 	return out
 }
 
@@ -916,7 +935,6 @@ func (r *Renderer) Frame() []byte {
 		if puzzleScene == "narration" {
 			return r.frameSeries(speaker, role, body,
 				bodyStart, bodyDur,
-				clockE, clockT,
 				userName, userMsg, userStart, userExpiry,
 				seriesShow, seriesSeason, seriesEpisode, seriesHost,
 				seriesLabelStart)
@@ -952,7 +970,7 @@ func (r *Renderer) drawBackground(img *image.RGBA) {
 	}
 	if r.sceneBg == nil && r.prevSceneBg == nil {
 		if fallback != nil {
-			drawScaledOver(img, fallback, img.Bounds())
+			draw.Draw(img, img.Bounds(), fallback, image.Point{}, draw.Src)
 			return
 		}
 		drawGradientBackground(img,
@@ -967,7 +985,7 @@ func (r *Renderer) drawBackground(img *image.RGBA) {
 	// inside the dst, the surrounding area would otherwise be transparent).
 	if r.prevSceneBg == nil {
 		if fallback != nil {
-			drawScaledOver(img, fallback, img.Bounds())
+			draw.Draw(img, img.Bounds(), fallback, image.Point{}, draw.Src)
 		} else {
 			drawGradientBackground(img,
 				color.RGBA{0x12, 0x14, 0x1f, 0xff},

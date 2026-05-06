@@ -58,6 +58,92 @@ func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int6
 	}
 }
 
+// AssignCharacterVoices assigns one Azure neural voice to each name in
+// `names` from the locale-filtered pool, biased by the supplied gender
+// hint when present. excludeUsed is the set of voice ShortNames already
+// claimed by agents (so the host narrator and a character don't share a
+// voice). Returned map is keyed by character name; missing entries (rare
+// — only when the entire pool fits inside excludeUsed) are left out so
+// the caller can detect & fall back. Same scoring + shuffle pipeline as
+// AssignVoices so the picks feel consistent with the rest of the cast.
+func AssignCharacterVoices(voices []tts.Voice, names []string, genders map[string]string,
+	language string, seed int64, excludeUsed map[string]bool, log *slog.Logger,
+) map[string]string {
+	if len(names) == 0 {
+		return nil
+	}
+	prefix := strings.ToLower(strings.SplitN(language, "-", 2)[0])
+	var pool []tts.Voice
+	for _, v := range voices {
+		if v.VoiceType != "" && !strings.Contains(strings.ToLower(v.VoiceType), "neural") {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(v.Locale), prefix) {
+			pool = append(pool, v)
+		}
+	}
+	if len(pool) == 0 {
+		log.Warn("no voices match language for character cast; falling back to all voices", "language", language)
+		pool = voices
+	}
+	r := rand.New(rand.NewSource(seed))
+	r.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
+	sort.SliceStable(pool, func(i, j int) bool {
+		return voiceScore(pool[i], language) > voiceScore(pool[j], language)
+	})
+	used := map[string]bool{}
+	for k, v := range excludeUsed {
+		used[k] = v
+	}
+	out := map[string]string{}
+	for _, name := range names {
+		gender := genders[name]
+		v, ok := pickCharacterVoice(pool, gender, used)
+		if !ok {
+			log.Warn("no voice available for character", "name", name)
+			continue
+		}
+		if used[v.ShortName] {
+			log.Warn("recycling voice for character", "name", name, "voice", v.ShortName)
+		}
+		used[v.ShortName] = true
+		out[name] = v.ShortName
+	}
+	return out
+}
+
+func pickCharacterVoice(pool []tts.Voice, wantGender string, used map[string]bool) (tts.Voice, bool) {
+	if len(pool) == 0 {
+		return tts.Voice{}, false
+	}
+	pick := func(matchGender, freshOnly bool) (tts.Voice, bool) {
+		for _, v := range pool {
+			if freshOnly && used[v.ShortName] {
+				continue
+			}
+			if matchGender && wantGender != "" && !strings.EqualFold(v.Gender, wantGender) {
+				continue
+			}
+			return v, true
+		}
+		return tts.Voice{}, false
+	}
+	if wantGender != "" {
+		if v, ok := pick(true, true); ok {
+			return v, true
+		}
+	}
+	if v, ok := pick(false, true); ok {
+		return v, true
+	}
+	if wantGender != "" {
+		if v, ok := pick(true, false); ok {
+			return v, true
+		}
+	}
+	return pool[0], true
+}
+
 // pickVoiceFor returns the best unused voice for an agent. Preference order:
 //  1. unused voice whose Gender matches the agent's name (Bob → Male)
 //  2. unused voice with no gender match

@@ -97,6 +97,15 @@ const surfaceTTSScale = 0.6
 // dominant offset and 2300ms wasn't enough.
 const subtitleClientLatency = 3100 * time.Millisecond
 
+// postProducerGrace is the breathing window held between the LLM
+// closing its stream ("producer drained") and the mixer teardown.
+// The mixer + LiveStream keep several seconds of decoded TTS PCM /
+// mp3 buffered behind the listener; closing immediately would cut
+// the last sentence mid-word. A flat sleep is simpler and more
+// reliable than the previous mixer-Close-then-poll-BytesAhead path,
+// which has shown pathological hangs that pin the channel runner.
+const postProducerGrace = 20 * time.Second
+
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
@@ -224,21 +233,30 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		p.updateMemories(ctx, t)
 	}
 
-	// Drain audio before returning so the next debate's TopicMsg (published
-	// by runChannel as soon as Run returns) doesn't flip the visuals while
-	// this debate's last 10–15s of TTS is still in the LiveStream's
-	// realtime-paced output buffer. Two stages:
-	//   1. Close the music mixer here (idempotent — the deferred Close is a
-	//      no-op via closeOnce). This pumps any unmixed TTS PCM out of the
-	//      mixer and into LiveStream.
-	//   2. Poll LiveStream.BytesAhead until it drops to ~0, capped by a
-	//      generous timeout so a stuck pump can't pin the channel forever.
+	// Once the LLM closes its stream we hold for a fixed grace window
+	// before tearing the mixer down. The mixer's TTS pipeline still has
+	// several seconds of decoded PCM buffered (encoder pipe + LiveStream's
+	// realtime-paced output buffer); closing immediately would cut the
+	// final sentence mid-word at the listener side. A simple sleep is
+	// preferable to the previous "close, then poll BytesAhead" approach
+	// because the mixer's drain path has shown spurious hangs that pin
+	// the channel runner indefinitely. Bounded by ctx so a hard shutdown
+	// (Ctrl-C) doesn't have to wait the full window out.
+	p.d.Log.Info("pipeline producer drained — holding for tail playback",
+		"turns", len(files), "grace", postProducerGrace)
+	select {
+	case <-ctx.Done():
+	case <-time.After(postProducerGrace):
+	}
 	if p.sessionMixer != nil {
 		if cerr := p.sessionMixer.Close(); cerr != nil {
 			p.d.Log.Warn("session music mixer close (drain)", "err", cerr)
 		}
 	}
+	t0 := time.Now()
 	p.waitAudioDrained(ctx)
+	p.d.Log.Info("pipeline audio drained",
+		"elapsed", time.Since(t0).Round(time.Millisecond))
 
 	// Sidecar WebVTT next to the run's audio archive. WriteTo no-ops on
 	// an empty cue list, so a run that produced no TTS output (degenerate
@@ -562,6 +580,17 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// audio-end.
 	var leadImageRefs, trailImageRefs []string
 	cleaned, leadImageRefs, trailImageRefs = stripImageRefMarkers(cleaned)
+	// Parse `<char-N>...</char-N>` voice spans (series content type
+	// only — the regex no-ops on streams without any). Unlike scene /
+	// sound / image-ref markers, character markers DON'T fire stage
+	// events; they only carry per-segment voice info that the synth
+	// path uses to build a multi-voice SSML envelope below. The
+	// returned cleanText (markers removed, inner text retained) is
+	// what the transcript / subtitle / TTS see.
+	charClean, charSpans, hadCharMarkers := splitCharacterSpans(cleaned)
+	if hadCharMarkers {
+		cleaned = charClean
+	}
 	// Drop indices that would point past the planner's frame count for
 	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
 	// the last frame for the rest of the turn. Unnumbered legacy markers
@@ -652,7 +681,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	targetSend := p.nextPlayAt
 	p.playheadMu.Unlock()
 
-	body, err := p.d.TTS.SynthesizeStream(ctx, t.Speaker.Voice().ShortName, sent, p.d.Language)
+	body, err := p.synthVoice(ctx, t, sent, hadCharMarkers, charSpans)
 	if err != nil {
 		return 0, err
 	}

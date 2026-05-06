@@ -56,6 +56,29 @@ type SeriesHost struct {
 	// episode (the system prompt then omits the image-reuse section so
 	// the LLM never invents a marker).
 	imageRefs []ImageRefCatalogEntry
+
+	// characters is the planner-generated cast list for this episode. The
+	// host's prompt enumerates each entry as "Character N: <name> —
+	// <description>" so the LLM knows which dialogue to wrap in
+	// `<char-N>...</char-N>` markers (rendered as a separate Azure neural
+	// voice in the multi-voice SSML envelope built at synth time). Empty
+	// disables the feature — the host's prompt stays free of character
+	// instructions and the synth path stays single-voice.
+	characters []SeriesCharacter
+}
+
+// SeriesCharacter is one extra speaking role surfaced to the host. Mirrors
+// the scenes.SeriesCharacter struct (the wiring layer translates one to
+// the other so the agent package doesn't import scenes). AzureVoice is
+// the assigned voice ShortName the orchestrator picks from the locale's
+// available pool — empty when no Azure provider is configured (the host
+// is still told the character exists so it can name them in narration,
+// but the synth path collapses to the narrator voice for that span).
+type SeriesCharacter struct {
+	Name        string
+	Gender      string
+	Description string
+	AzureVoice  string
 }
 
 // ImageRefCatalogEntry is one row in the cross-episode image-reuse catalog
@@ -78,7 +101,7 @@ type ImageRefCatalogEntry struct {
 // no prior plans to mine.
 func NewSeriesHost(b *Base, show string, season, episode int, synopsis, previouslyOn string,
 	narrationPlan, narrationAnchors []string, soundPlan []SoundDirection,
-	imageRefs []ImageRefCatalogEntry,
+	imageRefs []ImageRefCatalogEntry, characters []SeriesCharacter,
 ) *SeriesHost {
 	return &SeriesHost{
 		Base:             b,
@@ -91,6 +114,27 @@ func NewSeriesHost(b *Base, show string, season, episode int, synopsis, previous
 		narrationAnchors: narrationAnchors,
 		soundPlan:        soundPlan,
 		imageRefs:        imageRefs,
+		characters:       characters,
+	}
+}
+
+// Characters returns the per-episode cast roster (without the narrator).
+// The pipeline reads this in synthSentence to map `<char-N>...</char-N>`
+// markers to Azure voice ShortNames when building multi-voice SSML.
+func (h *SeriesHost) Characters() []SeriesCharacter {
+	return h.characters
+}
+
+// SetCharacterVoices fills in the AzureVoice ShortName on each character
+// entry by name. Called by the orchestrator after the per-locale voice
+// pool is fetched + the per-character voices are picked. Names not in
+// the supplied map are left untouched (their AzureVoice stays empty,
+// which the synth path treats as "fall back to the narrator voice").
+func (h *SeriesHost) SetCharacterVoices(byName map[string]string) {
+	for i, c := range h.characters {
+		if v, ok := byName[c.Name]; ok && v != "" {
+			h.characters[i].AzureVoice = v
+		}
 	}
 }
 
@@ -112,6 +156,8 @@ Directives:
   Markers are silent: the TTS engine never sees them and the on-screen subtitle never shows them.
 
 %s
+%s
+
 %s`
 
 // Speak emits one series-host turn for the supplied directive.
@@ -124,8 +170,42 @@ func (h *SeriesHost) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, err
 		seriesNarrationBlock(h.narrationPlan, h.narrationAnchors),
 		seriesSoundBlock(h.soundPlan),
 		seriesImageRefBlock(h.imageRefs),
+		seriesCharacterBlock(h.characters),
 	)
 	return h.runStream(ctx, system, p)
+}
+
+// seriesCharacterBlock formats the per-episode cast roster for the host's
+// system prompt. Empty / nil cast → empty string (no `<char-N/>` marker
+// instructions reach the LLM, so the synth path stays single-voice).
+// When the cast is present each entry is enumerated with its 0-based
+// index, name, and description; the host is instructed to wrap a
+// character's spoken line in `<char-N>…</char-N>` so the synth path can
+// render it in a distinct Azure neural voice.
+func seriesCharacterBlock(cast []SeriesCharacter) string {
+	if len(cast) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Character voices — this episode has additional speaking roles beyond the narrator. When you put words in a character's mouth (a quoted line, an internal-thought line in their voice, anything spoken AS that character rather than narrated about them), wrap the spoken text in `<char-N>...</char-N>` markers where N is the character's 0-based index in the list below. The synth engine renders that span in a distinct neural voice so the listener hears the character speak. Rules:\n")
+	sb.WriteString("  * Wrap ONLY the character's literal spoken words. Narrative framing (\"she whispered\", \"老陳搖頭，說\") stays OUTSIDE the marker, in the narrator's voice.\n")
+	sb.WriteString("  * Markers must NOT span sentence boundaries — open and close within the same sentence.\n")
+	sb.WriteString("  * Use markers SPARINGLY — only when the character's voice genuinely belongs in the audio. A passing reference (\"她記得他們的約定\") stays in the narrator's voice.\n")
+	sb.WriteString("  * Reference ONLY indices that appear in the cast list below; do not invent characters.\n")
+	sb.WriteString("  * Markers are silent — the TTS engine treats them as voice switches, not as text. Do not write them out loud.\n")
+	sb.WriteString("Cast:\n")
+	for i, c := range cast {
+		desc := strings.TrimSpace(c.Description)
+		if desc == "" {
+			desc = "(no description)"
+		}
+		gender := strings.TrimSpace(c.Gender)
+		if gender == "" {
+			gender = "—"
+		}
+		fmt.Fprintf(&sb, "  Character %d: %s (%s) — %s\n", i, strings.TrimSpace(c.Name), gender, desc)
+	}
+	return sb.String()
 }
 
 // seriesPreviouslyBlock formats the recap section for the system prompt.

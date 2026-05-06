@@ -712,10 +712,14 @@ func (r *runtime) run() error {
 func (r *runtime) runChannel(ch *channelRuntime) {
 	send := r.channelSend(ch.def.ID)
 	for {
+		r.log.Info("channel waiting for next debate", "channel", ch.def.ID)
 		d, ok := ch.queue.Pop(r.ctx)
 		if !ok {
+			r.log.Info("channel queue closed — exiting", "channel", ch.def.ID)
 			return
 		}
+		r.log.Info("channel popped next debate",
+			"channel", ch.def.ID, "id", d.id, "title", d.title, "type", d.topic.Type)
 
 		ch.counterMu.Lock()
 		i := ch.started
@@ -766,19 +770,37 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		send(buildTopicMsg(d, i, total))
 
 		if d.topic.Type == config.ContentTypeSituationPuzzle && ch.puzzleStage != nil {
+			t0 := time.Now()
+			r.log.Info("puzzle asset prep starting", "channel", ch.def.ID, "id", d.id)
 			preparePuzzleAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
+			r.log.Info("puzzle asset prep done",
+				"channel", ch.def.ID, "id", d.id,
+				"elapsed", time.Since(t0).Round(time.Millisecond))
 		}
 		if d.topic.Type == config.ContentTypeSeries && ch.seriesStage != nil {
+			t0 := time.Now()
+			r.log.Info("series asset prep starting", "channel", ch.def.ID, "id", d.id)
 			prepareSeriesAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
+			r.log.Info("series asset prep done",
+				"channel", ch.def.ID, "id", d.id,
+				"elapsed", time.Since(t0).Round(time.Millisecond))
 		}
 
+		r.log.Info("orchestrator run starting",
+			"channel", ch.def.ID, "id", d.id, "type", d.topic.Type)
 		runErr := orch.Run(r.ctx)
+		r.log.Info("orchestrator run returned",
+			"channel", ch.def.ID, "id", d.id, "type", d.topic.Type, "err", runErr)
 		// Series episodes archive their per-run output (script, audio,
 		// subtitles) into the persistent show directory so the next
 		// episode's recap engine can read them. Best-effort — failure
 		// here doesn't fail the run.
 		if d.topic.Type == config.ContentTypeSeries {
+			t0 := time.Now()
 			finishSeriesEpisode(r.log, &debateEnv, d)
+			r.log.Info("series finish complete",
+				"channel", ch.def.ID, "id", d.id,
+				"elapsed", time.Since(t0).Round(time.Millisecond))
 			// Inter-episode breathing room. orch.Run already drained
 			// the audio (Pipeline.waitAudioDrained), but back-to-back
 			// title cards read as a hard cut on a narrated drama.
@@ -788,15 +810,27 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 			// title slides in.
 			if ch.seriesStage != nil {
 				ch.seriesStage.PostEpisodeIdle()
+				r.log.Info("series stage parked on intermission",
+					"channel", ch.def.ID, "id", d.id)
 			}
+			r.log.Info("series inter-episode gap holding",
+				"channel", ch.def.ID, "id", d.id, "duration", seriesEpisodeGap)
 			select {
 			case <-r.ctx.Done():
+				r.log.Info("series inter-episode gap cancelled by ctx",
+					"channel", ch.def.ID, "id", d.id)
 				orch.Shutdown()
 				return
 			case <-time.After(seriesEpisodeGap):
 			}
+			r.log.Info("series inter-episode gap done",
+				"channel", ch.def.ID, "id", d.id)
 		}
+		r.log.Info("orchestrator shutting down",
+			"channel", ch.def.ID, "id", d.id)
 		orch.Shutdown()
+		r.log.Info("orchestrator shutdown complete",
+			"channel", ch.def.ID, "id", d.id)
 		r.sessions.SetCurrentOrch(ch.def.ID, "", nil)
 		// Release the loadedDebates entry now that the debate has reached
 		// a terminal state (Done or Error). onRemovedFile keeps the entry

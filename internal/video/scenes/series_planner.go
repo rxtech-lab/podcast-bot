@@ -17,6 +17,12 @@ import (
 const (
 	minNarrationFrames = 6
 	maxNarrationFrames = 60
+	// maxCharacters caps how many extra speaking voices the planner may
+	// introduce per episode. A single narrator + 6 distinct character
+	// voices is already a wide cast; more dilutes the listener's ability
+	// to tell speakers apart and burns through the small Azure neural
+	// voice pool for a given locale.
+	maxCharacters = 6
 )
 
 // SeriesImageRefCandidate is one entry in the cross-episode reuse catalog
@@ -67,6 +73,9 @@ Output strict JSON with this shape:
   "narration_anchors": ["...", "...", ...],
   "narration_animations": ["stall" | "panleft" | "panright" | "pantop" | "panbottom" | "zoomin" | "zoomout", ...],
   "image_reuse": ["", "s1e3i7", "", ...],
+  "characters": [
+    {"name": "...", "gender": "Male" | "Female" | "", "voice_hint": "...", "description": "..."}
+  ],
   "sounds": [
     {"mode": "overlap" | "replace", "prompt": "...", "anchor": "...", "duration_seconds": 0}
   ]
@@ -98,12 +107,35 @@ Rules:
   clearly continues a recurring location or character. NEVER set
   image_reuse[0] to a non-empty key (the show always opens on a
   freshly-generated image).
+- "characters" is OPTIONAL. List the recurring SPEAKING ROLES in this
+  episode beyond the narrator — characters whose dialogue should be
+  voiced separately from the narrator. Up to %d entries. Each entry is
+  a distinct speaker with a stable identity across the episode (a
+  one-line walk-on that says nothing twice does NOT need its own
+  character entry — the narrator can cover it). Required fields:
+    * name: the in-show display name (e.g. "Alice", "老陳", "the
+      detective"). Must be the SAME spelling the narrator will use in
+      narration prose so the host can reference characters by name.
+    * gender: "Male" or "Female" when established by the synopsis;
+      "" only when truly unknown / non-binary / non-human and you
+      want the renderer to pick from the full voice pool.
+    * voice_hint: ONE short sentence describing the desired voice
+      personality / age / register (e.g. "young, hesitant, breathy",
+      "gravelly weathered baritone, slow"). Used by the engine to
+      bias voice selection.
+    * description: ONE short sentence about who this character is in
+      the episode (e.g. "the protagonist's estranged sister, mid-30s,
+      returning to the village after a decade").
+  Do NOT include the narrator in this list — the narrator voice is
+  configured separately. Do NOT invent characters that are not in
+  the synopsis. If the episode is purely first-person reflection
+  with no spoken dialogue, leave the array empty.
 - "sounds" follows the same shape as the puzzle planner's sound list.
 
 Narration count: between %d and %d frames, scaled to synopsis length and
 distinct beats. Prefer one frame per paragraph or scene shift.`
 
-	system = fmt.Sprintf(system, minNarrationFrames, maxNarrationFrames)
+	system = fmt.Sprintf(system, maxCharacters, minNarrationFrames, maxNarrationFrames)
 
 	var catalog string
 	if len(candidates) > 0 {
@@ -131,7 +163,13 @@ distinct beats. Prefer one frame per paragraph or scene shift.`
 		NarrationAnchors    []string `json:"narration_anchors"`
 		NarrationAnimations []string `json:"narration_animations"`
 		ImageReuse          []string `json:"image_reuse"`
-		Sounds              []struct {
+		Characters          []struct {
+			Name        string `json:"name"`
+			Gender      string `json:"gender"`
+			VoiceHint   string `json:"voice_hint"`
+			Description string `json:"description"`
+		} `json:"characters"`
+		Sounds []struct {
 			Mode            string `json:"mode"`
 			Prompt          string `json:"prompt"`
 			Anchor          string `json:"anchor"`
@@ -193,13 +231,51 @@ distinct beats. Prefer one frame per paragraph or scene shift.`
 		}
 	}
 
+	characters := make([]SeriesCharacter, 0, len(parsed.Characters))
+	seenNames := map[string]bool{}
+	for _, c := range parsed.Characters {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if seenNames[key] {
+			continue
+		}
+		seenNames[key] = true
+		characters = append(characters, SeriesCharacter{
+			Name:        name,
+			Gender:      normaliseCharacterGender(c.Gender),
+			VoiceHint:   strings.TrimSpace(c.VoiceHint),
+			Description: strings.TrimSpace(c.Description),
+		})
+		if len(characters) >= maxCharacters {
+			break
+		}
+	}
+
 	return &ScenePlan{
 		Narration:           parsed.Narration,
 		NarrationAnchors:    parsed.NarrationAnchors,
 		NarrationAnimations: parsed.NarrationAnimations,
 		ImageReuse:          imageReuse,
+		Characters:          characters,
 		Sounds:              sounds,
 	}, nil
+}
+
+// normaliseCharacterGender folds the planner's gender field to one of the
+// canonical Azure voice gender labels ("Male" / "Female") or "" when the
+// label is unknown / non-binary / unspecified. Empty preserves the planner's
+// "we don't know — pick from the full pool" intent.
+func normaliseCharacterGender(g string) string {
+	switch strings.ToLower(strings.TrimSpace(g)) {
+	case "male", "m":
+		return "Male"
+	case "female", "f":
+		return "Female"
+	}
+	return ""
 }
 
 // FallbackSeriesPlan builds a deterministic story-ordered narration plan
