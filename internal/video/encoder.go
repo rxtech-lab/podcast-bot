@@ -87,6 +87,16 @@ type Encoder struct {
 	curSide         string
 	curBodyText     string
 	curBodyDuration time.Duration
+
+	// audioStart is the wall-clock moment the encoder began (silence
+	// pump tick zero). audioFirstReal is the wall-clock moment the
+	// audio pump first observed real (non-silent) bytes from the
+	// LiveStream. AudioStartOffset returns the delta — used by the
+	// stitch pass to skip the silent prep prefix so the final mp4
+	// starts at the moment the show actually starts speaking.
+	audioStart     time.Time
+	audioStartedMu sync.Mutex
+	audioFirstReal time.Time
 }
 
 // Options configures encoder construction. Archival switches the HLS
@@ -98,6 +108,14 @@ type Encoder struct {
 // segments before stitch can reach them.
 type Options struct {
 	Archival bool
+
+	// BurnInSeriesCaptions controls whether the series-narration
+	// renderer paints the spoken sentence onto the scene as
+	// always-visible burned-in text. False (default) leaves the
+	// imagery clean — soft-sub clients toggle the .vtt sidecar
+	// instead. Has no effect on debate / puzzle modes, where the
+	// caption slab is part of the chrome.
+	BurnInSeriesCaptions bool
 }
 
 // New starts the encoder in live (sliding-window HLS) mode. Equivalent
@@ -123,6 +141,7 @@ func NewWithOptions(ctx context.Context, sessionDir string, res Resolution, opts
 	if err != nil {
 		return nil, fmt.Errorf("renderer: %w", err)
 	}
+	rend.SetBurnInSeriesCaptions(opts.BurnInSeriesCaptions)
 
 	silent, err := generateSilentMP3(silentBufSeconds)
 	if err != nil {
@@ -241,16 +260,18 @@ func NewWithOptions(ctx context.Context, sessionDir string, res Resolution, opts
 	}
 
 	e := &Encoder{
-		cmd:      cmd,
-		videoIn:  videoIn,
-		audioIn:  audioInW,
-		hlsDir:   hlsDir,
-		rend:     rend,
-		audioBuf: silent,
-		log:      log,
-		done:     make(chan struct{}),
+		cmd:        cmd,
+		videoIn:    videoIn,
+		audioIn:    audioInW,
+		hlsDir:     hlsDir,
+		rend:       rend,
+		audioBuf:   silent,
+		log:        log,
+		done:       make(chan struct{}),
+		audioStart: time.Now(),
 	}
 	e.pump = newEncoderAudioPump(audioInW, silent, log)
+	e.pump.onFirstRealAudio = e.recordFirstRealAudio
 	go e.pump.run(ctx)
 
 	go e.frameLoop(ctx)
@@ -409,6 +430,38 @@ func (e *Encoder) frameLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// recordFirstRealAudio is called by the audio pump the first time it
+// sees a non-silent chunk arrive from the LiveStream. Idempotent — only
+// the first call wins so subsequent gaps (silence between turns) don't
+// reset the offset.
+func (e *Encoder) recordFirstRealAudio() {
+	e.audioStartedMu.Lock()
+	defer e.audioStartedMu.Unlock()
+	if !e.audioFirstReal.IsZero() {
+		return
+	}
+	e.audioFirstReal = time.Now()
+}
+
+// AudioStartOffset returns how long the encoder ran before any real
+// (non-silent) audio bytes arrived. Returns 0 if the audio pump never
+// reported real bytes (degenerate run with no TTS output) or the
+// encoder hasn't started yet. Stitch trims the front of the mp4 by
+// this duration so the output starts at the show's actual first
+// sound, not the silent prep prefix.
+func (e *Encoder) AudioStartOffset() time.Duration {
+	e.audioStartedMu.Lock()
+	defer e.audioStartedMu.Unlock()
+	if e.audioStart.IsZero() || e.audioFirstReal.IsZero() {
+		return 0
+	}
+	d := e.audioFirstReal.Sub(e.audioStart)
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // Close flushes video, waits up to 2s for ffmpeg to exit, then SIGKILLs.

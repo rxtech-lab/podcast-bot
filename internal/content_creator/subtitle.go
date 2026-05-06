@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirily11/debate-bot/internal/subtitleutil"
 )
 
 // vttCue is one rendered subtitle line in the sidecar WebVTT file. Start and
@@ -43,6 +45,12 @@ func newVTTWriter() *vttWriter { return &vttWriter{} }
 // Empty text or non-positive durations are skipped — both would produce a
 // syntactically-invalid (or invisible) cue, and a missing cue is preferable
 // to a malformed file that breaks the player's parser.
+//
+// Punctuation is stripped via subtitleutil.StripPunct so the sidecar's
+// visible text matches the burned-in caption byte-for-byte. The cue's
+// audio duration is unchanged — only the displayed string is condensed.
+// The cursor still advances by `dur` even if stripping leaves an empty
+// string, so subsequent cues stay aligned with the produced audio.
 func (w *vttWriter) Append(text string, dur time.Duration) {
 	if w == nil {
 		return
@@ -51,11 +59,14 @@ func (w *vttWriter) Append(text string, dur time.Duration) {
 	if clean == "" || dur <= 0 {
 		return
 	}
+	clean = subtitleutil.StripPunct(clean)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	start := w.cursor
 	end := start + dur
-	w.cues = append(w.cues, vttCue{Start: start, End: end, Text: clean})
+	if clean != "" {
+		w.cues = append(w.cues, vttCue{Start: start, End: end, Text: clean})
+	}
 	w.cursor = end
 }
 

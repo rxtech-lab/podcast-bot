@@ -78,6 +78,12 @@ type Renderer struct {
 	// in the second half of playback rather than at a fixed offset.
 	bodyAudioDuration time.Duration
 
+	// burnInSeriesCaptions controls whether frameSeries paints the
+	// spoken sentence on the scene as always-visible burned-in text.
+	// false leaves the imagery clean (soft-sub via .vtt only). Set
+	// once at encoder construction via Options.BurnInSeriesCaptions.
+	burnInSeriesCaptions bool
+
 	// speakerStartedAt is the wall-clock moment the current speaker became
 	// non-empty. Distinct from bodyStartedAt: that one resets on every
 	// sentence; this one resets only when the speaker actually changes (or
@@ -433,6 +439,16 @@ func cjkFontCandidates() []string {
 func (r *Renderer) SetTopic(s string) {
 	r.mu.Lock()
 	r.topic = s
+	r.mu.Unlock()
+}
+
+// SetBurnInSeriesCaptions toggles whether series-narration frames paint
+// the active sentence on the scene. Called once by the encoder at
+// construction; not safe to flip mid-stream (the renderer doesn't fade
+// across the boundary).
+func (r *Renderer) SetBurnInSeriesCaptions(b bool) {
+	r.mu.Lock()
+	r.burnInSeriesCaptions = b
 	r.mu.Unlock()
 }
 
@@ -925,6 +941,7 @@ func (r *Renderer) Frame() []byte {
 	seriesEpisode := r.seriesEpisode
 	seriesHost := r.seriesHost
 	seriesLabelStart := r.seriesLabelStart
+	burnInCaptions := r.burnInSeriesCaptions
 	r.mu.Unlock()
 
 	if puzzleMode {
@@ -933,7 +950,11 @@ func (r *Renderer) Frame() []byte {
 		// untouched. Detected via the dedicated narration scene name —
 		// SeriesStage is the only producer of that name.
 		if puzzleScene == "narration" {
-			return r.frameSeries(speaker, role, body,
+			seriesBody := body
+			if !burnInCaptions {
+				seriesBody = ""
+			}
+			return r.frameSeries(speaker, role, seriesBody,
 				bodyStart, bodyDur,
 				userName, userMsg, userStart, userExpiry,
 				seriesShow, seriesSeason, seriesEpisode, seriesHost,

@@ -284,11 +284,29 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	if p.sessionMixer != nil {
 		t0 := time.Now()
 		p.d.Log.Info("pipeline closing session mixer")
-		if cerr := p.sessionMixer.Close(); cerr != nil {
-			p.d.Log.Warn("session music mixer close (drain)", "err", cerr)
+		// Run the close on a side goroutine so cleanupCtx can pull
+		// the rip-cord if the mixer wedges (observed: the pump
+		// goroutine blocked writing into LiveStream after the
+		// listener stopped consuming, and the unbounded post-kill
+		// waits inside Mixer.Close hung the pipeline forever — see
+		// 2026-05-06 stuck-job investigation). Hitting the cap
+		// leaks the mixer goroutine + ffmpeg subprocesses for the
+		// rest of this process's life; that's strictly better than
+		// pinning the channel runner / video job indefinitely.
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- p.sessionMixer.Close() }()
+		select {
+		case cerr := <-closeDone:
+			if cerr != nil {
+				p.d.Log.Warn("session music mixer close (drain)", "err", cerr)
+			}
+			p.d.Log.Info("pipeline session mixer closed",
+				"elapsed", time.Since(t0).Round(time.Millisecond))
+		case <-cleanupCtx.Done():
+			p.d.Log.Warn("session music mixer close hit hard cap — abandoning",
+				"elapsed", time.Since(t0).Round(time.Millisecond),
+				"cap", cleanupHardCap)
 		}
-		p.d.Log.Info("pipeline session mixer closed",
-			"elapsed", time.Since(t0).Round(time.Millisecond))
 	}
 	if cleanupCtx.Err() != nil {
 		p.d.Log.Warn("pipeline cleanup hard cap exceeded — skipping audio drain",

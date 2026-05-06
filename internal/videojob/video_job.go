@@ -182,7 +182,16 @@ func run(ctx context.Context, deps Deps, jobID string,
 		// segment survives long enough for the stitch pass to consume
 		// it. Without this, episodes longer than ~12 s lose their
 		// earliest segments to delete_segments before stitch runs.
-		video.Options{Archival: true}, logger)
+		//
+		// BurnInSeriesCaptions makes the renderer paint the spoken
+		// sentence onto the scene as always-visible burned-in text.
+		// Off by default — soft-sub clients toggle the .vtt sidecar
+		// instead, leaving the imagery clean. The form's burn_subs
+		// checkbox is the user-facing knob.
+		video.Options{
+			Archival:             true,
+			BurnInSeriesCaptions: sub.BurnSubs,
+		}, logger)
 	if err != nil {
 		fail(deps, jobID, logger, fmt.Errorf("encoder: %w", err))
 		return
@@ -257,30 +266,35 @@ func run(ctx context.Context, deps Deps, jobID string,
 	}
 	encClosed = true
 
-	// Stitch HLS + audio into the downloadable mp4.
+	// Stitch HLS + audio into the downloadable mp4. Burn-in is
+	// already baked into the HLS frames by the renderer when
+	// sub.BurnSubs is set (Encoder.Options.BurnInSeriesCaptions),
+	// so stitch only handles soft-subs muxing + the front trim that
+	// drops the silent prep prefix.
 	mp4Path := filepath.Join(jobOutDir, "video.mp4")
 	stitchOpts := video.StitchOpts{
-		SoftSubs: sub.SoftSubs,
-		BurnSubs: sub.BurnSubs,
-		Language: topic.Language,
+		SoftSubs:    sub.SoftSubs,
+		Language:    topic.Language,
+		StartOffset: enc.AudioStartOffset(),
 	}
 	subPath := filepath.Join(jobOutDir, "subtitles.vtt")
-	if stitchOpts.SoftSubs || stitchOpts.BurnSubs {
+	if stitchOpts.SoftSubs {
 		if _, err := os.Stat(subPath); err != nil {
 			logger.Warn("subtitles.vtt not produced — falling back to no subs",
 				"path", subPath, "err", err)
 			stitchOpts.SoftSubs = false
-			stitchOpts.BurnSubs = false
 		} else {
 			stitchOpts.SubtitlesPath = subPath
 		}
 	}
 	audioPath := filepath.Join(jobOutDir, "debate.mp3")
 	stitchLabel := "stitching mp4"
-	if stitchOpts.BurnSubs {
-		stitchLabel += " (re-encoding for burned subs)"
-	} else if stitchOpts.SoftSubs {
+	if stitchOpts.SoftSubs {
 		stitchLabel += " (with soft subtitle track)"
+	}
+	if stitchOpts.StartOffset > 0 {
+		stitchLabel += fmt.Sprintf(" (trimming %s prep)",
+			stitchOpts.StartOffset.Round(time.Second))
 	}
 	status(stitchLabel + "…")
 	tStitch := time.Now()
@@ -289,7 +303,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 		return
 	}
 	logger.Info("video stitched", "path", mp4Path,
-		"soft_subs", stitchOpts.SoftSubs, "burn_subs", stitchOpts.BurnSubs)
+		"soft_subs", stitchOpts.SoftSubs,
+		"burn_in_captions", sub.BurnSubs,
+		"start_offset", stitchOpts.StartOffset.Round(time.Millisecond))
 	if info, err := os.Stat(mp4Path); err == nil {
 		status(fmt.Sprintf("mp4 ready · %.1f MB · %s",
 			float64(info.Size())/(1024*1024),

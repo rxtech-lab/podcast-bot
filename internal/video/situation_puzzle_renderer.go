@@ -6,8 +6,8 @@ import (
 	"image/draw"
 	"strings"
 	"time"
-	"unicode"
 
+	"github.com/sirily11/debate-bot/internal/subtitleutil"
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
 )
@@ -260,73 +260,18 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 	}
 }
 
-// stripPuzzleSubtitlePunct removes punctuation, pause indicators and
-// stray symbols from a puzzle subtitle body so the cinematic single-row
-// caption shows only the readable words. Targets:
-//   - CJK fullstop / comma / pauses: 。 ， 、 ； ： ！ ？ 「 」 『 』 （ ）《 》 【 】
-//   - CJK pause/ellipsis sequences: …… —— ···
-//   - Latin punctuation: . , ; : ! ? — - … " ' ( ) [ ] { }
-//
-// Stripping happens before line wrapping so a residue line that would
-// otherwise contain only "。" or ", " disappears from the display
-// entirely. Letters / digits / CJK glyphs are kept verbatim. Whitespace
-// is collapsed to a single space so the wrapper still has word
-// boundaries for Latin text.
-func stripPuzzleSubtitlePunct(s string) string {
-	if s == "" {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	prevSpace := false
-	for _, r := range s {
-		if isPuzzleSubtitleWordRune(r) {
-			b.WriteRune(r)
-			prevSpace = false
-			continue
-		}
-		// Map any non-word rune to a single collapsed space so Latin
-		// "Hello, world" doesn't become "Helloworld" while CJK still
-		// reads cleanly (CJK has no inter-glyph spaces, so the trim at
-		// the end strips trailing/leading spaces and consecutive spaces
-		// inside CJK runs are collapsed to one each).
-		if !prevSpace {
-			b.WriteByte(' ')
-			prevSpace = true
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
+// stripPuzzleSubtitlePunct delegates to subtitleutil.StripPunct. Kept as a
+// package-local alias so the puzzle renderer's existing call sites read
+// naturally; the strip rules themselves live in the shared package so the
+// WebVTT writer (internal/content_creator) can apply the same rules to
+// the sidecar without pulling in this package.
+func stripPuzzleSubtitlePunct(s string) string { return subtitleutil.StripPunct(s) }
 
-// isPuzzleSubtitleWordRune reports whether r is a content rune that
-// should appear in the cinematic puzzle caption — letter, digit, or any
-// glyph in the CJK Unified Ideographs (and adjacent) blocks. Colons
-// (`:` / `：`) are also kept because they're typically structural
-// (e.g. "今晚的题目：归途" or "Alice: …") and dropping them collapses
-// otherwise-meaningful labels. Everything else (sentence-final
-// punctuation, pause indicators, symbols, control, whitespace) is
-// dropped or mapped to a separator by stripPuzzleSubtitlePunct.
-func isPuzzleSubtitleWordRune(r rune) bool {
-	if unicode.IsLetter(r) || unicode.IsDigit(r) {
-		return true
-	}
-	// Keep colons — both ASCII and the fullwidth CJK variant.
-	if r == ':' || r == '：' {
-		return true
-	}
-	// IsLetter already covers Han ideographs in modern Go, but be
-	// explicit so a future stdlib quirk doesn't silently drop them.
-	switch {
-	case r >= 0x4E00 && r <= 0x9FFF, // CJK Unified Ideographs
-		r >= 0x3400 && r <= 0x4DBF,   // CJK Unified Ext A
-		r >= 0x20000 && r <= 0x2A6DF, // CJK Unified Ext B
-		r >= 0x3040 && r <= 0x309F,   // Hiragana
-		r >= 0x30A0 && r <= 0x30FF,   // Katakana
-		r >= 0xAC00 && r <= 0xD7AF:   // Hangul syllables
-		return true
-	}
-	return false
-}
+// isPuzzleSubtitleWordRune is the in-package alias for subtitleutil.IsWordRune.
+// Used by lineWeights to count content runes per wrapped line; must stay
+// byte-identical with the strip predicate so weighted-scroll math lines up
+// with the visible text.
+func isPuzzleSubtitleWordRune(r rune) bool { return subtitleutil.IsWordRune(r) }
 
 // lineWeights returns the dwell-time weight for each wrapped subtitle
 // line. Weight is the count of content runes — letters, digits, CJK

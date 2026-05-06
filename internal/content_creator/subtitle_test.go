@@ -55,8 +55,39 @@ func TestVTTWriter_WriteToProducesValidVTT(t *testing.T) {
 	if !strings.Contains(body, "00:00:01.500 --> 00:00:03.500") {
 		t.Errorf("second cue timing wrong; full body=%q", body)
 	}
-	if !strings.Contains(body, "hello world.") || !strings.Contains(body, "second line.") {
+	// Punctuation is stripped to align with burned-in captions, so the
+	// trailing periods on the input cues should not appear in the file.
+	if !strings.Contains(body, "hello world") || !strings.Contains(body, "second line") {
 		t.Errorf("cue text missing; full body=%q", body)
+	}
+	if strings.Contains(body, "hello world.") || strings.Contains(body, "second line.") {
+		t.Errorf("punctuation should be stripped from cue text; full body=%q", body)
+	}
+}
+
+// TestVTTWriter_StripsPunct asserts that CJK punctuation (the project's
+// primary content language) is removed from cue text so the sidecar
+// matches what drawHBOSubtitleBodyOutlined paints on the burned-in
+// frame. Mismatched soft / burned text was the original symptom.
+func TestVTTWriter_StripsPunct(t *testing.T) {
+	w := newVTTWriter()
+	w.Append("林夕說：「夜深了，我得走。」", 2*time.Second)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subtitles.vtt")
+	if err := w.WriteTo(path); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	for _, p := range []string{"。", "，", "「", "」"} {
+		if strings.Contains(got, p) {
+			t.Errorf("expected punctuation %q stripped; body=%q", p, got)
+		}
+	}
+	// Colons (both ASCII and fullwidth) are deliberately preserved by
+	// the strip rules — they're structural in lines like "林夕說：…".
+	if !strings.Contains(got, "林夕說：") {
+		t.Errorf("colon should be preserved; body=%q", got)
 	}
 }
 
@@ -74,7 +105,11 @@ func TestVTTWriter_WriteToEmptyNoOp(t *testing.T) {
 
 func TestVTTWriter_EscapeAndNewlines(t *testing.T) {
 	w := newVTTWriter()
-	w.Append("a < b & c", 1*time.Second)
+	// `<` / `>` / `&` are not word runes, so the punctuation strip drops
+	// them before they reach escapeVTT. Use an input that exercises the
+	// newline collapse without relying on the now-stripped html-like
+	// chars; the html escape path is covered directly by escapeVTT's
+	// behaviour and unaffected by the strip.
 	w.Append("line one\nline two", 1*time.Second)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.vtt")
@@ -83,9 +118,6 @@ func TestVTTWriter_EscapeAndNewlines(t *testing.T) {
 	}
 	data, _ := os.ReadFile(path)
 	body := string(data)
-	if !strings.Contains(body, "a &lt; b &amp; c") {
-		t.Errorf("html-like chars not escaped; body=%q", body)
-	}
 	if strings.Contains(body, "line one\nline two") {
 		t.Errorf("internal newline should be collapsed; body=%q", body)
 	}

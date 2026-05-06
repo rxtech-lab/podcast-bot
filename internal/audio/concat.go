@@ -15,6 +15,12 @@ import (
 //
 // All input files must share the same codec/rate/channels — guaranteed here
 // because every turn uses the same Azure output format.
+//
+// File paths are resolved to absolute form before being written into the
+// list. The concat demuxer interprets relative entries against the list
+// file's directory (not the working directory), so a relative path like
+// `out/session/.../turn_001.mp3` would otherwise be double-prefixed when
+// `outDir` itself is also a relative path under that same tree.
 func ConcatToMP3(outDir, outPath string, files []string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no input files to concat")
@@ -25,8 +31,12 @@ func ConcatToMP3(outDir, outPath string, files []string) error {
 	list := filepath.Join(outDir, "concat_list.txt")
 	var b bytes.Buffer
 	for _, p := range files {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("abs %s: %w", p, err)
+		}
 		// concat-demuxer requires posix-style escaped single quotes.
-		escaped := strings.ReplaceAll(p, "'", `'\''`)
+		escaped := strings.ReplaceAll(abs, "'", `'\''`)
 		fmt.Fprintf(&b, "file '%s'\n", escaped)
 	}
 	if err := os.WriteFile(list, b.Bytes(), 0o644); err != nil {

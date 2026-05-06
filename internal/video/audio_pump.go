@@ -60,6 +60,13 @@ type encoderAudioPump struct {
 	cond   *sync.Cond
 	buf    bytes.Buffer
 	closed bool
+
+	// onFirstRealAudio fires exactly once, the first time feedFrom
+	// observes a non-empty chunk from the LiveStream. The encoder
+	// uses this to stamp the wall-clock offset between encoder start
+	// and first real audio for the stitch front-trim. nil disables.
+	onFirstRealAudio func()
+	firstSeen        bool
 }
 
 func newEncoderAudioPump(out io.WriteCloser, silent []byte, log *slog.Logger) *encoderAudioPump {
@@ -88,9 +95,17 @@ func (p *encoderAudioPump) feedFrom(ctx context.Context, ls *audio.LiveStream) {
 				p.mu.Unlock()
 				return
 			}
+			fireFirst := false
+			if !p.firstSeen && len(chunk) > 0 {
+				p.firstSeen = true
+				fireFirst = p.onFirstRealAudio != nil
+			}
 			p.buf.Write(chunk)
 			p.cond.Broadcast()
 			p.mu.Unlock()
+			if fireFirst {
+				p.onFirstRealAudio()
+			}
 		}
 	}
 }

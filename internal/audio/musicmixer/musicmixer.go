@@ -53,6 +53,16 @@ import (
 // in trade for never freezing the channel.
 const closeStageTimeout = 15 * time.Second
 
+// postKillTimeout caps the wait for a goroutine / subprocess to exit
+// AFTER killAll has SIGKILL'd everything. Once the kernel tears the
+// pipes down the reader/mixer/pump goroutines should unblock within
+// milliseconds; if they don't, the goroutine is wedged on something
+// that isn't a pipe (e.g. a blocked write into a downstream sink that
+// stopped consuming), and there's nothing more Close() can do about it.
+// Bounding the wait lets Close() return so callers (the pipeline
+// cleanup path) aren't pinned indefinitely. We log + leak in trade.
+const postKillTimeout = 5 * time.Second
+
 // musicVolume is the linear gain applied to the background bed
 // before TTS is summed in. 0.10 ≈ −20 dBFS, quiet enough to sit
 // under speech without competing with it.
@@ -348,7 +358,9 @@ func (m *Mixer) Close() error {
 		}
 		if !waitWithTimeout(m.readerDone, closeStageTimeout) {
 			m.killAll()
-			<-m.readerDone
+			// Bounded post-kill wait. Mixer has no logger field, so
+			// a wedge here returns silently and the goroutine leaks.
+			_ = waitWithTimeout(m.readerDone, postKillTimeout)
 		}
 
 		// 2. Tell mixLoop it can exit once the queued TTS PCM has
@@ -359,7 +371,7 @@ func (m *Mixer) Close() error {
 		close(m.drainCh)
 		if !waitWithTimeout(m.mixDone, closeStageTimeout) {
 			m.killAll()
-			<-m.mixDone
+			_ = waitWithTimeout(m.mixDone, postKillTimeout)
 		}
 
 		// 3. Stop the music decoder now that mixLoop has exited.
@@ -377,20 +389,24 @@ func (m *Mixer) Close() error {
 		}
 		if !waitWithTimeout(m.pumpDone, closeStageTimeout) {
 			m.killAll()
-			<-m.pumpDone
+			_ = waitWithTimeout(m.pumpDone, postKillTimeout)
 		}
 
 		// 5. Reap subprocesses. Non-zero exits from SIGINT'd
-		//    music ffmpeg are expected and not surfaced.
-		_ = m.musicCmd.Wait()
-		_ = m.ttsCmd.Wait()
-		_ = m.encCmd.Wait()
+		//    music ffmpeg are expected and not surfaced. Each
+		//    Wait is bounded so a wedged subprocess (or a Wait
+		//    racing with goroutines that haven't released their
+		//    pipe handles) can't pin Close indefinitely. After
+		//    timeout we SIGKILL and accept that the entry leaks.
+		waitCmdWithTimeout(m.musicCmd, postKillTimeout)
+		waitCmdWithTimeout(m.ttsCmd, postKillTimeout)
+		waitCmdWithTimeout(m.encCmd, postKillTimeout)
 		// 6. Reap any overlay clips still in flight at session end.
 		m.overlaysMu.Lock()
 		for _, ov := range m.overlays {
 			if ov.cmd != nil && ov.cmd.Process != nil {
 				_ = ov.cmd.Process.Signal(syscall.SIGINT)
-				_ = ov.cmd.Wait()
+				waitCmdWithTimeout(ov.cmd, postKillTimeout)
 			}
 		}
 		m.overlays = nil
@@ -416,6 +432,34 @@ func waitWithTimeout(ch <-chan struct{}, d time.Duration) bool {
 		return true
 	case <-time.After(d):
 		return false
+	}
+}
+
+// waitCmdWithTimeout reaps cmd with a wall-clock cap. exec.Cmd.Wait
+// blocks until every goroutine attached to the process's stdout /
+// stderr pipes has returned; if one of those is wedged (e.g. an
+// io.Copy targeting a sink that stopped consuming), Wait can hang
+// indefinitely even after the process has exited. SIGKILL on timeout
+// + accept the goroutine leak so callers aren't pinned forever.
+func waitCmdWithTimeout(cmd *exec.Cmd, d time.Duration) {
+	if cmd == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(d):
+		}
 	}
 }
 
