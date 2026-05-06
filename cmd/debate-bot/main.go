@@ -796,6 +796,9 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		// episode's recap engine can read them. Best-effort — failure
 		// here doesn't fail the run.
 		if d.topic.Type == config.ContentTypeSeries {
+			r.log.Info("series episode finished — preparing handoff",
+				"channel", ch.def.ID, "id", d.id,
+				"completed_index", i+1, "next_index", i+2, "of", total)
 			t0 := time.Now()
 			finishSeriesEpisode(r.log, &debateEnv, d)
 			r.log.Info("series finish complete",
@@ -856,6 +859,11 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 			filepath.Join(debateEnv.OutDir, "debate.mp3"))
 		fmt.Fprintf(os.Stdout, "✓ ch %d [%s] finished debate %d/%d — %s\n",
 			ch.def.Number, ch.def.ID, i+1, total, d.title)
+		if d.topic.Type == config.ContentTypeSeries {
+			r.log.Info("series channel ready for next episode",
+				"channel", ch.def.ID, "completed_id", d.id,
+				"completed_index", i+1, "next_index", i+2, "of", total)
+		}
 	}
 }
 

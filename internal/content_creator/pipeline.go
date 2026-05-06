@@ -106,6 +106,16 @@ const subtitleClientLatency = 3100 * time.Millisecond
 // which has shown pathological hangs that pin the channel runner.
 const postProducerGrace = 20 * time.Second
 
+// cleanupHardCap caps the total wall time spent in the post-producer
+// cleanup tail (grace sleep + sessionMixer.Close + waitAudioDrained).
+// Each step has its own internal timeout, but those have been observed
+// to compound or fail to fire in pathological mixer/encoder states,
+// pinning the channel runner forever. Once this cap is reached the
+// pipeline returns regardless — at worst the listener loses ~0.5s of
+// tail audio at the handoff, which is strictly better than the
+// channel hanging and never starting the next debate.
+const cleanupHardCap = 90 * time.Second
+
 // Pipeline owns the goroutines for produce/memory stages.
 type Pipeline struct {
 	d Deps
@@ -243,20 +253,31 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	// the channel runner indefinitely. Bounded by ctx so a hard shutdown
 	// (Ctrl-C) doesn't have to wait the full window out.
 	p.d.Log.Info("pipeline producer drained — holding for tail playback",
-		"turns", len(files), "grace", postProducerGrace)
+		"turns", len(files), "grace", postProducerGrace, "hard_cap", cleanupHardCap)
+	cleanupCtx, cancelCleanup := context.WithTimeout(ctx, cleanupHardCap)
+	defer cancelCleanup()
 	select {
-	case <-ctx.Done():
+	case <-cleanupCtx.Done():
 	case <-time.After(postProducerGrace):
 	}
 	if p.sessionMixer != nil {
+		t0 := time.Now()
+		p.d.Log.Info("pipeline closing session mixer")
 		if cerr := p.sessionMixer.Close(); cerr != nil {
 			p.d.Log.Warn("session music mixer close (drain)", "err", cerr)
 		}
+		p.d.Log.Info("pipeline session mixer closed",
+			"elapsed", time.Since(t0).Round(time.Millisecond))
 	}
-	t0 := time.Now()
-	p.waitAudioDrained(ctx)
-	p.d.Log.Info("pipeline audio drained",
-		"elapsed", time.Since(t0).Round(time.Millisecond))
+	if cleanupCtx.Err() != nil {
+		p.d.Log.Warn("pipeline cleanup hard cap exceeded — skipping audio drain",
+			"cap", cleanupHardCap)
+	} else {
+		t0 := time.Now()
+		p.waitAudioDrained(cleanupCtx)
+		p.d.Log.Info("pipeline audio drained",
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+	}
 
 	// Sidecar WebVTT next to the run's audio archive. WriteTo no-ops on
 	// an empty cue list, so a run that produced no TTS output (degenerate
