@@ -35,6 +35,7 @@ type Renderer struct {
 	// nil when the embedded file is the 1×1 placeholder — the renderer treats
 	// nil as "draw the procedural fallback in this slot".
 	bgPlate         *image.RGBA
+	seriesBgPlate   *image.RGBA // full-bleed series narration fallback (no per-beat scene set)
 	headerPlate     *image.RGBA
 	lowerThirdPlate *image.RGBA
 	panelAffPlate   *image.RGBA
@@ -280,6 +281,11 @@ func newRenderer(width, height int) (*Renderer, error) {
 	return &Renderer{
 		width: width, height: height,
 		bgPlate:         loadPlate("bg.png", width, height),
+		// series_bg ships at 1920×1080 so it survives a 1080p ffmpeg
+		// upscale crisply — 0,0 here disables the size guard, and
+		// drawBackground rescales it down to the 1280×720 composite
+		// with Catmull-Rom on each frame.
+		seriesBgPlate: loadPlate("series_bg.png", 0, 0),
 		headerPlate:     loadPlate("header_bar.png", 0, 0),
 		lowerThirdPlate: loadPlate("lower_third.png", 0, 0),
 		panelAffPlate:   loadPlate("panel_aff.png", 0, 0),
@@ -458,6 +464,15 @@ func (r *Renderer) SetState(speaker, role, side, body string, audioDuration time
 			r.speakerStartedAt = time.Now()
 		}
 	}
+	// Series identification label starts its 15s lifetime on the first
+	// frame where the show actually begins speaking — not on
+	// SetSeriesLabel. SetSeriesLabel is called from handleTopic which
+	// runs before TTS / image gen finishes, so anchoring the fade to
+	// "first speaker on screen" guarantees the audience sees the label
+	// once the episode is actually playing.
+	if speaker != "" && r.seriesShow != "" && r.seriesLabelStart.IsZero() {
+		r.seriesLabelStart = time.Now()
+	}
 	r.body = body
 
 	want := stageIdle
@@ -504,7 +519,13 @@ func (r *Renderer) SetPuzzleSceneName(name string) {
 // during narration mode. Three rows: show name, season/episode, host
 // name. Repeated calls with identical values are no-ops so a redundant
 // TopicMsg doesn't restart the fade. Setting an empty show clears the
-// label (and resets the fade clock).
+// label.
+//
+// The fade clock is NOT started here — the label holds at full opacity
+// until the show actually starts (first non-empty speaker arrives via
+// SetState). Otherwise an episode whose TTS / image gen takes longer
+// than seriesLabelTotalDuration to warm up would have the label
+// disappear before the audience hears the first line.
 func (r *Renderer) SetSeriesLabel(show string, season, episode int, host string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -516,11 +537,7 @@ func (r *Renderer) SetSeriesLabel(show string, season, episode int, host string)
 	r.seriesSeason = season
 	r.seriesEpisode = episode
 	r.seriesHost = host
-	if show == "" {
-		r.seriesLabelStart = time.Time{}
-	} else {
-		r.seriesLabelStart = time.Now()
-	}
+	r.seriesLabelStart = time.Time{}
 }
 
 // SetSceneBackground swaps in a new scene background, retaining the
@@ -925,9 +942,17 @@ func (r *Renderer) Frame() []byte {
 // When no scene bg is set, falls back to the static plate or procedural
 // gradient.
 func (r *Renderer) drawBackground(img *image.RGBA) {
+	// Series narration mode prefers its own painterly bg plate when no
+	// per-beat scene image is in play (gap between episodes, warmup
+	// before the first scene PNG arrives). The debate bg looks like a
+	// CNN newsroom and reads wrong on a narrated drama.
+	fallback := r.bgPlate
+	if r.puzzleSceneName == "narration" && r.seriesBgPlate != nil {
+		fallback = r.seriesBgPlate
+	}
 	if r.sceneBg == nil && r.prevSceneBg == nil {
-		if r.bgPlate != nil {
-			draw.Draw(img, img.Bounds(), r.bgPlate, image.Point{}, draw.Src)
+		if fallback != nil {
+			drawScaledOver(img, fallback, img.Bounds())
 			return
 		}
 		drawGradientBackground(img,
@@ -941,8 +966,8 @@ func (r *Renderer) drawBackground(img *image.RGBA) {
 	// pixels at the edges (when the camera move shrinks the viewport
 	// inside the dst, the surrounding area would otherwise be transparent).
 	if r.prevSceneBg == nil {
-		if r.bgPlate != nil {
-			draw.Draw(img, img.Bounds(), r.bgPlate, image.Point{}, draw.Src)
+		if fallback != nil {
+			drawScaledOver(img, fallback, img.Bounds())
 		} else {
 			drawGradientBackground(img,
 				color.RGBA{0x12, 0x14, 0x1f, 0xff},

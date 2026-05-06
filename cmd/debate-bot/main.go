@@ -411,6 +411,13 @@ func extractContentArgs(args []string) (specs []string, rest []string, deprecate
 
 var slugRe = regexp.MustCompile(`[^a-z0-9_-]+`)
 
+// seriesEpisodeGap is the breathing pause held between two consecutive
+// series episodes after orch.Run drains the audio. The stage is parked
+// on the series fallback plate (no caption, no scene) for this window
+// so back-to-back episodes don't read as a hard cut on a narrated
+// drama. Cancellable via the runtime context.
+const seriesEpisodeGap = 6 * time.Second
+
 func slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = slugRe.ReplaceAllString(s, "-")
@@ -742,6 +749,16 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		fmt.Fprintf(os.Stdout, "▶ ch %d [%s] starting debate %d/%d — %s\n",
 			ch.def.Number, ch.def.ID, i+1, total, d.title)
 
+		// For series content, flip the renderer into narration mode
+		// synchronously BEFORE the topic msg lands on the bus. Without
+		// this, the few frames between "send TopicMsg" and "SeriesStage
+		// receives it" still render through the debate path and briefly
+		// show the CNN-style "今日辯題 · TODAY'S TOPIC" idle card with
+		// the episode title — visibly wrong for a narrated drama.
+		if d.topic.Type == config.ContentTypeSeries && ch.seriesStage != nil {
+			ch.seriesStage.Preactivate()
+		}
+
 		// Send TopicMsg FIRST so the puzzle stage activates immediately
 		// with the title + "today's puzzle" idle decoration visible to
 		// viewers — they get a clean "preparing scene…" screen instead of
@@ -762,6 +779,22 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		// here doesn't fail the run.
 		if d.topic.Type == config.ContentTypeSeries {
 			finishSeriesEpisode(r.log, &debateEnv, d)
+			// Inter-episode breathing room. orch.Run already drained
+			// the audio (Pipeline.waitAudioDrained), but back-to-back
+			// title cards read as a hard cut on a narrated drama.
+			// Park the stage on the series fallback plate (no caption,
+			// no scene image) and hold for a few seconds so the
+			// audience reads "episode just ended" before the next
+			// title slides in.
+			if ch.seriesStage != nil {
+				ch.seriesStage.PostEpisodeIdle()
+			}
+			select {
+			case <-r.ctx.Done():
+				orch.Shutdown()
+				return
+			case <-time.After(seriesEpisodeGap):
+			}
 		}
 		orch.Shutdown()
 		r.sessions.SetCurrentOrch(ch.def.ID, "", nil)

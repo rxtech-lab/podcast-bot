@@ -82,7 +82,7 @@ func (s *SeriesStage) Run(ctx context.Context, bus *eventbus.Bus) {
 					s.activate()
 					s.handleTopic(m)
 				} else {
-					s.idle()
+					s.idle(m.Type)
 				}
 				continue
 			}
@@ -116,14 +116,53 @@ func (s *SeriesStage) activate() {
 	s.enc.SetPuzzleSceneName(scenes.SceneNarration)
 }
 
-func (s *SeriesStage) idle() {
+// Preactivate flips the renderer into series narration mode
+// synchronously — separate from the bus-driven activate() that fires
+// when TopicMsg arrives. The channel runner calls it BEFORE sending the
+// topic so frames rendered during the gap between TopicMsg dispatch
+// and bus delivery don't briefly show the debate-style "TODAY'S TOPIC"
+// idle card. Idempotent.
+func (s *SeriesStage) Preactivate() {
+	s.enc.SetPuzzleMode(true)
+	s.enc.SetPuzzleSceneName(scenes.SceneNarration)
+}
+
+// PostEpisodeIdle parks the stage between two series episodes: caption /
+// name plate cleared, scene image dropped, but puzzleMode + the
+// "narration" scene name stay on so drawBackground keeps painting the
+// series fallback plate (not the debate one). The channel runner calls
+// this after orch.Run drains so the audience sees a clean intermission
+// frame for the inter-episode pause window. Idempotent.
+func (s *SeriesStage) PostEpisodeIdle() {
+	s.mu.Lock()
+	s.curSpeaker, s.curRole = "", ""
+	s.body.Reset()
+	s.curIdx = 0
+	s.narration = nil
+	s.animations = nil
+	s.mu.Unlock()
+	s.enc.SetSpeaker("", "", "")
+	s.enc.SetBody("", 0)
+	s.enc.SetSceneBackground(nil)
+	s.enc.SetSceneAnimation("")
+	s.enc.SetTopic("")
+	s.enc.SetPhase("")
+}
+
+func (s *SeriesStage) idle(nextType string) {
 	s.mu.Lock()
 	s.active = false
 	s.curSpeaker, s.curRole = "", ""
 	s.body.Reset()
 	s.curIdx = 0
 	s.mu.Unlock()
-	s.enc.SetPuzzleMode(false)
+	// Puzzle content also rides the puzzleMode pipeline; only flip it off
+	// when the next topic is a debate (the only mode that wants debate
+	// chrome). Symmetric to PuzzleStage.idle's series carve-out — without
+	// it the series→puzzle handoff would briefly drop into debate mode.
+	if nextType != config.ContentTypeSituationPuzzle {
+		s.enc.SetPuzzleMode(false)
+	}
 	s.enc.SetSceneBackground(nil)
 	s.enc.SetSeriesLabel("", 0, 0, "")
 }

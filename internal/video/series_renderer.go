@@ -121,13 +121,16 @@ func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 		drawLabel := func(alpha float64) {
 			blitWithGlobalAlphaAt(img, labelBuf, marginX, 60, alpha)
 		}
-		elapsed := time.Since(seriesLabelStart)
+		// seriesLabelStart stays zero until the first speaker arrives
+		// (see Renderer.SetState). While the show is still warming up
+		// we hold the label at full opacity; once the clock starts the
+		// usual fade-in / hold / fade-out runs against that anchor.
 		switch {
 		case seriesLabelStart.IsZero():
 			drawLabel(1)
-		case elapsed < seriesLabelFadeIn:
+		case time.Since(seriesLabelStart) < seriesLabelFadeIn:
 			fadeIn(drawLabel, seriesLabelStart, seriesLabelFadeIn)
-		case elapsed < seriesLabelTotalDuration-seriesLabelFadeOut:
+		case time.Since(seriesLabelStart) < seriesLabelTotalDuration-seriesLabelFadeOut:
 			drawLabel(1)
 		default:
 			fadeOut(drawLabel,

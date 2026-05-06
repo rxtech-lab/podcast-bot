@@ -112,7 +112,7 @@ func (s *PuzzleStage) Run(ctx context.Context, bus *eventbus.Bus) {
 					s.activate()
 					s.handleTopic(m)
 				} else {
-					s.idle()
+					s.idle(m.Type)
 				}
 				continue
 			}
@@ -157,7 +157,7 @@ func (s *PuzzleStage) activate() {
 	s.enc.SetPuzzleMode(true)
 }
 
-func (s *PuzzleStage) idle() {
+func (s *PuzzleStage) idle(nextType string) {
 	s.stopSceneRotation()
 	s.mu.Lock()
 	s.active = false
@@ -168,8 +168,15 @@ func (s *PuzzleStage) idle() {
 	s.body.Reset()
 	s.mu.Unlock()
 	// Reset puzzle layout so a subsequent debate topic on the same encoder
-	// renders with the standard CNN chrome.
-	s.enc.SetPuzzleMode(false)
+	// renders with the standard CNN chrome. Series content also rides the
+	// puzzleMode pipeline (full-bleed scene + outlined captions), so keep
+	// the renderer in puzzle mode when we're handing off to a series
+	// topic — otherwise the brief frame between PuzzleStage.idle() and
+	// SeriesStage.activate() flashes the debate-style "TODAY'S TOPIC"
+	// idle card.
+	if nextType != config.ContentTypeSeries {
+		s.enc.SetPuzzleMode(false)
+	}
 	s.enc.SetSceneBackground(nil)
 }
 

@@ -25,6 +25,20 @@ func PhaseLabel(contentType string, p agent.Phase) string {
 		case agent.PhaseEnded, agent.PhaseConclusion:
 			return "總結"
 		}
+	case config.ContentTypeSeries:
+		// Series episodes: a single narrator runs through (optional
+		// recap →) main narration → end. The planner emits PhaseOpening
+		// for the recap and PhaseFreeSpeech for the body, so map both
+		// to TV-episode-style labels rather than the debate defaults
+		// ("自由辯論" doesn't make sense on a narrated drama).
+		switch p {
+		case agent.PhaseSetup, agent.PhaseOpening:
+			return "上集回顧"
+		case agent.PhaseFreeSpeech:
+			return "本集"
+		case agent.PhaseEnded, agent.PhaseConclusion:
+			return "完"
+		}
 	default:
 		// Debate (and unknown types — match the existing on-frame chip).
 		switch p {
