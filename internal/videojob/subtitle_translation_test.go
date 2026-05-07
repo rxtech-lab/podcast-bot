@@ -2,7 +2,9 @@ package videojob
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,15 +15,56 @@ import (
 )
 
 type fakeSubtitleJSONClient struct {
-	raw []byte
-	err error
+	raws  [][]byte
+	raw   []byte
+	errs  []error
+	err   error
+	calls int
 }
 
-func (f fakeSubtitleJSONClient) JSON(context.Context, string, string) ([]byte, error) {
+func (f *fakeSubtitleJSONClient) JSON(context.Context, string, string) ([]byte, error) {
+	call := f.calls
+	f.calls++
+	if call < len(f.errs) && f.errs[call] != nil {
+		return nil, f.errs[call]
+	}
+	if call < len(f.raws) {
+		return f.raws[call], nil
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.raw, nil
+}
+
+func TestTranslateSubtitleCuesTranslatesInChunks(t *testing.T) {
+	source := make([]contentcreator.SubtitleCue, subtitleTranslationChunkSize+1)
+	for i := range source {
+		source[i] = contentcreator.SubtitleCue{
+			Start: time.Duration(i) * time.Second,
+			End:   time.Duration(i+1) * time.Second,
+			Text:  fmt.Sprintf("cue %d", i+1),
+		}
+	}
+	client := &fakeSubtitleJSONClient{raws: [][]byte{
+		subtitleTranslationJSON(t, subtitleTranslationChunkSize, "chunk-a"),
+		subtitleTranslationJSON(t, 1, "chunk-b"),
+	}}
+
+	cues, err := translateSubtitleCues(context.Background(),
+		client, source, subtitleLanguage{Code: "en", Name: "English"})
+	if err != nil {
+		t.Fatalf("translateSubtitleCues: %v", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("calls = %d, want 2", client.calls)
+	}
+	if got, want := len(cues), subtitleTranslationChunkSize+1; got != want {
+		t.Fatalf("translated cues = %d, want %d", got, want)
+	}
+	if got, want := cues[subtitleTranslationChunkSize].Text, "chunk b 1"; got != want {
+		t.Fatalf("last translated cue = %q, want %q", got, want)
+	}
 }
 
 func TestTranslateSubtitleCuesValidatesCount(t *testing.T) {
@@ -29,18 +72,49 @@ func TestTranslateSubtitleCuesValidatesCount(t *testing.T) {
 		{Start: 0, End: time.Second, Text: "hello"},
 		{Start: time.Second, End: 2 * time.Second, Text: "world"},
 	}
+	restore := stubSubtitleTranslationBackoff()
+	defer restore()
+
 	_, err := translateSubtitleCues(context.Background(),
-		fakeSubtitleJSONClient{raw: []byte(`{"translations":["hola"]}`)},
+		&fakeSubtitleJSONClient{raw: []byte(`{"translations":["hola"]}`)},
 		source, subtitleLanguage{Code: "es", Name: "Spanish"})
 	if err == nil || !strings.Contains(err.Error(), "got 1 cues, want 2") {
 		t.Fatalf("expected cue count error, got %v", err)
 	}
 }
 
+func TestTranslateSubtitleCuesRetriesValidationErrors(t *testing.T) {
+	source := []contentcreator.SubtitleCue{
+		{Start: 0, End: time.Second, Text: "hello"},
+		{Start: time.Second, End: 2 * time.Second, Text: "world"},
+	}
+	client := &fakeSubtitleJSONClient{raws: [][]byte{
+		[]byte(`{"translations":["hola"]}`),
+		[]byte(`{"translations":["hola","mundo"]}`),
+	}}
+	restore := stubSubtitleTranslationBackoff()
+	defer restore()
+
+	cues, err := translateSubtitleCues(context.Background(),
+		client, source, subtitleLanguage{Code: "es", Name: "Spanish"})
+	if err != nil {
+		t.Fatalf("translateSubtitleCues: %v", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("calls = %d, want 2", client.calls)
+	}
+	if got, want := cues[1].Text, "mundo"; got != want {
+		t.Fatalf("translated text = %q, want %q", got, want)
+	}
+}
+
 func TestTranslateSubtitleCuesRejectsBadJSON(t *testing.T) {
 	source := []contentcreator.SubtitleCue{{Start: 0, End: time.Second, Text: "hello"}}
+	restore := stubSubtitleTranslationBackoff()
+	defer restore()
+
 	_, err := translateSubtitleCues(context.Background(),
-		fakeSubtitleJSONClient{raw: []byte(`not json`)},
+		&fakeSubtitleJSONClient{raw: []byte(`not json`)},
 		source, subtitleLanguage{Code: "fr", Name: "French"})
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
 		t.Fatalf("expected invalid JSON error, got %v", err)
@@ -50,7 +124,7 @@ func TestTranslateSubtitleCuesRejectsBadJSON(t *testing.T) {
 func TestTranslateSubtitleCuesStripsPunctuation(t *testing.T) {
 	source := []contentcreator.SubtitleCue{{Start: 0, End: time.Second, Text: "hello"}}
 	cues, err := translateSubtitleCues(context.Background(),
-		fakeSubtitleJSONClient{raw: []byte(`{"translations":["Hello, world!"]}`)},
+		&fakeSubtitleJSONClient{raw: []byte(`{"translations":["Hello, world!"]}`)},
 		source, subtitleLanguage{Code: "en", Name: "English"})
 	if err != nil {
 		t.Fatalf("translateSubtitleCues: %v", err)
@@ -65,7 +139,7 @@ func TestSubtitleTracksForJobWritesDistinctLanguageFiles(t *testing.T) {
 		{Start: 0, End: time.Second, Text: "hello"},
 	}
 	dir := t.TempDir()
-	client := fakeSubtitleJSONClient{raw: []byte(`{"translations":["hola"]}`)}
+	client := &fakeSubtitleJSONClient{raw: []byte(`{"translations":["hola"]}`)}
 	tracks, err := subtitleTracksForJob(context.Background(), client, dir,
 		"zh-CN", source, []string{"es", "es", "zh-CN"})
 	if err != nil {
@@ -89,12 +163,34 @@ func TestSubtitleTracksForJobWritesDistinctLanguageFiles(t *testing.T) {
 
 func TestSubtitleTracksForJobPropagatesTranslationErrors(t *testing.T) {
 	source := []contentcreator.SubtitleCue{{Start: 0, End: time.Second, Text: "hello"}}
+	restore := stubSubtitleTranslationBackoff()
+	defer restore()
+
 	_, err := subtitleTracksForJob(context.Background(),
-		fakeSubtitleJSONClient{err: errors.New("network down")},
+		&fakeSubtitleJSONClient{err: errors.New("network down")},
 		t.TempDir(), "zh-CN", source, []string{"en"})
 	if err == nil || !strings.Contains(err.Error(), "network down") {
 		t.Fatalf("expected translation error, got %v", err)
 	}
+}
+
+func stubSubtitleTranslationBackoff() func() {
+	old := subtitleTranslationRetryBackoff
+	subtitleTranslationRetryBackoff = func(int) time.Duration { return time.Millisecond }
+	return func() { subtitleTranslationRetryBackoff = old }
+}
+
+func subtitleTranslationJSON(t *testing.T, n int, prefix string) []byte {
+	t.Helper()
+	translations := make([]string, n)
+	for i := range translations {
+		translations[i] = fmt.Sprintf("%s %d", prefix, i+1)
+	}
+	data, err := json.Marshal(subtitleTranslationResponse{Translations: translations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestNormalizeRequestedSubtitleLanguages(t *testing.T) {

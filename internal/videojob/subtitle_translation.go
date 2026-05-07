@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/llm"
@@ -140,12 +141,41 @@ type subtitleTranslationResponse struct {
 	Translations []string `json:"translations"`
 }
 
+const subtitleTranslationAttempts = 4
+const subtitleTranslationChunkSize = 80
+
+var subtitleTranslationRetryBackoff = func(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 750 * time.Millisecond
+	case 2:
+		return 1500 * time.Millisecond
+	default:
+		return 3 * time.Second
+	}
+}
+
 func translateSubtitleCues(ctx context.Context, client subtitleJSONClient,
 	source []contentcreator.SubtitleCue, target subtitleLanguage,
 ) ([]contentcreator.SubtitleCue, error) {
 	if client == nil {
 		return nil, fmt.Errorf("subtitle translation client is not configured")
 	}
+	out := make([]contentcreator.SubtitleCue, 0, len(source))
+	for start := 0; start < len(source); start += subtitleTranslationChunkSize {
+		end := min(start+subtitleTranslationChunkSize, len(source))
+		translated, err := translateSubtitleCueChunk(ctx, client, source[start:end], target, start, len(source))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, translated...)
+	}
+	return out, nil
+}
+
+func translateSubtitleCueChunk(ctx context.Context, client subtitleJSONClient,
+	source []contentcreator.SubtitleCue, target subtitleLanguage, startIndex, total int,
+) ([]contentcreator.SubtitleCue, error) {
 	texts := make([]string, len(source))
 	for i, cue := range source {
 		texts[i] = cue.Text
@@ -162,7 +192,29 @@ func translateSubtitleCues(ctx context.Context, client subtitleJSONClient,
 	}
 
 	system := "You translate subtitle cue text. Return only valid JSON with a translations array. Preserve cue count and order exactly. Do not include timestamps, numbering, markdown, commentary, or extra fields."
-	user := "Translate every cue into " + target.Name + ". Keep each entry concise enough for subtitles. Input JSON:\n" + string(payload)
+	user := fmt.Sprintf("Translate cues %d-%d of %d into %s. Keep each entry concise enough for subtitles. Return exactly %d translations in the same order. Input JSON:\n%s",
+		startIndex+1, startIndex+len(source), total, target.Name, len(source), string(payload))
+	var lastErr error
+	for attempt := 0; attempt < subtitleTranslationAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(subtitleTranslationRetryBackoff(attempt)):
+			}
+		}
+		cues, err := translateSubtitleCuesOnce(ctx, client, source, target, system, user)
+		if err == nil {
+			return cues, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("after %d attempts: %w", subtitleTranslationAttempts, lastErr)
+}
+
+func translateSubtitleCuesOnce(ctx context.Context, client subtitleJSONClient,
+	source []contentcreator.SubtitleCue, target subtitleLanguage, system, user string,
+) ([]contentcreator.SubtitleCue, error) {
 	raw, err := client.JSON(ctx, system, user)
 	if err != nil {
 		return nil, fmt.Errorf("translate subtitles to %s: %w", target.Name, err)
