@@ -158,13 +158,13 @@ func runDebate(out string) error {
 			body:    "The marginal cost of generated code is collapsing. Every productivity benchmark we've measured this year shows the gap closing.",
 		},
 		{
-			name:    "06-user-overlay-zh",
-			topic:   "AI 是否會取代程序員",
-			phase:   "free-debate",
-			speaker: "Carol",
-			role:    "affirmative",
-			side:    "affirmative",
-			body:    "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
+			name:     "06-user-overlay-zh",
+			topic:    "AI 是否會取代程序員",
+			phase:    "free-debate",
+			speaker:  "Carol",
+			role:     "affirmative",
+			side:     "affirmative",
+			body:     "AI 將在未來十年內取代大多數初級和中級程序員的工作。",
 			userMsg:  "請問正方,如果 AI 替代了所有初級程序員,新人從哪裡入行?",
 			userName: "觀眾_42",
 			elapsed:  3*time.Minute + 42*time.Second,
@@ -257,7 +257,7 @@ func runDebate(out string) error {
 }
 
 func writeFrame(path, topic, phase, speaker, role, side, body, userMsg, userName string, elapsed, total, stageElapsed, bodyElapsed time.Duration) error {
-	rend, err := video.NewRendererForTest(1280, 720)
+	rend, err := video.NewRendererForTest(1920, 1080)
 	if err != nil {
 		return err
 	}
@@ -296,8 +296,8 @@ func writeFrame(path, topic, phase, speaker, role, side, body, userMsg, userName
 	pix := rend.Frame()
 	img := &image.RGBA{
 		Pix:    pix,
-		Stride: 1280 * 4,
-		Rect:   image.Rect(0, 0, 1280, 720),
+		Stride: 1920 * 4,
+		Rect:   image.Rect(0, 0, 1920, 1080),
 	}
 	f, err := os.Create(path)
 	if err != nil {
@@ -447,7 +447,7 @@ func writePuzzleFrame(path string, topic *config.DebateTopic, title string, sc *
 	phase, scene, speaker, role, body string,
 	elapsed, total, stageElapsed, sceneElapsed, bodyElapsed time.Duration,
 ) error {
-	rend, err := video.NewRendererForTest(1280, 720)
+	rend, err := video.NewRendererForTest(1920, 1080)
 	if err != nil {
 		return err
 	}
@@ -477,8 +477,8 @@ func writePuzzleFrame(path string, topic *config.DebateTopic, title string, sc *
 	pix := rend.Frame()
 	img := &image.RGBA{
 		Pix:    pix,
-		Stride: 1280 * 4,
-		Rect:   image.Rect(0, 0, 1280, 720),
+		Stride: 1920 * 4,
+		Rect:   image.Rect(0, 0, 1920, 1080),
 	}
 	f, err := os.Create(path)
 	if err != nil {
@@ -572,7 +572,7 @@ func proceduralScenes() *scenes.PuzzleScenes {
 }
 
 func proceduralBg(top, bot color.RGBA, seed int64) *image.RGBA {
-	const w, h = 1280, 720
+	const w, h = 1920, 1080
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	r := rand.New(rand.NewSource(seed))
 	for y := 0; y < h; y++ {
@@ -622,8 +622,8 @@ func runPuzzleFade(out string) error {
 	}
 
 	const (
-		width  = 1280
-		height = 720
+		width  = 1920
+		height = 1080
 		fps    = 30
 	)
 

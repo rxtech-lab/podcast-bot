@@ -117,6 +117,30 @@ judge:       {model: m}
 	}
 }
 
+func TestLoadTopicResolutionDefaultsTo1080p(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "default-resolution.md")
+	if err := os.WriteFile(path, []byte(`---
+title: "x"
+type: debate
+language: en-US
+channel: tech
+affirmative: [{name: A, model: m}]
+negative:    [{name: B, model: m}]
+judge:       {model: m}
+---
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tp, err := config.LoadTopic(path)
+	if err != nil {
+		t.Fatalf("load topic: %v", err)
+	}
+	if tp.Resolution != config.Resolution1080p {
+		t.Fatalf("Resolution = %q, want %q", tp.Resolution, config.Resolution1080p)
+	}
+}
+
 func TestLoadTopicTypeRequired(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "missing-type.md")

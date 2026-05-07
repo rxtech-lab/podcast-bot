@@ -6,10 +6,10 @@ import (
 )
 
 // renderForTest builds a Renderer the package tests can poke into directly.
-// 1280×720 matches the production frame size used in cmd/render-smoke.
+// 1920×1080 matches the production frame size.
 func renderForTest(t *testing.T) *Renderer {
 	t.Helper()
-	r, err := NewRendererForTest(1280, 720)
+	r, err := NewRendererForTest(1920, 1080)
 	if err != nil {
 		t.Fatalf("renderer: %v", err)
 	}

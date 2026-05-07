@@ -62,3 +62,9 @@ func TestPromptKeyChangesWithPrompt(t *testing.T) {
 		t.Fatal("promptKey should differ for different inputs")
 	}
 }
+
+func TestSceneFrameSizeIs1080p(t *testing.T) {
+	if frameW != 1920 || frameH != 1080 {
+		t.Fatalf("scene frame size = %dx%d, want 1920x1080", frameW, frameH)
+	}
+}

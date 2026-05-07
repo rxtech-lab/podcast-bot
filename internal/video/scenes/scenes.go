@@ -92,7 +92,7 @@ const (
 const surfaceBatchSize = maxSurfaceFrames
 
 // genSize is what we ask the gateway for. Gemini flash-image accepts
-// 1024×1024; we resample to the renderer's 1280×720 below. Picking square
+// 1024×1024; we resample to the renderer's 1920×1080 below. Picking square
 // gives the model the most freedom — landscape crops cleanly because
 // prompts ask for a quiet bottom third.
 const genSize = "1024x1024"
@@ -101,8 +101,8 @@ const genSize = "1024x1024"
 // (Encoder.videoWidth/Height in internal/video/encoder.go). The renderer
 // blits scene bgs straight into the frame without scaling.
 const (
-	frameW = 1280
-	frameH = 720
+	frameW = 1920
+	frameH = 1080
 )
 
 // PuzzleScenes is the set of pre-generated bgs for one puzzle topic. Surface

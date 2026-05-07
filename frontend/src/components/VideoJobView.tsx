@@ -77,7 +77,7 @@ export function VideoJobView() {
   const [softSubs, setSoftSubs] = useState(false)
   const [burnSubs, setBurnSubs] = useState(false)
   const [subtitleLanguages, setSubtitleLanguages] = useState<string[]>([])
-  const [resolution, setResolution] = useState<Resolution>('720p')
+  const [resolution, setResolution] = useState<Resolution>('1080p')
   const [submitErr, setSubmitErr] = useState<string>('')
   const [jobID, setJobID] = useState<string>('')
   const [job, setJob] = useState<JobInfo | null>(null)
@@ -400,11 +400,11 @@ function FormView(props: FormViewProps) {
           onChange={(e) => props.setResolution(e.target.value as Resolution)}
           className="block w-full rounded-md border border-border bg-background/40 px-3 py-2 text-sm"
         >
-          <option value="720p">720p (1280×720) — faster</option>
-          <option value="1080p">1080p (1920×1080) — sharper</option>
+          <option value="1080p">1080p (1920×1080) — default</option>
+          <option value="720p">720p (1280×720) — smaller file</option>
         </select>
         <span className="text-xs text-muted-foreground">
-          ffmpeg upscales the renderer's 1280×720 internal canvas with Lanczos.
+          Images and the renderer use a 1920×1080 master; 720p is downscaled with Lanczos.
         </span>
       </label>
 

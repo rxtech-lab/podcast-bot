@@ -168,7 +168,7 @@ func (m CameraMovement) Render(dst *image.RGBA, src *image.RGBA, p float64) {
 		kx, 0, float64(db.Min.X) - kx*(float64(sb.Min.X)+vx),
 		0, ky, float64(db.Min.Y) - ky*(float64(sb.Min.Y)+vy),
 	}
-	// ApproxBiLinear is ~3–4× faster than CatmullRom on a 1280×720 frame
+	// ApproxBiLinear is ~3–4× faster than CatmullRom on a full-frame image
 	// and the visual difference for slow Ken-Burns motion is negligible —
 	// the move only ever zooms ≤ 30% so we never up-sample aggressively.
 	// CatmullRom at 30 fps blew the per-frame budget and made the encoder

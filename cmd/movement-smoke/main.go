@@ -2,7 +2,7 @@
 // camera moves (pan / zoom) and image-to-image transitions are driven against
 // the encoder so the output stream demonstrates each path in isolation.
 //
-// Inputs:  assets/image-0.png and assets/image-1.png (1280x720 RGB).
+// Inputs:  assets/image-0.png and assets/image-1.png (1920x1080 RGB).
 // Outputs: <out>/hls/stream.m3u8 (segmented) + <out>/preview.mp4 (single
 // file, ready to play in any video player).
 package main
@@ -50,7 +50,7 @@ func main() {
 	defer cancel()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	enc, err := video.New(ctx, *out, video.Resolution720p, log)
+	enc, err := video.New(ctx, *out, video.Resolution1080p, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "encoder:", err)
 		os.Exit(1)

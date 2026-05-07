@@ -25,8 +25,8 @@ const (
 )
 
 // Output resolutions selectable from topic.md `resolution:` field. The renderer
-// always composites at 1280×720; ffmpeg upscales to the chosen size with a
-// Lanczos filter so streams can target higher-resolution clients.
+// composites at 1920×1080 by default; ffmpeg only scales when callers request
+// a different delivery size.
 const (
 	Resolution720p  = "720p"
 	Resolution1080p = "1080p"
@@ -135,7 +135,7 @@ func LoadTopic(path string) (*DebateTopic, error) {
 		t.TTSProvider = TTSProviderAzure
 	}
 	if t.Resolution == "" {
-		t.Resolution = Resolution720p
+		t.Resolution = Resolution1080p
 	}
 	return &t, nil
 }

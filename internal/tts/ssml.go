@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // BuildSSML produces an Azure TTS SSML envelope for one voice + plain text body.
@@ -26,8 +27,8 @@ func BuildSSMLNodes(voice string, nodes []SpeechNode, lang string) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="%s"><voice name="%s">%s</voice></speak>`,
-		lang, voice, rendered,
+		`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="%s"><voice name="%s"><prosody rate="%s">%s</prosody></voice></speak>`,
+		lang, voice, azureDefaultProsodyRate, rendered,
 	)
 }
 
@@ -87,7 +88,8 @@ func BuildMultiVoiceSSML(parts []VoicePart, lang string) string {
 		if rendered == "" {
 			return ""
 		}
-		fmt.Fprintf(&body, `<voice name="%s">%s</voice>`, voice, rendered)
+		fmt.Fprintf(&body, `<voice name="%s"><prosody rate="%s">%s</prosody></voice>`,
+			voice, azureDefaultProsodyRate, rendered)
 	}
 	return fmt.Sprintf(
 		`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="%s">%s</speak>`,
@@ -116,17 +118,94 @@ func voicePartNodes(p VoicePart) []SpeechNode {
 
 func renderSpeechNodes(nodes []SpeechNode) string {
 	var body strings.Builder
-	for _, n := range nodes {
+	for i, n := range nodes {
 		if n.Text != "" {
-			var escaped strings.Builder
-			if err := xml.EscapeText(&escaped, []byte(n.Text)); err != nil {
+			suppressFinalBreak := nextNodeIsBreak(nodes, i)
+			rendered, ok := renderTextWithAutoBreaks(n.Text, suppressFinalBreak)
+			if !ok {
 				return ""
 			}
-			body.WriteString(escaped.String())
+			body.WriteString(rendered)
 		}
 		if n.BreakMS > 0 {
 			fmt.Fprintf(&body, `<break time="%dms"/>`, n.BreakMS)
 		}
 	}
 	return body.String()
+}
+
+const (
+	azureDefaultProsodyRate = "-10%"
+	azureSentenceBreakMS    = 220
+	azureParagraphBreakMS   = 500
+)
+
+func nextNodeIsBreak(nodes []SpeechNode, i int) bool {
+	for j := i + 1; j < len(nodes); j++ {
+		if nodes[j].Text != "" {
+			return false
+		}
+		if nodes[j].BreakMS > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func renderTextWithAutoBreaks(text string, suppressFinalBreak bool) (string, bool) {
+	var body strings.Builder
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 1 {
+			return "", false
+		}
+		if r == '\r' || r == '\n' {
+			next := consumeNewlineRun(text, i)
+			fmt.Fprintf(&body, `<break time="%dms"/>`, azureParagraphBreakMS)
+			i = next
+			continue
+		}
+		var escaped strings.Builder
+		if err := xml.EscapeText(&escaped, []byte(string(r))); err != nil {
+			return "", false
+		}
+		body.WriteString(escaped.String())
+		i += size
+		if sentenceEnder(r) && !(suppressFinalBreak && onlySpaceOrNewlineRemains(text[i:])) {
+			fmt.Fprintf(&body, `<break time="%dms"/>`, azureSentenceBreakMS)
+		}
+	}
+	return body.String(), true
+}
+
+func consumeNewlineRun(text string, i int) int {
+	for i < len(text) {
+		switch text[i] {
+		case '\r':
+			i++
+			if i < len(text) && text[i] == '\n' {
+				i++
+			}
+		case '\n':
+			i++
+		case ' ', '\t':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+func sentenceEnder(r rune) bool {
+	switch r {
+	case '.', '!', '?', '。', '！', '？', '…':
+		return true
+	default:
+		return false
+	}
+}
+
+func onlySpaceOrNewlineRemains(s string) bool {
+	return strings.TrimSpace(s) == ""
 }

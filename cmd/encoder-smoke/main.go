@@ -32,7 +32,7 @@ func main() {
 	defer cancel()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	enc, err := video.New(ctx, *out, video.Resolution720p, log)
+	enc, err := video.New(ctx, *out, video.Resolution1080p, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "encoder:", err)
 		os.Exit(1)

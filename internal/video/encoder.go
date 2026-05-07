@@ -31,17 +31,17 @@ import (
 
 const (
 	// Internal compositing resolution. The Go renderer always paints into a
-	// 1280×720 RGBA buffer; ffmpeg's scale filter resamples to the encoder's
-	// chosen output size (see Resolution / outputDims).
-	videoWidth    = 1280
-	videoHeight   = 720
+	// 1920×1080 RGBA buffer; ffmpeg's scale filter resamples only when the
+	// caller chooses a different output size (see Resolution / outputDims).
+	videoWidth    = 1920
+	videoHeight   = 1080
 	videoFPS      = 30
 	hlsSegmentSec = 2
 	hlsListSize   = 6
 )
 
 // Resolution is the encoder's output resolution. The renderer composites at
-// 1280×720 regardless; ffmpeg upscales to outputDims().
+// 1920×1080 by default; ffmpeg scales to outputDims() when needed.
 type Resolution string
 
 const (
@@ -51,11 +51,13 @@ const (
 )
 
 // outputDims returns the (width, height) the encoder should emit for the
-// requested resolution. Unknown / empty values fall back to 720p.
+// requested resolution. Unknown / empty values fall back to 1080p.
 func outputDims(r Resolution) (int, int) {
 	switch r {
+	case Resolution720p:
+		return 1280, 720
 	case Resolution1080p:
-		return 1920, 1080
+		return videoWidth, videoHeight
 	case Resolution4K:
 		return 3840, 2160
 	default:
@@ -127,8 +129,8 @@ func New(ctx context.Context, sessionDir string, res Resolution, log *slog.Logge
 
 // NewWithOptions starts the encoder. sessionDir is where HLS segments +
 // the ffmpeg stderr log are written. res selects the output resolution;
-// the renderer always composites at 1280×720 and ffmpeg's scale filter
-// upsamples. opts.Archival flips the HLS muxer into VOD mode so
+// the renderer composites at 1920×1080 and ffmpeg's scale filter changes
+// delivery size when needed. opts.Archival flips the HLS muxer into VOD mode so
 // segments are retained for a downstream stitch.
 func NewWithOptions(ctx context.Context, sessionDir string, res Resolution, opts Options, log *slog.Logger) (*Encoder, error) {
 	outW, outH := outputDims(res)
@@ -172,9 +174,9 @@ func NewWithOptions(ctx context.Context, sessionDir string, res Resolution, opts
 	}
 	args = append(args, codecArgs...)
 	if outW != videoWidth || outH != videoHeight {
-		// Upscale the 1280×720 composite to the requested output resolution.
+		// Scale the 1920×1080 composite to the requested output resolution.
 		// Lanczos preserves text edges noticeably better than the default
-		// bicubic at 1.5×/3× upscales.
+		// bicubic when changing output size.
 		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=lanczos", outW, outH))
 	}
 	args = append(args,

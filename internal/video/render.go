@@ -286,14 +286,12 @@ func newRenderer(width, height int) (*Renderer, error) {
 
 	return &Renderer{
 		width: width, height: height,
-		bgPlate:         loadPlate("bg.png", width, height),
-		// series_bg ships at 1920×1080 (so a high-quality master is
-		// archived). Pre-scale once to the canvas here; per-frame
+		bgPlate: loadPlate("bg.png", width, height),
+		// series_bg ships at 1920×1080, matching the production canvas.
+		// Pre-scale once to the requested test canvas here; per-frame
 		// drawBackground then uses the same fast memcpy path as the
-		// debate bgPlate. CatmullRom-resampling 1920×1080 → 1280×720
-		// every frame stalled the encoder enough to stutter the live
-		// audio.
-		seriesBgPlate: loadPlateScaled("series_bg.png", width, height),
+		// debate bgPlate.
+		seriesBgPlate:   loadPlateScaled("series_bg.png", width, height),
 		headerPlate:     loadPlate("header_bar.png", 0, 0),
 		lowerThirdPlate: loadPlate("lower_third.png", 0, 0),
 		panelAffPlate:   loadPlate("panel_aff.png", 0, 0),
@@ -895,7 +893,7 @@ func userTickerText(username, msg string) string {
 // frameDebate (CNN-style debate layout, in debate_renderer.go) or
 // framePuzzle (HBO-style puzzle layout, in situation_puzzle_renderer.go).
 //
-// Debate layout (1280×720):
+// Debate layout (1920×1080):
 //
 //	┌────────────────────────────────────────────────────────┐
 //	│                  [Topic title]                         │  title (y≈70)
@@ -1129,7 +1127,7 @@ const tickerStripH = 56
 
 // tickerSpeedPxPerSec controls how fast the ticker text travels right-to-left.
 // 110 px/s is roughly the cadence used by news-channel tickers — readable
-// while still passing through in a reasonable amount of time on a 1280-wide
+// while still passing through in a reasonable amount of time on a 1920-wide
 // frame even for short messages.
 const tickerSpeedPxPerSec = 110
 
@@ -1610,4 +1608,3 @@ func balanceLastLine(lines []string, face font.Face, maxWidth int) []string {
 	out = append(out, left, right)
 	return out
 }
-
