@@ -12,7 +12,7 @@ func TestBuildSSMLNodesEscapesTextAndEmitsBreak(t *testing.T) {
 		{Text: "他說：<別回頭> & 走。"},
 	}, "zh-CN")
 
-	if !strings.Contains(got, "門開了，風停住了。") {
+	if !strings.Contains(got, `門開了，<break time="120ms"/>風停住了。`) {
 		t.Fatalf("punctuated text missing from ssml: %s", got)
 	}
 	if !strings.Contains(got, `<prosody rate="-10%">`) {
@@ -21,7 +21,7 @@ func TestBuildSSMLNodesEscapesTextAndEmitsBreak(t *testing.T) {
 	if !strings.Contains(got, `<break time="500ms"/>`) {
 		t.Fatalf("break tag missing from ssml: %s", got)
 	}
-	if !strings.Contains(got, "&lt;別回頭&gt; &amp; 走。") {
+	if !strings.Contains(got, `他說：<break time="120ms"/>&lt;別回頭&gt; &amp; 走。`) {
 		t.Fatalf("text was not XML-escaped: %s", got)
 	}
 }
@@ -64,6 +64,20 @@ func TestBuildSSMLNodesAddsAutomaticPacing(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("ssml missing automatic pacing %q: %s", want, got)
+		}
+	}
+}
+
+func TestBuildSSMLNodesAddsClausePacing(t *testing.T) {
+	got := BuildSSMLNodes("zh-CN-YunxiNeural", []SpeechNode{
+		{Text: "别人都在门后生活，他却在白色的寂静里穿行，把信送到门前。"},
+	}, "zh-CN")
+
+	for _, want := range []string{
+		`别人都在门后生活，<break time="120ms"/>他却在白色的寂静里穿行，<break time="120ms"/>把信送到门前。<break time="220ms"/>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ssml missing clause pacing %q: %s", want, got)
 		}
 	}
 }

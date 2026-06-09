@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
@@ -52,6 +53,11 @@ type SeriesStage struct {
 	// animations is the per-narration-beat camera-move list (parallel to
 	// narration). Same protocol as PuzzleStage.surfaceAnimations.
 	animations []string
+
+	// episodeTitle caches TopicMsg.Title so handlePhase can build the
+	// "本集 — {Title}" main-content section banner without re-reading
+	// the bus. Reset together with the rest of per-episode state.
+	episodeTitle string
 }
 
 // NewSeriesChannelStage creates a SeriesStage that filters bus events by
@@ -94,6 +100,7 @@ func (s *SeriesStage) Run(ctx context.Context, bus *eventbus.Bus) {
 				s.handleTranscript(m)
 			case contentcreator.PhaseMsg:
 				s.enc.SetPhase(phaseChipText(m))
+				s.handlePhase(m)
 			case contentcreator.TickMsg:
 				s.enc.SetClock(m.Elapsed, m.Elapsed+m.Remaining)
 			case contentcreator.SceneAdvanceMsg:
@@ -147,6 +154,7 @@ func (s *SeriesStage) PostEpisodeIdle() {
 	s.enc.SetSceneAnimation("")
 	s.enc.SetTopic("")
 	s.enc.SetPhase("")
+	s.enc.SetSeriesSectionLabel("", false)
 }
 
 func (s *SeriesStage) idle(nextType string) {
@@ -165,6 +173,7 @@ func (s *SeriesStage) idle(nextType string) {
 	}
 	s.enc.SetSceneBackground(nil)
 	s.enc.SetSeriesLabel("", 0, 0, "")
+	s.enc.SetSeriesSectionLabel("", false)
 }
 
 func (s *SeriesStage) isActive() bool {
@@ -205,8 +214,42 @@ func (s *SeriesStage) handleTopic(m contentcreator.TopicMsg) {
 	s.animations = nil
 	s.imageRefs = nil
 	s.curIdx = 0
+	s.episodeTitle = strings.TrimSpace(m.Title)
 	s.mu.Unlock()
 	s.enc.SetSceneBackground(nil)
+	// New episode → no recap/main banner is meaningful yet. handlePhase
+	// re-installs the right one when the planner emits PhaseOpening or
+	// PhaseFreeSpeech.
+	s.enc.SetSeriesSectionLabel("", false)
+}
+
+func (s *SeriesStage) handlePhase(m contentcreator.PhaseMsg) {
+	switch m.Phase {
+	case agent.PhaseOpening:
+		// Recap section banner — held until the next phase arrives.
+		s.enc.SetSeriesSectionLabel("上集回顧", true)
+	case agent.PhaseFreeSpeech:
+		// The main narration prompt reserves frame 0 as the automatic
+		// opener, so the host starts with <scene 1/> for the second
+		// beat. When an optional previously-on recap runs first,
+		// recap scene markers or image-reuse markers can leave a
+		// different frame painted. Reset to narration[0] on the
+		// listener-timed phase change so the main episode starts on
+		// its intended first image.
+		s.applyNarrationIndex(0)
+		s.mu.Lock()
+		title := s.episodeTitle
+		s.mu.Unlock()
+		label := "本集"
+		if title != "" {
+			label = "本集 — " + title
+		}
+		s.enc.SetSeriesSectionLabel(label, false)
+	default:
+		// Episode wrap-up etc.: drop the banner so it doesn't linger
+		// into the post-episode idle frame.
+		s.enc.SetSeriesSectionLabel("", false)
+	}
 }
 
 // handleTranscript mirrors PuzzleStage.handleTranscript at the layout
@@ -245,26 +288,38 @@ func (s *SeriesStage) handleTranscript(m contentcreator.TranscriptMsg) {
 // explicit indices clamp to the last available frame so a stray
 // `<scene 99/>` against a 14-beat plan can't crash the renderer.
 func (s *SeriesStage) applyAdvance(idx int) {
+	if idx < 0 {
+		s.mu.Lock()
+		count := len(s.narration)
+		if count == 0 {
+			s.mu.Unlock()
+			return
+		}
+		idx = (s.curIdx + 1) % count
+		s.mu.Unlock()
+	}
+	s.applyNarrationIndex(idx)
+}
+
+func (s *SeriesStage) applyNarrationIndex(idx int) {
 	s.mu.Lock()
 	count := len(s.narration)
 	if count == 0 {
+		s.curIdx = 0
 		s.mu.Unlock()
 		return
 	}
-	switch {
-	case idx >= 0:
-		if idx >= count {
-			idx = count - 1
-		}
-		s.curIdx = idx
-	default:
-		s.curIdx = (s.curIdx + 1) % count
+	if idx < 0 {
+		idx = 0
 	}
-	applyIdx := s.curIdx
-	img := s.narration[applyIdx]
+	if idx >= count {
+		idx = count - 1
+	}
+	s.curIdx = idx
+	img := s.narration[idx]
 	anim := ""
-	if applyIdx >= 0 && applyIdx < len(s.animations) {
-		anim = s.animations[applyIdx]
+	if idx >= 0 && idx < len(s.animations) {
+		anim = s.animations[idx]
 	}
 	s.mu.Unlock()
 	s.enc.SetPuzzleSceneName(scenes.SceneNarration)

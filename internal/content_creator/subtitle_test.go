@@ -17,6 +17,18 @@ func TestVTTWriter_Append(t *testing.T) {
 	}
 }
 
+func TestPipeline_VTTBiasAddsPreviouslyOnDelay(t *testing.T) {
+	base := NewPipeline(Deps{}).vttBias()
+	withRecap := NewPipeline(Deps{HasSeriesPreviouslyOn: true}).vttBias()
+
+	if got, want := base, 1*time.Second; got != want {
+		t.Fatalf("base vtt bias = %v, want %v", got, want)
+	}
+	if got, want := withRecap, 2*time.Second; got != want {
+		t.Fatalf("previously-on vtt bias = %v, want %v", got, want)
+	}
+}
+
 func TestVTTWriter_AppendIgnoresEmpty(t *testing.T) {
 	w := newVTTWriter()
 	w.Append("", 0, 5*time.Second)

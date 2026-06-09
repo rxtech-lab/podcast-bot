@@ -137,6 +137,7 @@ func renderSpeechNodes(nodes []SpeechNode) string {
 const (
 	azureDefaultProsodyRate = "-10%"
 	azureSentenceBreakMS    = 220
+	azureClauseBreakMS      = 120
 	azureParagraphBreakMS   = 500
 )
 
@@ -171,8 +172,9 @@ func renderTextWithAutoBreaks(text string, suppressFinalBreak bool) (string, boo
 		}
 		body.WriteString(escaped.String())
 		i += size
-		if sentenceEnder(r) && !(suppressFinalBreak && onlySpaceOrNewlineRemains(text[i:])) {
-			fmt.Fprintf(&body, `<break time="%dms"/>`, azureSentenceBreakMS)
+		if autoBreakMS := punctuationBreakMS(r); autoBreakMS > 0 &&
+			!(suppressFinalBreak && onlySpaceOrNewlineRemains(text[i:])) {
+			fmt.Fprintf(&body, `<break time="%dms"/>`, autoBreakMS)
 		}
 	}
 	return body.String(), true
@@ -203,6 +205,18 @@ func sentenceEnder(r rune) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func punctuationBreakMS(r rune) int {
+	if sentenceEnder(r) {
+		return azureSentenceBreakMS
+	}
+	switch r {
+	case ',', ';', ':', '，', '、', '；', '：':
+		return azureClauseBreakMS
+	default:
+		return 0
 	}
 }
 

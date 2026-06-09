@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
@@ -368,7 +369,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		SurfaceFrames:    len(o.surfacePlan),
 		ConclusionFrames: len(o.conclusionPlan),
 		NarrationFrames:  len(o.seriesNarrationPlan),
-		SoundPaths:       soundPaths,
+		HasSeriesPreviouslyOn: o.Topic.Type == config.ContentTypeSeries &&
+			strings.TrimSpace(o.seriesPreviouslyOn) != "",
+		SoundPaths: soundPaths,
 	})
 	files, err := pipe.Run(ctx)
 	if err != nil {

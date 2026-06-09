@@ -24,13 +24,15 @@ func (r *Renderer) frameSeries(
 	userName, userMsg string, userStart, userExpiry time.Time,
 	seriesShow string, seriesSeason, seriesEpisode int, seriesHost string,
 	seriesLabelStart time.Time,
+	sectionText string, sectionStart time.Time, sectionHold bool,
 ) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, r.width, r.height))
 	r.drawBackground(img)
 	r.drawSeriesOverlay(img, speaker, role, body,
 		bodyStart, bodyDur,
 		userName, userMsg, userStart, userExpiry,
-		seriesShow, seriesSeason, seriesEpisode, seriesHost, seriesLabelStart)
+		seriesShow, seriesSeason, seriesEpisode, seriesHost, seriesLabelStart,
+		sectionText, sectionStart, sectionHold)
 	return img.Pix
 }
 
@@ -45,6 +47,7 @@ func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 	userName, userMsg string, userStart, userExpiry time.Time,
 	seriesShow string, seriesSeason, seriesEpisode int, seriesHost string,
 	seriesLabelStart time.Time,
+	sectionText string, sectionStart time.Time, sectionHold bool,
 ) {
 	bodyFG := color.RGBA{0xf2, 0xf4, 0xf8, 0xff}
 
@@ -122,6 +125,39 @@ func (r *Renderer) drawSeriesOverlay(img *image.RGBA,
 		}
 	}
 
+	// Section banner (recap / main-content) painted directly under the
+	// ID label so the audience reads which section is on screen. Same
+	// offscreen-buffer + global-alpha-blit trick as the ID label so the
+	// drop shadow stays coherent during the dissolve. sectionStart
+	// stays zero whenever sectionText == "" (cleared via SetSeriesSec-
+	// tionLabel(""), false), so we treat "no start" as "don't paint".
+	if sectionText != "" && !sectionStart.IsZero() {
+		const (
+			bannerW = 900
+			bannerH = 80
+			// Stack directly under the 240-px ID-label buffer (y=60 in
+			// the parent coords).
+			bannerY = 60 + 240
+		)
+		bannerBuf := image.NewRGBA(image.Rect(0, 0, bannerW, bannerH))
+		drawSeriesSectionBanner(bannerBuf, r.bodyFace, sectionText, 0, 0)
+		drawBanner := func(alpha float64) {
+			blitWithGlobalAlphaAt(img, bannerBuf, marginX, bannerY, alpha)
+		}
+		switch {
+		case time.Since(sectionStart) < seriesSectionFadeIn:
+			fadeIn(drawBanner, sectionStart, seriesSectionFadeIn)
+		case sectionHold:
+			drawBanner(1)
+		case time.Since(sectionStart) < seriesSectionTotalDuration-seriesSectionFadeOut:
+			drawBanner(1)
+		default:
+			fadeOut(drawBanner,
+				sectionStart.Add(seriesSectionTotalDuration-seriesSectionFadeOut),
+				seriesSectionFadeOut)
+		}
+	}
+
 	// Series narration intentionally has no on-screen clock — episodes
 	// run for as long as the narration audio plays, with no time-up cut.
 
@@ -148,6 +184,42 @@ const seriesLabelFadeIn = 400 * time.Millisecond
 // short so the dissolve reads as motion rather than a slow alpha
 // drift.
 const seriesLabelFadeOut = 1200 * time.Millisecond
+
+// seriesSectionTotalDuration is the lifetime of the main-content
+// banner: fade-in + hold + fade-out all complete within this window.
+// The recap banner sets sectionHold = true and ignores this value.
+const seriesSectionTotalDuration = 30 * time.Second
+
+// seriesSectionFadeIn matches the ID-label fade-in so both top-left
+// elements settle in lockstep when the section starts.
+const seriesSectionFadeIn = 400 * time.Millisecond
+
+// seriesSectionFadeOut is the dissolve when the main-content banner
+// retires. Kept identical to the ID-label fade-out for consistency.
+const seriesSectionFadeOut = 1200 * time.Millisecond
+
+// drawSeriesSectionBanner paints a single-line banner (white fill +
+// 2 px black drop shadow) at (x, y), used for the recap / main-content
+// section subtitles. Always at full opacity — the caller renders into
+// an offscreen buffer and applies fade alpha with blitWithGlobalAlphaAt
+// so shadow + fill stay coherent during the dissolve.
+func drawSeriesSectionBanner(dst *image.RGBA, face font.Face, text string, x, y int) {
+	if text == "" {
+		return
+	}
+	white := color.RGBA{0xff, 0xff, 0xff, 0xff}
+	shadow := color.RGBA{0x00, 0x00, 0x00, 0xcc}
+
+	m := face.Metrics()
+	baseline := y + m.Ascent.Ceil()
+
+	shadowDrawer := &font.Drawer{Dst: dst, Src: image.NewUniform(shadow), Face: face}
+	shadowDrawer.Dot = fixed.P(x+2, baseline+2)
+	shadowDrawer.DrawString(text)
+	fill := &font.Drawer{Dst: dst, Src: image.NewUniform(white), Face: face}
+	fill.Dot = fixed.P(x, baseline)
+	fill.DrawString(text)
+}
 
 // drawSeriesIDLabel paints the small three-row identification at
 // (x, y): show name on top, then "S{N} · E{N}", then host name. White

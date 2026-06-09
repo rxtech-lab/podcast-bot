@@ -64,6 +64,11 @@ type Deps struct {
 	// rotation back to frame 0 mid-episode. 0 disables the cap.
 	NarrationFrames int
 
+	// HasSeriesPreviouslyOn means this series episode includes the optional
+	// opening recap turn. The stitched mp4 lands soft subtitles slightly early
+	// on those episodes, so the VTT sidecar gets a small extra delay.
+	HasSeriesPreviouslyOn bool
+
 	// SoundPaths is the planner's per-cue clip list — index N is the
 	// on-disk mp3 path the mixer plays when the host emits
 	// "<sound-overlapped-N/>" or "<sound-replace-N/>". Nil / empty
@@ -105,6 +110,9 @@ const subtitleClientLatency = 3100 * time.Millisecond
 // reliable than the previous mixer-Close-then-poll-BytesAhead path,
 // which has shown pathological hangs that pin the channel runner.
 const postProducerGrace = 20 * time.Second
+
+const vttBaseBias = 1 * time.Second
+const vttPreviouslyOnBias = 1 * time.Second
 
 // cleanupHardCap caps the total wall time spent in the post-producer
 // cleanup tail (grace sleep + sessionMixer.Close + waitAudioDrained).
@@ -158,6 +166,14 @@ func (p *Pipeline) SubtitleCues() []SubtitleCue {
 		return nil
 	}
 	return p.vtt.Cues()
+}
+
+func (p *Pipeline) vttBias() time.Duration {
+	bias := vttBaseBias
+	if p != nil && p.d.HasSeriesPreviouslyOn {
+		bias += vttPreviouslyOnBias
+	}
+	return bias
 }
 
 // Run boots all stages and blocks until the planner stops emitting turns
@@ -797,10 +813,9 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// pump-side first-real-audio timestamp, and any small drift it
 	// introduces in long shows is dwarfed by the 1-2 s segment-
 	// boundary trim already in stitch.go.
-	const vttBias = 1 * time.Second
 	var cueStart time.Duration
 	if firstWrite := p.d.LiveStream.FirstWriteAt(); !firstWrite.IsZero() {
-		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + vttBias
+		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + p.vttBias()
 	}
 	if sent != "" {
 		p.vtt.Append(sent, cueStart, audioDuration)
