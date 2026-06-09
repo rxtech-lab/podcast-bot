@@ -169,6 +169,17 @@ type Renderer struct {
 	seriesEpisode    int
 	seriesHost       string
 	seriesLabelStart time.Time
+
+	// Series section banner painted top-left under the ID label. Names
+	// the active phase ("上集回顧" during the recap, "本集 — {title}"
+	// during the main narration). seriesSectionLabelHold == true keeps
+	// it at full opacity until cleared (recap behaviour); false runs
+	// the standard fade-in / hold / fade-out against
+	// seriesSectionTotalDuration anchored at seriesSectionLabelStart
+	// (main behaviour). Empty text disables the banner.
+	seriesSectionLabelText  string
+	seriesSectionLabelStart time.Time
+	seriesSectionLabelHold  bool
 }
 
 // pendingUserMsg is one viewer message buffered during the debounce window.
@@ -573,6 +584,31 @@ func (r *Renderer) SetSeriesLabel(show string, season, episode int, host string)
 	r.seriesLabelStart = time.Time{}
 }
 
+// SetSeriesSectionLabel installs the section banner painted under the
+// series ID label. text == "" clears it. hold == true keeps the banner
+// at full opacity for the lifetime of the section (used for the recap
+// section, which ends when the next phase arrives). hold == false runs
+// the standard fade-in / hold / fade-out against
+// seriesSectionTotalDuration so the main-content banner clears itself
+// 30 s in. Repeated calls with identical text/hold are no-ops so a
+// PhaseMsg storm doesn't restart the fade.
+func (r *Renderer) SetSeriesSectionLabel(text string, hold bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if text == "" {
+		r.seriesSectionLabelText = ""
+		r.seriesSectionLabelStart = time.Time{}
+		r.seriesSectionLabelHold = false
+		return
+	}
+	if r.seriesSectionLabelText == text && r.seriesSectionLabelHold == hold {
+		return
+	}
+	r.seriesSectionLabelText = text
+	r.seriesSectionLabelHold = hold
+	r.seriesSectionLabelStart = time.Now()
+}
+
 // SetSceneBackground swaps in a new scene background, retaining the
 // previous one so drawBackground can crossfade between them. Pass nil to
 // clear (renderer falls back to bgPlate / procedural bg). Idempotent: a
@@ -939,6 +975,9 @@ func (r *Renderer) Frame() []byte {
 	seriesEpisode := r.seriesEpisode
 	seriesHost := r.seriesHost
 	seriesLabelStart := r.seriesLabelStart
+	seriesSectionText := r.seriesSectionLabelText
+	seriesSectionStart := r.seriesSectionLabelStart
+	seriesSectionHold := r.seriesSectionLabelHold
 	burnInCaptions := r.burnInSeriesCaptions
 	r.mu.Unlock()
 
@@ -956,7 +995,8 @@ func (r *Renderer) Frame() []byte {
 				bodyStart, bodyDur,
 				userName, userMsg, userStart, userExpiry,
 				seriesShow, seriesSeason, seriesEpisode, seriesHost,
-				seriesLabelStart)
+				seriesLabelStart,
+				seriesSectionText, seriesSectionStart, seriesSectionHold)
 		}
 		return r.framePuzzle(topic, phase, puzzleScene, speaker, role, body,
 			affPos, /* surface text shown in idle subtitle */

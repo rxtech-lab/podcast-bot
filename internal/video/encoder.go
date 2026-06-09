@@ -366,6 +366,14 @@ func (e *Encoder) SetSeriesLabel(show string, season, episode int, host string) 
 	e.rend.SetSeriesLabel(show, season, episode, host)
 }
 
+// SetSeriesSectionLabel installs the section subtitle painted under the
+// ID label. text == "" clears it. hold == true keeps the banner at full
+// opacity until cleared (used for the recap section, ended by the next
+// phase); hold == false runs a 30 s fade-out (main-content section).
+func (e *Encoder) SetSeriesSectionLabel(text string, hold bool) {
+	e.rend.SetSeriesSectionLabel(text, hold)
+}
+
 // SetSpeaker activates the centered subtitle box for the given speaker. role
 // values match agent.Role string values ("host", "affirmative", etc).
 // Calling with empty speaker hides the subtitle (idle state).
