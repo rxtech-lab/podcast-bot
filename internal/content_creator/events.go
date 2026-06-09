@@ -1,6 +1,7 @@
 package contentcreator
 
 import (
+	"image"
 	"strings"
 	"time"
 
@@ -23,6 +24,15 @@ func PhaseLabel(contentType string, p agent.Phase) string {
 		case agent.PhaseVerdict:
 			return "揭曉"
 		case agent.PhaseEnded, agent.PhaseConclusion:
+			return "總結"
+		}
+	case config.ContentTypeDiscussion:
+		switch p {
+		case agent.PhaseSetup, agent.PhaseOpening:
+			return "開場"
+		case agent.PhaseFreeSpeech:
+			return "討論"
+		case agent.PhaseClosing, agent.PhaseConclusion, agent.PhaseEnded:
 			return "總結"
 		}
 	case config.ContentTypeSeries:
@@ -195,6 +205,16 @@ type ImageRefMsg struct {
 	Key       string
 }
 
+// DynamicSceneMsg hands a freshly-generated background image to the active
+// visual stage. Unlike SceneAdvanceMsg (which selects a pre-generated palette
+// frame by index), this carries the decoded image itself — emitted by the
+// discussion commander/director when it generates a new background on the fly.
+// Stages that don't paint AI backgrounds (debate) treat it as a no-op.
+type DynamicSceneMsg struct {
+	ChannelID string
+	Img       *image.RGBA
+}
+
 // SoundCueMsg asks the audio mixer to dispatch one of the planner's
 // pre-generated sound clips. Emitted by the producer when the host
 // stream contains a `<sound-overlapped-N/>` or `<sound-replace-N/>`
@@ -229,6 +249,8 @@ func MsgChannelID(v any) string {
 	case TopicsChangedMsg:
 		return ""
 	case SceneAdvanceMsg:
+		return m.ChannelID
+	case DynamicSceneMsg:
 		return m.ChannelID
 	case SoundCueMsg:
 		return m.ChannelID
@@ -269,6 +291,9 @@ func StampChannelID(v any, id string) any {
 	case TopicsChangedMsg:
 		return m
 	case SceneAdvanceMsg:
+		m.ChannelID = id
+		return m
+	case DynamicSceneMsg:
 		m.ChannelID = id
 		return m
 	case SoundCueMsg:

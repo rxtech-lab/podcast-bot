@@ -82,3 +82,11 @@ func RegisterBuiltins(r *Registry) {
 	r.Register(TakeNoteTool{})
 	r.Register(LookUpQuoteTool{})
 }
+
+// RegisterDataStore registers the plain-text research scratchpad rooted at
+// dir. Called only for discussion topics whose storage is "plaintext"; the
+// MongoDB backend is provided by an MCP server instead, so nothing is
+// registered here in that case.
+func RegisterDataStore(r *Registry, dir string) {
+	r.Register(NewDataStoreTool(dir))
+}

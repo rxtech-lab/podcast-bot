@@ -114,6 +114,17 @@ type Orchestrator struct {
 	seriesCharacters      []SeriesCharacter
 	seriesCharacterVoices map[string]string
 
+	// Discussion content type. discussionMusic is the session bed map
+	// (folded into the pipeline's MusicPaths). discussionSounds are the
+	// pre-generated beds the commander crossfades between via replace
+	// SoundCueMsg (index-aligned with discussionMusicMoods, which feeds the
+	// commander's prompt). discussionDirector is the silent commander loop;
+	// it's started in Run and cancelled when the run ctx ends.
+	discussionMusic      map[string]string
+	discussionSounds     []string
+	discussionMusicMoods []string
+	discussionDirector   *DiscussionDirector
+
 	subtitleCues []SubtitleCue
 }
 
@@ -218,6 +229,17 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 		}
 	}
 
+	// Discussion participants get a plain-text research scratchpad when the
+	// topic's storage backend is plaintext (the default). For mongodb the
+	// scratchpad is the MongoDB MCP server declared in mcp.json, so no
+	// built-in tool is registered here.
+	if o.Topic.Type == config.ContentTypeDiscussion &&
+		o.Topic.Storage != config.StorageMongo {
+		tools.RegisterDataStore(o.Tools, filepath.Join(o.Env.OutDir, "datastore"))
+		o.Log.Info("discussion data store enabled (plaintext)",
+			"dir", filepath.Join(o.Env.OutDir, "datastore"))
+	}
+
 	if err := o.buildAgents(); err != nil {
 		return err
 	}
@@ -269,6 +291,10 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 		return agent.NewViewer(base)
 	case agent.RolePlayer:
 		return agent.NewPlayer(base)
+	case agent.RoleDiscussant:
+		return agent.NewDiscussant(base, spec.Aspect)
+	case agent.RoleCommander:
+		return agent.NewCommander(base, o.Topic.Title, o.discussionMusicMoods)
 	case agent.RoleSeriesHost:
 		// Translate the orchestrator-side sound plan to the agent-side
 		// SoundDirection (mirrors the puzzle host construction).
@@ -316,6 +342,8 @@ func (o *Orchestrator) buildAgents() error {
 		return o.buildPuzzleAgents()
 	case config.ContentTypeSeries:
 		return o.buildSeriesAgents()
+	case config.ContentTypeDiscussion:
+		return o.buildDiscussionAgents()
 	default:
 		// Debate is also the implicit fallback if a future content type is
 		// added before its branch lands here; config validation rejects
@@ -333,6 +361,8 @@ func (o *Orchestrator) newPlanner() Planner {
 		return o.newPuzzlePlanner()
 	case config.ContentTypeSeries:
 		return o.newSeriesPlanner()
+	case config.ContentTypeDiscussion:
+		return o.newDiscussionPlanner()
 	}
 	return o.newDebatePlanner()
 }
@@ -356,6 +386,19 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		if len(o.seriesSoundPaths) > 0 {
 			soundPaths = append([]string(nil), o.seriesSoundPaths...)
 		}
+	}
+	// Discussion folds its pre-generated beds into the same MusicPaths /
+	// SoundPaths surfaces (session bed under every turn; the rest crossfaded
+	// live by the commander via replace SoundCueMsg). The silent director
+	// loop is started here and cancelled when ctx ends.
+	if o.Topic.Type == config.ContentTypeDiscussion {
+		if len(o.discussionMusic) > 0 {
+			musicPaths = o.discussionMusic
+		}
+		if len(o.discussionSounds) > 0 {
+			soundPaths = append([]string(nil), o.discussionSounds...)
+		}
+		o.startDiscussionDirector(ctx)
 	}
 	pipe := NewPipeline(Deps{
 		Planner: planner, Tracker: o.Tracker, Registry: o.Registry,

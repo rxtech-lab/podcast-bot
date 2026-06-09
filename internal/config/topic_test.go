@@ -42,6 +42,53 @@ func TestLoadTopicExample(t *testing.T) {
 	}
 }
 
+func TestLoadDiscussionExample(t *testing.T) {
+	tp, err := config.LoadTopic("../../examples/discussion.md")
+	if err != nil {
+		t.Fatalf("load discussion topic: %v", err)
+	}
+	if tp.Type != config.ContentTypeDiscussion {
+		t.Fatalf("type = %q, want discussion", tp.Type)
+	}
+	if tp.Storage != config.StoragePlaintext {
+		t.Errorf("storage = %q, want plaintext default", tp.Storage)
+	}
+	if len(tp.Discussants) < 2 {
+		t.Fatalf("expected 2+ discussants, got %d", len(tp.Discussants))
+	}
+	if tp.Discussants[0].Aspect == "" {
+		t.Errorf("first discussant missing aspect")
+	}
+	if tp.Host.Model == "" || tp.Commander.Model == "" {
+		t.Errorf("host/commander model empty: host=%q commander=%q", tp.Host.Model, tp.Commander.Model)
+	}
+	if tp.Background == "" {
+		t.Errorf("background section empty")
+	}
+}
+
+func TestValidateDiscussionRejectsMissingCommander(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "bad.md")
+	const body = `---
+title: "x"
+type: discussion
+channel: default
+host: { model: "gpt-4o" }
+discussants:
+  - { name: "A", model: "gpt-4o" }
+  - { name: "B", model: "gpt-4o" }
+---
+## Background
+hi
+`
+	if err := os.WriteFile(bad, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadTopic(bad); err == nil {
+		t.Fatalf("expected error for discussion without commander")
+	}
+}
+
 func TestLoadTopicMissing(t *testing.T) {
 	_, err := config.LoadTopic("does-not-exist.md")
 	if err == nil {
