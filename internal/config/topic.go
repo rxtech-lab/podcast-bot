@@ -16,6 +16,11 @@ type AgentSpec struct {
 	Model   string `yaml:"model"`
 	BaseURL string `yaml:"base_url,omitempty"`
 	APIKey  string `yaml:"api_key,omitempty"`
+	// Aspect is the perspective/angle a discussant argues from (e.g.
+	// "economic", "ethical", "technical"). Discussion content type only;
+	// ignored by every other format. Optional — a blank aspect just means
+	// the discussant speaks from no pre-assigned angle.
+	Aspect string `yaml:"aspect,omitempty"`
 }
 
 // TTS provider identifiers used in topic.md `tts_provider:` field.
@@ -38,6 +43,14 @@ const (
 const (
 	ContentTypeDebate          = "debate"
 	ContentTypeSituationPuzzle = "situation-puzzle"
+	// ContentTypeDiscussion is a multi-participant panel discussion. Several
+	// discussants, each assigned a distinct aspect/perspective, talk through
+	// one topic and respond to each other; a moderator (host) opens, hands
+	// off, and closes; a single silent "commander" drives the background
+	// image + music on the fly to match the mood. Each discussant gets
+	// research tools (firecrawl MCP + a data-store scratchpad). See
+	// discussion_planner.go / discussion_director.go / discussion_stage.go.
+	ContentTypeDiscussion = "discussion"
 	// ContentTypeSeries is a host-only narrated TV-style episode. Episodes
 	// declare show + season + episode in frontmatter; the pipeline writes
 	// every episode's assets (scene plan, generated PNGs, music, recap-
@@ -48,6 +61,20 @@ const (
 	// emitting `<season-S-episode-E-image-N/>` markers in the host's
 	// stream.
 	ContentTypeSeries = "series"
+)
+
+// Research-scratchpad storage backends selectable via the `storage:` field in
+// topic.md frontmatter (discussion content type only). Discussants research
+// with firecrawl and stash findings through a data-store tool; the backend is
+// either a built-in plain-text file store or the MongoDB MCP server.
+const (
+	// StoragePlaintext gives discussants a built-in file-backed data-store
+	// tool (save/load/list under <out>/datastore). The default.
+	StoragePlaintext = "plaintext"
+	// StorageMongo expects a MongoDB MCP server declared in mcp.json; no
+	// built-in store tool is registered, so discussants persist findings
+	// through the MongoDB MCP tools instead.
+	StorageMongo = "mongodb"
 )
 
 // DebateTopic is the full topic.md content: YAML frontmatter + named markdown
@@ -89,6 +116,16 @@ type DebateTopic struct {
 	Season     int       `yaml:"season,omitempty"`
 	Episode    int       `yaml:"episode,omitempty"`
 	SeriesHost AgentSpec `yaml:"series_host,omitempty"`
+
+	// Discussion-only roster. Discussants each carry an Aspect (the angle
+	// they speak from) and respond to one another; Host moderates; Commander
+	// is the single silent director that drives background image + music on
+	// the fly (it never speaks). Storage picks the research-scratchpad
+	// backend (StoragePlaintext / StorageMongo); empty defaults to plaintext.
+	Discussants []AgentSpec `yaml:"discussants,omitempty"`
+	Host        AgentSpec   `yaml:"host,omitempty"`
+	Commander   AgentSpec   `yaml:"commander,omitempty"`
+	Storage     string      `yaml:"storage,omitempty"`
 
 	// Shared across both content types.
 	Viewers []AgentSpec `yaml:"viewers,omitempty"`
@@ -136,6 +173,9 @@ func LoadTopic(path string) (*DebateTopic, error) {
 	}
 	if t.Resolution == "" {
 		t.Resolution = Resolution1080p
+	}
+	if t.Type == ContentTypeDiscussion && t.Storage == "" {
+		t.Storage = StoragePlaintext
 	}
 	return &t, nil
 }
@@ -216,10 +256,10 @@ func validateTopic(t *DebateTopic) error {
 		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
 	switch t.Type {
-	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries:
+	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion:
 	default:
-		return fmt.Errorf("type must be one of %q, %q, %q (got %q)",
-			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, t.Type)
+		return fmt.Errorf("type must be one of %q, %q, %q, %q (got %q)",
+			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, t.Type)
 	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:
@@ -245,6 +285,40 @@ func validateTopic(t *DebateTopic) error {
 		return validateSituationPuzzle(t)
 	case ContentTypeSeries:
 		return validateSeries(t)
+	case ContentTypeDiscussion:
+		return validateDiscussion(t)
+	}
+	return nil
+}
+
+func validateDiscussion(t *DebateTopic) error {
+	// Discussion is its own roster: discussants + host + commander. Reject
+	// debate/puzzle/series fields so a copy-paste from another fixture
+	// doesn't silently build agents that never speak.
+	if len(t.Affirmative) > 0 || len(t.Negative) > 0 || t.Judge.Model != "" {
+		return fmt.Errorf("type=discussion must not declare affirmative/negative/judge — use discussants/host/commander")
+	}
+	if t.PuzzleHost.Model != "" || len(t.Players) > 0 || t.SeriesHost.Model != "" {
+		return fmt.Errorf("type=discussion must not declare puzzle_host/players/series_host")
+	}
+	if len(t.Discussants) < 2 {
+		return fmt.Errorf("type=discussion requires at least two discussants")
+	}
+	for _, s := range t.Discussants {
+		if s.Name == "" || s.Model == "" {
+			return fmt.Errorf("discussant entry needs name and model")
+		}
+	}
+	if t.Host.Model == "" {
+		return fmt.Errorf("host.model is required for type=discussion (the moderator)")
+	}
+	if t.Commander.Model == "" {
+		return fmt.Errorf("commander.model is required for type=discussion (the silent visual/music director)")
+	}
+	switch t.Storage {
+	case "", StoragePlaintext, StorageMongo:
+	default:
+		return fmt.Errorf("storage must be %q or %q (got %q)", StoragePlaintext, StorageMongo, t.Storage)
 	}
 	return nil
 }

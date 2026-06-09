@@ -24,6 +24,14 @@ const (
 	// host reads the prepared synopsis and (optionally) a "previously on …"
 	// preamble. See agent/series_host.go.
 	RoleSeriesHost Role = "series-host"
+	// RoleDiscussant is one participant in a panel discussion. Each speaks
+	// from an assigned aspect/perspective and responds to the others. See
+	// agent/discussant.go.
+	RoleDiscussant Role = "discussant"
+	// RoleCommander is the silent visual/music director of a discussion. It
+	// never takes a spoken turn; a background loop calls its Direct method to
+	// decide background-image / music changes. See agent/commander.go.
+	RoleCommander Role = "commander"
 )
 
 // Side returns "affirmative" or "negative" for candidate roles, otherwise "".
@@ -133,14 +141,24 @@ type Registry struct {
 	// no other speakers.
 	SeriesHost Agent
 
+	// Discussion content type: Discussants speak in round-robin; Host (above)
+	// moderates; Commander is the silent visual/music director (it never
+	// appears in the speaking rotation, but lives here so the orchestrator
+	// can reach it to drive the background loop).
+	Discussants []Agent
+	Commander   Agent
+
 	Viewers []Agent
 }
 
 // All returns every agent in a deterministic order.
 func (r *Registry) All() []Agent {
-	out := make([]Agent, 0, 4+len(r.Affirmatve)+len(r.Negative)+len(r.Players)+len(r.Viewers))
+	out := make([]Agent, 0, 5+len(r.Affirmatve)+len(r.Negative)+len(r.Players)+len(r.Discussants)+len(r.Viewers))
 	if r.Host != nil {
 		out = append(out, r.Host)
+	}
+	if r.Commander != nil {
+		out = append(out, r.Commander)
 	}
 	if r.Judge != nil {
 		out = append(out, r.Judge)
@@ -154,6 +172,7 @@ func (r *Registry) All() []Agent {
 	out = append(out, r.Affirmatve...)
 	out = append(out, r.Negative...)
 	out = append(out, r.Players...)
+	out = append(out, r.Discussants...)
 	out = append(out, r.Viewers...)
 	return out
 }

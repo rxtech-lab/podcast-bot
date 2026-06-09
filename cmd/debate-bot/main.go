@@ -68,6 +68,9 @@ usage:
     - debate            multi-agent affirmative-vs-negative debate
     - situation-puzzle  海龜湯 / lateral-thinking puzzle (host knows the
                         hidden truth; players ask yes/no questions)
+    - discussion        multi-agent panel discussion (discussants debate one
+                        topic from different aspects; a silent commander
+                        swaps background image + music on the fly)
   Unknown types abort startup with a clear error.
 
   Channels run in parallel as independent video + audio streams. Multiple
@@ -191,8 +194,9 @@ type channelRuntime struct {
 	queue       *debateQueue
 	live        *audio.LiveStream
 	enc         *video.Encoder
-	puzzleStage *video.PuzzleStage // retained so scene generators can call AttachScenes
-	seriesStage *video.SeriesStage // retained for series episodes (preparation hooks reach in)
+	puzzleStage     *video.PuzzleStage     // retained so scene generators can call AttachScenes
+	seriesStage     *video.SeriesStage     // retained for series episodes (preparation hooks reach in)
+	discussionStage *video.DiscussionStage // retained so the palette generator can call AttachPalette
 
 	// counterMu protects total + started, which feed the live TopicMsg.Total
 	// and Index values. Both grow over the channel's lifetime: total
@@ -629,9 +633,12 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 			cr.puzzleStage = puzzleStage
 			seriesStage := video.NewSeriesChannelStage(enc, ch.ID)
 			cr.seriesStage = seriesStage
+			discussionStage := video.NewDiscussionChannelStage(enc, ch.ID)
+			cr.discussionStage = discussionStage
 			go debateStage.Run(ctx, bus)
 			go puzzleStage.Run(ctx, bus)
 			go seriesStage.Run(ctx, bus)
+			go discussionStage.Run(ctx, bus)
 		}
 
 		rt.channels = append(rt.channels, cr)
@@ -913,6 +920,14 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 				"channel", ch.def.ID, "id", d.id,
 				"elapsed", time.Since(t0).Round(time.Millisecond))
 		}
+		if d.topic.Type == config.ContentTypeDiscussion && ch.discussionStage != nil {
+			t0 := time.Now()
+			r.log.Info("discussion asset prep starting", "channel", ch.def.ID, "id", d.id)
+			prepareDiscussionAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
+			r.log.Info("discussion asset prep done",
+				"channel", ch.def.ID, "id", d.id,
+				"elapsed", time.Since(t0).Round(time.Millisecond))
+		}
 		if d.topic.Type == config.ContentTypeSeries && ch.seriesStage != nil {
 			t0 := time.Now()
 			r.log.Info("series asset prep starting", "channel", ch.def.ID, "id", d.id)
@@ -1182,6 +1197,9 @@ func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
 	}
 	if d.topic.Type == config.ContentTypeSeries {
 		return buildSeriesTopicMsg(d, msg)
+	}
+	if d.topic.Type == config.ContentTypeDiscussion {
+		return buildDiscussionTopicMsg(d, msg)
 	}
 	return buildDebateTopicMsg(d, msg)
 }
