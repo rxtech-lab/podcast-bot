@@ -137,6 +137,11 @@ type Renderer struct {
 	// while QA / reveal / conclusion keep the slab-and-rule layout.
 	puzzleMode           bool
 	puzzleSceneName      string
+	// puzzleIdleLabel is the small pill drawn above the idle title card
+	// (shown while no one is speaking yet — typically during scene-gen
+	// warmup). Empty means the default puzzle label; the discussion stage
+	// overrides it so a panel discussion doesn't read "TODAY'S PUZZLE".
+	puzzleIdleLabel      string
 	sceneBg              *image.RGBA
 	prevSceneBg          *image.RGBA
 	sceneTransitionStart time.Time
@@ -557,6 +562,31 @@ func (r *Renderer) SetPuzzleSceneName(name string) {
 	r.mu.Lock()
 	r.puzzleSceneName = name
 	r.mu.Unlock()
+}
+
+// puzzleDefaultIdleLabel is the idle-card pill shown for situation-puzzle
+// content. Other puzzle-mode content types (discussion) override it via
+// SetPuzzleIdleLabel.
+const puzzleDefaultIdleLabel = "今日海龜湯  ·  TODAY'S PUZZLE"
+
+// SetPuzzleIdleLabel overrides the idle-card pill text. Pass "" to restore
+// the default puzzle label. Idempotent.
+func (r *Renderer) SetPuzzleIdleLabel(s string) {
+	r.mu.Lock()
+	r.puzzleIdleLabel = s
+	r.mu.Unlock()
+}
+
+// idleLabel returns the active idle-card pill text, falling back to the
+// default puzzle label when none has been set.
+func (r *Renderer) idleLabel() string {
+	r.mu.Lock()
+	s := r.puzzleIdleLabel
+	r.mu.Unlock()
+	if strings.TrimSpace(s) == "" {
+		return puzzleDefaultIdleLabel
+	}
+	return s
 }
 
 // SetSeriesLabel records the series identification label painted top-left

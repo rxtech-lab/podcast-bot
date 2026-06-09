@@ -2,7 +2,7 @@
 title: "The Future of Remote Work"
 type: discussion
 language: en-US
-channel: default
+channel: discussions
 total_minutes: 20
 segment_max_seconds: 60
 # storage picks the research scratchpad backend each discussant uses to stash
