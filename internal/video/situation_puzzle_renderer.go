@@ -229,7 +229,7 @@ func (r *Renderer) drawPuzzleOverlay(img *image.RGBA,
 
 		drawHBOQuoteCard(img, qcLeft, idleQcTop, qcRight, idleQcBot)
 
-		const labelText = "今日海龜湯  ·  TODAY'S PUZZLE"
+		labelText := r.idleLabel()
 		drawCenteredPill(img, r.phaseFace, labelText,
 			(qcLeft+qcRight)/2, idleQcTop-22,
 			hboGold, color.RGBA{0x07, 0x07, 0x0a, 0xff})

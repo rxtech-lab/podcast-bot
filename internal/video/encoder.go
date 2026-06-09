@@ -349,6 +349,11 @@ func (e *Encoder) SetSceneBackground(img *image.RGBA) { e.rend.SetSceneBackgroun
 // lockstep with SetSceneBackground.
 func (e *Encoder) SetPuzzleSceneName(name string) { e.rend.SetPuzzleSceneName(name) }
 
+// SetPuzzleIdleLabel overrides the idle-card pill text shown in puzzle mode
+// before the first speaker arrives. The discussion stage uses it so a panel
+// discussion doesn't display "TODAY'S PUZZLE". Pass "" to restore the default.
+func (e *Encoder) SetPuzzleIdleLabel(s string) { e.rend.SetPuzzleIdleLabel(s) }
+
 // SetSceneAnimation forwards the per-beat camera move name (one of
 // scenes.Animation*) to the renderer so the still scene image plays
 // with a Ken-Burns-style pan / zoom. Pass "" or "stall" to hold the

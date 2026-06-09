@@ -5,6 +5,7 @@ import (
 	"image"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/content_creator"
@@ -51,6 +52,12 @@ func NewDiscussionChannelStage(enc *Encoder, channelID string) *DiscussionStage 
 	return &DiscussionStage{enc: enc, channelID: channelID}
 }
 
+// discussionRotationInterval is how long each background stays on screen
+// before the stage rotates to the next one. Keeps the frame alive between
+// the commander's on-the-fly background swaps so a static plate doesn't sit
+// for minutes while the discussion runs.
+const discussionRotationInterval = 25 * time.Second
+
 // AttachPalette installs the pre-generated background palette. Safe to call
 // before or after the topic activates; the first frame paints on activation.
 func (s *DiscussionStage) AttachPalette(frames []*image.RGBA) {
@@ -64,14 +71,55 @@ func (s *DiscussionStage) AttachPalette(frames []*image.RGBA) {
 	}
 }
 
+// AttachPaletteFrame appends a single background as it finishes generating
+// (streaming path). The first frame to land paints immediately so the show
+// can start without waiting for the whole palette; later frames join the
+// rotation pool.
+func (s *DiscussionStage) AttachPaletteFrame(img *image.RGBA) {
+	if img == nil {
+		return
+	}
+	s.mu.Lock()
+	s.frames = append(s.frames, img)
+	var show *image.RGBA
+	if s.active && len(s.frames) == 1 {
+		s.curIdx = 0
+		show = img
+	}
+	s.mu.Unlock()
+	if show != nil {
+		s.enc.SetSceneBackground(show)
+	}
+}
+
+// rotate advances to the next background in the pool. No-op until there are
+// at least two frames to cycle between.
+func (s *DiscussionStage) rotate() {
+	s.mu.Lock()
+	if !s.active || len(s.frames) <= 1 {
+		s.mu.Unlock()
+		return
+	}
+	s.curIdx = (s.curIdx + 1) % len(s.frames)
+	img := s.frames[s.curIdx]
+	s.mu.Unlock()
+	if img != nil {
+		s.enc.SetSceneBackground(img)
+	}
+}
+
 // Run subscribes to the bus and drives the encoder until ctx is cancelled.
 func (s *DiscussionStage) Run(ctx context.Context, bus *eventbus.Bus) {
 	ch, cancel := bus.Subscribe(128)
 	defer cancel()
+	rot := time.NewTicker(discussionRotationInterval)
+	defer rot.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-rot.C:
+			s.rotate()
 		case v, ok := <-ch:
 			if !ok {
 				return
@@ -118,6 +166,9 @@ func (s *DiscussionStage) activate() {
 	// outline-only surface style.
 	s.enc.SetPuzzleMode(true)
 	s.enc.SetPuzzleSceneName(scenes.SceneQA)
+	// Override the puzzle idle pill so the warmup card reads as a discussion,
+	// not "TODAY'S PUZZLE".
+	s.enc.SetPuzzleIdleLabel("討論  ·  DISCUSSION")
 }
 
 func (s *DiscussionStage) idle() {
@@ -127,6 +178,9 @@ func (s *DiscussionStage) idle() {
 	s.body.Reset()
 	s.mu.Unlock()
 	s.enc.SetPuzzleMode(false)
+	// Restore the default idle label so a puzzle topic that follows on the
+	// same channel encoder doesn't inherit the discussion pill.
+	s.enc.SetPuzzleIdleLabel("")
 }
 
 func (s *DiscussionStage) isActive() bool {
