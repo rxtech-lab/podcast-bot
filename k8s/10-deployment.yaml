@@ -1,0 +1,92 @@
+# The `debate-bot-secrets` Secret referenced below is NOT defined here.
+# Create it from secrets.example.yaml (copy -> secrets.yaml -> fill -> apply).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: debate-bot
+  namespace: debate-bot
+  labels:
+    app: debate-bot
+spec:
+  replicas: 1
+  # SQLite + on-disk render output live on a single RWO PVC, so we can't run two
+  # pods at once. Recreate (not RollingUpdate) avoids two pods sharing the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: debate-bot
+  template:
+    metadata:
+      labels:
+        app: debate-bot
+    spec:
+      containers:
+        - name: debate-bot
+          image: sirily11/debate-bot:latest
+          imagePullPolicy: Always
+          # Serve the self-contained "video" web app: the browser uploads a
+          # script.md and downloads the rendered .mp4 — no channels/topics dir to
+          # mount. For TV-channel "stream" mode instead, drop these args (the
+          # image's default CMD) and mount a topics volume + channels.json.
+          args: ["server", "--mode", "video", "--addr", ":3000"]
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Non-secret config. Point these at whatever providers you use; the
+            # API keys / password themselves come from the Secret below.
+            - name: OPENAI_BASE_URL
+              value: "https://api.openai.com/v1"
+            - name: HOST_MODEL
+              value: "gpt-4o"
+            - name: COMPRESSION_MODEL
+              value: "gpt-4o-mini"
+            - name: OUT_DIR
+              value: "/app/out"
+          envFrom:
+            - secretRef:
+                name: debate-bot-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              # ffmpeg + concurrent TTS/render are CPU/RAM hungry; give it room.
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/config   # unauthenticated even when APP_PASSWORD is set
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/config
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: out
+              mountPath: /app/out
+      volumes:
+        - name: out
+          persistentVolumeClaim:
+            claimName: debate-bot-out
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: debate-bot-out
+  namespace: debate-bot
+  labels:
+    app: debate-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # Uses the cluster default StorageClass (microk8s hostpath-storage). Set
+  # storageClassName explicitly here if your cluster's default differs.

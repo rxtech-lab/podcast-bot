@@ -75,3 +75,9 @@ export const jobVideoURL = (id: string) =>
 
 export const jobArchiveURL = (id: string) =>
   `/api/jobs/${encodeURIComponent(id)}/archive`
+
+// jobHLSURL points at the live HLS playlist the encoder writes while a job
+// runs, used for the realtime generation preview. Segments referenced inside
+// the playlist resolve relative to this URL (same /hls/ directory).
+export const jobHLSURL = (id: string) =>
+  `/api/jobs/${encodeURIComponent(id)}/hls/stream.m3u8`

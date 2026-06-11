@@ -83,6 +83,11 @@ usage:
   print a warning). `+"`run`"+` is kept as an alias for `+"`server`"+` for backwards
   compatibility.
 
+  --password gates the whole web UI + API behind a password (falls back to
+  the APP_PASSWORD env var). When set, the browser must sign in before any
+  /api/* route responds; unauthenticated requests get 401. Omit it (the
+  default) to leave the server open.
+
 env (loaded from .env if present):
   OPENAI_BASE_URL   OPENAI_API_KEY   HOST_MODEL
   COMPRESSION_BASE_URL   COMPRESSION_API_KEY   COMPRESSION_MODEL
@@ -457,7 +462,7 @@ func slugify(s string) string {
 // pre-initialised — auto-watch is always on, so a debate.md dropped into the
 // watched directory at runtime can start airing on any channel without re-
 // bootstrapping.
-func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, addr string) (*runtime, int) {
+func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, addr, password string) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
@@ -671,6 +676,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		Bus:      bus,
 		Sessions: sessions,
 		Log:      log,
+		Password: password,
 	})
 
 	return rt, 0
@@ -685,7 +691,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 // channels.json + topic .md preloading are intentionally skipped — in
 // video mode the user-facing surface is browser uploads, not a watched
 // directory.
-func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int) (*runtime, int) {
+func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int, password string) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
@@ -767,6 +773,7 @@ func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int) (*run
 		Jobs:       jobs,
 		Log:        log,
 		UploadRoot: uploadRoot,
+		Password:   password,
 		// SubmitJob runs one upload through the orchestrator + stitch +
 		// (for series) zip pipeline. Defined as a closure so it can
 		// reach the env / bus / log without cycling the import graph.
@@ -1224,6 +1231,7 @@ func serverCmd(args []string) int {
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
 	addr := fs.String("addr", ":3000", "HTTP listen address")
 	maxConcurrency := fs.Int("max-concurrency", 2, "video mode: maximum number of video generations to run concurrently")
+	password := fs.String("password", os.Getenv("APP_PASSWORD"), "if set, gate the web UI + API behind this password (falls back to APP_PASSWORD env)")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -1236,12 +1244,12 @@ func serverCmd(args []string) int {
 		if *maxConcurrency != 2 {
 			fmt.Fprintln(os.Stderr, "warning: --max-concurrency is ignored unless --mode=video")
 		}
-		return serverCmdStream(specs, *channelsPath, *mcpPath, *outDir, *addr)
+		return serverCmdStream(specs, *channelsPath, *mcpPath, *outDir, *addr, *password)
 	case modeVideo:
 		if len(specs) > 0 {
 			fmt.Fprintln(os.Stderr, "warning: --content is ignored in --mode=video (uploads come from the browser)")
 		}
-		return serverCmdVideo(*mcpPath, *outDir, *addr, *maxConcurrency)
+		return serverCmdVideo(*mcpPath, *outDir, *addr, *maxConcurrency, *password)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown --mode %q (want stream|video)\n", *mode)
 		return 2
@@ -1251,13 +1259,13 @@ func serverCmd(args []string) int {
 // serverCmdStream runs the long-running TV-channel mode: per-channel
 // encoders, fsnotify watching for new topic .md files, browser-side TV
 // tuner UI.
-func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr string) int {
+func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr, password string) int {
 	if len(specs) == 0 {
 		fmt.Fprintln(os.Stderr, "missing --content")
 		return 2
 	}
 
-	rt, code := bootstrap(channelsPath, specs, mcpPath, outDir, addr)
+	rt, code := bootstrap(channelsPath, specs, mcpPath, outDir, addr, password)
 	if code != 0 {
 		return code
 	}
@@ -1322,8 +1330,8 @@ func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr string)
 // waiting for /api/jobs requests; each one runs end-to-end in
 // internal/content_creator/video_job.go and writes its artefacts under
 // <session>/jobs/<jobID>/.
-func serverCmdVideo(mcpPath, outDir, addr string, maxConcurrency int) int {
-	rt, code := bootstrapVideo(mcpPath, outDir, addr, maxConcurrency)
+func serverCmdVideo(mcpPath, outDir, addr string, maxConcurrency int, password string) int {
+	rt, code := bootstrapVideo(mcpPath, outDir, addr, maxConcurrency, password)
 	if code != 0 {
 		return code
 	}

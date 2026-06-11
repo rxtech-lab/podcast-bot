@@ -65,18 +65,31 @@ type Deps struct {
 	Log        *slog.Logger
 	UploadRoot string
 	SubmitJob  func(jobID string, sub JobSubmission) error
+	// Password, when non-empty, gates every /api/* route behind a login
+	// cookie. Empty disables auth entirely (the default).
+	Password string
 }
 
 // Server is the HTTP front-end.
 type Server struct {
 	d   Deps
 	mux *http.ServeMux
+	// handler is what ListenAndServe / Handler expose: the bare mux when no
+	// password is set, or the auth-wrapped mux otherwise.
+	handler http.Handler
+	// authTok is the precomputed cookie token for the configured password.
+	authTok string
 }
 
 // New builds a Server with all routes mounted.
 func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux()}
+	if d.Password != "" {
+		s.authTok = authToken(d.Password)
+	}
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
+	s.mux.HandleFunc("POST /api/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/me", s.handleGetMe)
 	s.mux.HandleFunc("POST /api/me", s.handlePostMe)
@@ -98,25 +111,39 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
 		s.mux.HandleFunc("GET /api/jobs/{id}/video", s.handleJobVideo)
 		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
+		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
 	}
 
 	s.mux.Handle("/", staticHandler())
+
+	if s.authTok != "" {
+		s.handler = s.withAuth(s.mux)
+	} else {
+		s.handler = s.mux
+	}
 	return s
 }
 
 // handleConfig surfaces the server-side mode so the SPA can pick which
 // view to render. The frontend hits this once on mount.
-func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	mode := s.d.Mode
 	if mode == "" {
 		mode = "stream"
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"mode": mode})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"mode":          mode,
+		"auth_required": s.authEnabled(),
+		// authed lets the SPA skip the login screen when a valid cookie is
+		// already present (e.g. a returning visitor or a page reload).
+		"authed": s.requestAuthed(r),
+	})
 }
 
-// Handler exposes the underlying mux (useful for tests / custom mounting).
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler exposes the served handler (auth-wrapped when a password is set).
+// Useful for tests / custom mounting.
+func (s *Server) Handler() http.Handler { return s.handler }
 
 // ListenAndServe binds to addr and serves until ctx is cancelled. addr like
 // ":8080" or "127.0.0.1:0" (random port). The actual bound address is returned
@@ -130,7 +157,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string, started func(*
 		started(ln.Addr().(*net.TCPAddr))
 	}
 	srv := &http.Server{
-		Handler:           s.mux,
+		Handler:           s.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

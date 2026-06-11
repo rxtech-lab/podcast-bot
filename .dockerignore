@@ -1,0 +1,27 @@
+# Build artifacts & deps — rebuilt inside the image
+bin/
+out/
+frontend/node_modules/
+frontend/dist/
+internal/server/web-dist/
+
+# Committed prebuilt binaries / smoke executables (not needed in the image)
+debate-bot
+gen-assets
+music-smoke
+series-smoke
+series-recap-smoke
+transition-smoke
+
+# Secrets & local state
+.env
+.env.local
+mcp.json
+
+# VCS / editor / misc
+.git/
+.github/
+.DS_Store
+*.png
+.playwright-mcp/
+docs/

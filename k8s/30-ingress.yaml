@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: debate-bot
+  namespace: debate-bot
+  labels:
+    app: debate-bot
+  annotations:
+    # Reuse the cluster-wide cert-manager ClusterIssuer `letsencrypt-prod`
+    # (HTTP-01 via the nginx ingress). cert-manager provisions/renews the
+    # `debate-bot-tls` secret automatically — nothing to define in this repo.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # debate-bot serves long-lived SSE event streams + HLS, and accepts large
+    # script/zip uploads — give the proxy generous timeouts, no buffering, and
+    # a high body-size cap.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - debatebot.rxlab.app
+      secretName: debate-bot-tls   # created/renewed by cert-manager
+  rules:
+    - host: debatebot.rxlab.app
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: debate-bot
+                port:
+                  name: http
