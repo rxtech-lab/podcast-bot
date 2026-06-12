@@ -198,6 +198,50 @@ func (s *Server) handleJobArchive(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, j.ArchivePath)
 }
 
+// handleJobHLS serves the live HLS playlist + segments the encoder writes
+// while a job runs, so the SPA can show a realtime preview of the video being
+// generated. The encoder runs in archival/EVENT mode, so segments accumulate
+// and the playlist keeps growing until the job finishes (then ENDLIST lands).
+//
+// The HLS dir mirrors the runner's layout: <OutDir>/jobs/<id>/hls, where
+// OutDir is the parent of UploadRoot (same derivation recoverJob uses). The
+// job id comes from the path so no registry lookup is needed — segments may be
+// requested before the registry has caught up.
+func (s *Server) handleJobHLS(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil || s.d.UploadRoot == "" {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	file := r.PathValue("file")
+	if id == "" || file == "" || strings.ContainsAny(file, `/\`) || strings.Contains(file, "..") {
+		http.NotFound(w, r)
+		return
+	}
+	switch {
+	case strings.HasSuffix(file, ".m3u8"):
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-cache")
+	case strings.HasSuffix(file, ".ts"):
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Cache-Control", "max-age=10")
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	hlsDir := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id, "hls")
+	full := filepath.Join(hlsDir, file)
+	// Final containment check after Join — defends against a crafted id/file.
+	clean := filepath.Clean(full)
+	if !strings.HasPrefix(clean, filepath.Clean(hlsDir)+string(filepath.Separator)) {
+		http.NotFound(w, r)
+		return
+	}
+	// During warmup the playlist/segment may not exist yet; ServeFile 404s,
+	// which the SPA's HLS player treats as "keep polling".
+	http.ServeFile(w, r, full)
+}
+
 func saveUpload(src io.Reader, dst string) error {
 	f, err := os.Create(dst)
 	if err != nil {

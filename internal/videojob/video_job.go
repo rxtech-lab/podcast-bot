@@ -25,6 +25,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
+	"github.com/sirily11/debate-bot/internal/discussion"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/series"
 	"github.com/sirily11/debate-bot/internal/server"
@@ -72,11 +73,23 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 		return fmt.Errorf("script.md: %w", err)
 	}
 
-	// Subtitle flags + priors zip are series-only. Reject early with
-	// a clear message rather than silently ignoring them.
+	// Soft subs + translated tracks work for any type whose stage
+	// emits a subtitles.vtt sidecar — series and discussion. Burn-in
+	// captions are painted only by the series renderer (discussion
+	// already burns its active-speaker caption natively), and the
+	// priors zip is a series-only continuity feature. Reject mismatched
+	// flags early with a clear message rather than silently ignoring
+	// them.
+	supportsSoftSubs := topic.Type == config.ContentTypeSeries ||
+		topic.Type == config.ContentTypeDiscussion
+	if !supportsSoftSubs {
+		if sub.SoftSubs || len(sub.SubtitleLanguages) > 0 {
+			return errors.New("subtitle options (soft_subs) are only valid for type=series or type=discussion")
+		}
+	}
 	if topic.Type != config.ContentTypeSeries {
-		if sub.SoftSubs || sub.BurnSubs || len(sub.SubtitleLanguages) > 0 {
-			return errors.New("subtitle options (soft_subs / burn_subs) are only valid for type=series")
+		if sub.BurnSubs {
+			return errors.New("burn-in subtitles (burn_subs) are only valid for type=series")
 		}
 		if sub.PriorsZipPath != "" {
 			return errors.New("priors zip is only valid for type=series")
@@ -235,9 +248,11 @@ func run(ctx context.Context, deps Deps, jobID string,
 	debateStage := video.NewDebateChannelStage(enc, jobID)
 	puzzleStage := video.NewPuzzleChannelStage(enc, jobID)
 	seriesStage := video.NewSeriesChannelStage(enc, jobID)
+	discussionStage := video.NewDiscussionChannelStage(enc, jobID)
 	go debateStage.Run(ctx, deps.Bus)
 	go puzzleStage.Run(ctx, deps.Bus)
 	go seriesStage.Run(ctx, deps.Bus)
+	go discussionStage.Run(ctx, deps.Bus)
 
 	orch, err := contentcreator.New(&jobEnv, topic, deps.MCPCfg, send, logger, live)
 	if err != nil {
@@ -262,6 +277,20 @@ func run(ctx context.Context, deps Deps, jobID string,
 		logger.Info("series asset prep done",
 			"elapsed", time.Since(t0).Round(time.Millisecond))
 		status(fmt.Sprintf("series assets ready (%s)",
+			time.Since(t0).Round(time.Second)))
+	}
+
+	// Discussion needs its background palette + music beds generated before
+	// the orchestrator runs (the session bed must be installed pre-Run, and
+	// the stage paints the first background as soon as it lands). Without this
+	// the show rendered over a bare background with no imagery.
+	if topic.Type == config.ContentTypeDiscussion {
+		status("preparing discussion assets (backgrounds, music)…")
+		t0 := time.Now()
+		discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch)
+		logger.Info("discussion asset prep done",
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+		status(fmt.Sprintf("discussion assets ready (%s)",
 			time.Since(t0).Round(time.Second)))
 	}
 
@@ -516,6 +545,17 @@ func buildTopicMsg(topic *config.DebateTopic, jobID string) contentcreator.Topic
 		}
 		msg.AffPosition = topic.AffirmativePos
 		msg.NegPosition = topic.NegativePos
+	case config.ContentTypeDiscussion:
+		// Discussants populate the left panel; the moderator/host the right.
+		for _, dsc := range topic.Discussants {
+			msg.AffNames = append(msg.AffNames, dsc.Name)
+		}
+		hostName := topic.Host.Name
+		if hostName == "" {
+			hostName = "Host"
+		}
+		msg.NegNames = []string{hostName}
+		msg.AffPosition = topic.Background
 	}
 	return msg
 }

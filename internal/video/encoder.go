@@ -203,15 +203,22 @@ func NewWithOptions(ctx context.Context, sessionDir string, res Resolution, opts
 		"-hls_segment_filename", filepath.Join(hlsDir, "seg_%03d.ts"),
 	)
 	if opts.Archival {
-		// VOD-style HLS: keep every segment + emit #EXT-X-ENDLIST on
+		// EVENT-style HLS: keep every segment + emit #EXT-X-ENDLIST on
 		// close. Required for the modeVideo stitch pass — the live
 		// sliding window deletes segments older than ~12s and
 		// ffmpeg never closes the playlist, so a copy stitch on a
 		// long episode would be missing the bulk of the show.
+		//
+		// EVENT (not VOD) so the playlist is also usable for live
+		// preview while the job runs: an append-only EVENT playlist
+		// signals players to keep polling for new segments, whereas a
+		// VOD playlist without an ENDLIST is treated as complete and
+		// never refreshed. The stitch pass reads the playlist only
+		// after Close() appends ENDLIST, so it is unaffected.
 		args = append(args,
 			"-hls_list_size", "0",
 			"-hls_flags", "append_list+independent_segments",
-			"-hls_playlist_type", "vod",
+			"-hls_playlist_type", "event",
 		)
 	} else {
 		args = append(args,

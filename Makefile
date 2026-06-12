@@ -4,7 +4,15 @@ FRONTEND  := frontend
 EMBED_DIR := internal/server/web-dist
 BIN_DIR   := bin
 
-.PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke
+# Docker image. The k8s cluster runs on linux/amd64, so images are always built
+# for that platform regardless of the host arch (e.g. an Apple-silicon Mac).
+IMAGE     := sirily11/debate-bot
+TAG       := latest
+PLATFORM  := linux/amd64
+BUILDER   := debate-bot-builder
+
+.PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke \
+        buildx-setup docker-build docker-push
 
 all: build
 
@@ -41,6 +49,25 @@ tidy:
 # look — the resulting PNGs are committed under internal/video/assets/.
 gen-assets:
 	go run ./cmd/gen-assets
+
+# --- Docker (linux/amd64 for the k8s cluster) -------------------------------
+# Create/boot a buildx builder capable of cross-building amd64 on any host.
+# Idempotent: reuses the builder if it already exists.
+buildx-setup:
+	docker buildx inspect $(BUILDER) >/dev/null 2>&1 || \
+	  docker buildx create --name $(BUILDER) --driver docker-container --bootstrap
+
+# Build the amd64 image and load it into the local docker image store.
+# Use this to smoke-test the image locally before pushing.
+docker-build: buildx-setup
+	docker buildx build --builder $(BUILDER) --platform $(PLATFORM) \
+	  -t $(IMAGE):$(TAG) --load .
+
+# Build the amd64 image and push it to the registry in one step.
+# Override the tag with: make docker-push TAG=v1.2.3
+docker-push: buildx-setup
+	docker buildx build --builder $(BUILDER) --platform $(PLATFORM) \
+	  -t $(IMAGE):$(TAG) --push .
 
 clean:
 	rm -rf $(BIN_DIR) $(EMBED_DIR) $(FRONTEND)/dist $(FRONTEND)/node_modules

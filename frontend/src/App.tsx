@@ -8,6 +8,7 @@ import {
 } from '@/components/ChannelSwitcher'
 import { VideoStage } from '@/components/VideoStage'
 import { VideoJobView } from '@/components/VideoJobView'
+import { Login } from '@/components/Login'
 import { useDebateEvents } from '@/lib/sse'
 import { loadConfig, type ServerMode } from '@/lib/config'
 
@@ -19,9 +20,20 @@ function App() {
   // forget on mount; no loading screen — the stream UI is the safe
   // baseline.
   const [mode, setMode] = useState<ServerMode>('stream')
+  // needsLogin: server requires a password and we don't yet hold a valid
+  // cookie. null = config not loaded yet (show nothing to avoid a flash of
+  // either the app or the login form before we know which to render).
+  const [needsLogin, setNeedsLogin] = useState<boolean | null>(null)
+
   useEffect(() => {
-    loadConfig().then((c) => setMode(c.mode))
+    loadConfig().then((c) => {
+      setMode(c.mode)
+      setNeedsLogin(c.authRequired && !c.authed)
+    })
   }, [])
+
+  if (needsLogin === null) return null
+  if (needsLogin) return <Login onSuccess={() => setNeedsLogin(false)} />
 
   if (mode === 'video') {
     return <VideoJobView />

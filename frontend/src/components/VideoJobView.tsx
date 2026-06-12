@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import Hls from 'hls.js'
 import { FileArrowUp, FilmStrip, Spinner, Download, Archive, Clock } from '@phosphor-icons/react'
 import {
   jobArchiveURL,
+  jobHLSURL,
   jobVideoURL,
   loadJob,
   submitJob,
@@ -85,6 +87,10 @@ export function VideoJobView() {
   const [clock, setClock] = useState<RenderClock>({ elapsedMs: 0, remainingMs: 0 })
   const logRef = useRef<HTMLDivElement>(null)
   const isSeries = topicType === 'series'
+  // Soft subs + translated tracks are produced from the per-turn
+  // transcript, which series and discussion both emit. Burn-in and the
+  // priors zip stay series-only.
+  const supportsSubtitles = topicType === 'series' || topicType === 'discussion'
 
   // Auto-scroll the log as it grows.
   useEffect(() => {
@@ -114,7 +120,7 @@ export function VideoJobView() {
   }, [scriptFile])
 
   useEffect(() => {
-    if (!isSeries || !softSubs) {
+    if (!supportsSubtitles || !softSubs) {
       setSubtitleLanguages([])
       return
     }
@@ -124,7 +130,7 @@ export function VideoJobView() {
         prev.filter((code) => languageKey(code) !== sourceKey),
       )
     }
-  }, [isSeries, softSubs, topicLanguage])
+  }, [supportsSubtitles, softSubs, topicLanguage])
 
   useEffect(() => {
     const restoredID = new URLSearchParams(window.location.search).get('job')
@@ -245,9 +251,9 @@ export function VideoJobView() {
       const id = await submitJob({
         script: scriptFile,
         priors: isSeries ? priorsFile : null,
-        softSubs: isSeries && softSubs,
+        softSubs: supportsSubtitles && softSubs,
         burnSubs: isSeries && burnSubs,
-        subtitleLanguages: isSeries && softSubs ? subtitleLanguages : [],
+        subtitleLanguages: supportsSubtitles && softSubs ? subtitleLanguages : [],
         resolution,
       })
       setJobID(id)
@@ -289,6 +295,7 @@ export function VideoJobView() {
             priorsFile={priorsFile}
             setPriorsFile={setPriorsFile}
             isSeries={isSeries}
+            supportsSubtitles={supportsSubtitles}
             topicType={topicType}
             softSubs={softSubs}
             setSoftSubs={setSoftSubs}
@@ -338,6 +345,7 @@ interface FormViewProps {
   priorsFile: File | null
   setPriorsFile: (f: File | null) => void
   isSeries: boolean
+  supportsSubtitles: boolean
   topicType: string
   softSubs: boolean
   setSoftSubs: (b: boolean) => void
@@ -354,7 +362,7 @@ interface FormViewProps {
 
 function FormView(props: FormViewProps) {
   const sourceLanguageKey = languageKey(props.topicLanguage)
-  const translationEnabled = props.isSeries && props.softSubs
+  const translationEnabled = props.supportsSubtitles && props.softSubs
   const toggleSubtitleLanguage = (code: string, checked: boolean) => {
     props.setSubtitleLanguages(
       checked
@@ -410,13 +418,13 @@ function FormView(props: FormViewProps) {
 
       <fieldset className="flex flex-col gap-2 rounded-md border border-border/60 bg-background/40 p-4">
         <legend className="px-1 text-xs uppercase tracking-wider text-muted-foreground">
-          Subtitles (series only)
+          Subtitles (series &amp; discussion)
         </legend>
         <Checkbox
           label="Embed subtitle track (soft, mov_text)"
           checked={props.softSubs}
           onChange={props.setSoftSubs}
-          disabled={!props.isSeries}
+          disabled={!props.supportsSubtitles}
           hint="toggleable in players that support soft subs (VLC, browser <video>)"
         />
         <Checkbox
@@ -424,7 +432,7 @@ function FormView(props: FormViewProps) {
           checked={props.burnSubs}
           onChange={props.setBurnSubs}
           disabled={!props.isSeries}
-          hint="hardcoded — visible in any player including QuickTime, but takes longer"
+          hint="series only — discussion already paints captions on-screen; takes longer"
         />
         <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-3">
           <div>
@@ -562,6 +570,10 @@ function ProgressView(props: ProgressViewProps) {
         </div>
       )}
 
+      {!isError && (
+        <JobVideoPreview jobID={props.jobID} isDone={isDone} hasVideo={!!j?.has_video} />
+      )}
+
       <div
         ref={props.logRef}
         className="max-h-[28rem] overflow-y-auto rounded-md border border-border/60 bg-background/40 p-3 text-xs font-mono"
@@ -577,6 +589,116 @@ function ProgressView(props: ProgressViewProps) {
             </div>
           ))
         )}
+      </div>
+    </div>
+  )
+}
+
+interface JobVideoPreviewProps {
+  jobID: string
+  isDone: boolean
+  hasVideo: boolean
+}
+
+// JobVideoPreview shows the video as it is generated. While the job runs it
+// attaches hls.js to the live (EVENT) playlist the encoder writes segment by
+// segment; once the job finishes it swaps to the final downloadable mp4 so the
+// viewer gets a clean, scrubbable result instead of a still-growing stream.
+function JobVideoPreview(props: JobVideoPreviewProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [ready, setReady] = useState(false)
+  const hlsUrl = jobHLSURL(props.jobID)
+
+  // Reset readiness when the job id changes (New job → reuse of the card).
+  useEffect(() => {
+    setReady(false)
+  }, [props.jobID])
+
+  // Phase 1: poll the playlist (HEAD) until ffmpeg has emitted the first
+  // segment, then flip to live playback. Skipped once the job is done — the
+  // mp4 is served directly instead.
+  useEffect(() => {
+    if (props.isDone) return
+    let cancelled = false
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const resp = await fetch(hlsUrl, { method: 'HEAD', cache: 'no-store' })
+          if (resp.ok) {
+            if (!cancelled) setReady(true)
+            return
+          }
+        } catch {
+          // network blip / not ready yet — keep polling
+        }
+        await new Promise((r) => setTimeout(r, 1500))
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+    }
+  }, [hlsUrl, props.isDone])
+
+  // Phase 2: attach hls.js once the <video> is mounted and the manifest is
+  // live. Separate effect so it runs after React commits the element.
+  useEffect(() => {
+    if (props.isDone || !ready) return
+    const player = videoRef.current
+    if (!player) return
+    let hls: Hls | null = null
+    const tryPlay = () => player.play().catch(() => {})
+
+    if (Hls.isSupported()) {
+      hls = new Hls({ liveSyncDurationCount: 3, enableWorker: true })
+      hls.loadSource(hlsUrl)
+      hls.attachMedia(player)
+      hls.on(Hls.Events.MANIFEST_PARSED, tryPlay)
+    } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+      player.src = hlsUrl
+      tryPlay()
+    }
+    return () => {
+      if (hls) hls.destroy()
+    }
+  }, [ready, props.isDone, hlsUrl])
+
+  if (props.isDone) {
+    if (!props.hasVideo) return null
+    return (
+      <video
+        src={jobVideoURL(props.jobID)}
+        controls
+        playsInline
+        className="aspect-video w-full rounded-md border border-border/60 bg-black"
+      />
+    )
+  }
+
+  if (!ready) {
+    return (
+      <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border/60 bg-black/60 text-xs text-muted-foreground">
+        warming up live preview — waiting for the first frames…
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        controls
+        className="aspect-video w-full rounded-md border border-border/60 bg-black"
+      />
+      <div className="absolute left-2 top-2 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-red-400 ring-1 ring-red-500/40 backdrop-blur-md">
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="absolute inset-0 animate-ping rounded-full bg-red-500" />
+          <span className="relative h-1.5 w-1.5 rounded-full bg-red-500" />
+        </span>
+        live preview
       </div>
     </div>
   )
