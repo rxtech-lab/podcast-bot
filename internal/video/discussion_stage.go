@@ -132,7 +132,7 @@ func (s *DiscussionStage) Run(ctx context.Context, bus *eventbus.Bus) {
 					s.activate()
 					s.handleTopic(m)
 				} else {
-					s.idle()
+					s.idle(m.Type)
 				}
 				continue
 			}
@@ -171,13 +171,19 @@ func (s *DiscussionStage) activate() {
 	s.enc.SetPuzzleIdleLabel("討論  ·  DISCUSSION")
 }
 
-func (s *DiscussionStage) idle() {
+func (s *DiscussionStage) idle(nextType string) {
 	s.mu.Lock()
 	s.active = false
 	s.curSpeaker, s.curRole = "", ""
 	s.body.Reset()
 	s.mu.Unlock()
-	s.enc.SetPuzzleMode(false)
+	// Puzzle and series content also ride the puzzleMode pipeline; only flip
+	// it off when the next topic wants debate chrome. Otherwise this idle()
+	// races the incoming puzzle/series stage's activate() and the frame drops
+	// into debate mode (the mirror of the discussion-renders-as-debate bug).
+	if !usesPuzzleMode(nextType) {
+		s.enc.SetPuzzleMode(false)
+	}
 	// Restore the default idle label so a puzzle topic that follows on the
 	// same channel encoder doesn't inherit the discussion pill.
 	s.enc.SetPuzzleIdleLabel("")

@@ -12,11 +12,15 @@ topics/*.md
 !internal/video/assets/*.png
 gen-assets
 channels
-debate-bot
-music-smoke
-transition-smoke
-series-smoke
-series-recap-smoke
+# Root-level compiled binaries only — anchored with a leading slash so these
+# patterns don't also match the cmd/<name>/ source directories (an unanchored
+# "debate-bot" silently ignored every .go file under cmd/debate-bot/).
+/debate-bot
+/music-smoke
+/transition-smoke
+/series-smoke
+/series-recap-smoke
+/discussion-smoke
 
 # k8s filled-in secrets (never commit)
 k8s/secrets.yaml

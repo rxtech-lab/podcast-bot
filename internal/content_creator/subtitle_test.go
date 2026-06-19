@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sirily11/debate-bot/internal/config"
 )
 
 func TestVTTWriter_Append(t *testing.T) {
@@ -26,6 +28,22 @@ func TestPipeline_VTTBiasAddsPreviouslyOnDelay(t *testing.T) {
 	}
 	if got, want := withRecap, 2*time.Second; got != want {
 		t.Fatalf("previously-on vtt bias = %v, want %v", got, want)
+	}
+}
+
+func TestPipeline_VTTBiasAddsDiscussionDelay(t *testing.T) {
+	// Discussion runs background-asset prep before the orchestrator, so its
+	// sidecar .vtt lands ~1.5s ahead of the stitched mp4 audio. The bias
+	// gets an extra discussion-only nudge to realign it.
+	discussion := NewPipeline(Deps{ContentType: config.ContentTypeDiscussion}).vttBias()
+	if got, want := discussion, 1*time.Second+1500*time.Millisecond; got != want {
+		t.Fatalf("discussion vtt bias = %v, want %v", got, want)
+	}
+
+	// Non-discussion content keeps the base bias.
+	debate := NewPipeline(Deps{ContentType: config.ContentTypeDebate}).vttBias()
+	if got, want := debate, 1*time.Second; got != want {
+		t.Fatalf("debate vtt bias = %v, want %v", got, want)
 	}
 }
 

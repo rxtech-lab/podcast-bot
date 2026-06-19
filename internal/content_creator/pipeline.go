@@ -14,6 +14,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/audio/musicmixer"
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/tts"
 )
@@ -114,6 +115,17 @@ const postProducerGrace = 20 * time.Second
 const vttBaseBias = 1 * time.Second
 const vttPreviouslyOnBias = 1 * time.Second
 
+// vttDiscussionBias is an extra sidecar-subtitle delay applied only to
+// discussion content. The cue offset is anchored to LiveStream's first
+// write plus vttBaseBias, a gap tuned for debate/series where the
+// encoder begins right as the producer starts writing. Discussion runs
+// its background-asset prep before the orchestrator, so first-real-audio
+// lands later relative to the encoder start than the base bias assumes —
+// the sidecar .vtt ended up ~1.5s ahead of the stitched mp4's audio.
+// This nudge realigns it. Only affects the recorded .vtt sidecar; live
+// subtitle dispatch uses targetSend directly and is unchanged.
+const vttDiscussionBias = 1500 * time.Millisecond
+
 // cleanupHardCap caps the total wall time spent in the post-producer
 // cleanup tail (grace sleep + sessionMixer.Close + waitAudioDrained).
 // Each step has its own internal timeout, but those have been observed
@@ -172,6 +184,9 @@ func (p *Pipeline) vttBias() time.Duration {
 	bias := vttBaseBias
 	if p != nil && p.d.HasSeriesPreviouslyOn {
 		bias += vttPreviouslyOnBias
+	}
+	if p != nil && p.d.ContentType == config.ContentTypeDiscussion {
+		bias += vttDiscussionBias
 	}
 	return bias
 }
