@@ -164,11 +164,10 @@ func (s *SeriesStage) idle(nextType string) {
 	s.body.Reset()
 	s.curIdx = 0
 	s.mu.Unlock()
-	// Puzzle content also rides the puzzleMode pipeline; only flip it off
-	// when the next topic is a debate (the only mode that wants debate
-	// chrome). Symmetric to PuzzleStage.idle's series carve-out — without
-	// it the series→puzzle handoff would briefly drop into debate mode.
-	if nextType != config.ContentTypeSituationPuzzle {
+	// Puzzle and discussion content also ride the puzzleMode pipeline; only
+	// flip it off when the next topic wants debate chrome. Without this the
+	// series→puzzle or series→discussion handoff would drop into debate mode.
+	if !usesPuzzleMode(nextType) {
 		s.enc.SetPuzzleMode(false)
 	}
 	s.enc.SetSceneBackground(nil)

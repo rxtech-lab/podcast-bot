@@ -138,6 +138,20 @@ func isPuzzleType(t string) bool {
 	return t == config.ContentTypeSituationPuzzle
 }
 
+// usesPuzzleMode reports whether content type t renders through the puzzleMode
+// pipeline (full-bleed scene background + caption card) rather than the debate
+// CNN chrome. Puzzle, series, and discussion all do. The puzzle-family stages
+// share a single renderer puzzleMode flag, so when one stage idles it must NOT
+// flip the flag off if the incoming topic is another puzzle-family type —
+// otherwise its SetPuzzleMode(false) races the next stage's activate() and the
+// renderer falls through to frameDebate (discussion content rendering with the
+// debate layout was exactly this bug).
+func usesPuzzleMode(t string) bool {
+	return t == config.ContentTypeSituationPuzzle ||
+		t == config.ContentTypeSeries ||
+		t == config.ContentTypeDiscussion
+}
+
 // phaseChipText returns the on-frame label for the phase pill. Prefers
 // the server-stamped human label (PhaseMsg.Label) so the on-air chip and
 // the SSE phase event always agree. Falls back to the raw phase id for
@@ -168,13 +182,12 @@ func (s *PuzzleStage) idle(nextType string) {
 	s.body.Reset()
 	s.mu.Unlock()
 	// Reset puzzle layout so a subsequent debate topic on the same encoder
-	// renders with the standard CNN chrome. Series content also rides the
-	// puzzleMode pipeline (full-bleed scene + outlined captions), so keep
-	// the renderer in puzzle mode when we're handing off to a series
-	// topic — otherwise the brief frame between PuzzleStage.idle() and
-	// SeriesStage.activate() flashes the debate-style "TODAY'S TOPIC"
-	// idle card.
-	if nextType != config.ContentTypeSeries {
+	// renders with the standard CNN chrome. Series and discussion content
+	// also ride the puzzleMode pipeline (full-bleed scene + caption card), so
+	// keep the renderer in puzzle mode when handing off to any puzzle-family
+	// topic — otherwise this idle()'s SetPuzzleMode(false) races the next
+	// stage's activate() and the frame flashes (or sticks on) debate chrome.
+	if !usesPuzzleMode(nextType) {
 		s.enc.SetPuzzleMode(false)
 	}
 	s.enc.SetSceneBackground(nil)

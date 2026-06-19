@@ -101,12 +101,24 @@ func TestDiscussionStageStreamingPath(t *testing.T) {
 	defer cancel()
 
 	const channelID = "discussions"
-	// Mirror main.go: every content-type stage runs concurrently on the same
-	// channel-bound encoder and self-gates on TopicMsg.Type.
+	// Mirror main.go: ALL content-type stages run concurrently on the same
+	// channel-bound encoder and self-gate on TopicMsg.Type. Wiring every
+	// stage (not just debate+discussion) is essential — the puzzle and series
+	// stages' idle() also write the shared puzzleMode flag, which is where the
+	// discussion-renders-as-debate race lived.
 	debateStage := NewDebateChannelStage(enc, channelID)
+	puzzleStage := NewPuzzleChannelStage(enc, channelID)
+	seriesStage := NewSeriesChannelStage(enc, channelID)
 	discussionStage := NewDiscussionChannelStage(enc, channelID)
 	go debateStage.Run(ctx, bus)
+	go puzzleStage.Run(ctx, bus)
+	go seriesStage.Run(ctx, bus)
 	go discussionStage.Run(ctx, bus)
+
+	// Let the Run goroutines subscribe before the first publish (the bus drops
+	// events for not-yet-registered subscribers). Production never races here:
+	// orchestrator setup happens long after the stages subscribe.
+	time.Sleep(50 * time.Millisecond)
 
 	// Stamp the channel id the way runtime.channelSend does before publishing.
 	topic := contentcreator.StampChannelID(contentcreator.TopicMsg{
@@ -117,19 +129,69 @@ func TestDiscussionStageStreamingPath(t *testing.T) {
 		NegNames:    []string{"Host"},
 		AffPosition: "一場關於人工智慧與人類創意的圓桌討論。",
 	}, channelID)
+	bus.Publish(topic)
 
-	ok := publishUntil(bus, topic, func() bool {
-		mode, _, _ := readPuzzleState(r)
-		return mode
-	}, time.Second)
-	if !ok {
-		mode, sceneName, idle := readPuzzleState(r)
-		t.Fatalf("discussion TopicMsg did not enable discussion render mode: "+
-			"puzzleMode=%v sceneName=%q idle=%q (Frame() would use the debate template)",
-			mode, sceneName, idle)
+	// Wait for the discussion stage to activate, then let every stage settle
+	// and assert the STEADY-STATE mode. The bug was that PuzzleStage.idle and
+	// SeriesStage.idle reset puzzleMode=false after activate(); a "first time
+	// true wins" check would miss it, so we require it to remain true once the
+	// dust settles.
+	if !waitPuzzleMode(r, true, time.Second) {
+		t.Fatalf("discussion TopicMsg never enabled puzzle mode")
 	}
-	if _, sceneName, _ := readPuzzleState(r); sceneName != scenes.SceneQA {
+	time.Sleep(80 * time.Millisecond) // let puzzle/series idle() finish racing
+	mode, sceneName, _ := readPuzzleState(r)
+	if !mode {
+		t.Fatalf("puzzleMode settled to false — a puzzle-family idle() reset it; " +
+			"Frame() would use the debate template for discussion content")
+	}
+	if sceneName != scenes.SceneQA {
 		t.Fatalf("puzzleSceneName = %q, want %q", sceneName, scenes.SceneQA)
+	}
+}
+
+// TestPuzzleFamilyIdleKeepsPuzzleModeForDiscussion is the deterministic guard
+// for the carve-out: when a puzzle or series topic hands off to a discussion
+// topic, the idling stage must NOT flip puzzleMode off (discussion rides the
+// same pipeline). This is the unit-level root cause of the streaming race.
+func TestPuzzleFamilyIdleKeepsPuzzleModeForDiscussion(t *testing.T) {
+	cases := []struct {
+		name string
+		idle func(enc *Encoder)
+	}{
+		{"puzzle->discussion", func(enc *Encoder) {
+			NewPuzzleChannelStage(enc, "").idle(config.ContentTypeDiscussion)
+		}},
+		{"series->discussion", func(enc *Encoder) {
+			NewSeriesChannelStage(enc, "").idle(config.ContentTypeDiscussion)
+		}},
+		{"discussion->puzzle", func(enc *Encoder) {
+			NewDiscussionChannelStage(enc, "").idle(config.ContentTypeSituationPuzzle)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := renderForTest(t)
+			enc := &Encoder{rend: r}
+			enc.SetPuzzleMode(true) // a puzzle-family topic is on screen
+			tc.idle(enc)
+			if mode, _, _ := readPuzzleState(r); !mode {
+				t.Fatalf("%s: idle() reset puzzleMode to false; the next stage's "+
+					"activate() would race and the frame falls through to debate", tc.name)
+			}
+		})
+	}
+}
+
+// TestPuzzleFamilyIdleResetsForDebate is the negative control: handing off to a
+// debate topic MUST flip puzzleMode off so debate content gets CNN chrome.
+func TestPuzzleFamilyIdleResetsForDebate(t *testing.T) {
+	r := renderForTest(t)
+	enc := &Encoder{rend: r}
+	enc.SetPuzzleMode(true)
+	NewPuzzleChannelStage(enc, "").idle(config.ContentTypeDebate)
+	if mode, _, _ := readPuzzleState(r); mode {
+		t.Fatalf("puzzle->debate handoff kept puzzleMode on; debate would render with puzzle chrome")
 	}
 }
 

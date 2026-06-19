@@ -20,6 +20,7 @@ channels
 /transition-smoke
 /series-smoke
 /series-recap-smoke
+/discussion-smoke
 
 # k8s filled-in secrets (never commit)
 k8s/secrets.yaml
