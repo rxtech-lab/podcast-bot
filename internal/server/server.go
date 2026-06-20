@@ -36,8 +36,18 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/audio"
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/storage"
+)
+
+// HTTP server modes. Mirror the cmd-side mode strings so route mounting and
+// the cmd flag stay in lockstep.
+const (
+	ModeStream    = "stream"
+	ModeVideo     = "video"
+	ModeDashboard = "dashboard"
 )
 
 // Deps wires the server to the event bus and the registry that tracks every
@@ -68,6 +78,28 @@ type Deps struct {
 	// Password, when non-empty, gates every /api/* route behind a login
 	// cookie. Empty disables auth entirely (the default).
 	Password string
+
+	// Env / MCPCfg back the dashboard-facing metadata + planning endpoints
+	// (GET /api/models, GET /api/tools, POST /api/plan). Both may be nil in
+	// deployments that don't expose those routes; the handlers degrade
+	// gracefully when they are.
+	Env    *config.Env
+	MCPCfg *config.MCPConfig
+
+	// AllowedOrigins, when non-empty, enables CORS for the listed browser
+	// origins so a separately-hosted dashboard (different origin) can call
+	// the API. Empty leaves CORS off (same-origin SPA only).
+	AllowedOrigins []string
+
+	// ServiceToken, when non-empty, lets a trusted backend (the dashboard's
+	// Next.js server) authenticate via `Authorization: Bearer <token>` in
+	// addition to / instead of the human password cookie. It is never
+	// exposed to browsers — the dashboard forwards it server-side only.
+	ServiceToken string
+
+	// Uploader, when enabled, serves finished videos from S3 (presigned
+	// redirect) instead of local disk. nil / disabled keeps disk serving.
+	Uploader *storage.Uploader
 }
 
 // Server is the HTTP front-end.
@@ -95,8 +127,21 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /api/me", s.handlePostMe)
 	s.mux.HandleFunc("GET /api/debug", s.handleDebug)
 
+	// Dashboard-facing metadata routes (always mounted): model + tool
+	// discovery and the planning/script-generation endpoints. They degrade
+	// gracefully when Env/MCPCfg are nil.
+	s.mux.HandleFunc("GET /api/models", s.handleModels)
+	s.mux.HandleFunc("GET /api/tools", s.handleTools)
+	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
+	s.mux.HandleFunc("POST /api/plan/improve", s.handlePlanImprove)
+
+	// "video" and "dashboard" both run the upload-and-render job pipeline;
+	// only the embedded SPA differs (dashboard has its own frontend). Stream
+	// mode is everything else.
+	jobsMode := d.Mode == ModeVideo || d.Mode == ModeDashboard
+
 	// Stream-mode routes (channel queues, HLS, live chat).
-	if d.Mode != "video" {
+	if !jobsMode {
 		s.mux.HandleFunc("GET /api/topics", s.handleTopics)
 		s.mux.HandleFunc("GET /api/transcript", s.handleTranscript)
 		s.mux.HandleFunc("GET /api/audio/", s.handleAudio)
@@ -104,24 +149,56 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/messages", s.handleMessages)
 	}
 
-	// Video-mode routes (upload-and-render jobs).
-	if d.Mode == "video" {
+	// Job-pipeline routes (video + dashboard modes).
+	if jobsMode {
 		s.mux.HandleFunc("POST /api/jobs", s.handleJobSubmit)
+		s.mux.HandleFunc("POST /api/jobs/json", s.handleJobSubmitJSON)
 		s.mux.HandleFunc("GET /api/jobs", s.handleJobList)
 		s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
 		s.mux.HandleFunc("GET /api/jobs/{id}/video", s.handleJobVideo)
 		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
 		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
+		s.mux.HandleFunc("GET /api/jobs/{id}/ws", s.handleJobWS)
+		s.mux.HandleFunc("POST /api/jobs/{id}/messages", s.handleJobMessage)
 	}
 
-	s.mux.Handle("/", staticHandler())
-
-	if s.authTok != "" {
-		s.handler = s.withAuth(s.mux)
+	// The embedded TV SPA is served in stream + video modes. In dashboard
+	// mode the Next.js app is the frontend, so "/" returns a tiny health
+	// response instead of the bundled UI.
+	if d.Mode == ModeDashboard {
+		s.mux.HandleFunc("GET /", s.handleDashboardRoot)
 	} else {
-		s.handler = s.mux
+		s.mux.Handle("/", staticHandler())
 	}
+
+	// Auth engages when either a human password OR a service token is set.
+	// CORS, when configured, wraps the auth layer so cross-origin preflight
+	// (OPTIONS, which carries no credentials) is answered before auth runs.
+	var handler http.Handler = s.mux
+	if s.authTok != "" || d.ServiceToken != "" {
+		handler = s.withAuth(handler)
+	}
+	if len(d.AllowedOrigins) > 0 {
+		handler = withCORS(d.AllowedOrigins, handler)
+	}
+	s.handler = handler
 	return s
+}
+
+// handleDashboardRoot answers "/" in dashboard mode with a tiny health/info
+// payload (the embedded TV SPA isn't served — the Next.js dashboard is the
+// frontend). Unknown paths still 404 since the catch-all GET / pattern also
+// receives them.
+func (s *Server) handleDashboardRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"service": "debate-bot",
+		"mode":    ModeDashboard,
+		"status":  "ok",
+	})
 }
 
 // handleConfig surfaces the server-side mode so the SPA can pick which
@@ -312,6 +389,14 @@ type eventEnvelope struct {
 
 func envelope(v any) (eventEnvelope, bool) {
 	switch m := v.(type) {
+	case contentcreator.AgentActivityMsg:
+		return eventEnvelope{"agent_activity", map[string]any{
+			"channel_id": m.ChannelID,
+			"agent":      m.Agent,
+			"role":       m.Role,
+			"activity":   string(m.Activity),
+			"detail":     m.Detail,
+		}}, true
 	case contentcreator.TranscriptMsg:
 		return eventEnvelope{"transcript", map[string]any{
 			"channel_id": m.ChannelID,

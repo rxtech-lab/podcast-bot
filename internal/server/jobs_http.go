@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 )
@@ -93,6 +94,19 @@ func (s *Server) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 		SubtitleLanguages: formValues(r, "subtitle_languages"),
 	}
 
+	if err := s.submitStaged(jobID, sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": jobID})
+}
+
+// submitStaged registers the job and hands its staged uploads to the runner,
+// marking the job errored (and logging) when synchronous validation rejects
+// it. Shared by the multipart and JSON submit paths.
+func (s *Server) submitStaged(jobID string, sub JobSubmission) error {
 	s.d.Jobs.Add(jobID)
 	if err := s.d.SubmitJob(jobID, sub); err != nil {
 		// Submission rejection is a synchronous failure (e.g. bad
@@ -104,12 +118,48 @@ func (s *Server) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 			j.Error = err.Error()
 		})
 		s.d.Jobs.AppendLog(jobID, "error", err.Error(), nil)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		return err
+	}
+	return nil
+}
+
+// jobMessageReq is the body of POST /api/jobs/{id}/messages — a viewer
+// participation message for a running video job.
+type jobMessageReq struct {
+	Text     string `json:"text"`
+	Username string `json:"username"`
+}
+
+// handleJobMessage injects a viewer message into a running video job's
+// orchestrator. This is the video-mode counterpart to stream-mode's
+// POST /api/messages (which isn't mounted in video mode); the dashboard's
+// "participate" box posts here. Returns 503 when the job has no live
+// orchestrator (not started, finished, or unknown id).
+func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"id": jobID})
+	id := r.PathValue("id")
+	var req jobMessageReq
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		http.Error(w, "empty text", http.StatusBadRequest)
+		return
+	}
+	orch := s.d.Jobs.Orch(id)
+	if orch == nil {
+		http.Error(w, "no active job", http.StatusServiceUnavailable)
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		username = "viewer"
+	}
+	orch.PushUserMessage(req.Text, username)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleJobList returns every job currently tracked by the registry.
@@ -140,6 +190,14 @@ func (s *Server) handleJobGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// When the finished video lives in S3, hand the client a fresh presigned
+	// download link directly on the job snapshot so the dashboard can show a
+	// download button without a redirect round-trip.
+	if j.Status == JobDone && j.S3Key != "" && s.d.Uploader.Enabled() {
+		if url, err := s.d.Uploader.PresignGet(r.Context(), j.S3Key, time.Hour); err == nil {
+			j.DownloadURL = url
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(j)
 }
@@ -161,7 +219,22 @@ func (s *Server) handleJobVideo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if j.Status != JobDone || j.VideoPath == "" {
+	if j.Status != JobDone {
+		http.Error(w, "video not ready", http.StatusTooEarly)
+		return
+	}
+	// Prefer object storage: mint a fresh presigned URL each request (never
+	// persisted, so it can't go stale) and redirect the browser to it.
+	if j.S3Key != "" && s.d.Uploader.Enabled() {
+		url, err := s.d.Uploader.PresignGet(r.Context(), j.S3Key, time.Hour)
+		if err != nil {
+			http.Error(w, "presign failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, url, http.StatusFound)
+		return
+	}
+	if j.VideoPath == "" {
 		http.Error(w, "video not ready", http.StatusTooEarly)
 		return
 	}

@@ -9,8 +9,10 @@ import (
 // TakeNoteTool appends a note to the calling agent's memory file.
 type TakeNoteTool struct{}
 
-func (TakeNoteTool) Name() string        { return "take_note" }
-func (TakeNoteTool) Description() string { return "Append a personal note to your private memory file." }
+func (TakeNoteTool) Name() string { return "take_note" }
+func (TakeNoteTool) Description() string {
+	return "Append a personal note to your private memory file."
+}
 func (TakeNoteTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -89,4 +91,21 @@ func RegisterBuiltins(r *Registry) {
 // registered here in that case.
 func RegisterDataStore(r *Registry, dir string) {
 	r.Register(NewDataStoreTool(dir))
+}
+
+// Snapshot builds a fresh registry containing the built-in tools (and, when
+// withDataStore is true, the discussion research scratchpad) without booting
+// any MCP subprocess. It exists so the HTTP layer can enumerate the engine's
+// statically-known tools (GET /api/tools) without standing up a full
+// orchestrator. MCP-provided tools are intentionally excluded — their schemas
+// are only knowable after a live ListTools handshake.
+func Snapshot(withDataStore bool) []Tool {
+	r := New()
+	RegisterBuiltins(r)
+	if withDataStore {
+		// The directory is irrelevant for a metadata snapshot; the tool's
+		// Name/Description/Schema don't depend on it.
+		RegisterDataStore(r, "")
+	}
+	return r.All()
 }

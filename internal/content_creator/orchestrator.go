@@ -280,6 +280,17 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	client := llm.New(baseURL, key, model)
 	mem := o.MemStore.For(spec.Name)
 	base := agent.NewBase(spec.Name, role, client, mem, o.Compressor, o.Tools, o.Transcript)
+	// Fan this agent's activity transitions onto the event bus so the
+	// dashboard's live diagram can show who is searching / taking memory.
+	agentName, agentRole := spec.Name, string(role)
+	base.SetActivityEmitter(func(activity, detail string) {
+		o.Send(AgentActivityMsg{
+			Agent:    agentName,
+			Role:     agentRole,
+			Activity: AgentActivity(activity),
+			Detail:   detail,
+		})
+	})
 	switch role {
 	case agent.RoleHost:
 		return agent.NewHost(base)

@@ -13,6 +13,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/sirily11/debate-bot/internal/content_creator"
 )
 
 // JobStatus is the lifecycle of a video-mode upload job.
@@ -56,6 +58,12 @@ type Job struct {
 	ArchivePath string    `json:"-"`
 	HasVideo    bool      `json:"has_video"`
 	HasArchive  bool      `json:"has_archive"`
+	// S3Key is the object key of the uploaded mp4 when S3 upload is enabled
+	// (empty otherwise). The download URL is presigned on demand from it.
+	S3Key string `json:"-"`
+	// DownloadURL is a presigned S3 link populated on the job-detail response
+	// when the video lives in object storage; empty when served from disk.
+	DownloadURL string `json:"download_url,omitempty"`
 
 	ElapsedMS   int64    `json:"elapsed_ms,omitempty"`
 	RemainingMS int64    `json:"remaining_ms,omitempty"`
@@ -90,6 +98,13 @@ type JobRegistry struct {
 	db       *gorm.DB
 	logLimit int
 	mu       sync.Mutex
+
+	// orchs tracks the live orchestrator for each currently-running job so
+	// the WebSocket endpoint can inject viewer participation messages into
+	// an in-flight discussion. Entries exist only while a job is running
+	// (set at run start, cleared on exit); they are never persisted.
+	orchMu sync.RWMutex
+	orchs  map[string]*contentcreator.Orchestrator
 }
 
 type videoJobRecord struct {
@@ -105,6 +120,7 @@ type videoJobRecord struct {
 	ArchivePath string
 	HasVideo    bool
 	HasArchive  bool
+	S3Key       string
 	ElapsedMS   int64
 	RemainingMS int64
 	Phase       string
@@ -148,7 +164,7 @@ func NewJobRegistry(dbPath string) (*JobRegistry, error) {
 	if err := db.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
 		return nil, err
 	}
-	r := &JobRegistry{db: db, logLimit: 500}
+	r := &JobRegistry{db: db, logLimit: 500, orchs: map[string]*contentcreator.Orchestrator{}}
 	if err := r.ensureSchema(); err != nil {
 		return nil, err
 	}
@@ -180,6 +196,30 @@ func (r *JobRegistry) retryMissingTable(err error, op func() error) error {
 		return fmt.Errorf("%w; remigrate: %v", err, migrateErr)
 	}
 	return op()
+}
+
+// SetOrch records the live orchestrator for a running job. The video-job
+// runner calls this once the orchestrator is built, and pairs it with a
+// deferred ClearOrch so the entry never outlives the run.
+func (r *JobRegistry) SetOrch(id string, orch *contentcreator.Orchestrator) {
+	r.orchMu.Lock()
+	r.orchs[id] = orch
+	r.orchMu.Unlock()
+}
+
+// Orch returns the live orchestrator for a running job, or nil when the job
+// is unknown, finished, or never started one.
+func (r *JobRegistry) Orch(id string) *contentcreator.Orchestrator {
+	r.orchMu.RLock()
+	defer r.orchMu.RUnlock()
+	return r.orchs[id]
+}
+
+// ClearOrch drops the live-orchestrator entry for a job once its run exits.
+func (r *JobRegistry) ClearOrch(id string) {
+	r.orchMu.Lock()
+	delete(r.orchs, id)
+	r.orchMu.Unlock()
 }
 
 // Add inserts a fresh pending job. Caller picks the id.
@@ -326,6 +366,7 @@ func jobFromRecord(rec videoJobRecord) Job {
 		ArchivePath: rec.ArchivePath,
 		HasVideo:    rec.HasVideo,
 		HasArchive:  rec.HasArchive,
+		S3Key:       rec.S3Key,
 		ElapsedMS:   rec.ElapsedMS,
 		RemainingMS: rec.RemainingMS,
 		Phase:       rec.Phase,
@@ -347,6 +388,7 @@ func recordFromJob(j Job) videoJobRecord {
 		ArchivePath: j.ArchivePath,
 		HasVideo:    j.HasVideo,
 		HasArchive:  j.HasArchive,
+		S3Key:       j.S3Key,
 		ElapsedMS:   j.ElapsedMS,
 		RemainingMS: j.RemainingMS,
 		Phase:       j.Phase,

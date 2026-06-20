@@ -84,10 +84,14 @@ func (d *DiscussionDirector) tick(ctx context.Context) {
 	if len(recent) == 0 {
 		return
 	}
+	// Light up the commander node in the live diagram while it deliberates;
+	// it otherwise works silently and would appear idle the whole show.
+	d.commander.EmitActivity(string(ActivityDirecting), "")
 	cueCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	cue, err := d.commander.Direct(cueCtx, recent)
 	cancel()
 	if err != nil {
+		d.commander.EmitActivity(string(ActivityIdle), "")
 		d.log.Warn("commander direct failed", "err", err)
 		return
 	}
@@ -101,22 +105,27 @@ func (d *DiscussionDirector) tick(ctx context.Context) {
 		d.send(SoundCueMsg{Index: cue.MusicIndex, Mode: SoundCueReplace})
 	}
 
-	// Generate a fresh background on the fly.
+	// Generate a fresh background on the fly. When generation starts it keeps
+	// the node lit and resets to idle from its own goroutine; otherwise we
+	// settle the node back to idle here.
 	if strings.EqualFold(strings.TrimSpace(cue.Action), "generate") &&
-		strings.TrimSpace(cue.ScenePrompt) != "" {
-		d.maybeGenerate(ctx, cue.ScenePrompt)
+		strings.TrimSpace(cue.ScenePrompt) != "" && d.maybeGenerate(ctx, cue.ScenePrompt) {
+		return
 	}
+	d.commander.EmitActivity(string(ActivityIdle), "")
 }
 
-// maybeGenerate kicks off one background generation if none is in flight.
-func (d *DiscussionDirector) maybeGenerate(ctx context.Context, prompt string) {
+// maybeGenerate kicks off one background generation if none is in flight. It
+// reports whether a generation goroutine was started; when true, that goroutine
+// owns resetting the commander node back to idle once the image is ready.
+func (d *DiscussionDirector) maybeGenerate(ctx context.Context, prompt string) bool {
 	if d.img == nil {
-		return
+		return false
 	}
 	d.mu.Lock()
 	if d.generating {
 		d.mu.Unlock()
-		return
+		return false
 	}
 	d.generating = true
 	d.mu.Unlock()
@@ -126,6 +135,7 @@ func (d *DiscussionDirector) maybeGenerate(ctx context.Context, prompt string) {
 			d.mu.Lock()
 			d.generating = false
 			d.mu.Unlock()
+			d.commander.EmitActivity(string(ActivityIdle), "")
 		}()
 		genCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
@@ -148,4 +158,5 @@ func (d *DiscussionDirector) maybeGenerate(ctx context.Context, prompt string) {
 			"elapsed", time.Since(t0).Round(time.Millisecond))
 		d.send(DynamicSceneMsg{Img: rgba})
 	}()
+	return true
 }

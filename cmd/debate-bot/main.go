@@ -22,6 +22,7 @@ import (
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/server"
+	"github.com/sirily11/debate-bot/internal/storage"
 	"github.com/sirily11/debate-bot/internal/util"
 	"github.com/sirily11/debate-bot/internal/video"
 	"github.com/sirily11/debate-bot/internal/videojob"
@@ -195,10 +196,10 @@ func (q *debateQueue) Pop(ctx context.Context) (loadedDebate, bool) {
 // live and enc are nil for off-air channels (no debates queued AND no watcher
 // pre-initialised encoder).
 type channelRuntime struct {
-	def         config.Channel
-	queue       *debateQueue
-	live        *audio.LiveStream
-	enc         *video.Encoder
+	def             config.Channel
+	queue           *debateQueue
+	live            *audio.LiveStream
+	enc             *video.Encoder
 	puzzleStage     *video.PuzzleStage     // retained so scene generators can call AttachScenes
 	seriesStage     *video.SeriesStage     // retained for series episodes (preparation hooks reach in)
 	discussionStage *video.DiscussionStage // retained so the palette generator can call AttachPalette
@@ -223,9 +224,16 @@ type channelRuntime struct {
 // series, a zip of prior generations); the server runs one orchestrator,
 // stitches the resulting HLS into a downloadable .mp4, and (for series)
 // re-zips the persistent show archive so the next generation can chain.
+//
+// modeDashboard is the API backend for the standalone Next.js dashboard. It
+// shares modeVideo's job pipeline (JSON script submit, live WS/SSE, S3 upload)
+// but is a distinct mode value so GET /api/config reports "dashboard" and the
+// embedded TV SPA is not served — the dashboard is the frontend. CORS +
+// service-token auth (DASHBOARD_ORIGINS / DASHBOARD_SERVICE_TOKEN) are expected.
 const (
-	modeStream = "stream"
-	modeVideo  = "video"
+	modeStream    = "stream"
+	modeVideo     = "video"
+	modeDashboard = "dashboard"
 )
 
 // runtime owns every cross-channel resource: the shared event bus, server,
@@ -672,11 +680,15 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 	}
 
 	rt.srv = server.New(server.Deps{
-		Mode:     modeStream,
-		Bus:      bus,
-		Sessions: sessions,
-		Log:      log,
-		Password: password,
+		Mode:           modeStream,
+		Bus:            bus,
+		Sessions:       sessions,
+		Log:            log,
+		Password:       password,
+		Env:            env,
+		MCPCfg:         mcpCfg,
+		AllowedOrigins: env.DashboardOrigins,
+		ServiceToken:   env.DashboardServiceToken,
 	})
 
 	return rt, 0
@@ -691,7 +703,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 // channels.json + topic .md preloading are intentionally skipped — in
 // video mode the user-facing surface is browser uploads, not a watched
 // directory.
-func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int, password string) (*runtime, int) {
+func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int, password string) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
@@ -752,7 +764,7 @@ func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int, passw
 
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
-		mode: modeVideo,
+		mode: mode,
 		env:  env, mcpCfg: mcpCfg, bus: bus, jobs: jobs,
 		addr: addr, stopSig: stopSig,
 		channelByID:   map[string]*channelRuntime{},
@@ -767,13 +779,33 @@ func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int, passw
 		return nil, 1
 	}
 
+	uploader, err := storage.New(ctx, storage.Config{
+		Bucket:   env.S3Bucket,
+		Region:   env.S3Region,
+		Endpoint: env.S3Endpoint,
+		Prefix:   env.S3Prefix,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "s3:", err)
+		cancel()
+		return nil, 1
+	}
+	if uploader.Enabled() {
+		fmt.Fprintln(os.Stdout, "S3 upload enabled · bucket:", env.S3Bucket)
+	}
+
 	rt.srv = server.New(server.Deps{
-		Mode:       modeVideo,
-		Bus:        bus,
-		Jobs:       jobs,
-		Log:        log,
-		UploadRoot: uploadRoot,
-		Password:   password,
+		Mode:           mode,
+		Bus:            bus,
+		Jobs:           jobs,
+		Log:            log,
+		UploadRoot:     uploadRoot,
+		Password:       password,
+		Env:            env,
+		MCPCfg:         mcpCfg,
+		AllowedOrigins: env.DashboardOrigins,
+		ServiceToken:   env.DashboardServiceToken,
+		Uploader:       uploader,
 		// SubmitJob runs one upload through the orchestrator + stitch +
 		// (for series) zip pipeline. Defined as a closure so it can
 		// reach the env / bus / log without cycling the import graph.
@@ -781,12 +813,13 @@ func bootstrapVideo(mcpPath, outOverride, addr string, maxConcurrency int, passw
 		// in a goroutine the runner spawns.
 		SubmitJob: func(jobID string, req server.JobSubmission) error {
 			return videojob.Submit(rt.ctx, videojob.Deps{
-				Env:    env,
-				MCPCfg: mcpCfg,
-				Bus:    bus,
-				Jobs:   jobs,
-				Queue:  queue,
-				Log:    log,
+				Env:      env,
+				MCPCfg:   mcpCfg,
+				Bus:      bus,
+				Jobs:     jobs,
+				Queue:    queue,
+				Log:      log,
+				Uploader: uploader,
 			}, jobID, req)
 		},
 	})
@@ -1225,7 +1258,7 @@ func serverCmd(args []string) int {
 	}
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	fs.Var((*stringSlice)(&specs), "content", "path or glob to topic .md file(s) — repeatable; consecutive paths after one --content are also accepted")
-	mode := fs.String("mode", modeStream, "stream|video — stream (default) airs HLS channels; video accepts uploaded scripts and renders downloadable mp4s")
+	mode := fs.String("mode", modeStream, "stream|video|dashboard — stream (default) airs HLS channels; video accepts uploaded scripts and renders downloadable mp4s; dashboard is the API backend for the Next.js dashboard (same job pipeline, no embedded SPA)")
 	channelsPath := fs.String("channel", "./channels.json", "path to channels.json — array of {id, number, title} channel definitions")
 	mcpPath := fs.String("mcp", "", "path to mcp.json (optional)")
 	outDir := fs.String("out", "", "output directory (overrides OUT_DIR)")
@@ -1245,13 +1278,13 @@ func serverCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, "warning: --max-concurrency is ignored unless --mode=video")
 		}
 		return serverCmdStream(specs, *channelsPath, *mcpPath, *outDir, *addr, *password)
-	case modeVideo:
+	case modeVideo, modeDashboard:
 		if len(specs) > 0 {
-			fmt.Fprintln(os.Stderr, "warning: --content is ignored in --mode=video (uploads come from the browser)")
+			fmt.Fprintf(os.Stderr, "warning: --content is ignored in --mode=%s (scripts come from the API)\n", *mode)
 		}
-		return serverCmdVideo(*mcpPath, *outDir, *addr, *maxConcurrency, *password)
+		return serverCmdVideo(*mode, *mcpPath, *outDir, *addr, *maxConcurrency, *password)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown --mode %q (want stream|video)\n", *mode)
+		fmt.Fprintf(os.Stderr, "unknown --mode %q (want stream|video|dashboard)\n", *mode)
 		return 2
 	}
 }
@@ -1330,18 +1363,22 @@ func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr, passwo
 // waiting for /api/jobs requests; each one runs end-to-end in
 // internal/content_creator/video_job.go and writes its artefacts under
 // <session>/jobs/<jobID>/.
-func serverCmdVideo(mcpPath, outDir, addr string, maxConcurrency int, password string) int {
-	rt, code := bootstrapVideo(mcpPath, outDir, addr, maxConcurrency, password)
+func serverCmdVideo(mode, mcpPath, outDir, addr string, maxConcurrency int, password string) int {
+	rt, code := bootstrapVideo(mode, mcpPath, outDir, addr, maxConcurrency, password)
 	if code != 0 {
 		return code
 	}
 	defer rt.shutdown()
 
+	banner := "video mode — upload script.md via the web UI"
+	if mode == modeDashboard {
+		banner = "dashboard mode — API backend for the Next.js dashboard"
+	}
 	srvErrCh := make(chan error, 1)
 	go func() {
 		srvErrCh <- rt.srv.ListenAndServe(rt.ctx, rt.addr, func(a *net.TCPAddr) {
 			fmt.Fprintln(os.Stdout, "server listening at http://"+a.String()+
-				"  (video mode — upload script.md via the web UI)")
+				"  ("+banner+")")
 		})
 	}()
 

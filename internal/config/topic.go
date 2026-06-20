@@ -12,15 +12,15 @@ import (
 // AgentSpec describes one agent declared in topic.md frontmatter.
 // BaseURL/APIKey are optional per-agent overrides; otherwise the env defaults are used.
 type AgentSpec struct {
-	Name    string `yaml:"name"`
-	Model   string `yaml:"model"`
-	BaseURL string `yaml:"base_url,omitempty"`
-	APIKey  string `yaml:"api_key,omitempty"`
+	Name    string `yaml:"name" json:"name"`
+	Model   string `yaml:"model" json:"model"`
+	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	APIKey  string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
 	// Aspect is the perspective/angle a discussant argues from (e.g.
 	// "economic", "ethical", "technical"). Discussion content type only;
 	// ignored by every other format. Optional — a blank aspect just means
 	// the discussant speaks from no pre-assigned angle.
-	Aspect string `yaml:"aspect,omitempty"`
+	Aspect string `yaml:"aspect,omitempty" json:"aspect,omitempty"`
 }
 
 // TTS provider identifiers used in topic.md `tts_provider:` field.
@@ -81,30 +81,30 @@ const (
 // sections. Despite the name, it now covers every supported content type
 // (debate + situation-puzzle); the active subset of fields depends on Type.
 type DebateTopic struct {
-	Title             string `yaml:"title"`
-	Type              string `yaml:"type"`
-	Language          string `yaml:"language"`
-	TotalMinutes      int    `yaml:"total_minutes"`
-	SegmentMaxSeconds int    `yaml:"segment_max_seconds"`
-	TTSProvider       string `yaml:"tts_provider,omitempty"`
-	Resolution        string `yaml:"resolution,omitempty"`
+	Title             string `yaml:"title" json:"title"`
+	Type              string `yaml:"type" json:"type"`
+	Language          string `yaml:"language" json:"language"`
+	TotalMinutes      int    `yaml:"total_minutes" json:"total_minutes"`
+	SegmentMaxSeconds int    `yaml:"segment_max_seconds" json:"segment_max_seconds"`
+	TTSProvider       string `yaml:"tts_provider,omitempty" json:"tts_provider,omitempty"`
+	Resolution        string `yaml:"resolution,omitempty" json:"resolution,omitempty"`
 	// Channel is the id of the TV-style channel this debate belongs to.
 	// Channels are defined in channels.json. Multiple debates with the same
 	// channel id are queued and play sequentially within that channel; debates
 	// on different channels run in parallel as independent video streams.
 	// Required — startup fails if the id isn't defined in channels.json.
-	Channel string `yaml:"channel"`
+	Channel string `yaml:"channel" json:"channel"`
 
 	// Debate-only roster.
-	Affirmative []AgentSpec `yaml:"affirmative,omitempty"`
-	Negative    []AgentSpec `yaml:"negative,omitempty"`
-	Judge       AgentSpec   `yaml:"judge,omitempty"`
+	Affirmative []AgentSpec `yaml:"affirmative,omitempty" json:"affirmative,omitempty"`
+	Negative    []AgentSpec `yaml:"negative,omitempty" json:"negative,omitempty"`
+	Judge       AgentSpec   `yaml:"judge,omitempty" json:"judge,omitempty"`
 
 	// Situation-puzzle-only roster. PuzzleHost is the 出題者 who knows the
 	// hidden truth and answers player questions with 是/不是/與此無關.
 	// Players are 解題者 trying to deduce the truth.
-	PuzzleHost AgentSpec   `yaml:"puzzle_host,omitempty"`
-	Players    []AgentSpec `yaml:"players,omitempty"`
+	PuzzleHost AgentSpec   `yaml:"puzzle_host,omitempty" json:"puzzle_host,omitempty"`
+	Players    []AgentSpec `yaml:"players,omitempty" json:"players,omitempty"`
 
 	// Series-only roster + metadata. Show is the human-readable show name
 	// (slugified for the on-disk archive directory). Season + Episode are
@@ -112,33 +112,33 @@ type DebateTopic struct {
 	// order as canonical "before this episode" (so s2e1 follows s1e9).
 	// SeriesHost is the single narrator agent; series episodes are
 	// non-interactive (no players, no Q&A, no live audience).
-	Show       string    `yaml:"show,omitempty"`
-	Season     int       `yaml:"season,omitempty"`
-	Episode    int       `yaml:"episode,omitempty"`
-	SeriesHost AgentSpec `yaml:"series_host,omitempty"`
+	Show       string    `yaml:"show,omitempty" json:"show,omitempty"`
+	Season     int       `yaml:"season,omitempty" json:"season,omitempty"`
+	Episode    int       `yaml:"episode,omitempty" json:"episode,omitempty"`
+	SeriesHost AgentSpec `yaml:"series_host,omitempty" json:"series_host,omitempty"`
 
 	// Discussion-only roster. Discussants each carry an Aspect (the angle
 	// they speak from) and respond to one another; Host moderates; Commander
 	// is the single silent director that drives background image + music on
 	// the fly (it never speaks). Storage picks the research-scratchpad
 	// backend (StoragePlaintext / StorageMongo); empty defaults to plaintext.
-	Discussants []AgentSpec `yaml:"discussants,omitempty"`
-	Host        AgentSpec   `yaml:"host,omitempty"`
-	Commander   AgentSpec   `yaml:"commander,omitempty"`
-	Storage     string      `yaml:"storage,omitempty"`
+	Discussants []AgentSpec `yaml:"discussants,omitempty" json:"discussants,omitempty"`
+	Host        AgentSpec   `yaml:"host,omitempty" json:"host,omitempty"`
+	Commander   AgentSpec   `yaml:"commander,omitempty" json:"commander,omitempty"`
+	Storage     string      `yaml:"storage,omitempty" json:"storage,omitempty"`
 
 	// Shared across both content types.
-	Viewers []AgentSpec `yaml:"viewers,omitempty"`
+	Viewers []AgentSpec `yaml:"viewers,omitempty" json:"viewers,omitempty"`
 
 	// Body sections, populated from markdown after frontmatter.
 	// Debate sections:
-	Background     string `yaml:"-"`
-	AffirmativePos string `yaml:"-"`
-	NegativePos    string `yaml:"-"`
-	Rules          string `yaml:"-"`
+	Background     string `yaml:"-" json:"background,omitempty"`
+	AffirmativePos string `yaml:"-" json:"affirmative_position,omitempty"`
+	NegativePos    string `yaml:"-" json:"negative_position,omitempty"`
+	Rules          string `yaml:"-" json:"rules,omitempty"`
 	// Situation-puzzle sections:
-	Surface string `yaml:"-"` // 湯面 — visible to everyone
-	Truth   string `yaml:"-"` // 湯底 — only the puzzle host's prompt sees it
+	Surface string `yaml:"-" json:"surface,omitempty"` // 湯面 — visible to everyone
+	Truth   string `yaml:"-" json:"truth,omitempty"`   // 湯底 — only the puzzle host's prompt sees it
 }
 
 // LoadTopic parses a debate.md file with YAML frontmatter and markdown body.
