@@ -190,13 +190,21 @@ func WriteSubtitleCues(path string, cues []SubtitleCue) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("subtitle mkdir: %w", err)
 	}
+	return os.WriteFile(path, []byte(FormatSubtitleCues(cues)), 0o644)
+}
+
+// FormatSubtitleCues renders cues as a WebVTT document string. It is the
+// in-memory counterpart of WriteSubtitleCues, used by the live captions
+// endpoint to serve cues-so-far mid-generation without touching disk. An empty
+// cue list still yields a valid (header-only) WebVTT body.
+func FormatSubtitleCues(cues []SubtitleCue) string {
 	var sb strings.Builder
 	sb.WriteString("WEBVTT\n\n")
 	for i, c := range cues {
 		fmt.Fprintf(&sb, "%d\n%s --> %s\n%s\n\n",
 			i+1, formatVTT(c.Start), formatVTT(c.End), escapeVTT(c.Text))
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return sb.String()
 }
 
 func exportVTTCues(cues []vttCue) []SubtitleCue {

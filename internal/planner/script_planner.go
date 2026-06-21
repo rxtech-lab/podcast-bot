@@ -46,6 +46,7 @@ type PlanRequest struct {
 type Result struct {
 	Script     *config.DebateTopic
 	Markdown   string
+	Sources    []config.Source
 	Researched bool
 }
 
@@ -83,6 +84,14 @@ func (p *Planner) Generate(ctx context.Context, req PlanRequest) (*Result, error
 		lang = "en-US"
 	}
 
+	// Optionally ground the draft in real web sources. Best-effort: when no
+	// search backend is configured (or it fails) sources is empty and the plan
+	// reports researched=false.
+	var sources []config.Source
+	if req.Research {
+		sources, _ = p.research(ctx, req.Topic)
+	}
+
 	user := fmt.Sprintf(`Design a panel discussion about the following topic.
 
 Topic: %s
@@ -96,14 +105,14 @@ Return STRICT JSON with this exact shape:
   "host": { "name": "moderator's display name" },
   "discussants": [ { "name": "display name", "aspect": "the distinct angle/perspective this person argues from" } ]
 }
-Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.`,
-		req.Topic, lang, n, n)
+Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.%s`,
+		req.Topic, lang, n, n, sourcesPrompt(sources))
 
 	d, err := p.draftJSON(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	return p.assemble(d, lang, req.Channel, req.Research)
+	return p.assemble(d, lang, req.Channel, sources)
 }
 
 // Improve revises an existing script per a free-text instruction.
@@ -138,8 +147,9 @@ Return STRICT JSON with the SAME shape (title, background, host{name}, discussan
 	if err != nil {
 		return nil, err
 	}
-	// Improve preserves the prior channel + research flag.
-	return p.assemble(d, lang, prev.Channel, false)
+	// Improve preserves the prior channel and carries forward any sources the
+	// original plan researched, so a chat-edit doesn't drop the references.
+	return p.assemble(d, lang, prev.Channel, prev.Sources)
 }
 
 func discussantViews(specs []config.AgentSpec) []map[string]string {
@@ -171,7 +181,7 @@ func (p *Planner) draftJSON(ctx context.Context, user string) (*draft, error) {
 
 // assemble turns a creative draft into a full, validated DebateTopic, filling
 // the non-creative scaffolding (type, language, channel, models, defaults).
-func (p *Planner) assemble(d *draft, lang, channel string, researchRequested bool) (*Result, error) {
+func (p *Planner) assemble(d *draft, lang, channel string, sources []config.Source) (*Result, error) {
 	model := p.agentModel()
 	host := config.AgentSpec{Name: d.Host.Name, Model: model}
 	if host.Name == "" {
@@ -199,6 +209,7 @@ func (p *Planner) assemble(d *draft, lang, channel string, researchRequested boo
 		Commander:         config.AgentSpec{Model: model},
 		Storage:           config.StoragePlaintext,
 		Background:        d.Background,
+		Sources:           sources,
 	}
 	if err := config.ValidateTopic(topic); err != nil {
 		return nil, fmt.Errorf("planner produced an invalid script: %w", err)
@@ -207,10 +218,7 @@ func (p *Planner) assemble(d *draft, lang, channel string, researchRequested boo
 	if err != nil {
 		return nil, fmt.Errorf("render planned script: %w", err)
 	}
-	// Research is not yet wired (no built-in web search); always false today
-	// even when requested, so the caller can tell the user.
-	_ = researchRequested
-	return &Result{Script: topic, Markdown: md, Researched: false}, nil
+	return &Result{Script: topic, Markdown: md, Sources: sources, Researched: len(sources) > 0}, nil
 }
 
 func (p *Planner) scriptModel() string {

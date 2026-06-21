@@ -130,6 +130,12 @@ type DebateTopic struct {
 	// Shared across both content types.
 	Viewers []AgentSpec `yaml:"viewers,omitempty" json:"viewers,omitempty"`
 
+	// Sources are researched references gathered during the planning phase
+	// when research is enabled. Advisory: surfaced to the planning UI (and the
+	// iOS app's plan view) and used to ground the background; not serialized to
+	// frontmatter or parsed back from markdown.
+	Sources []Source `yaml:"-" json:"sources,omitempty"`
+
 	// Body sections, populated from markdown after frontmatter.
 	// Debate sections:
 	Background     string `yaml:"-" json:"background,omitempty"`
@@ -139,6 +145,14 @@ type DebateTopic struct {
 	// Situation-puzzle sections:
 	Surface string `yaml:"-" json:"surface,omitempty"` // 湯面 — visible to everyone
 	Truth   string `yaml:"-" json:"truth,omitempty"`   // 湯底 — only the puzzle host's prompt sees it
+}
+
+// Source is one researched reference gathered during planning: a human-facing
+// title, the canonical URL, and a short snippet describing why it's relevant.
+type Source struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet,omitempty"`
 }
 
 // LoadTopic parses a debate.md file with YAML frontmatter and markdown body.

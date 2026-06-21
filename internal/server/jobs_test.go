@@ -1,9 +1,16 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/sirily11/debate-bot/internal/agent"
+	"github.com/sirily11/debate-bot/internal/content_creator"
 )
 
 func TestJobRegistryPersistsJobsAndLogs(t *testing.T) {
@@ -124,5 +131,74 @@ func TestRecoverJobFromArtifacts(t *testing.T) {
 	}
 	if len(got.Logs) == 0 || got.Logs[len(got.Logs)-1].Text != "done" {
 		t.Fatalf("recovered logs = %+v", got.Logs)
+	}
+}
+
+func TestJobTranscriptReturnsPersistedJobTranscript(t *testing.T) {
+	root := t.TempDir()
+	uploadRoot := filepath.Join(root, "uploads")
+	if err := os.MkdirAll(filepath.Join(uploadRoot, "job-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jobOut := filepath.Join(root, "jobs", "job-a")
+	if err := os.MkdirAll(jobOut, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobOut, "audio.mp3"), []byte("mp3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := contentcreator.OpenStore(filepath.Join(jobOut, "session.db"), nil)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	store.Append(agent.TranscriptLine{
+		Speaker: "Host",
+		Role:    agent.RoleHost,
+		Text:    "Welcome back to the discussion.",
+		At:      time.Now(),
+	})
+	store.Append(agent.TranscriptLine{
+		Speaker: "Mina",
+		Role:    agent.RoleDiscussant,
+		Text:    "The important part is the tradeoff.",
+		At:      time.Now(),
+	})
+
+	jobs, err := NewJobRegistry(filepath.Join(root, "jobs.db"))
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	jobs.Add("job-a")
+	jobs.Update("job-a", func(j *Job) {
+		j.Status = JobDone
+		j.AudioPath = filepath.Join(jobOut, "audio.mp3")
+		j.HasAudio = true
+		j.AudioOnly = true
+	})
+	srv := New(Deps{Mode: ModeDashboard, Jobs: jobs, UploadRoot: uploadRoot})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/jobs/job-a/transcript")
+	if err != nil {
+		t.Fatalf("get transcript: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got []transcriptDTO
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode transcript: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Speaker != "Host" || got[0].Role != "host" || got[0].Text != "Welcome back to the discussion." {
+		t.Fatalf("first line = %+v", got[0])
+	}
+	if got[1].Speaker != "Mina" || got[1].Role != "discussant" || got[1].Text != "The important part is the tradeoff." {
+		t.Fatalf("second line = %+v", got[1])
 	}
 }

@@ -284,6 +284,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// recDone fires.
 	audioPath := filepath.Join(jobOutDir, "audio.mp3")
 	var recDone chan struct{}
+	var hlsWait func()
 	if audioOnly {
 		recFile, ferr := os.Create(audioPath)
 		if ferr != nil {
@@ -302,6 +303,17 @@ func run(ctx context.Context, deps Deps, jobID string,
 				}
 			}
 		}()
+
+		// Live HLS audio rendition: a second LiveStream subscriber feeds an
+		// ffmpeg HLS muxer writing into the job's hls dir, so a native client
+		// can stream the audio while it generates via GET
+		// /api/jobs/{id}/hls/stream.m3u8 (served by handleJobHLS). Best-effort:
+		// a failure here only disables live streaming, not the final download.
+		if wait, herr := audio.StartHLSAudio(ctx, live, filepath.Join(jobOutDir, "hls"), logger); herr != nil {
+			logger.Warn("audio-only live HLS disabled", "err", herr)
+		} else {
+			hlsWait = wait
+		}
 	}
 
 	orch, err := contentcreator.New(&jobEnv, topic, deps.MCPCfg, send, logger, live)
@@ -396,6 +408,18 @@ func run(ctx context.Context, deps Deps, jobID string,
 			case <-recDone:
 			case <-time.After(30 * time.Second):
 				logger.Warn("audio recorder drain timed out — output may be truncated")
+			case <-ctx.Done():
+			}
+		}
+		// Let the HLS muxer flush its final segment + #EXT-X-ENDLIST so the
+		// playlist is complete for on-demand playback after the job finishes.
+		if hlsWait != nil {
+			fin := make(chan struct{})
+			go func() { hlsWait(); close(fin) }()
+			select {
+			case <-fin:
+			case <-time.After(30 * time.Second):
+				logger.Warn("audio HLS finalize timed out — playlist may lack ENDLIST")
 			case <-ctx.Done():
 			}
 		}

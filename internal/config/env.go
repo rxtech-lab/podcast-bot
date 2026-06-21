@@ -51,6 +51,21 @@ type Env struct {
 	// of the human password cookie. Never exposed to browsers.
 	DashboardServiceToken string
 
+	// AuthIssuer, when set (AUTH_ISSUER, e.g. https://auth.rxlab.app), enables
+	// per-user rxlab OAuth authentication: a request carrying
+	// `Authorization: Bearer <access token>` is validated by calling the
+	// issuer's OIDC userinfo endpoint, so native apps (iOS) can authenticate
+	// directly with the access token from RxAuthSwift. Empty disables it.
+	AuthIssuer string
+
+	// SearchAPIKey / SearchAPIURL configure the web-search backend the planner
+	// uses to ground a discussion plan in real sources when research is
+	// requested. SearchAPIKey comes from SEARCH_API_KEY; SearchAPIURL
+	// (SEARCH_API_URL) defaults to Tavily's search endpoint. When the key is
+	// empty, planning still works but returns researched=false (no sources).
+	SearchAPIKey string
+	SearchAPIURL string
+
 	// S3 settings for uploading finished videos. When S3Bucket is empty the
 	// engine keeps serving videos from local disk (no upload).
 	S3Bucket   string
@@ -96,6 +111,9 @@ func LoadEnv() (*Env, error) {
 
 		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
+		AuthIssuer:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
+		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
+		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
 
 		S3Bucket:   strings.TrimSpace(os.Getenv("S3_BUCKET")),
 		S3Region:   strings.TrimSpace(os.Getenv("S3_REGION")),

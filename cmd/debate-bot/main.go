@@ -689,6 +689,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		MCPCfg:         mcpCfg,
 		AllowedOrigins: env.DashboardOrigins,
 		ServiceToken:   env.DashboardServiceToken,
+		AuthIssuer:     env.AuthIssuer,
 	})
 
 	return rt, 0
@@ -805,6 +806,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		MCPCfg:         mcpCfg,
 		AllowedOrigins: env.DashboardOrigins,
 		ServiceToken:   env.DashboardServiceToken,
+		AuthIssuer:     env.AuthIssuer,
 		Uploader:       uploader,
 		ForceAudio:     forceAudio,
 		// SubmitJob runs one upload through the orchestrator + stitch +

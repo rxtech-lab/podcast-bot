@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 )
 
 // jobScriptName / jobPriorsName are the filenames the handler saves
@@ -301,6 +302,45 @@ func (s *Server) handleJobAudio(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, j.AudioPath)
 }
 
+// handleJobTranscript returns a job's transcript as structured JSON. While the
+// orchestrator is live it serves the in-memory snapshot; after completion or a
+// server restart it falls back to the job's session.db so native clients can
+// backfill missed transcript lines into their local store.
+func (s *Server) handleJobTranscript(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if orch := s.d.Jobs.Orch(id); orch != nil {
+		writeTranscript(w, orch.Transcript.Snapshot())
+		return
+	}
+	if s.d.Jobs.Get(id) == nil {
+		if recovered := s.recoverJob(id); recovered == nil {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	if s.d.UploadRoot == "" {
+		writeTranscript(w, nil)
+		return
+	}
+	dbPath := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id, "session.db")
+	lines, err := contentcreator.LoadSnapshot(dbPath)
+	if err != nil {
+		s.logger().Warn("job transcript disk load failed", "job", id, "path", dbPath, "err", err)
+		writeTranscript(w, nil)
+		return
+	}
+	writeTranscript(w, lines)
+}
+
 // handleJobSubtitles serves the WebVTT sidecar the pipeline writes next to the
 // run audio. Available for any finished job that produced one (audio-only feeds
 // expose it as the captions track; video jobs already mux it into the mp4).
@@ -329,6 +369,35 @@ func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	http.ServeFile(w, r, subPath)
+}
+
+// handleJobSubtitlesLive serves the captions accumulated so far as WebVTT while
+// a job is still generating, so a client streaming the live audio can show
+// synced captions before the final sidecar exists. Unlike handleJobSubtitles it
+// never returns 425: a running job yields cues-so-far (just the WEBVTT header
+// early on), and once the run has ended it falls back to the written sidecar.
+func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if orch := s.d.Jobs.Orch(id); orch != nil {
+		_, _ = io.WriteString(w, contentcreator.FormatSubtitleCues(orch.LiveSubtitleCues()))
+		return
+	}
+	// No running orchestrator: serve the final sidecar if present, else an
+	// empty (header-only) WebVTT so the client always gets a valid document.
+	if s.d.UploadRoot != "" {
+		subPath := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id, "subtitles.vtt")
+		if _, err := os.Stat(subPath); err == nil {
+			http.ServeFile(w, r, subPath)
+			return
+		}
+	}
+	_, _ = io.WriteString(w, "WEBVTT\n\n")
 }
 
 // handleJobArchive serves the per-job zip of the persistent show

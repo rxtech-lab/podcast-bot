@@ -1,0 +1,12 @@
+// Debug.xcconfig — local development.
+// Points the app at a debate-bot engine running locally on :8000
+// (`go run ./cmd/debate-bot --addr :8000`). See SETUP.md for wiring.
+
+// Backend engine base URL (no trailing slash). AppConfig appends paths.
+AppAPIBaseURL = http:/$()/localhost:8000
+
+// rxlab OAuth (RxAuthSwift).
+AppAuthIssuer = https:/$()/auth.rxlab.app
+AppAuthClientID = client_a22a1a75102a4279bcb893f437e74027
+AppAuthRedirectURI = debatepod:/$()/oauth-callback
+AppAuthScopes = openid profile email
