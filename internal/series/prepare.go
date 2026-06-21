@@ -62,6 +62,28 @@ const priorityCount = 6
 func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 	stage *video.SeriesStage, topic *config.DebateTopic, orch *contentcreator.Orchestrator,
 ) {
+	prepareEpisode(ctx, log, env, stage, topic, orch, true)
+}
+
+// PrepareEpisodeAudioOnly is the image-free variant used by the audio-only
+// feed. It still builds the recap, plans the narration beats (the text the
+// host speaks), wires the cast, and generates the music bed + sound clips —
+// everything audible — but skips all scene-image generation and the
+// cross-episode image-ref decoding. No SeriesStage is needed (nothing
+// renders), so callers pass none.
+func PrepareEpisodeAudioOnly(ctx context.Context, log *slog.Logger, env *config.Env,
+	topic *config.DebateTopic, orch *contentcreator.Orchestrator,
+) {
+	prepareEpisode(ctx, log, env, nil, topic, orch, false)
+}
+
+// prepareEpisode is the shared body. genImages gates the (expensive) scene-
+// image generation and cross-episode image-ref decoding: true for the video
+// pipeline, false for the audio-only feed.
+func prepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
+	stage *video.SeriesStage, topic *config.DebateTopic, orch *contentcreator.Orchestrator,
+	genImages bool,
+) {
 	// status pushes a one-line note onto the bus so the SPA progress
 	// log can render scene-prep milestones interleaved with the
 	// orchestrator's events. No-op when the orchestrator was built
@@ -151,12 +173,16 @@ func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 		}
 		refPaths = trimmed
 	}
-	imgs, lerr := loadImageRefImages(refPaths)
-	if lerr != nil {
-		log.Warn("series cross-episode image load partial", "err", lerr)
-	}
-	if stage != nil {
-		stage.AttachImageRefs(imgs)
+	// Cross-episode image refs only matter to the renderer; the audio-only
+	// feed has none, so skip the PNG decode entirely.
+	if genImages {
+		imgs, lerr := loadImageRefImages(refPaths)
+		if lerr != nil {
+			log.Warn("series cross-episode image load partial", "err", lerr)
+		}
+		if stage != nil {
+			stage.AttachImageRefs(imgs)
+		}
 	}
 
 	orch.SetSeriesPreviouslyOn(recap)
@@ -179,7 +205,9 @@ func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 			log.Info("series cast ready", "count", len(cast))
 		}
 	}
-	orch.SetSeriesImageRefs(catalog, refPaths)
+	if genImages {
+		orch.SetSeriesImageRefs(catalog, refPaths)
+	}
 
 	status("starting music + narration audio bed generation…")
 	musicCh := make(chan string, 1)
@@ -193,16 +221,20 @@ func PrepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 		status(fmt.Sprintf("sound clips generated (%d)", len(soundPaths)))
 	}
 
-	if plan != nil && plan.NarrationCount() > 0 {
-		status(fmt.Sprintf("starting image generation · %d narration frame(s)", plan.NarrationCount()))
+	// Scene-image generation is the whole point we skip for the audio-only
+	// feed — block only on the music bed in that case.
+	if genImages {
+		if plan != nil && plan.NarrationCount() > 0 {
+			status(fmt.Sprintf("starting image generation · %d narration frame(s)", plan.NarrationCount()))
+		}
+		readyCh := make(chan struct{})
+		go func() {
+			generateNarrationStreaming(ctx, log, status, stage, topic, plan, scenesCacheDir, readyCh)
+		}()
+		<-readyCh
 	}
-	readyCh := make(chan struct{})
-	go func() {
-		generateNarrationStreaming(ctx, log, status, stage, topic, plan, scenesCacheDir, readyCh)
-	}()
 
 	music := <-musicCh
-	<-readyCh
 	if music != "" {
 		orch.SetSeriesMusic(music)
 		status("music bed ready")

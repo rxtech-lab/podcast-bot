@@ -125,6 +125,11 @@ type Orchestrator struct {
 	discussionMusicMoods []string
 	discussionDirector   *DiscussionDirector
 
+	// disableImages suppresses all on-the-fly image generation during Run.
+	// Set for audio-only feeds: the discussion director still crossfades the
+	// pre-generated music beds but never calls imagegen for backgrounds.
+	disableImages bool
+
 	subtitleCues []SubtitleCue
 }
 

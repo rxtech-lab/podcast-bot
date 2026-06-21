@@ -56,13 +56,24 @@ type Job struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	VideoPath   string    `json:"-"`
 	ArchivePath string    `json:"-"`
+	AudioPath   string    `json:"-"`
 	HasVideo    bool      `json:"has_video"`
 	HasArchive  bool      `json:"has_archive"`
+	// HasAudio is set when an audio-only job produced a downloadable mp3.
+	// AudioOnly echoes the submission flag so the SPA can render the audio
+	// player instead of the video player.
+	HasAudio  bool `json:"has_audio"`
+	AudioOnly bool `json:"audio_only,omitempty"`
 	// S3Key is the object key of the uploaded mp4 when S3 upload is enabled
 	// (empty otherwise). The download URL is presigned on demand from it.
 	S3Key string `json:"-"`
+	// AudioS3Key is the object key of the uploaded mp3 for an audio-only job.
+	// Kept separate from S3Key so the /video and /audio endpoints never serve
+	// each other's artefact.
+	AudioS3Key string `json:"-"`
 	// DownloadURL is a presigned S3 link populated on the job-detail response
-	// when the video lives in object storage; empty when served from disk.
+	// when the finished artefact (mp4 or, for audio-only jobs, mp3) lives in
+	// object storage; empty when served from disk.
 	DownloadURL string `json:"download_url,omitempty"`
 
 	ElapsedMS   int64    `json:"elapsed_ms,omitempty"`
@@ -91,6 +102,10 @@ type JobSubmission struct {
 	BurnSubs          bool
 	Resolution        string
 	SubtitleLanguages []string
+	// AudioOnly renders an audio-only feed: the runner skips the encoder,
+	// the render stages, and all image generation, producing a downloadable
+	// mp3 (+ subtitles.vtt sidecar) instead of an mp4.
+	AudioOnly bool
 }
 
 // JobRegistry persists video-mode jobs and progress logs to SQLite.
@@ -118,9 +133,13 @@ type videoJobRecord struct {
 	Error       string
 	VideoPath   string
 	ArchivePath string
+	AudioPath   string
 	HasVideo    bool
 	HasArchive  bool
+	HasAudio    bool
+	AudioOnly   bool
 	S3Key       string
+	AudioS3Key  string
 	ElapsedMS   int64
 	RemainingMS int64
 	Phase       string
@@ -364,9 +383,13 @@ func jobFromRecord(rec videoJobRecord) Job {
 		UpdatedAt:   rec.UpdatedAt,
 		VideoPath:   rec.VideoPath,
 		ArchivePath: rec.ArchivePath,
+		AudioPath:   rec.AudioPath,
 		HasVideo:    rec.HasVideo,
 		HasArchive:  rec.HasArchive,
+		HasAudio:    rec.HasAudio,
+		AudioOnly:   rec.AudioOnly,
 		S3Key:       rec.S3Key,
+		AudioS3Key:  rec.AudioS3Key,
 		ElapsedMS:   rec.ElapsedMS,
 		RemainingMS: rec.RemainingMS,
 		Phase:       rec.Phase,
@@ -386,9 +409,13 @@ func recordFromJob(j Job) videoJobRecord {
 		Error:       j.Error,
 		VideoPath:   j.VideoPath,
 		ArchivePath: j.ArchivePath,
+		AudioPath:   j.AudioPath,
 		HasVideo:    j.HasVideo,
 		HasArchive:  j.HasArchive,
+		HasAudio:    j.HasAudio,
+		AudioOnly:   j.AudioOnly,
 		S3Key:       j.S3Key,
+		AudioS3Key:  j.AudioS3Key,
 		ElapsedMS:   j.ElapsedMS,
 		RemainingMS: j.RemainingMS,
 		Phase:       j.Phase,

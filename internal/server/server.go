@@ -100,6 +100,11 @@ type Deps struct {
 	// Uploader, when enabled, serves finished videos from S3 (presigned
 	// redirect) instead of local disk. nil / disabled keeps disk serving.
 	Uploader *storage.Uploader
+
+	// ForceAudio, when true, means the engine was started with --audio: every
+	// job renders as an audio-only feed regardless of the request. Surfaced on
+	// GET /api/config so a frontend can hide video-only controls.
+	ForceAudio bool
 }
 
 // Server is the HTTP front-end.
@@ -156,6 +161,8 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/jobs", s.handleJobList)
 		s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
 		s.mux.HandleFunc("GET /api/jobs/{id}/video", s.handleJobVideo)
+		s.mux.HandleFunc("GET /api/jobs/{id}/audio", s.handleJobAudio)
+		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles", s.handleJobSubtitles)
 		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
 		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
 		s.mux.HandleFunc("GET /api/jobs/{id}/ws", s.handleJobWS)
@@ -215,6 +222,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// authed lets the SPA skip the login screen when a valid cookie is
 		// already present (e.g. a returning visitor or a page reload).
 		"authed": s.requestAuthed(r),
+		// force_audio mirrors the engine's --audio flag so the frontend can
+		// hide video-only options and present an audio feed.
+		"force_audio": s.d.ForceAudio,
 	})
 }
 

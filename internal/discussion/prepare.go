@@ -98,6 +98,23 @@ func PrepareAssets(ctx context.Context, log *slog.Logger, outDir string,
 	}
 }
 
+// PrepareAudioOnly is the image-free variant of PrepareAssets for the
+// audio-only feed: it generates only the music beds (the audible part) and
+// installs them on the orchestrator, skipping the background palette
+// entirely (no imagegen calls). Mirrors the music half of PrepareAssets but
+// blocks on the beds synchronously since there is no live stage to race
+// against. Degrades gracefully: failed music gen just means the discussion
+// plays dry.
+func PrepareAudioOnly(ctx context.Context, log *slog.Logger, outDir string,
+	topic *config.DebateTopic, orch AudioSink) {
+	music := GenerateMusic(ctx, log, topic, outDir)
+	if len(music.Beds) > 0 || len(music.Sounds) > 0 {
+		orch.SetDiscussionAudio(music.Beds, music.Sounds, music.Moods)
+		log.Info("discussion music ready (audio-only)",
+			"beds", len(music.Sounds), "title", topic.Title)
+	}
+}
+
 // GeneratePalette renders the mood palette concurrently, attaching each frame
 // to the stage the moment it lands and closing readyCh once the first frame is
 // up (or all frames have failed, so the caller never blocks forever).

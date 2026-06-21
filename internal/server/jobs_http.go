@@ -92,6 +92,7 @@ func (s *Server) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 		BurnSubs:          formBool(r, "burn_subs"),
 		Resolution:        strings.TrimSpace(r.FormValue("resolution")),
 		SubtitleLanguages: formValues(r, "subtitle_languages"),
+		AudioOnly:         formBool(r, "audio_only"),
 	}
 
 	if err := s.submitStaged(jobID, sub); err != nil {
@@ -190,12 +191,20 @@ func (s *Server) handleJobGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// When the finished video lives in S3, hand the client a fresh presigned
+	// When the finished artefact lives in S3, hand the client a fresh presigned
 	// download link directly on the job snapshot so the dashboard can show a
-	// download button without a redirect round-trip.
-	if j.Status == JobDone && j.S3Key != "" && s.d.Uploader.Enabled() {
-		if url, err := s.d.Uploader.PresignGet(r.Context(), j.S3Key, time.Hour); err == nil {
-			j.DownloadURL = url
+	// download button without a redirect round-trip. Audio-only jobs expose the
+	// mp3 key; everything else the mp4 key. (A job is exclusively one or the
+	// other, so the keys never both apply.)
+	if j.Status == JobDone && s.d.Uploader.Enabled() {
+		key := j.S3Key
+		if j.AudioOnly {
+			key = j.AudioS3Key
+		}
+		if key != "" {
+			if url, err := s.d.Uploader.PresignGet(r.Context(), key, time.Hour); err == nil {
+				j.DownloadURL = url
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -223,6 +232,13 @@ func (s *Server) handleJobVideo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "video not ready", http.StatusTooEarly)
 		return
 	}
+	// Audio-only (and failed-before-stitch) jobs have no video; don't fall
+	// through to the S3 redirect, which keys off the generic S3Key field and
+	// would otherwise hand back the .mp3.
+	if !j.HasVideo {
+		http.NotFound(w, r)
+		return
+	}
 	// Prefer object storage: mint a fresh presigned URL each request (never
 	// persisted, so it can't go stale) and redirect the browser to it.
 	if j.S3Key != "" && s.d.Uploader.Enabled() {
@@ -242,6 +258,77 @@ func (s *Server) handleJobVideo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="%s.mp4"`, jobDownloadStem(j)))
 	http.ServeFile(w, r, j.VideoPath)
+}
+
+// handleJobAudio serves the job's rendered .mp3 for an audio-only job once it
+// has reached JobDone. Mirrors handleJobVideo: 425 (Too Early) while in
+// flight, S3 presigned redirect when the asset lives in object storage, and
+// local file otherwise. 404 when the job produced no audio.
+func (s *Server) handleJobAudio(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	j := s.d.Jobs.Get(id)
+	if j == nil {
+		j = s.recoverJob(id)
+		if j == nil {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	if j.Status != JobDone || !j.HasAudio {
+		http.Error(w, "audio not ready", http.StatusTooEarly)
+		return
+	}
+	if j.AudioS3Key != "" && s.d.Uploader.Enabled() {
+		url, err := s.d.Uploader.PresignGet(r.Context(), j.AudioS3Key, time.Hour)
+		if err != nil {
+			http.Error(w, "presign failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, url, http.StatusFound)
+		return
+	}
+	if j.AudioPath == "" {
+		http.Error(w, "audio not ready", http.StatusTooEarly)
+		return
+	}
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="%s.mp3"`, jobDownloadStem(j)))
+	http.ServeFile(w, r, j.AudioPath)
+}
+
+// handleJobSubtitles serves the WebVTT sidecar the pipeline writes next to the
+// run audio. Available for any finished job that produced one (audio-only feeds
+// expose it as the captions track; video jobs already mux it into the mp4).
+func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil || s.d.UploadRoot == "" {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	j := s.d.Jobs.Get(id)
+	if j == nil {
+		j = s.recoverJob(id)
+		if j == nil {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	if j.Status != JobDone {
+		http.Error(w, "subtitles not ready", http.StatusTooEarly)
+		return
+	}
+	subPath := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id, "subtitles.vtt")
+	if _, err := os.Stat(subPath); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	http.ServeFile(w, r, subPath)
 }
 
 // handleJobArchive serves the per-job zip of the persistent show
@@ -332,10 +419,12 @@ func (s *Server) recoverJob(id string) *Job {
 	jobOutDir := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id)
 	mp4Path := filepath.Join(jobOutDir, "video.mp4")
 	archivePath := filepath.Join(jobOutDir, "archive.zip")
+	audioPath := filepath.Join(jobOutDir, "audio.mp3")
 
 	mp4Info, mp4Err := os.Stat(mp4Path)
 	archiveInfo, archiveErr := os.Stat(archivePath)
-	if mp4Err != nil && archiveErr != nil {
+	audioInfo, audioErr := os.Stat(audioPath)
+	if mp4Err != nil && archiveErr != nil && audioErr != nil {
 		return nil
 	}
 
@@ -349,6 +438,14 @@ func (s *Server) recoverJob(id string) *Job {
 		if archiveErr == nil {
 			j.ArchivePath = archivePath
 			j.HasArchive = true
+		}
+		// audio.mp3 (and no video.mp4) is the audio-only feed artefact.
+		if audioErr == nil {
+			j.AudioPath = audioPath
+			j.HasAudio = true
+			if mp4Err != nil {
+				j.AudioOnly = true
+			}
 		}
 		if topic, err := config.LoadTopic(filepath.Join(s.d.UploadRoot, id, jobScriptName)); err == nil {
 			j.Title = topic.Title
@@ -365,6 +462,10 @@ func (s *Server) recoverJob(id string) *Job {
 	if archiveErr == nil {
 		s.d.Jobs.AppendLog(id, "status", fmt.Sprintf("recovered archive · %.1f MB",
 			float64(archiveInfo.Size())/(1024*1024)), nil)
+	}
+	if audioErr == nil {
+		s.d.Jobs.AppendLog(id, "status", fmt.Sprintf("recovered audio · %.1f MB",
+			float64(audioInfo.Size())/(1024*1024)), nil)
 	}
 	s.d.Jobs.AppendLog(id, "status", "done", nil)
 

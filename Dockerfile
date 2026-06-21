@@ -40,9 +40,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=backend /out/debate-bot /usr/local/bin/debate-bot
-# Ship the default channel registry and examples for convenience.
-COPY channels ./channels
-COPY examples ./examples
 
 EXPOSE 3000
 ENV OUT_DIR=/app/out

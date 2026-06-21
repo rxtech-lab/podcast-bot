@@ -10,6 +10,12 @@ internal/server/web-dist
 .playwright-mcp
 topics/*.md
 !internal/video/assets/*.png
+# Golden style-test reference frames must be committed (override *.png above).
+# The _actual/ dump written on a failing run stays ignored.
+!smoke-test/**/*.png
+smoke-test/_actual/
+# Style-test CJK font is fetched on demand (scripts/fetch-style-font.sh), not committed.
+internal/video/testdata/fonts/*.otf
 gen-assets
 channels
 # Root-level compiled binaries only — anchored with a leading slash so these

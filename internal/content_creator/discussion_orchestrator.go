@@ -64,6 +64,14 @@ func (o *Orchestrator) SetDiscussionAudio(beds map[string]string, sounds, moods 
 	o.discussionMusicMoods = append([]string(nil), moods...)
 }
 
+// SetDisableImages suppresses all on-the-fly image generation during Run (the
+// discussion director's background generation). Used by the audio-only feed,
+// where generated images would be unused but still cost provider calls. Call
+// before Run. Music crossfade behaviour is unaffected.
+func (o *Orchestrator) SetDisableImages(v bool) {
+	o.disableImages = v
+}
+
 // startDiscussionDirector builds and launches the silent commander loop. The
 // image client is best-effort: if no API key is configured the director still
 // crossfades the pre-generated beds, it just can't generate fresh backgrounds.
@@ -73,10 +81,16 @@ func (o *Orchestrator) startDiscussionDirector(ctx context.Context) {
 		o.Log.Warn("discussion commander missing — director disabled")
 		return
 	}
-	imgClient, err := imagegen.New("")
-	if err != nil {
+	var imgClient *imagegen.Client
+	if o.disableImages {
+		// Audio-only feed: keep the music crossfade loop, never generate
+		// backgrounds (there's no stage to paint them and they cost provider
+		// calls).
+		o.Log.Info("discussion image gen suppressed (audio-only) — commander will only crossfade music")
+	} else if c, err := imagegen.New(""); err != nil {
 		o.Log.Warn("discussion image gen disabled — commander will only crossfade music", "err", err)
-		imgClient = nil
+	} else {
+		imgClient = c
 	}
 	o.discussionDirector = NewDiscussionDirector(
 		cmd, o.Transcript, o.Send, imgClient, len(o.discussionSounds), o.Log)
