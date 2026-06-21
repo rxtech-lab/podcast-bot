@@ -24,6 +24,7 @@ type videoConfigJSON struct {
 	BurnSubs          bool     `json:"burn_subs"`
 	Resolution        string   `json:"resolution"`
 	SubtitleLanguages []string `json:"subtitle_languages"`
+	AudioOnly         bool     `json:"audio_only"`
 }
 
 // handleJobSubmitJSON accepts a JSON DebateTopic, validates + renders it to a
@@ -82,6 +83,7 @@ func (s *Server) handleJobSubmitJSON(w http.ResponseWriter, r *http.Request) {
 		BurnSubs:          req.VideoConfig.BurnSubs,
 		Resolution:        req.VideoConfig.Resolution,
 		SubtitleLanguages: req.VideoConfig.SubtitleLanguages,
+		AudioOnly:         req.VideoConfig.AudioOnly,
 	}
 	if err := s.submitStaged(jobID, sub); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

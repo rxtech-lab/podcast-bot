@@ -114,6 +114,13 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 		return errors.New("type=situation-puzzle is not supported in video mode yet")
 	}
 
+	// Audio-only produces no frames, so burn-in captions are meaningless.
+	// Soft subs are still surfaced as the subtitles.vtt sidecar regardless of
+	// the flag, so we don't require it here.
+	if sub.AudioOnly && sub.BurnSubs {
+		return errors.New("burn-in subtitles (burn_subs) are not applicable to audio-only feeds")
+	}
+
 	// Resolution override (UI form). Empty means "use the topic's
 	// declared resolution" — keeps backward compatibility for users
 	// who don't set the field. We deliberately do NOT expose 4K from
@@ -156,6 +163,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	sub server.JobSubmission, topic *config.DebateTopic,
 ) {
 	logger := deps.Log.With("job", jobID, "type", topic.Type, "title", topic.Title)
+	audioOnly := sub.AudioOnly
 	deps.Jobs.Update(jobID, func(j *server.Job) { j.Status = server.JobRunning })
 
 	send := func(v any) {
@@ -218,45 +226,83 @@ func run(ctx context.Context, deps Deps, jobID string,
 		}
 	}()
 
-	res := video.Resolution(topic.Resolution)
-	enc, err := video.NewWithOptions(ctx, jobOutDir, res,
-		// Archival mode disables the live HLS sliding window so every
-		// segment survives long enough for the stitch pass to consume
-		// it. Without this, episodes longer than ~12 s lose their
-		// earliest segments to delete_segments before stitch runs.
-		//
-		// BurnInSeriesCaptions makes the renderer paint the spoken
-		// sentence onto the scene as always-visible burned-in text.
-		// Off by default — soft-sub clients toggle the .vtt sidecar
-		// instead, leaving the imagery clean. The form's burn_subs
-		// checkbox is the user-facing knob.
-		video.Options{
-			Archival:             true,
-			BurnInSeriesCaptions: sub.BurnSubs,
-		}, logger)
-	if err != nil {
-		fail(deps, jobID, logger, fmt.Errorf("encoder: %w", err))
-		return
-	}
-	defer func() {
-		if !encClosed {
-			_ = enc.Close()
+	// Audio-only feeds skip the encoder, the render stages, and all image
+	// generation entirely. The stage pointers stay nil; the asset-prep and
+	// finalisation branches below switch on audioOnly to record the mixed
+	// LiveStream audio instead of stitching HLS.
+	var (
+		enc             *video.Encoder
+		seriesStage     *video.SeriesStage
+		discussionStage *video.DiscussionStage
+	)
+	if !audioOnly {
+		res := video.Resolution(topic.Resolution)
+		enc, err = video.NewWithOptions(ctx, jobOutDir, res,
+			// Archival mode disables the live HLS sliding window so every
+			// segment survives long enough for the stitch pass to consume
+			// it. Without this, episodes longer than ~12 s lose their
+			// earliest segments to delete_segments before stitch runs.
+			//
+			// BurnInSeriesCaptions makes the renderer paint the spoken
+			// sentence onto the scene as always-visible burned-in text.
+			// Off by default — soft-sub clients toggle the .vtt sidecar
+			// instead, leaving the imagery clean. The form's burn_subs
+			// checkbox is the user-facing knob.
+			video.Options{
+				Archival:             true,
+				BurnInSeriesCaptions: sub.BurnSubs,
+			}, logger)
+		if err != nil {
+			fail(deps, jobID, logger, fmt.Errorf("encoder: %w", err))
+			return
 		}
-	}()
-	enc.AttachAudio(ctx, live)
+		defer func() {
+			if !encClosed {
+				_ = enc.Close()
+			}
+		}()
+		enc.AttachAudio(ctx, live)
 
-	// Spin up the per-content-type stage. Mirrors bootstrap's
-	// "every channel runs every stage concurrently" pattern; only
-	// the stage matching topic.Type ends up driving the encoder
-	// since the others self-gate on TopicMsg.Type.
-	debateStage := video.NewDebateChannelStage(enc, jobID)
-	puzzleStage := video.NewPuzzleChannelStage(enc, jobID)
-	seriesStage := video.NewSeriesChannelStage(enc, jobID)
-	discussionStage := video.NewDiscussionChannelStage(enc, jobID)
-	go debateStage.Run(ctx, deps.Bus)
-	go puzzleStage.Run(ctx, deps.Bus)
-	go seriesStage.Run(ctx, deps.Bus)
-	go discussionStage.Run(ctx, deps.Bus)
+		// Spin up the per-content-type stage. Mirrors bootstrap's
+		// "every channel runs every stage concurrently" pattern; only
+		// the stage matching topic.Type ends up driving the encoder
+		// since the others self-gate on TopicMsg.Type.
+		debateStage := video.NewDebateChannelStage(enc, jobID)
+		puzzleStage := video.NewPuzzleChannelStage(enc, jobID)
+		seriesStage = video.NewSeriesChannelStage(enc, jobID)
+		discussionStage = video.NewDiscussionChannelStage(enc, jobID)
+		go debateStage.Run(ctx, deps.Bus)
+		go puzzleStage.Run(ctx, deps.Bus)
+		go seriesStage.Run(ctx, deps.Bus)
+		go discussionStage.Run(ctx, deps.Bus)
+	}
+
+	// Audio-only: record the realtime LiveStream (mixed TTS + music bed) to
+	// audio.mp3. Subscribe before any audio is produced so the recording
+	// starts at the stream's t=0 (the same anchor the subtitles.vtt cues use).
+	// The subscriber channel closes when CloseInput drains ffmpeg, after which
+	// recDone fires.
+	audioPath := filepath.Join(jobOutDir, "audio.mp3")
+	var recDone chan struct{}
+	if audioOnly {
+		recFile, ferr := os.Create(audioPath)
+		if ferr != nil {
+			fail(deps, jobID, logger, fmt.Errorf("create audio file: %w", ferr))
+			return
+		}
+		chunks, _ := live.Subscribe(1024)
+		recDone = make(chan struct{})
+		go func() {
+			defer close(recDone)
+			defer recFile.Close()
+			for chunk := range chunks {
+				if _, werr := recFile.Write(chunk); werr != nil {
+					logger.Warn("audio recorder write failed", "err", werr)
+					return
+				}
+			}
+		}()
+	}
 
 	orch, err := contentcreator.New(&jobEnv, topic, deps.MCPCfg, send, logger, live)
 	if err != nil {
@@ -264,6 +310,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 		return
 	}
 	defer orch.Shutdown()
+
+	// Audio-only feeds have no stage to paint, so suppress all on-the-fly
+	// image generation inside Run (today: the discussion director's background
+	// generation). The director still crossfades the pre-generated music beds.
+	if audioOnly {
+		orch.SetDisableImages(true)
+	}
 
 	// Expose the live orchestrator so the WebSocket endpoint can inject
 	// viewer participation messages into this in-flight run. Cleared when the
@@ -273,18 +326,25 @@ func run(ctx context.Context, deps Deps, jobID string,
 
 	// Pre-activate the series stage so the brief window between
 	// TopicMsg send and stage activation doesn't render through the
-	// debate idle card (mirrors the stream-mode behavior).
-	if topic.Type == config.ContentTypeSeries {
+	// debate idle card (mirrors the stream-mode behavior). No stage
+	// exists in audio-only mode.
+	if topic.Type == config.ContentTypeSeries && !audioOnly {
 		seriesStage.Preactivate()
 	}
 
 	send(buildTopicMsg(topic, jobID))
 
 	if topic.Type == config.ContentTypeSeries {
-		status("preparing series assets (recap, scenes, music)…")
 		t0 := time.Now()
-		series.PrepareEpisode(ctx, logger, &jobEnv, seriesStage, topic, orch)
+		if audioOnly {
+			status("preparing series audio (recap, narration, music)…")
+			series.PrepareEpisodeAudioOnly(ctx, logger, &jobEnv, topic, orch)
+		} else {
+			status("preparing series assets (recap, scenes, music)…")
+			series.PrepareEpisode(ctx, logger, &jobEnv, seriesStage, topic, orch)
+		}
 		logger.Info("series asset prep done",
+			"audio_only", audioOnly,
 			"elapsed", time.Since(t0).Round(time.Millisecond))
 		status(fmt.Sprintf("series assets ready (%s)",
 			time.Since(t0).Round(time.Second)))
@@ -295,10 +355,16 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// the stage paints the first background as soon as it lands). Without this
 	// the show rendered over a bare background with no imagery.
 	if topic.Type == config.ContentTypeDiscussion {
-		status("preparing discussion assets (backgrounds, music)…")
 		t0 := time.Now()
-		discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch)
+		if audioOnly {
+			status("preparing discussion audio (music)…")
+			discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch)
+		} else {
+			status("preparing discussion assets (backgrounds, music)…")
+			discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch)
+		}
 		logger.Info("discussion asset prep done",
+			"audio_only", audioOnly,
 			"elapsed", time.Since(t0).Round(time.Millisecond))
 		status(fmt.Sprintf("discussion assets ready (%s)",
 			time.Since(t0).Round(time.Second)))
@@ -316,6 +382,53 @@ func run(ctx context.Context, deps Deps, jobID string,
 	if topic.Type == config.ContentTypeSeries {
 		status("archiving episode…")
 		series.FinishEpisode(logger, &jobEnv, topic)
+	}
+
+	// Audio-only finalisation: signal end-of-stream and wait for the recorder
+	// to flush the full mixed audio (ffmpeg -re paces out the buffered tail),
+	// then publish audio.mp3 + the subtitles.vtt sidecar. No HLS, no stitch.
+	if audioOnly {
+		status("finalising audio output…")
+		_ = live.CloseInput()
+		liveClosed = true
+		if recDone != nil {
+			select {
+			case <-recDone:
+			case <-time.After(30 * time.Second):
+				logger.Warn("audio recorder drain timed out — output may be truncated")
+			case <-ctx.Done():
+			}
+		}
+
+		info, statErr := os.Stat(audioPath)
+		if statErr != nil || info.Size() == 0 {
+			fail(deps, jobID, logger, fmt.Errorf("audio output missing or empty: %v", statErr))
+			return
+		}
+		status(fmt.Sprintf("audio ready · %.1f MB", float64(info.Size())/(1024*1024)))
+
+		var s3Key string
+		if deps.Uploader.Enabled() {
+			status("uploading to S3...")
+			key := deps.Uploader.Key(jobID + ".mp3")
+			if err := deps.Uploader.Upload(ctx, audioPath, key); err != nil {
+				logger.Error("s3 upload failed", "err", err)
+				status("S3 upload failed (serving from disk)")
+			} else {
+				s3Key = key
+				status("uploaded to S3")
+			}
+		}
+
+		status("done")
+		deps.Jobs.Update(jobID, func(j *server.Job) {
+			j.Status = server.JobDone
+			j.AudioPath = audioPath
+			j.HasAudio = true
+			j.AudioOnly = true
+			j.AudioS3Key = s3Key
+		})
+		return
 	}
 
 	// Finalise the encoder before stitching so ffmpeg flushes the

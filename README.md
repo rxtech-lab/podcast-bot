@@ -18,6 +18,9 @@ the LLM, TTS, image, and music providers behind the scenes.
     no restart needed.
   - **video** — no channels; the browser uploads a `script.md` (and, for series, a zip of
     prior generations) and the server renders a downloadable `.mp4`.
+- **Audio-only feed** — render a podcast-style `.mp3` (mixed TTS + music bed) plus a
+  `subtitles.vtt` sidecar, skipping all image/video generation. Opt in per job
+  (`audio_only`) or force it server-wide with the `--audio` flag.
 - **Pluggable providers** — OpenAI-compatible chat endpoint, Azure / ElevenLabs TTS,
   Gemini (Lyria music + scene image generation).
 - **MCP tools** — optional `mcp.json` lets agents call external Model Context Protocol tools.
@@ -146,6 +149,38 @@ Both `--mode stream` and `--mode video` honour the password.
 Open the web UI and upload a `script.md`; the server renders an MP4 you can download.
 `--max-concurrency` caps simultaneous renders.
 
+Video/dashboard-mode flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `stream` | `stream` \| `video` \| `dashboard` |
+| `--max-concurrency` | `2` | cap on simultaneous renders |
+| `--audio` | `false` | force every job to render as an audio-only feed (see below) |
+| `--addr` | `:3000` | HTTP listen address |
+| `--password` | `$APP_PASSWORD` | gate the web UI + API behind a password |
+
+### Audio-only feed (MP3 + subtitles, no images)
+
+Skip all image/video generation and produce a downloadable `.mp3` (mixed TTS + music bed)
+with a `subtitles.vtt` sidecar — useful for podcast-style output and far cheaper/faster
+since no scene images are generated. Works for `debate`, `discussion`, and `series` topics.
+
+Two ways to enable it:
+
+- **Per job** — submit with `audio_only` set: the multipart form field `audio_only=true`,
+  or `videoConfig.audio_only: true` on `POST /api/jobs/json`.
+- **Server-wide** — start with `--audio` to force every job onto the audio feed regardless
+  of the request:
+
+  ```bash
+  ./bin/debate-bot server --mode video --audio --addr :3000
+  ```
+
+  `GET /api/config` reports `force_audio: true` so a frontend can hide video-only controls.
+
+Download the artefacts from `GET /api/jobs/{id}/audio` (the `.mp3`) and
+`GET /api/jobs/{id}/subtitles` (the `.vtt`).
+
 ### Dev (hot-reload frontend)
 
 ```bash
@@ -221,3 +256,6 @@ outside the container.
 Each run writes to `OUT_DIR/session-<timestamp>/` — per-channel HLS segments, the stitched
 `debate.mp3`, `transcript.txt`, per-agent `memory/`, and `run.log`. Series episodes also
 archive into `SERIES_ROOT/tv-series/<show>/...` for cross-episode recaps.
+
+Video-mode jobs land under `OUT_DIR/session-<timestamp>/jobs/<jobID>/`: `video.mp4` (or
+`audio.mp3` for an audio-only feed), the `subtitles.vtt` sidecar, and the per-turn audio.

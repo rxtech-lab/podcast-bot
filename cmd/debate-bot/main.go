@@ -703,7 +703,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 // channels.json + topic .md preloading are intentionally skipped — in
 // video mode the user-facing surface is browser uploads, not a watched
 // directory.
-func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int, password string) (*runtime, int) {
+func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int, password string, forceAudio bool) (*runtime, int) {
 	if err := audio.VerifyTools(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
@@ -806,12 +806,18 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		AllowedOrigins: env.DashboardOrigins,
 		ServiceToken:   env.DashboardServiceToken,
 		Uploader:       uploader,
+		ForceAudio:     forceAudio,
 		// SubmitJob runs one upload through the orchestrator + stitch +
 		// (for series) zip pipeline. Defined as a closure so it can
 		// reach the env / bus / log without cycling the import graph.
 		// Returns synchronously after validation; the heavy work runs
 		// in a goroutine the runner spawns.
 		SubmitJob: func(jobID string, req server.JobSubmission) error {
+			// --audio forces every job to the audio-only feed, overriding
+			// whatever the request asked for.
+			if forceAudio {
+				req.AudioOnly = true
+			}
 			return videojob.Submit(rt.ctx, videojob.Deps{
 				Env:      env,
 				MCPCfg:   mcpCfg,
@@ -1265,6 +1271,7 @@ func serverCmd(args []string) int {
 	addr := fs.String("addr", ":3000", "HTTP listen address")
 	maxConcurrency := fs.Int("max-concurrency", 2, "video mode: maximum number of video generations to run concurrently")
 	password := fs.String("password", os.Getenv("APP_PASSWORD"), "if set, gate the web UI + API behind this password (falls back to APP_PASSWORD env)")
+	audio := fs.Bool("audio", false, "video/dashboard mode: force every job to render as an audio-only feed (mp3 + subtitles, no images/video), regardless of the per-request audio_only flag")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -1277,12 +1284,15 @@ func serverCmd(args []string) int {
 		if *maxConcurrency != 2 {
 			fmt.Fprintln(os.Stderr, "warning: --max-concurrency is ignored unless --mode=video")
 		}
+		if *audio {
+			fmt.Fprintln(os.Stderr, "warning: --audio is ignored unless --mode=video or --mode=dashboard")
+		}
 		return serverCmdStream(specs, *channelsPath, *mcpPath, *outDir, *addr, *password)
 	case modeVideo, modeDashboard:
 		if len(specs) > 0 {
 			fmt.Fprintf(os.Stderr, "warning: --content is ignored in --mode=%s (scripts come from the API)\n", *mode)
 		}
-		return serverCmdVideo(*mode, *mcpPath, *outDir, *addr, *maxConcurrency, *password)
+		return serverCmdVideo(*mode, *mcpPath, *outDir, *addr, *maxConcurrency, *password, *audio)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown --mode %q (want stream|video|dashboard)\n", *mode)
 		return 2
@@ -1363,8 +1373,8 @@ func serverCmdStream(specs []string, channelsPath, mcpPath, outDir, addr, passwo
 // waiting for /api/jobs requests; each one runs end-to-end in
 // internal/content_creator/video_job.go and writes its artefacts under
 // <session>/jobs/<jobID>/.
-func serverCmdVideo(mode, mcpPath, outDir, addr string, maxConcurrency int, password string) int {
-	rt, code := bootstrapVideo(mode, mcpPath, outDir, addr, maxConcurrency, password)
+func serverCmdVideo(mode, mcpPath, outDir, addr string, maxConcurrency int, password string, forceAudio bool) int {
+	rt, code := bootstrapVideo(mode, mcpPath, outDir, addr, maxConcurrency, password, forceAudio)
 	if code != 0 {
 		return code
 	}
@@ -1373,6 +1383,9 @@ func serverCmdVideo(mode, mcpPath, outDir, addr string, maxConcurrency int, pass
 	banner := "video mode — upload script.md via the web UI"
 	if mode == modeDashboard {
 		banner = "dashboard mode — API backend for the Next.js dashboard"
+	}
+	if forceAudio {
+		banner += " · audio-only feed forced (--audio)"
 	}
 	srvErrCh := make(chan error, 1)
 	go func() {

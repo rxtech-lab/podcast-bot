@@ -12,7 +12,7 @@ PLATFORM  := linux/amd64
 BUILDER   := debate-bot-builder
 
 .PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke \
-        buildx-setup docker-build docker-push
+        style-test style-golden style-font buildx-setup docker-build docker-push
 
 all: build
 
@@ -86,3 +86,20 @@ series-recap-smoke:
 
 dashboard-engine:
 	go run ./cmd/debate-bot server --mode dashboard --addr :8000
+
+# Fetch the pinned CJK font the style test renders with (8 MB, not committed —
+# downloaded on demand and checksum-verified). Idempotent.
+style-font:
+	./scripts/fetch-style-font.sh
+
+# Style regression guard: re-render one frame per content-type layout (debate,
+# situation puzzle, series, discussion) and assert it still matches the golden
+# PNGs committed under smoke-test/. Fails the moment a renderer change shifts the
+# pixels of any layout.
+style-test: style-font
+	go test ./internal/video -run TestStyleGolden
+
+# Regenerate the smoke-test/ golden images after an intentional style change.
+# Review the diff before committing the updated PNGs.
+style-golden: style-font
+	go test ./internal/video -run TestStyleGolden -update-golden
