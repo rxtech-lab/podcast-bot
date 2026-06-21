@@ -1,22 +1,21 @@
 import SwiftUI
-import SwiftData
 
-/// Home: the user's discussions (synced via iCloud), newest first, with a button
-/// to plan a new one. Routing by status: planning → plan editor, ready/generating
-/// → podcast player.
+/// Home: the user's server-owned discussions, newest first.
 struct LibraryView: View {
     @Environment(AuthManager.self) private var auth
-    @Environment(\.modelContext) private var context
-    @Query(sort: \Discussion.updatedAt, order: .reverse) private var discussions: [Discussion]
+    @State private var discussions: [Discussion] = []
     @State private var showingNew = false
     @State private var path: [Discussion] = []
-    @State private var deletionError: String?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
                 Theme.background.ignoresSafeArea()
-                if discussions.isEmpty {
+                if isLoading && discussions.isEmpty {
+                    ProgressView().tint(Theme.accent)
+                } else if discussions.isEmpty {
                     emptyState
                 } else {
                     list
@@ -29,6 +28,7 @@ struct LibraryView: View {
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
+                        Button("Refresh") { Task { await load() } }
                         Button("Sign Out", role: .destructive) { Task { await auth.signOut() } }
                     } label: { Image(systemName: "person.crop.circle") }
                 }
@@ -39,14 +39,17 @@ struct LibraryView: View {
             .sheet(isPresented: $showingNew) {
                 NewDiscussionView { discussion in
                     showingNew = false
+                    upsert(discussion)
                     path.append(discussion)
                 }
             }
-            .alert("Could not delete discussion", isPresented: deletionErrorBinding) {
-                Button("OK", role: .cancel) { deletionError = nil }
+            .alert("Could not load discussions", isPresented: errorBinding) {
+                Button("OK", role: .cancel) { errorMessage = nil }
             } message: {
-                Text(deletionError ?? "")
+                Text(errorMessage ?? "")
             }
+            .task { await load() }
+            .refreshable { await load() }
         }
     }
 
@@ -67,29 +70,49 @@ struct LibraryView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
         .background(Color.clear)
     }
 
-    private var deletionErrorBinding: Binding<Bool> {
+    private var errorBinding: Binding<Bool> {
         Binding(
-            get: { deletionError != nil },
-            set: { if !$0 { deletionError = nil } }
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
         )
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            discussions = try await APIClient(tokens: auth).discussions()
+        } catch {
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     private func deleteDiscussions(at offsets: IndexSet) {
         let targets = offsets.map { discussions[$0] }
         let targetIDs = Set(targets.map(\.id))
-
+        discussions.removeAll { targetIDs.contains($0.id) }
         path.removeAll { targetIDs.contains($0.id) }
-        targets.forEach(context.delete)
-
-        do {
-            try context.save()
-        } catch {
-            context.rollback()
-            deletionError = error.localizedDescription
+        Task {
+            let api = APIClient(tokens: auth)
+            for target in targets {
+                do {
+                    try await api.deleteDiscussion(id: target.id)
+                } catch {
+                    errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                    await load()
+                    return
+                }
+            }
         }
+    }
+
+    private func upsert(_ discussion: Discussion) {
+        discussions.removeAll { $0.id == discussion.id }
+        discussions.insert(discussion, at: 0)
     }
 
     private var emptyState: some View {
@@ -119,7 +142,14 @@ struct LibraryView: View {
     private func destination(for discussion: Discussion) -> some View {
         switch discussion.status {
         case .planning, .failed:
-            PlanDetailView(discussion: discussion)
+            PlanDetailView(discussion: discussion) { generated in
+                upsert(generated)
+                if let index = path.lastIndex(where: { $0.id == generated.id }) {
+                    path[index] = generated
+                } else {
+                    path.append(generated)
+                }
+            }
         case .generating, .ready:
             PodcastPlayerView(discussion: discussion)
         }
@@ -136,7 +166,7 @@ private struct DiscussionRow: View {
                 .foregroundStyle(Theme.accent)
                 .frame(width: 40)
             VStack(alignment: .leading, spacing: 4) {
-                Text(discussion.title.isEmpty ? discussion.topic : discussion.title)
+                Text(discussion.displayTitle)
                     .font(.headline)
                     .lineLimit(2)
                 Text(statusLabel)
@@ -161,8 +191,8 @@ private struct DiscussionRow: View {
 
     private var statusLabel: String {
         switch discussion.status {
-        case .planning: return "Plan • \(discussion.sortedPeople.count) people"
-        case .generating: return "Generating…"
+        case .planning: return "Plan - \(discussion.sortedPeople.count) people"
+        case .generating: return "Generating..."
         case .ready: return "Ready to play"
         case .failed: return "Failed"
         }

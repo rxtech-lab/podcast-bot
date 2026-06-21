@@ -7,12 +7,15 @@
 //
 
 import SwiftUI
-import SwiftData
+import UIKit
 
 @main
 struct iOSApp: App {
     @State private var auth = AuthManager()
-    private let modelContainer = PersistenceController.makeContainer()
+
+    init() {
+        UIScrollView.appearance().keyboardDismissMode = .interactive
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -20,7 +23,7 @@ struct iOSApp: App {
                 .environment(auth)
                 .tint(Theme.accent)
                 .preferredColorScheme(.dark)
+                .scrollDismissesKeyboard(.interactively)
         }
-        .modelContainer(modelContainer)
     }
 }

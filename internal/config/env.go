@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -27,6 +28,12 @@ type Env struct {
 	CompressionBaseURL string
 	CompressionKey     string
 	CompressionModel   string
+
+	// Optional pricing override for OpenAI-compatible chat calls. Values are
+	// dollars per million tokens and are used only when the provider response
+	// does not include a cost field in the usage payload.
+	LLMInputCostPerMillion  float64
+	LLMOutputCostPerMillion float64
 
 	AzureSpeechKey    string
 	AzureSpeechRegion string
@@ -66,12 +73,23 @@ type Env struct {
 	SearchAPIKey string
 	SearchAPIURL string
 
-	// S3 settings for uploading finished videos. When S3Bucket is empty the
-	// engine keeps serving videos from local disk (no upload).
-	S3Bucket   string
-	S3Region   string
-	S3Endpoint string
-	S3Prefix   string
+	// S3 settings for uploading finished media. When S3Bucket is empty the
+	// engine keeps serving media from local disk (no upload). S3Endpoint is
+	// for S3-compatible APIs such as R2; S3DownloadBaseURL is an optional
+	// public/custom download domain used instead of presigned URLs.
+	S3Bucket          string
+	S3Region          string
+	S3Endpoint        string
+	S3Prefix          string
+	S3DownloadBaseURL string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+
+	// Turso/libSQL database for durable native-client discussion storage.
+	// TURSO_CONNECTION_URL is the primary database URL. TURSO_AUTH_TOKEN is
+	// required for remote Turso databases and may be empty for local testing.
+	TursoConnectionURL string
+	TursoAuthToken     string
 
 	// PersistentRoot is the non-session base directory for cross-run
 	// archives — today only the series content type uses it (every
@@ -102,12 +120,18 @@ func LoadEnv() (*Env, error) {
 		CompressionBaseURL: strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
 		CompressionKey:     strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
 		CompressionModel:   strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
-		AzureSpeechKey:     strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
-		AzureSpeechRegion:  strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
-		ElevenLabsAPIKey:   strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
-		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		OutDir:             strings.TrimSpace(os.Getenv("OUT_DIR")),
-		PersistentRoot:     strings.TrimSpace(os.Getenv("SERIES_ROOT")),
+		LLMInputCostPerMillion: parseFloatEnv(
+			"LLM_INPUT_COST_PER_MILLION",
+		),
+		LLMOutputCostPerMillion: parseFloatEnv(
+			"LLM_OUTPUT_COST_PER_MILLION",
+		),
+		AzureSpeechKey:    strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
+		AzureSpeechRegion: strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
+		ElevenLabsAPIKey:  strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
+		GeminiAPIKey:      strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		OutDir:            strings.TrimSpace(os.Getenv("OUT_DIR")),
+		PersistentRoot:    strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 
 		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
@@ -115,10 +139,16 @@ func LoadEnv() (*Env, error) {
 		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
 		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
 
-		S3Bucket:   strings.TrimSpace(os.Getenv("S3_BUCKET")),
-		S3Region:   strings.TrimSpace(os.Getenv("S3_REGION")),
-		S3Endpoint: strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
-		S3Prefix:   strings.TrimSpace(os.Getenv("S3_PREFIX")),
+		S3Bucket:          strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		S3Region:          strings.TrimSpace(os.Getenv("S3_REGION")),
+		S3Endpoint:        strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
+		S3Prefix:          strings.TrimSpace(os.Getenv("S3_PREFIX")),
+		S3DownloadBaseURL: strings.TrimSpace(os.Getenv("S3_DOWNLOAD_BASE_URL")),
+		S3AccessKeyID:     strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID")),
+		S3SecretAccessKey: strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY")),
+
+		TursoConnectionURL: strings.TrimSpace(os.Getenv("TURSO_CONNECTION_URL")),
+		TursoAuthToken:     strings.TrimSpace(os.Getenv("TURSO_AUTH_TOKEN")),
 	}
 
 	if e.CompressionBaseURL == "" {
@@ -179,6 +209,18 @@ func splitCSV(s string) []string {
 		return nil
 	}
 	return out
+}
+
+func parseFloatEnv(key string) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f < 0 {
+		return 0
+	}
+	return f
 }
 
 // ErrEnvNotLoaded is returned when an Env was expected but not initialised.

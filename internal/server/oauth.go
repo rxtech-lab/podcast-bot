@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -25,7 +26,18 @@ type oauthValidator struct {
 	log         *slog.Logger
 
 	mu    sync.Mutex
-	cache map[string]time.Time // token sha256 -> expiry of the cached "valid" verdict
+	cache map[string]oauthCacheEntry // token sha256 -> cached userinfo verdict
+}
+
+type oauthUser struct {
+	Subject string `json:"sub"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+}
+
+type oauthCacheEntry struct {
+	expiry time.Time
+	user   oauthUser
 }
 
 const (
@@ -42,53 +54,62 @@ func newOAuthValidator(issuer string, log *slog.Logger) *oauthValidator {
 		userInfoURL: issuer + userInfoPath,
 		client:      &http.Client{Timeout: 8 * time.Second},
 		log:         log,
-		cache:       make(map[string]time.Time),
+		cache:       make(map[string]oauthCacheEntry),
 	}
 }
 
 // valid reports whether the access token is currently accepted by the issuer.
 func (v *oauthValidator) valid(ctx context.Context, token string) bool {
+	_, ok := v.user(ctx, token)
+	return ok
+}
+
+// user returns the authenticated OAuth userinfo for a token. A valid userinfo
+// response with no sub still authenticates, but callers that need ownership get
+// a stable hash-derived fallback from requestUser below.
+func (v *oauthValidator) user(ctx context.Context, token string) (oauthUser, bool) {
 	if v == nil || token == "" {
-		return false
+		return oauthUser{}, false
 	}
 	sum := sha256.Sum256([]byte(token))
 	key := hex.EncodeToString(sum[:])
 
 	now := time.Now()
 	v.mu.Lock()
-	if exp, ok := v.cache[key]; ok {
-		if now.Before(exp) {
+	if entry, ok := v.cache[key]; ok {
+		if now.Before(entry.expiry) {
 			v.mu.Unlock()
-			return true
+			return entry.user, true
 		}
 		delete(v.cache, key)
 	}
 	v.mu.Unlock()
 
-	if !v.introspect(ctx, token) {
-		return false
+	user, ok := v.introspect(ctx, token)
+	if !ok {
+		return oauthUser{}, false
 	}
 
 	v.mu.Lock()
-	v.cache[key] = now.Add(oauthCacheTTL)
+	v.cache[key] = oauthCacheEntry{expiry: now.Add(oauthCacheTTL), user: user}
 	// Opportunistically evict stale entries so the map can't grow unbounded.
 	if len(v.cache) > 1024 {
-		for k, exp := range v.cache {
-			if now.After(exp) {
+		for k, entry := range v.cache {
+			if now.After(entry.expiry) {
 				delete(v.cache, k)
 			}
 		}
 	}
 	v.mu.Unlock()
-	return true
+	return user, true
 }
 
 // introspect performs the live userinfo round-trip; a 200 means the token is
 // valid. Any non-200 or transport error is treated as invalid (fail closed).
-func (v *oauthValidator) introspect(ctx context.Context, token string) bool {
+func (v *oauthValidator) introspect(ctx context.Context, token string) (oauthUser, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.userInfoURL, nil)
 	if err != nil {
-		return false
+		return oauthUser{}, false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := v.client.Do(req)
@@ -97,7 +118,7 @@ func (v *oauthValidator) introspect(ctx context.Context, token string) bool {
 			"userinfo_url", v.userInfoURL,
 			"err", err,
 		)
-		return false
+		return oauthUser{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -105,8 +126,17 @@ func (v *oauthValidator) introspect(ctx context.Context, token string) bool {
 			"userinfo_url", v.userInfoURL,
 			"status", resp.StatusCode,
 		)
+		return oauthUser{}, false
 	}
-	return resp.StatusCode == http.StatusOK
+	var user oauthUser
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		v.logger().Warn("oauth userinfo decode failed",
+			"userinfo_url", v.userInfoURL,
+			"err", err,
+		)
+		return oauthUser{}, false
+	}
+	return user, true
 }
 
 func (v *oauthValidator) logger() *slog.Logger {

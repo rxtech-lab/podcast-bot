@@ -1,4 +1,3 @@
-import SwiftData
 import SwiftUI
 
 /// Step 1 of planning: enter a topic + panelist count, then ask the engine to
@@ -6,7 +5,6 @@ import SwiftUI
 /// plan is persisted and pushed into the editor.
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
-    @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     var onPlanned: (Discussion) -> Void = { _ in }
 
@@ -60,6 +58,8 @@ struct NewDiscussionView: View {
                     .padding(12)
                     .glassEffect(in: .rect(cornerRadius: 16))
 
+                DiscussionLanguageMenu(selection: $language)
+
                 if let errorMessage {
                     Text(errorMessage).font(.footnote).foregroundStyle(.red)
                 }
@@ -75,6 +75,7 @@ struct NewDiscussionView: View {
             }
             .padding(16)
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     private func plan() {
@@ -85,12 +86,8 @@ struct NewDiscussionView: View {
         let api = APIClient(tokens: auth)
         Task {
             do {
-                let resp = try await api.plan(PlanRequest(topic: trimmed, language: language,
-                                                          discussants: discussants, research: true))
-                let discussion = Discussion(topic: trimmed, language: language)
-                context.insert(discussion)
-                Mapping.apply(resp, to: discussion, in: context)
-                try? context.save()
+                let discussion = try await api.planDiscussion(PlanRequest(topic: trimmed, language: language,
+                                                                          discussants: discussants, research: true))
                 isPlanning = false
                 dismiss()
                 onPlanned(discussion)
@@ -98,6 +95,71 @@ struct NewDiscussionView: View {
                 isPlanning = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
+        }
+    }
+}
+
+struct DiscussionLanguage: Identifiable, Hashable {
+    let code: String
+    let label: String
+
+    var id: String { code }
+
+    static let supported: [DiscussionLanguage] = [
+        DiscussionLanguage(code: "en-US", label: "English"),
+        DiscussionLanguage(code: "zh-CN", label: "Chinese (Simplified)"),
+        DiscussionLanguage(code: "zh-TW", label: "Chinese (Traditional)"),
+        DiscussionLanguage(code: "ja-JP", label: "Japanese"),
+        DiscussionLanguage(code: "ko-KR", label: "Korean"),
+        DiscussionLanguage(code: "es-ES", label: "Spanish"),
+        DiscussionLanguage(code: "fr-FR", label: "French"),
+        DiscussionLanguage(code: "de-DE", label: "German")
+    ]
+
+    static func normalized(_ code: String) -> String {
+        supported.first(where: { $0.code == code })?.code ?? "en-US"
+    }
+
+    static func label(for code: String) -> String {
+        supported.first(where: { $0.code == code })?.label ?? code
+    }
+}
+
+struct DiscussionLanguageMenu: View {
+    @Binding var selection: String
+    var title = "Podcast language"
+
+    var body: some View {
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(DiscussionLanguage.supported) { language in
+                    Text(language.label).tag(language.code)
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "globe")
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(DiscussionLanguage.label(for: selection))
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .padding(12)
+            .glassEffect(in: .rect(cornerRadius: 16))
+        }
+        .tint(Theme.accent)
+        .onAppear {
+            selection = DiscussionLanguage.normalized(selection)
         }
     }
 }

@@ -196,7 +196,7 @@ func TestVTTWriter_StripsPunct(t *testing.T) {
 // proportion to each chunk's content-rune count.
 func TestVTTWriter_SplitsLongSentence(t *testing.T) {
 	w := newVTTWriter()
-	// 60-char CJK string — more than vttMaxRunesPerCue (~22) so it
+	// 60-char CJK string — more than vttMaxRunesPerCue so it
 	// must split into multiple cues.
 	long := strings.Repeat("夜深了我得走前要把這封信交給你保管", 3)
 	w.Append(long, 0, 6*time.Second)

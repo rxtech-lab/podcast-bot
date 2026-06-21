@@ -68,13 +68,14 @@ const (
 // UploadRoot is the directory where uploaded scripts + priors zips
 // land. Each job gets its own subdirectory keyed by jobID.
 type Deps struct {
-	Mode       string
-	Bus        *eventbus.Bus
-	Sessions   *SessionRegistry
-	Jobs       *JobRegistry
-	Log        *slog.Logger
-	UploadRoot string
-	SubmitJob  func(jobID string, sub JobSubmission) error
+	Mode        string
+	Bus         *eventbus.Bus
+	Sessions    *SessionRegistry
+	Jobs        *JobRegistry
+	Discussions *DiscussionStore
+	Log         *slog.Logger
+	UploadRoot  string
+	SubmitJob   func(jobID string, sub JobSubmission) error
 	// Password, when non-empty, gates every /api/* route behind a login
 	// cookie. Empty disables auth entirely (the default).
 	Password string
@@ -182,6 +183,17 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
 		s.mux.HandleFunc("GET /api/jobs/{id}/ws", s.handleJobWS)
 		s.mux.HandleFunc("POST /api/jobs/{id}/messages", s.handleJobMessage)
+		s.mux.HandleFunc("POST /api/jobs/{id}/stop", s.handleJobStop)
+	}
+
+	if d.Discussions != nil {
+		s.mux.HandleFunc("GET /api/discussions", s.handleDiscussionList)
+		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)
+		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
+		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
+		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
+		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
+		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
 	}
 
 	// The embedded TV SPA is served in stream + video modes. In dashboard

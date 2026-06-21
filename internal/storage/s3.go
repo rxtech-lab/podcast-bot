@@ -1,16 +1,18 @@
-// Package storage uploads finished videos to an S3-compatible bucket and mints
-// presigned download URLs. It is optional: when no bucket is configured the
-// Uploader is disabled and the engine keeps serving videos from local disk.
+// Package storage uploads finished media to an S3-compatible bucket and mints
+// download URLs. It is optional: when no bucket is configured the Uploader is
+// disabled and the engine keeps serving media from local disk.
 package storage
 
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -19,10 +21,13 @@ import (
 // Endpoint is set for S3-compatible stores (Cloudflare R2, MinIO); leave empty
 // for AWS S3. Credentials come from the standard AWS environment.
 type Config struct {
-	Bucket   string
-	Region   string
-	Endpoint string
-	Prefix   string
+	Bucket          string
+	Region          string
+	Endpoint        string
+	Prefix          string
+	DownloadBaseURL string
+	AccessKeyID     string
+	SecretAccessKey string
 }
 
 // Uploader wraps an S3 client plus a presigner. A nil/disabled Uploader is
@@ -39,9 +44,23 @@ func New(ctx context.Context, cfg Config) (*Uploader, error) {
 	if strings.TrimSpace(cfg.Bucket) == "" {
 		return &Uploader{cfg: cfg}, nil
 	}
+	cfg.DownloadBaseURL = strings.TrimRight(strings.TrimSpace(cfg.DownloadBaseURL), "/")
+	if cfg.DownloadBaseURL != "" {
+		if _, err := url.ParseRequestURI(cfg.DownloadBaseURL); err != nil {
+			return nil, fmt.Errorf("s3 download base url: %w", err)
+		}
+	}
 	opts := []func(*awsconfig.LoadOptions) error{}
 	if cfg.Region != "" {
 		opts = append(opts, awsconfig.WithRegion(cfg.Region))
+	}
+	if cfg.AccessKeyID != "" || cfg.SecretAccessKey != "" {
+		if cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
+			return nil, fmt.Errorf("s3 credentials: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must both be set")
+		}
+		opts = append(opts, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
+		))
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
@@ -88,6 +107,8 @@ func (u *Uploader) Upload(ctx context.Context, localPath, key string) error {
 	contentType := "application/octet-stream"
 	if strings.HasSuffix(strings.ToLower(localPath), ".mp4") {
 		contentType = "video/mp4"
+	} else if strings.HasSuffix(strings.ToLower(localPath), ".mp3") {
+		contentType = "audio/mpeg"
 	}
 	uploader := manager.NewUploader(u.client)
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
@@ -116,4 +137,20 @@ func (u *Uploader) PresignGet(ctx context.Context, key string, ttl time.Duration
 		return "", fmt.Errorf("presign: %w", err)
 	}
 	return req.URL, nil
+}
+
+// DownloadURL returns a public/custom-domain URL when configured; otherwise it
+// falls back to a presigned S3 URL. Use S3_DOWNLOAD_BASE_URL for R2 custom
+// domains or public S3/CDN front doors.
+func (u *Uploader) DownloadURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if !u.Enabled() || key == "" {
+		return "", nil
+	}
+	if u.cfg.DownloadBaseURL != "" {
+		if parsed, err := url.Parse(u.cfg.DownloadBaseURL); err == nil && (parsed.Path == "" || parsed.Path == "/") {
+			return url.JoinPath(u.cfg.DownloadBaseURL, u.cfg.Bucket, key)
+		}
+		return url.JoinPath(u.cfg.DownloadBaseURL, key)
+	}
+	return u.PresignGet(ctx, key, ttl)
 }

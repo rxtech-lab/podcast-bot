@@ -37,12 +37,38 @@ type userQueue struct {
 func (q *userQueue) push(m userMessage) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if m.Text == "/end" {
+	if isEndRequest(m.Text) {
 		q.end = true
 		return
 	}
 	q.buf = append(q.buf, m)
 }
+
+func isEndRequest(text string) bool {
+	s := strings.ToLower(strings.TrimSpace(text))
+	s = strings.Trim(s, " \t\r\n.!?。！？")
+	switch s {
+	case "/end", "end", "finish", "stop", "wrap up", "conclude":
+		return true
+	}
+	for _, phrase := range []string{
+		"end it fast",
+		"end it quickly",
+		"end the podcast",
+		"finish it fast",
+		"finish it quickly",
+		"finish the podcast",
+		"wrap it up",
+		"skip to end",
+		"skip to the end",
+	} {
+		if strings.Contains(s, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func (q *userQueue) drain() ([]userMessage, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

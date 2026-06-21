@@ -35,16 +35,11 @@ type SubtitleCue struct {
 	Text  string
 }
 
-// vttMaxRunesPerCue caps the visible text per cue. The burned-in
-// renderer paints one wrapped line at a time (puzzleSubtitleMaxLines = 1
-// in internal/video) and scrolls overflow lines through it weighted by
-// audio duration. The sidecar mirrors that one-line-at-a-time feel by
-// splitting a long sentence into multiple cues, each holding a single
-// readable chunk. ~22 runes is the sweet spot for CJK content (the
-// project's primary language) — long enough to fit a full clause,
-// short enough that a player without auto-scroll doesn't show a wall of
-// text.
-const vttMaxRunesPerCue = 22
+// vttMaxRunesPerCue caps the visible text per cue. Native audio clients have
+// room for a multi-line caption, so keep enough text to show a complete phrase
+// instead of flickering through only a few words. Long sentences still split
+// into bounded chunks whose durations are proportional to content length.
+const vttMaxRunesPerCue = 44
 
 // vttWriter accumulates one cue per synthesised sentence and writes a
 // sidecar .vtt file at the end of the run. Toggling captions off in the

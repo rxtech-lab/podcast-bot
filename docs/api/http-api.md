@@ -129,11 +129,21 @@ List every tracked job (debugging aid).
 ### `GET /api/jobs/{id}`
 Single job snapshot. `404` for unknown ids (jobs aren't persisted across
 restarts, though completed mp4/zip artifacts on disk are recovered on demand).
+When S3 storage is configured, finished jobs include `download_url`; this is a
+custom-domain URL when `S3_DOWNLOAD_BASE_URL` is set, otherwise a presigned S3
+URL. Configure S3/R2 credentials with `S3_ACCESS_KEY_ID` and
+`S3_SECRET_ACCESS_KEY`, or leave them empty to use the AWS SDK default
+credential chain.
 
 ### `GET /api/jobs/{id}/video`
 Download the rendered `.mp4` once the job reaches `done`. `425 Too Early` while
 in flight; `404` if the asset doesn't exist. Sets a friendly
 `Content-Disposition` filename derived from show/season/episode or title.
+
+### `GET /api/jobs/{id}/audio`
+Download the rendered `.mp3` for an audio-only job once it reaches `done`.
+With S3 storage configured, this redirects to the S3/custom-domain download URL
+instead of serving a local audio path.
 
 ### `GET /api/jobs/{id}/archive`
 Download the per-job zip of the persistent show directory. **Series jobs only**

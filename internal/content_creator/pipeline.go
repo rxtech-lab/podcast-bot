@@ -167,10 +167,27 @@ type Pipeline struct {
 	// inter-turn idle still counts toward when the next chunk plays.
 	playheadMu sync.Mutex
 	nextPlayAt time.Time
+
+	stopMu      sync.Mutex
+	stopProduce context.CancelFunc
 }
 
 // NewPipeline creates a Pipeline.
 func NewPipeline(d Deps) *Pipeline { return &Pipeline{d: d, vtt: newVTTWriter()} }
+
+// ForceStop stops planning and any in-flight turn generation. Cleanup and
+// artifact finalization continue under the parent job context.
+func (p *Pipeline) ForceStop() {
+	if p == nil {
+		return
+	}
+	p.stopMu.Lock()
+	stop := p.stopProduce
+	p.stopMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
 
 // SubtitleCues returns the timed WebVTT cues accumulated so far.
 func (p *Pipeline) SubtitleCues() []SubtitleCue {
@@ -194,6 +211,17 @@ func (p *Pipeline) vttBias() time.Duration {
 // Run boots all stages and blocks until the planner stops emitting turns
 // AND every stage drains. Returns the produced audio file paths in order.
 func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
+	produceCtx, stopProduce := context.WithCancel(ctx)
+	p.stopMu.Lock()
+	p.stopProduce = stopProduce
+	p.stopMu.Unlock()
+	defer func() {
+		stopProduce()
+		p.stopMu.Lock()
+		p.stopProduce = nil
+		p.stopMu.Unlock()
+	}()
+
 	turnCh := make(chan *Turn, 2)
 	producedCh := make(chan *Turn, 1)
 
@@ -217,7 +245,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	}
 
 	// Tick goroutine — publishes elapsed/remaining once a second.
-	tickCtx, tickCancel := context.WithCancel(ctx)
+	tickCtx, tickCancel := context.WithCancel(produceCtx)
 	go p.tickLoop(tickCtx)
 	defer tickCancel()
 
@@ -225,13 +253,13 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	go func() {
 		defer close(turnCh)
 		for {
-			t, ok := p.d.Planner.Next(ctx)
+			t, ok := p.d.Planner.Next(produceCtx)
 			if !ok {
 				return
 			}
 			select {
 			case turnCh <- t:
-			case <-ctx.Done():
+			case <-produceCtx.Done():
 				return
 			}
 		}
@@ -273,7 +301,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 			}
 			p.d.Send(StatusMsg{Text: startStatus})
 			start := time.Now()
-			if err := p.produce(ctx, t); err != nil {
+			if err := p.produce(produceCtx, t); err != nil {
 				p.d.Log.Warn("produce error", "turn", t.ID, "err", err)
 				t.SetErr(err)
 				p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d produce: %w", t.ID, err)})
@@ -292,7 +320,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 			}
 			select {
 			case producedCh <- t:
-			case <-ctx.Done():
+			case <-produceCtx.Done():
 				return
 			}
 		}

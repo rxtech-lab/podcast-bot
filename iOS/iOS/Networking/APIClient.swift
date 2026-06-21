@@ -8,12 +8,14 @@ protocol TokenProviding: Sendable {
 
 enum APIError: Error, LocalizedError {
     case notAuthenticated
+    case invalidRequest(String)
     case http(Int, String)
     case decoding(String)
 
     var errorDescription: String? {
         switch self {
         case .notAuthenticated: return "You're signed out. Please sign in again."
+        case let .invalidRequest(msg): return msg
         case let .http(code, msg): return "Request failed (\(code)): \(msg)"
         case let .decoding(msg): return "Couldn't read the server response: \(msg)"
         }
@@ -33,10 +35,10 @@ final class APIClient: Sendable {
         case notReady
     }
 
-    init(baseURL: URL = AppConfig.apiBaseURL, tokens: TokenProviding) {
+    init(baseURL: URL = AppConfig.apiBaseURL, tokens: TokenProviding, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.tokens = tokens
-        self.session = .shared
+        self.session = session
     }
 
     // MARK: - Planning
@@ -49,6 +51,39 @@ final class APIClient: Sendable {
         try await send("POST", "/api/plan/improve", body: req)
     }
 
+    // MARK: - Server-owned discussions
+
+    func discussions() async throws -> [Discussion] {
+        try await get("/api/discussions")
+    }
+
+    func discussion(id: String) async throws -> Discussion {
+        try await get("/api/discussions/\(id)")
+    }
+
+    func planDiscussion(_ req: PlanRequest) async throws -> Discussion {
+        try await send("POST", "/api/discussions/plan", body: req)
+    }
+
+    func improveDiscussion(id: String, instruction: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/improve",
+                       body: DiscussionImproveRequest(instruction: instruction))
+    }
+
+    func generateDiscussion(id: String, language: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/generate",
+                       body: DiscussionGenerateRequest(language: language))
+    }
+
+    func deleteDiscussion(id: String) async throws {
+        _ = try await perform(request(method: "DELETE", path: "/api/discussions/\(id)"))
+    }
+
+    func appendDiscussionLine(id: String, line: DiscussionLineRequest) async throws {
+        let payload = try JSONEncoder().encode(line)
+        _ = try await perform(request(method: "POST", path: "/api/discussions/\(id)/lines", body: payload))
+    }
+
     // MARK: - Jobs
 
     func submitJob(_ req: JobSubmitRequest) async throws -> JobSubmitResponse {
@@ -57,6 +92,15 @@ final class APIClient: Sendable {
 
     func jobStatus(id: String) async throws -> JobStatusDTO {
         try await get("/api/jobs/\(id)")
+    }
+
+    func sendJobMessage(id: String, text: String, username: String, discussionID: String) async throws {
+        let req = JobMessageRequest(text: text, username: username, discussionID: discussionID)
+        try await sendNoContent("POST", "/api/jobs/\(id)/messages", body: req)
+    }
+
+    func forceStopJob(id: String) async throws {
+        try await sendNoContent("POST", "/api/jobs/\(id)/stop", body: EmptyRequest())
     }
 
     /// Persisted transcript snapshot for a running or finished job.
@@ -78,6 +122,28 @@ final class APIClient: Sendable {
 
     func finalAudioURL(jobID: String) -> URL {
         baseURL.appendingPathComponent("api/jobs/\(jobID)/audio")
+    }
+
+    func downloadPodcastAudio(sourceURL: URL?,
+                              jobID: String?,
+                              title: String,
+                              progress: @escaping (Double) -> Void) async throws -> URL {
+        guard let primaryURL = sourceURL ?? jobID.map({ finalAudioURL(jobID: $0) }) else {
+            throw APIError.invalidRequest("Podcast download is not ready yet.")
+        }
+
+        do {
+            return try await downloadPodcastAudio(from: primaryURL,
+                                                  title: title,
+                                                  progress: progress)
+        } catch let error as APIError {
+            if case .http(404, _) = error, sourceURL != nil, let jobID {
+                return try await downloadPodcastAudio(from: finalAudioURL(jobID: jobID),
+                                                      title: title,
+                                                      progress: progress)
+            }
+            throw error
+        }
     }
 
     func hlsPlaylistReady(jobID: String) async -> Bool {
@@ -131,6 +197,67 @@ final class APIClient: Sendable {
 
     // MARK: - Core
 
+    private func downloadPodcastAudio(from url: URL,
+                                      title: String,
+                                      progress: @escaping (Double) -> Void) async throws -> URL {
+        let destinationURL = try podcastDownloadDestination(title: title, sourceURL: url)
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+
+        if shouldAuthenticateDownload(url) {
+            guard let token = await tokens.token() else { throw APIError.notAuthenticated }
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            do {
+                return try await performDownload(req, to: destinationURL, progress: progress)
+            } catch APIError.http(401, _) {
+                guard let fresh = await tokens.refreshedToken() else { throw APIError.notAuthenticated }
+                var retry = URLRequest(url: url)
+                retry.httpMethod = "GET"
+                retry.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                retry.setValue("Bearer \(fresh)", forHTTPHeaderField: "Authorization")
+                return try await performDownload(retry, to: destinationURL, progress: progress)
+            }
+        }
+
+        return try await performDownload(req, to: destinationURL, progress: progress)
+    }
+
+    private func shouldAuthenticateDownload(_ url: URL) -> Bool {
+        url.scheme == baseURL.scheme && url.host == baseURL.host && url.port == baseURL.port
+    }
+
+    private func podcastDownloadDestination(title: String, sourceURL: URL) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PodcastDownloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+        let sanitized = title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+        let baseName = String(sanitized)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " -_"))
+        let name = baseName.isEmpty ? "Podcast" : String(baseName.prefix(80))
+        let ext = sourceURL.pathExtension.isEmpty ? "mp3" : sourceURL.pathExtension
+        return directory
+            .appendingPathComponent(name)
+            .appendingPathExtension(ext)
+    }
+
+    private func performDownload(_ request: URLRequest,
+                                 to destinationURL: URL,
+                                 progress: @escaping (Double) -> Void) async throws -> URL {
+        let delegate = PodcastDownloadDelegate(destinationURL: destinationURL, progress: progress)
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        let downloadSession = URLSession(configuration: .default, delegate: delegate, delegateQueue: queue)
+        defer { downloadSession.finishTasksAndInvalidate() }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            delegate.continuation = continuation
+            downloadSession.downloadTask(with: request).resume()
+        }
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         let (data, _) = try await perform(request(method: "GET", path: path))
         return try decode(data)
@@ -140,6 +267,11 @@ final class APIClient: Sendable {
         let payload = try JSONEncoder().encode(body)
         let (data, _) = try await perform(request(method: method, path: path, body: payload))
         return try decode(data)
+    }
+
+    private func sendNoContent<B: Encodable>(_ method: String, _ path: String, body: B) async throws {
+        let payload = try JSONEncoder().encode(body)
+        _ = try await perform(request(method: method, path: path, body: payload))
     }
 
     private func request(method: String, path: String, body: Data? = nil) -> URLRequest {
@@ -176,5 +308,70 @@ final class APIClient: Sendable {
     private func decode<T: Decodable>(_ data: Data) throws -> T {
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw APIError.decoding(error.localizedDescription) }
+    }
+}
+
+private final class PodcastDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    let destinationURL: URL
+    let progress: (Double) -> Void
+    var continuation: CheckedContinuation<URL, Error>?
+    private var completionResult: Result<URL, Error>?
+
+    init(destinationURL: URL, progress: @escaping (Double) -> Void) {
+        self.destinationURL = destinationURL
+        self.progress = progress
+    }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        progress(min(1, max(0, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))))
+    }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        do {
+            try FileManager.default.createDirectory(
+                at: destinationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            try FileManager.default.copyItem(at: location, to: destinationURL)
+            completionResult = .success(destinationURL)
+        } catch {
+            completionResult = .failure(error)
+        }
+    }
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    didCompleteWithError error: Error?) {
+        if let error {
+            continuation?.resume(throwing: error)
+            continuation = nil
+            return
+        }
+        if let http = task.response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            continuation?.resume(throwing: APIError.http(http.statusCode, HTTPURLResponse.localizedString(forStatusCode: http.statusCode)))
+            continuation = nil
+            return
+        }
+        switch completionResult {
+        case let .success(url):
+            progress(1)
+            continuation?.resume(returning: url)
+        case let .failure(error):
+            continuation?.resume(throwing: error)
+        case .none:
+            continuation?.resume(throwing: APIError.invalidRequest("Download did not produce a file."))
+        }
+        continuation = nil
     }
 }

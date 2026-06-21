@@ -3,23 +3,27 @@ package contentcreator
 import (
 	"sync"
 	"time"
+
+	"github.com/sirily11/debate-bot/internal/llm"
 )
 
 // Tracker tracks elapsed time and per-speaker speaking budget.
 type Tracker struct {
-	mu          sync.RWMutex
-	start       time.Time
-	total       time.Duration
-	perSpeaker  map[string]time.Duration
-	overallUsed time.Duration
+	mu           sync.RWMutex
+	start        time.Time
+	total        time.Duration
+	perSpeaker   map[string]time.Duration
+	overallUsed  time.Duration
+	usageByModel map[string]llm.Usage
 }
 
 // NewTracker starts the clock.
 func NewTracker(total time.Duration) *Tracker {
 	return &Tracker{
-		start:      time.Now(),
-		total:      total,
-		perSpeaker: map[string]time.Duration{},
+		start:        time.Now(),
+		total:        total,
+		perSpeaker:   map[string]time.Duration{},
+		usageByModel: map[string]llm.Usage{},
 	}
 }
 
@@ -61,4 +65,48 @@ func (t *Tracker) FairShare(speakers int) time.Duration {
 		return t.total
 	}
 	return t.total / time.Duration(speakers)
+}
+
+// AddLLMUsage records one completed LLM call.
+func (t *Tracker) AddLLMUsage(u llm.Usage) {
+	if t == nil || u.TotalTokens == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	model := u.Model
+	if model == "" {
+		model = "unknown"
+	}
+	current := t.usageByModel[model]
+	current.Model = model
+	current.PromptTokens += u.PromptTokens
+	current.CompletionTokens += u.CompletionTokens
+	current.TotalTokens += u.TotalTokens
+	if u.CostKnown {
+		current.CostUSD += u.CostUSD
+		current.CostKnown = true
+	}
+	t.usageByModel[model] = current
+}
+
+// LLMSummary returns aggregate LLM token and cost usage for the run.
+func (t *Tracker) LLMSummary() llm.UsageSummary {
+	if t == nil {
+		return llm.UsageSummary{}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := llm.UsageSummary{ByModel: map[string]llm.Usage{}}
+	for model, usage := range t.usageByModel {
+		out.PromptTokens += usage.PromptTokens
+		out.CompletionTokens += usage.CompletionTokens
+		out.TotalTokens += usage.TotalTokens
+		if usage.CostKnown {
+			out.CostUSD += usage.CostUSD
+			out.CostKnown = true
+		}
+		out.ByModel[model] = usage
+	}
+	return out
 }

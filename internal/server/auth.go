@@ -177,6 +177,37 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
+type requestUser struct {
+	ID    string
+	Name  string
+	Email string
+}
+
+func (s *Server) requestUser(r *http.Request) requestUser {
+	if tok := bearerToken(r); tok != "" {
+		sum := sha256.Sum256([]byte(tok))
+		fallback := "bearer:" + hex.EncodeToString(sum[:])
+		if s.oauth != nil {
+			if user, ok := s.oauth.user(r.Context(), tok); ok {
+				id := strings.TrimSpace(user.Subject)
+				if id == "" {
+					id = fallback
+				}
+				return requestUser{ID: "oauth:" + id, Name: user.Name, Email: user.Email}
+			}
+		}
+		if s.d.ServiceToken != "" &&
+			subtle.ConstantTimeCompare([]byte(tok), []byte(s.d.ServiceToken)) == 1 {
+			return requestUser{ID: "service:dashboard", Name: "Dashboard"}
+		}
+		return requestUser{ID: fallback}
+	}
+	if name := usernameFromRequest(r); name != "" {
+		return requestUser{ID: "cookie:" + name, Name: name}
+	}
+	return requestUser{ID: "anonymous", Name: "viewer"}
+}
+
 type loginRequest struct {
 	Password string `json:"password"`
 }

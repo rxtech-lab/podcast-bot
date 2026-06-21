@@ -1,20 +1,25 @@
 import SwiftUI
-import SwiftData
 
 /// Step 2: review/edit the plan. Shows the topic, background, panelists, and
 /// researched sources; edits via a chat box ("Edit using chat") that calls
 /// /api/plan/improve; and generates the audio podcast.
 struct PlanDetailView: View {
     @Environment(AuthManager.self) private var auth
-    @Environment(\.modelContext) private var context
-    @Bindable var discussion: Discussion
+    @State var discussion: Discussion
+    var onGenerated: (Discussion) -> Void = { _ in }
 
     @State private var instruction = ""
+    @State private var selectedLanguage: String
     @State private var isImproving = false
     @State private var isGenerating = false
     @State private var errorMessage: String?
-    @State private var generated: Discussion?
     @State private var editTurns: [PlanEditTurn] = []
+
+    init(discussion: Discussion, onGenerated: @escaping (Discussion) -> Void = { _ in }) {
+        _discussion = State(initialValue: discussion)
+        _selectedLanguage = State(initialValue: DiscussionLanguage.normalized(discussion.script?.language ?? discussion.language))
+        self.onGenerated = onGenerated
+    }
 
     var body: some View {
         ZStack {
@@ -34,15 +39,14 @@ struct PlanDetailView: View {
                 .disabled(isGenerating)
             }
         }
-        .navigationDestination(item: $generated) { d in
-            PodcastPlayerView(discussion: d)
-        }
     }
 
     private var content: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    DiscussionLanguageMenu(selection: $selectedLanguage)
+
                     ForEach(editTurns) { turn in
                         PlanEditBubble(turn: turn)
                             .id(turn.id)
@@ -55,6 +59,7 @@ struct PlanDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onAppear {
                 seedInitialTurnIfNeeded()
                 scrollToLatest(proxy)
@@ -79,9 +84,9 @@ struct PlanDetailView: View {
         editTurns = [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: discussion))]
     }
 
-    private func appendUpdatedPlan(_ response: PlanResponse) {
+    private func appendUpdatedPlan() {
         editTurns.removeAll { $0.role == .loading }
-        editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion, response: response)))
+        editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion)))
     }
 
     private func appendError(_ message: String) {
@@ -115,13 +120,10 @@ struct PlanDetailView: View {
         isImproving = true
         errorMessage = nil
         let api = APIClient(tokens: auth)
-        let prev = Mapping.scriptDTO(from: discussion)
         Task {
             do {
-                let resp = try await api.improve(PlanImproveRequest(previousScript: prev, instruction: text))
-                Mapping.apply(resp, to: discussion, in: context)
-                try? context.save()
-                appendUpdatedPlan(resp)
+                discussion = try await api.improveDiscussion(id: discussion.id, instruction: text)
+                appendUpdatedPlan()
                 isImproving = false
             } catch {
                 isImproving = false
@@ -134,16 +136,11 @@ struct PlanDetailView: View {
         isGenerating = true
         errorMessage = nil
         let api = APIClient(tokens: auth)
-        let script = Mapping.scriptDTO(from: discussion)
         Task {
             do {
-                let resp = try await api.submitJob(JobSubmitRequest(script: script))
-                discussion.jobID = resp.id
-                discussion.status = .generating
-                discussion.updatedAt = Date()
-                try? context.save()
+                discussion = try await api.generateDiscussion(id: discussion.id, language: selectedLanguage)
                 isGenerating = false
-                generated = discussion
+                onGenerated(discussion)
             } catch {
                 isGenerating = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -181,83 +178,6 @@ private struct PlanEditTurn: Identifiable {
     static func error(_ message: String) -> PlanEditTurn {
         PlanEditTurn(role: .error, label: nil, text: message, snapshot: nil)
     }
-}
-
-private struct PlanSnapshot {
-    let title: String
-    let topic: String
-    let background: String
-    let people: [PlanPersonSnapshot]
-    let sources: [PlanSourceSnapshot]
-
-    init(discussion: Discussion) {
-        title = discussion.title
-        topic = discussion.topic
-        background = discussion.background
-        people = discussion.sortedPeople.map(PlanPersonSnapshot.init)
-        sources = discussion.sortedSources.map(PlanSourceSnapshot.init)
-    }
-
-    init(discussion: Discussion, response: PlanResponse) {
-        let script = response.script
-        title = script.title
-        topic = discussion.topic
-        background = script.background ?? discussion.background
-
-        var nextPeople: [PlanPersonSnapshot] = []
-        if let host = script.host, !host.name.isEmpty {
-            nextPeople.append(PlanPersonSnapshot(name: host.name, aspect: "Moderator", isHost: true))
-        }
-        nextPeople.append(contentsOf: (script.discussants ?? []).map {
-            PlanPersonSnapshot(name: $0.name, aspect: $0.aspect ?? "", isHost: false)
-        })
-        people = nextPeople
-
-        let dtoSources = response.sources ?? script.sources ?? []
-        sources = dtoSources.map {
-            PlanSourceSnapshot(title: $0.title, urlString: $0.url, snippet: $0.snippet ?? "")
-        }
-    }
-}
-
-private struct PlanPersonSnapshot: Identifiable {
-    let id = UUID()
-    let name: String
-    let aspect: String
-    let isHost: Bool
-
-    init(_ person: Person) {
-        name = person.name
-        aspect = person.aspect
-        isHost = person.isHost
-    }
-
-    init(name: String, aspect: String, isHost: Bool) {
-        self.name = name
-        self.aspect = aspect
-        self.isHost = isHost
-    }
-}
-
-private struct PlanSourceSnapshot: Identifiable {
-    let id = UUID()
-    let title: String
-    let urlString: String
-    let snippet: String
-
-    init(_ source: SourceRef) {
-        title = source.title
-        urlString = source.urlString
-        snippet = source.snippet
-    }
-
-    init(title: String, urlString: String, snippet: String) {
-        self.title = title
-        self.urlString = urlString
-        self.snippet = snippet
-    }
-
-    var url: URL? { URL(string: urlString) }
 }
 
 private struct PlanEditBubble: View {
@@ -312,97 +232,5 @@ private struct PlanEditBubble: View {
                 .padding(.vertical, 11)
                 .background(Color.red.opacity(0.12), in: .rect(cornerRadius: 20))
         }
-    }
-}
-
-private struct PlanSnapshotCard: View {
-    let label: String
-    let snapshot: PlanSnapshot
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(label.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(Theme.accent)
-                if !snapshot.title.isEmpty {
-                    Text(snapshot.title)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                }
-                if !snapshot.topic.isEmpty {
-                    Text("Topic: \(snapshot.topic)")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryText)
-                }
-            }
-
-            if !snapshot.background.isEmpty {
-                MarkdownText(snapshot.background)
-                    .font(.body)
-                    .foregroundStyle(Theme.secondaryText)
-            }
-
-            if !snapshot.people.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Panelists").font(.headline)
-                    ForEach(snapshot.people) { person in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 8) {
-                                Image(systemName: person.isHost ? "person.wave.2.fill" : "person.fill")
-                                    .foregroundStyle(Theme.accent)
-                                    .frame(width: 20)
-                                Text(person.name)
-                                    .font(.body.weight(.semibold))
-                            }
-                            if !person.aspect.isEmpty {
-                                Text(person.aspect)
-                                    .font(.subheadline)
-                                    .foregroundStyle(Theme.secondaryText)
-                                    .padding(.leading, 28)
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !snapshot.sources.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Sources").font(.headline)
-                    ForEach(snapshot.sources) { source in
-                        sourceRow(source)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func sourceRow(_ source: PlanSourceSnapshot) -> some View {
-        if let url = source.url {
-            Link(destination: url) {
-                sourceContent(source)
-            }
-        } else {
-            sourceContent(source)
-        }
-    }
-
-    private func sourceContent(_ source: PlanSourceSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(source.title.isEmpty ? source.urlString : source.title)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white)
-            if !source.snippet.isEmpty {
-                Text(source.snippet)
-                    .font(.caption)
-                    .foregroundStyle(Theme.secondaryText)
-                    .lineLimit(3)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.white.opacity(0.05), in: .rect(cornerRadius: 14))
     }
 }

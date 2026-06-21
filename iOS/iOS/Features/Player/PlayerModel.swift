@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import AVFoundation
 import MediaPlayer
-import SwiftData
 
 /// One transcript bubble shown in the player. While an utterance streams it is
 /// updated in place; when `done` it is finalized (and persisted).
@@ -66,6 +65,11 @@ struct VTTCue: Equatable {
     var text: String
 }
 
+struct DownloadedPodcastFile: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+}
+
 /// Drives the live podcast experience: streams the audio (live HLS while
 /// generating, final MP3 when ready), surfaces the per-agent transcript over the
 /// job WebSocket, polls live captions, and tracks job completion.
@@ -73,10 +77,10 @@ struct VTTCue: Equatable {
 @Observable
 final class PlayerModel {
     nonisolated static let liveCaptionLeadSeconds = 1.5
+    nonisolated static let autoplayAdvanceThresholdSeconds = 0.15
 
-    let discussion: Discussion
+    var discussion: Discussion
     private let api: APIClient
-    private let context: ModelContext
     private let username: String
 
     let player = AVPlayer()
@@ -86,26 +90,52 @@ final class PlayerModel {
     var elapsedTime: Double = 0
     var remainingTime: Double = 0
     var caption: String = ""
+    var captionSpeaker: String = ""
     var phaseLabel: String = ""
     var statusText: String = ""
+    var usageSummaryText: String = ""
+    var isForceStopping = false
     var isFinished = false
     var downloadURL: URL?
+    var isDownloadingPodcast = false
+    var downloadProgress = 0.0
+    var downloadErrorText: String?
+    var showsDownloadDialog = false
+    var downloadedPodcastFile: DownloadedPodcastFile?
     var lines: [LiveLine] = []
     var transcriptScrollToken: TranscriptScrollToken {
         TranscriptScrollToken.make(for: lines)
+    }
+    var canForceStop: Bool {
+        discussion.status == .generating && !isFinished && !isForceStopping && discussion.jobID != nil
+    }
+    var showsForceStopAction: Bool {
+        discussion.status == .generating && !isFinished && discussion.jobID != nil
+    }
+    var isReadyForDownload: Bool {
+        discussion.status == .ready || (isFinished && downloadURL != nil)
+    }
+    var canDownloadPodcast: Bool {
+        isReadyForDownload && (downloadURL != nil || discussion.jobID != nil)
+    }
+    var showsPodcastActions: Bool {
+        showsForceStopAction || canDownloadPodcast
+    }
+    var canSeek: Bool {
+        !usesLiveCaptionTiming && duration > 0
     }
 
     private var socket: JobSocket?
     private var timeObserver: Any?
     private var remoteCommandTargets: [Any] = []
     private var usesLiveCaptionTiming = false
+    private var autoplayRequested = false
     private var cues: [VTTCue] = []
     private var tasks: [Task<Void, Never>] = []
 
-    init(discussion: Discussion, api: APIClient, context: ModelContext, username: String) {
+    init(discussion: Discussion, api: APIClient, username: String) {
         self.discussion = discussion
         self.api = api
-        self.context = context
         self.username = username
     }
 
@@ -116,6 +146,7 @@ final class PlayerModel {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true)
         }
         if let s = discussion.downloadURLString { downloadURL = URL(string: s) }
+        usageSummaryText = discussion.usageSummaryText ?? ""
         guard let jobID = discussion.jobID else { return }
 
         configureRemoteCommands()
@@ -156,8 +187,74 @@ final class PlayerModel {
         guard !trimmed.isEmpty else { return }
         let line = LiveLine(speaker: username, role: "user", text: trimmed, isUser: true, done: true)
         lines.append(line)
-        persistIfNeeded(line: line)
-        Task { await socket?.send(text: trimmed, username: username) }
+        let jobID = discussion.jobID
+        persistIfNeeded(line: line, syncRemote: jobID == nil)
+        guard let jobID else { return }
+        Task {
+            do {
+                try await api.sendJobMessage(id: jobID,
+                                            text: trimmed,
+                                            username: username,
+                                            discussionID: discussion.id)
+            } catch {
+                try? await api.appendDiscussionLine(
+                    id: discussion.id,
+                    line: DiscussionLineRequest(speaker: username,
+                                                role: "user",
+                                                side: nil,
+                                                text: trimmed,
+                                                startMS: 0,
+                                                isUser: true)
+                )
+            }
+        }
+    }
+
+    func forceStop() {
+        guard canForceStop, let jobID = discussion.jobID else { return }
+        isForceStopping = true
+        statusText = "Stopping and finalising upload..."
+        updateNowPlayingInfo()
+        Task {
+            do {
+                try await api.forceStopJob(id: jobID)
+            } catch {
+                isForceStopping = false
+                statusText = "Stop failed: \(error.localizedDescription)"
+                updateNowPlayingInfo()
+            }
+        }
+    }
+
+    func downloadPodcast() {
+        guard canDownloadPodcast, !isDownloadingPodcast else { return }
+        isDownloadingPodcast = true
+        downloadProgress = 0
+        downloadErrorText = nil
+        showsDownloadDialog = true
+
+        Task {
+            do {
+                let file = try await api.downloadPodcastAudio(
+                    sourceURL: downloadURL,
+                    jobID: discussion.jobID,
+                    title: discussion.displayTitle
+                ) { [weak self] progress in
+                    Task { @MainActor in
+                        self?.downloadProgress = progress
+                    }
+                }
+                isDownloadingPodcast = false
+                downloadProgress = 1
+                showsDownloadDialog = false
+                try? await Task.sleep(for: .milliseconds(250))
+                downloadedPodcastFile = DownloadedPodcastFile(url: file)
+            } catch {
+                isDownloadingPodcast = false
+                downloadErrorText = error.localizedDescription
+                showsDownloadDialog = true
+            }
+        }
     }
 
     // MARK: - Playback
@@ -213,18 +310,20 @@ final class PlayerModel {
     }
 
     private func play() {
+        autoplayRequested = true
         player.play()
         isPlaying = true
         updateNowPlayingInfo()
     }
 
     private func pause() {
+        autoplayRequested = false
         player.pause()
         isPlaying = false
         updateNowPlayingInfo()
     }
 
-    private func seek(to seconds: Double) {
+    func seek(to seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         player.seek(to: time)
@@ -255,6 +354,8 @@ final class PlayerModel {
         }
         let asset = AVURLAsset(url: url, options: options)
         let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = useFinalAudio ? 0 : 4
+        player.automaticallyWaitsToMinimizeStalling = true
         player.replaceCurrentItem(with: item)
 
         if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -269,11 +370,48 @@ final class PlayerModel {
             self.updateCaption(at: self.currentTime)
             self.updateNowPlayingInfo()
         }
+        let autoplayStartTime = Self.validPlaybackTime(player.currentTime().seconds) ?? 0
         play()
+        tasks.append(Task { await retryAutoplay(from: autoplayStartTime) })
+    }
+
+    private func retryAutoplay(from startTime: Double) async {
+        for delay in [0.25, 0.75, 1.5, 3.0, 5.0] {
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .seconds(delay))
+            guard autoplayRequested else { return }
+            let current = Self.validPlaybackTime(player.currentTime().seconds) ?? startTime
+            if Self.playbackHasAdvanced(from: startTime, to: current) {
+                isPlaying = true
+                updateNowPlayingInfo()
+                return
+            }
+            player.play()
+            isPlaying = true
+            updateNowPlayingInfo()
+        }
+    }
+
+    nonisolated static func validPlaybackTime(_ seconds: Double) -> Double? {
+        seconds.isFinite && seconds >= 0 ? seconds : nil
+    }
+
+    nonisolated static func playbackHasAdvanced(from startTime: Double, to currentTime: Double) -> Bool {
+        guard let start = validPlaybackTime(startTime),
+              let current = validPlaybackTime(currentTime) else {
+            return false
+        }
+        return current - start >= autoplayAdvanceThresholdSeconds
     }
 
     private func updateCaption(at time: Double) {
-        caption = Self.captionText(in: cues, at: captionLookupTime(playbackTime: time))
+        if let cue = Self.captionCue(in: cues, at: captionLookupTime(playbackTime: time)) {
+            caption = cue.text
+            captionSpeaker = Self.captionSpeaker(for: cue.text, in: lines) ?? ""
+        } else {
+            caption = ""
+            captionSpeaker = ""
+        }
         updateNowPlayingInfo()
     }
 
@@ -286,7 +424,27 @@ final class PlayerModel {
     }
 
     nonisolated static func captionText(in cues: [VTTCue], at time: Double) -> String {
-        cues.first(where: { time >= $0.start && time <= $0.end })?.text ?? ""
+        captionCue(in: cues, at: time)?.text ?? ""
+    }
+
+    nonisolated static func captionCue(in cues: [VTTCue], at time: Double) -> VTTCue? {
+        cues.first(where: { time >= $0.start && time <= $0.end })
+    }
+
+    nonisolated static func captionSpeaker(for caption: String, in lines: [LiveLine]) -> String? {
+        let needle = normalizedCaptionMatchText(caption)
+        guard !needle.isEmpty else { return nil }
+        return lines.last(where: { line in
+            !line.isUser && normalizedCaptionMatchText(line.text).contains(needle)
+        })?.speaker
+    }
+
+    private nonisolated static func normalizedCaptionMatchText(_ raw: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars where CharacterSet.alphanumerics.contains(scalar) {
+            scalars.append(scalar)
+        }
+        return String(scalars).lowercased()
     }
 
     // MARK: - Live transcript (WebSocket)
@@ -332,28 +490,42 @@ final class PlayerModel {
         persistIfNeeded(line: line, startMs: Int(currentTime * 1000))
     }
 
-    private func persistIfNeeded(line: LiveLine, startMs: Int = 0) {
+    private func persistIfNeeded(line: LiveLine, startMs: Int = 0, syncRemote: Bool = true) {
         persistIfNeeded(speaker: line.speaker,
                         role: line.role,
                         text: line.text,
                         startMs: startMs,
-                        isUser: line.isUser)
+                        isUser: line.isUser,
+                        syncRemote: syncRemote)
     }
 
-    private func persistIfNeeded(speaker: String, role: String, text: String, startMs: Int = 0, isUser: Bool) {
+    private func persistIfNeeded(speaker: String,
+                                 role: String,
+                                 text: String,
+                                 startMs: Int = 0,
+                                 isUser: Bool,
+                                 syncRemote: Bool = true) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let exists = discussion.sortedLines.contains {
             $0.speaker == speaker && $0.role == role && $0.text == trimmed && $0.isUser == isUser
         }
         guard !exists else { return }
-        let model = TranscriptLine(ordinal: discussion.sortedLines.count,
-                                   speaker: speaker, role: role,
-                                   text: trimmed, startMs: startMs, isUser: isUser)
-        model.discussion = discussion
-        context.insert(model)
-        discussion.updatedAt = Date()
-        try? context.save()
+        let dto = DiscussionLineDTO(speaker: speaker, role: role, side: nil,
+                                    text: trimmed, startMS: startMs, isUser: isUser)
+        discussion.lines = (discussion.lines ?? []) + [dto]
+        guard syncRemote else { return }
+        Task {
+            try? await api.appendDiscussionLine(
+                id: discussion.id,
+                line: DiscussionLineRequest(speaker: speaker,
+                                            role: role,
+                                            side: nil,
+                                            text: trimmed,
+                                            startMS: startMs,
+                                            isUser: isUser)
+            )
+        }
     }
 
     private func loadTranscriptSnapshot(jobID: String) async {
@@ -406,26 +578,65 @@ final class PlayerModel {
         while !Task.isCancelled && !isFinished {
             if let job = try? await api.jobStatus(id: jobID) {
                 phaseLabel = job.phase_label ?? phaseLabel
+                applyUsageSummary(job)
                 updateJobProgress(elapsedMS: job.elapsed_ms, remainingMS: job.remaining_ms)
                 if job.isDone {
+                    isForceStopping = false
                     isFinished = true
                     discussion.status = .ready
                     if let url = job.download_url {
                         downloadURL = URL(string: url)
                         discussion.downloadURLString = url
                     }
-                    discussion.updatedAt = Date()
-                    try? context.save()
+                    await switchToFinalAudioIfNeeded(jobID: jobID)
                     return
                 } else if job.isError {
+                    isForceStopping = false
                     isFinished = true
                     statusText = job.error ?? "Generation failed"
                     discussion.status = .failed
-                    try? context.save()
                     return
                 }
             }
             try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    private func switchToFinalAudioIfNeeded(jobID: String) async {
+        guard usesLiveCaptionTiming else { return }
+        let resumeTime = currentTime
+        let shouldResume = isPlaying || autoplayRequested
+        await loadFinalCaptions(jobID: jobID)
+
+        var options: [String: Any] = [:]
+        if let token = await api.currentToken() {
+            options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
+        }
+        let asset = AVURLAsset(url: api.finalAudioURL(jobID: jobID), options: options)
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 0
+        player.replaceCurrentItem(with: item)
+        usesLiveCaptionTiming = false
+
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+            guard let self else { return }
+            let secs = t.seconds
+            self.currentTime = secs.isFinite ? secs : 0
+            if let dur = self.player.currentItem?.duration.seconds, dur.isFinite, dur > 0 {
+                self.duration = dur
+            }
+            self.updateCaption(at: self.currentTime)
+            self.updateNowPlayingInfo()
+        }
+        if resumeTime > 0 {
+            seek(to: resumeTime)
+        }
+        if shouldResume {
+            play()
+        } else {
+            pause()
         }
     }
 
@@ -437,6 +648,17 @@ final class PlayerModel {
             remainingTime = Double(remainingMS) / 1000
         }
         updateNowPlayingInfo()
+    }
+
+    private func applyUsageSummary(_ job: JobStatusDTO) {
+        guard let text = job.usageSummaryText, !text.isEmpty else { return }
+        usageSummaryText = text
+        discussion.promptTokens = job.prompt_tokens
+        discussion.completionTokens = job.completion_tokens
+        discussion.totalTokens = job.total_tokens
+        discussion.llmCostUSD = job.llm_cost_usd
+        discussion.llmCostKnown = job.llm_cost_known
+        statusText = text
     }
 
     private func updateNowPlayingInfo() {
@@ -463,13 +685,16 @@ final class PlayerModel {
     }
 
     private var nowPlayingTitle: String {
-        if !discussion.title.isEmpty { return discussion.title }
+        if !discussion.displayTitle.isEmpty { return discussion.displayTitle }
         if !discussion.topic.isEmpty { return discussion.topic }
         return "Podcast"
     }
 
     private var nowPlayingSubtitle: String {
-        if !caption.isEmpty { return caption }
+        if !caption.isEmpty {
+            if !captionSpeaker.isEmpty { return "\(captionSpeaker): \(caption)" }
+            return caption
+        }
         if !phaseLabel.isEmpty { return phaseLabel }
         if !statusText.isEmpty { return statusText }
         return "Debate Bot"
