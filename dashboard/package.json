@@ -24,7 +24,7 @@
     "hls.js": "^1.5.18",
     "lucide-react": "^0.469.0",
     "next": "^15.5.19",
-    "next-auth": "5.0.0-beta.25",
+    "next-auth": "5.0.0-beta.30",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "tailwind-merge": "^2.6.0",
