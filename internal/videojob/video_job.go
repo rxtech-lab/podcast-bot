@@ -29,6 +29,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/series"
 	"github.com/sirily11/debate-bot/internal/server"
+	"github.com/sirily11/debate-bot/internal/storage"
 	"github.com/sirily11/debate-bot/internal/video"
 )
 
@@ -49,6 +50,9 @@ type Deps struct {
 	Jobs   *server.JobRegistry
 	Queue  Queue
 	Log    *slog.Logger
+	// Uploader, when enabled, pushes the finished mp4 to S3 after stitching.
+	// nil / disabled leaves the video on local disk.
+	Uploader *storage.Uploader
 }
 
 // Submit validates the request synchronously and enqueues the run.
@@ -261,6 +265,12 @@ func run(ctx context.Context, deps Deps, jobID string,
 	}
 	defer orch.Shutdown()
 
+	// Expose the live orchestrator so the WebSocket endpoint can inject
+	// viewer participation messages into this in-flight run. Cleared when the
+	// run exits so the entry never outlives the orchestrator.
+	deps.Jobs.SetOrch(jobID, orch)
+	defer deps.Jobs.ClearOrch(jobID)
+
 	// Pre-activate the series stage so the brief window between
 	// TopicMsg send and stage activation doesn't render through the
 	// debate idle card (mirrors the stream-mode behavior).
@@ -443,12 +453,30 @@ func run(ctx context.Context, deps Deps, jobID string,
 		}
 	}
 
+	// Upload the finished mp4 to object storage when configured, so the
+	// dashboard can hand users a presigned download link instead of streaming
+	// off the engine's disk. Failure is non-fatal — the local file remains
+	// servable.
+	var s3Key string
+	if deps.Uploader.Enabled() {
+		status("uploading to S3...")
+		key := deps.Uploader.Key(jobID + ".mp4")
+		if err := deps.Uploader.Upload(ctx, mp4Path, key); err != nil {
+			logger.Error("s3 upload failed", "err", err)
+			status("S3 upload failed (serving from disk)")
+		} else {
+			s3Key = key
+			status("uploaded to S3")
+		}
+	}
+
 	status("done")
 
 	deps.Jobs.Update(jobID, func(j *server.Job) {
 		j.Status = server.JobDone
 		j.VideoPath = mp4Path
 		j.HasVideo = true
+		j.S3Key = s3Key
 		if archivePath != "" {
 			j.ArchivePath = archivePath
 			j.HasArchive = true

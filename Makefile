@@ -82,3 +82,7 @@ series-smoke:
 # and <show>-ep2-s01e02.mp4.
 series-recap-smoke:
 	go run ./cmd/series-recap-smoke
+
+
+dashboard-engine:
+	go run ./cmd/debate-bot server --mode dashboard --addr :8000

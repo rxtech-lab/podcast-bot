@@ -42,11 +42,15 @@ func (s *Server) requestAuthed(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.authTok)) == 1
 }
 
-// withAuth wraps the mux so every /api/* route requires a valid auth cookie.
+// withAuth wraps the mux so every /api/* route requires authorization.
 // Exceptions (always reachable so the login screen can render and submit):
 //   - POST /api/login           — the credential exchange itself
 //   - GET  /api/config          — tells the SPA that auth is required
 //   - any non-/api/ path        — the embedded SPA shell + JS/CSS bundle
+//
+// A request is authorized if it carries a valid password cookie (human SPA
+// users) OR a valid `Authorization: Bearer <ServiceToken>` header (the
+// dashboard backend). Either mechanism alone is sufficient.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/login" || r.URL.Path == "/api/config" ||
@@ -54,12 +58,38 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !s.requestAuthed(r) {
+		if !s.requestAuthorized(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// requestAuthorized reports whether the request may reach a protected route,
+// via the password cookie or the service-token bearer header.
+func (s *Server) requestAuthorized(r *http.Request) bool {
+	if s.authEnabled() && s.requestAuthed(r) {
+		return true
+	}
+	if s.d.ServiceToken != "" {
+		if tok := bearerToken(r); tok != "" &&
+			subtle.ConstantTimeCompare([]byte(tok), []byte(s.d.ServiceToken)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// bearerToken extracts the token from an `Authorization: Bearer <token>`
+// header, or "" when absent/malformed.
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(h) > len(prefix) && strings.EqualFold(h[:len(prefix)], prefix) {
+		return strings.TrimSpace(h[len(prefix):])
+	}
+	return ""
 }
 
 type loginRequest struct {

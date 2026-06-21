@@ -228,10 +228,36 @@ type SoundCueMsg struct {
 	Mode      SoundCueMode
 }
 
+// AgentActivity enumerates what an agent is doing at a moment in time, so the
+// dashboard can light up the corresponding node in its live diagram.
+type AgentActivity string
+
+const (
+	ActivitySearching AgentActivity = "searching" // calling a web/research tool
+	ActivityMemory    AgentActivity = "memory"    // taking notes / data-store
+	ActivitySpeaking  AgentActivity = "speaking"  // producing its turn
+	ActivityDirecting AgentActivity = "directing" // commander deciding/rendering visuals + music
+	ActivityIdle      AgentActivity = "idle"      // waiting
+)
+
+// AgentActivityMsg reports a per-agent status change. It rides the same bus as
+// every other event and is exposed to both SSE and WebSocket clients, so the
+// dashboard's read-only diagram can show which agent is searching, taking
+// memory, or speaking in realtime.
+type AgentActivityMsg struct {
+	ChannelID string
+	Agent     string
+	Role      string
+	Activity  AgentActivity
+	Detail    string
+}
+
 // MsgChannelID extracts the channel id from any debate event message. Returns
 // "" for unknown types (which are treated as broadcast by per-channel filters).
 func MsgChannelID(v any) string {
 	switch m := v.(type) {
+	case AgentActivityMsg:
+		return m.ChannelID
 	case TranscriptMsg:
 		return m.ChannelID
 	case TickMsg:
@@ -265,6 +291,9 @@ func MsgChannelID(v any) string {
 // Unknown types are returned unchanged.
 func StampChannelID(v any, id string) any {
 	switch m := v.(type) {
+	case AgentActivityMsg:
+		m.ChannelID = id
+		return m
 	case TranscriptMsg:
 		m.ChannelID = id
 		return m

@@ -33,7 +33,20 @@ type Base struct {
 
 	transcript TranscriptProvider
 	mu         sync.Mutex
+
+	// emit reports this agent's activity changes (searching / taking memory /
+	// idle) so the orchestrator can fan them onto the event bus. Supplied by
+	// the orchestrator via SetActivityEmitter; nil (the default) is a no-op so
+	// CLI runs and tests are unaffected. Kept as a plain string callback to
+	// keep the agent package free of the content_creator event types (which
+	// already depend on agent).
+	emit ActivityEmitter
 }
+
+// ActivityEmitter receives an agent's activity transitions. activity is one of
+// "searching" / "memory" / "speaking" / "idle"; detail is an optional hint
+// (e.g. the tool name).
+type ActivityEmitter func(activity, detail string)
 
 // NewBase creates a Base.
 func NewBase(name string, role Role, llmC *llm.Client, mem *memory.Memory,
@@ -68,6 +81,33 @@ func (b *Base) Tools() *tools.Registry {
 	return b.reg
 }
 func (b *Base) Memory() *memory.Memory { return b.mem }
+
+// SetActivityEmitter wires the orchestrator's activity sink. Safe to call with
+// nil to disable.
+func (b *Base) SetActivityEmitter(fn ActivityEmitter) { b.emit = fn }
+
+// EmitActivity reports an activity transition, no-op when no emitter is set.
+// Exported so the orchestrator can stamp "speaking"/"idle" at turn boundaries.
+func (b *Base) EmitActivity(activity, detail string) {
+	if b.emit != nil {
+		b.emit(activity, detail)
+	}
+}
+
+// classifyToolActivity maps a tool name to the activity it represents so the
+// diagram can distinguish "searching the web" from "saving a note".
+func classifyToolActivity(name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case strings.Contains(n, "note"), strings.Contains(n, "memory"),
+		strings.Contains(n, "data_store"), strings.Contains(n, "store"):
+		return "memory"
+	default:
+		// look_up_quote, firecrawl/web search, and any MCP tool read as
+		// "searching" — the agent is gathering information.
+		return "searching"
+	}
+}
 
 // MemoryRead returns the agent's memory.md contents for inclusion in the next
 // SpeakPrompt. Read errors are swallowed (returning "") because a missing or
@@ -209,7 +249,12 @@ func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*ll
 	hist := []llm.Message{{Role: llm.RoleUser, Content: user}}
 	return b.llmC.StreamWithTools(ctx, system, hist, b.reg.AsOpenAIParams(),
 		func(ctx context.Context, name, jsonArgs string) (string, error) {
-			return b.reg.Dispatch(ctx, name, jsonArgs, b)
+			// Light up the diagram while a tool runs, then return to the
+			// agent's prevailing "speaking" state once it completes.
+			b.EmitActivity(classifyToolActivity(name), name)
+			res, err := b.reg.Dispatch(ctx, name, jsonArgs, b)
+			b.EmitActivity("speaking", "")
+			return res, err
 		})
 }
 

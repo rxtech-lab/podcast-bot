@@ -41,6 +41,23 @@ type Env struct {
 
 	OutDir string
 
+	// DashboardOrigins lists the browser origins permitted to call the API
+	// cross-origin (the separately-hosted dashboard). Comma-separated in the
+	// DASHBOARD_ORIGINS env var; empty leaves CORS disabled.
+	DashboardOrigins []string
+
+	// DashboardServiceToken, when set (DASHBOARD_SERVICE_TOKEN), lets the
+	// dashboard's backend authenticate to the API with a bearer token instead
+	// of the human password cookie. Never exposed to browsers.
+	DashboardServiceToken string
+
+	// S3 settings for uploading finished videos. When S3Bucket is empty the
+	// engine keeps serving videos from local disk (no upload).
+	S3Bucket   string
+	S3Region   string
+	S3Endpoint string
+	S3Prefix   string
+
 	// PersistentRoot is the non-session base directory for cross-run
 	// archives — today only the series content type uses it (every
 	// episode writes its assets to
@@ -76,6 +93,14 @@ func LoadEnv() (*Env, error) {
 		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		OutDir:             strings.TrimSpace(os.Getenv("OUT_DIR")),
 		PersistentRoot:     strings.TrimSpace(os.Getenv("SERIES_ROOT")),
+
+		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
+		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
+
+		S3Bucket:   strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		S3Region:   strings.TrimSpace(os.Getenv("S3_REGION")),
+		S3Endpoint: strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
+		S3Prefix:   strings.TrimSpace(os.Getenv("S3_PREFIX")),
 	}
 
 	if e.CompressionBaseURL == "" {
@@ -121,6 +146,21 @@ func LoadEnv() (*Env, error) {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}
 	return e, nil
+}
+
+// splitCSV parses a comma-separated env value into a trimmed, non-empty slice.
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ErrEnvNotLoaded is returned when an Env was expected but not initialised.
