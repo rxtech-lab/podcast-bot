@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: debate-bot
+
+resources:
+  - 00-namespace.yaml
+  - 10-deployment.yaml
+  - 20-service.yaml
+  - 30-ingress.yaml
+
+images:
+  - name: ghcr.io/rxtech-lab/podcast-bot
+    newName: ghcr.io/rxtech-lab/podcast-bot
+    newTag: sha-590cd5b

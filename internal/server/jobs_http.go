@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 )
@@ -315,10 +317,9 @@ func (s *Server) handleJobAudio(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, j.AudioPath)
 }
 
-// handleJobTranscript returns a job's transcript as structured JSON. While the
-// orchestrator is live it serves the in-memory snapshot; after completion or a
-// server restart it falls back to the job's session.db so native clients can
-// backfill missed transcript lines into their local store.
+// handleJobTranscript returns a job's transcript as structured JSON. It merges
+// native discussion rows, the per-job session.db, and any live orchestrator
+// snapshot so reloads never lose lines just because one source is partial.
 func (s *Server) handleJobTranscript(w http.ResponseWriter, r *http.Request) {
 	if s.d.Jobs == nil {
 		http.Error(w, "video mode not configured", http.StatusInternalServerError)
@@ -331,32 +332,130 @@ func (s *Server) handleJobTranscript(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if orch := s.d.Jobs.Orch(id); orch != nil {
-		writeTranscript(w, orch.Transcript.Snapshot())
+		writeTranscript(w, s.mergedJobTranscript(r, id, orch.Transcript.Snapshot()))
 		return
 	}
 	if s.d.Jobs.Get(id) == nil {
 		if recovered := s.recoverJob(id); recovered == nil {
+			if lines := s.mergedJobTranscript(r, id, nil); len(lines) > 0 {
+				writeTranscript(w, lines)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
 	}
-	if s.d.UploadRoot == "" {
-		writeTranscript(w, nil)
+	if lines := s.mergedJobTranscript(r, id, nil); len(lines) > 0 {
+		writeTranscript(w, lines)
 		return
 	}
-	jobDir := s.jobArtifactDir(id)
+	writeTranscript(w, nil)
+}
+
+func (s *Server) mergedJobTranscript(r *http.Request, jobID string, live []agent.TranscriptLine) []agent.TranscriptLine {
+	live = normalizedTranscriptLines(live)
+	if disk := s.jobDiskTranscript(jobID); len(disk) > 0 {
+		return appendTranscriptSuffix(disk, live)
+	}
+	if len(live) > 0 {
+		return live
+	}
+	return s.nativeDiscussionTranscript(r, jobID)
+}
+
+func (s *Server) jobDiskTranscript(jobID string) []agent.TranscriptLine {
+	jobDir := s.jobArtifactDir(jobID)
 	if jobDir == "" {
-		writeTranscript(w, nil)
-		return
+		return nil
 	}
 	dbPath := filepath.Join(jobDir, "session.db")
 	lines, err := contentcreator.LoadSnapshot(dbPath)
 	if err != nil {
-		s.logger().Warn("job transcript disk load failed", "job", id, "path", dbPath, "err", err)
-		writeTranscript(w, nil)
-		return
+		if !errors.Is(err, contentcreator.ErrNoStore) {
+			s.logger().Warn("job transcript disk load failed", "job", jobID, "path", dbPath, "err", err)
+		}
+		return nil
 	}
-	writeTranscript(w, lines)
+	return normalizedTranscriptLines(lines)
+}
+
+func (s *Server) nativeDiscussionTranscript(r *http.Request, jobID string) []agent.TranscriptLine {
+	if s.d.Discussions == nil {
+		return nil
+	}
+	lines, err := s.d.Discussions.LinesByJob(r.Context(), jobID)
+	if err != nil {
+		s.logger().Warn("job transcript discussion db load failed", "job", jobID, "err", err)
+		return nil
+	}
+	out := make([]agent.TranscriptLine, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, agent.TranscriptLine{
+			Speaker: strings.TrimSpace(line.Speaker),
+			Role:    agent.Role(strings.TrimSpace(line.Role)),
+			Side:    strings.TrimSpace(line.Side),
+			Text:    line.Text,
+		})
+	}
+	return normalizedTranscriptLines(out)
+}
+
+func normalizedTranscriptLines(lines []agent.TranscriptLine) []agent.TranscriptLine {
+	out := make([]agent.TranscriptLine, 0, len(lines))
+	for _, line := range lines {
+		line.Speaker = strings.TrimSpace(line.Speaker)
+		line.Side = strings.TrimSpace(line.Side)
+		line.Text = strings.TrimSpace(line.Text)
+		if line.Text == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func appendTranscriptSuffix(base, live []agent.TranscriptLine) []agent.TranscriptLine {
+	if len(base) == 0 {
+		return append([]agent.TranscriptLine(nil), live...)
+	}
+	out := append([]agent.TranscriptLine(nil), base...)
+	if len(live) == 0 {
+		return out
+	}
+	overlap := transcriptOverlap(base, live)
+	return append(out, live[overlap:]...)
+}
+
+func transcriptOverlap(base, next []agent.TranscriptLine) int {
+	max := len(base)
+	if len(next) < max {
+		max = len(next)
+	}
+	for n := max; n > 0; n-- {
+		if transcriptSequencesEqual(base[len(base)-n:], next[:n]) {
+			return n
+		}
+	}
+	return 0
+}
+
+func transcriptSequencesEqual(a, b []agent.TranscriptLine) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !sameTranscriptLine(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameTranscriptLine(a, b agent.TranscriptLine) bool {
+	return strings.TrimSpace(a.Speaker) == strings.TrimSpace(b.Speaker) &&
+		strings.TrimSpace(string(a.Role)) == strings.TrimSpace(string(b.Role)) &&
+		strings.TrimSpace(a.Side) == strings.TrimSpace(b.Side) &&
+		strings.TrimSpace(a.Text) == strings.TrimSpace(b.Text)
 }
 
 // handleJobSubtitles serves the WebVTT sidecar the pipeline writes next to the

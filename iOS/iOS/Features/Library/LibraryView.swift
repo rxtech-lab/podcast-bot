@@ -120,7 +120,7 @@ struct LibraryView: View {
             discussions = items
             canLoadMore = items.count == pageSize
         } catch {
-            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            reportLoadError(error)
         }
     }
 
@@ -134,7 +134,7 @@ struct LibraryView: View {
             discussions.append(contentsOf: items.filter { !existing.contains($0.id) })
             canLoadMore = items.count == pageSize
         } catch {
-            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            reportLoadError(error)
         }
     }
 
@@ -149,12 +149,17 @@ struct LibraryView: View {
                 do {
                     try await api.deleteDiscussion(id: target.id)
                 } catch {
-                    errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                    reportLoadError(error)
                     await load()
                     return
                 }
             }
         }
+    }
+
+    private func reportLoadError(_ error: Error) {
+        guard !APIClient.isCancellation(error) else { return }
+        errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
     }
 
     private func upsert(_ discussion: Discussion) {

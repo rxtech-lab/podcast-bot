@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/storage"
+	"gorm.io/gorm"
 )
 
 func TestJobRegistryPersistsJobsAndLogs(t *testing.T) {
@@ -332,6 +334,190 @@ func TestApplyDiscussionJobStatusMarksMissingGeneratingJobFailed(t *testing.T) {
 	}
 	if persisted.Status != DiscussionFailed {
 		t.Fatalf("persisted status = %q, want failed", persisted.Status)
+	}
+}
+
+func TestJobTranscriptReturnsNativeDiscussionTranscriptFromDB(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script:   &config.DebateTopic{Title: "AI Safety", Type: config.ContentTypeDiscussion, Language: "en-US"},
+		Markdown: "# AI Safety",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-a"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.ReplaceTranscript(ctx, created.ID, []agent.TranscriptLine{
+		{Speaker: "Host", Role: agent.RoleHost, Text: "Welcome back to the discussion."},
+		{Speaker: "Mina", Role: agent.RoleDiscussant, Side: "technical", Text: "The important part is the tradeoff."},
+	}); err != nil {
+		t.Fatalf("ReplaceTranscript: %v", err)
+	}
+
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	jobs.Add("job-a")
+	jobs.Update("job-a", func(j *Job) {
+		j.Status = JobDone
+		j.HasAudio = true
+		j.AudioOnly = true
+	})
+	srv := New(Deps{Mode: ModeDashboard, Jobs: jobs, Discussions: store})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/jobs/job-a/transcript")
+	if err != nil {
+		t.Fatalf("get transcript: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got []transcriptDTO
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode transcript: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Speaker != "Host" || got[0].Role != "host" || got[0].Text != "Welcome back to the discussion." {
+		t.Fatalf("first line = %+v", got[0])
+	}
+	if got[1].Speaker != "Mina" || got[1].Role != "discussant" ||
+		got[1].Side != "technical" || got[1].Text != "The important part is the tradeoff." {
+		t.Fatalf("second line = %+v", got[1])
+	}
+}
+
+func TestActiveJobTranscriptUsesDiskOrderAndLiveSuffix(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script:   &config.DebateTopic{Title: "AI Safety", Type: config.ContentTypeDiscussion, Language: "en-US"},
+		Markdown: "# AI Safety",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-a"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.AppendLine(ctx, owner, created.ID, DiscussionLine{
+		Speaker: "Viewer",
+		Role:    "user",
+		Text:    "Can you explain the rollout risk?",
+		IsUser:  true,
+	}); err != nil {
+		t.Fatalf("AppendLine: %v", err)
+	}
+
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	root := t.TempDir()
+	uploadRoot := filepath.Join(root, "uploads")
+	if err := os.MkdirAll(uploadRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jobOut := filepath.Join(root, "jobs", "job-a")
+	if err := os.MkdirAll(jobOut, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	diskStore, err := contentcreator.OpenStore(filepath.Join(jobOut, "session.db"), nil)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer diskStore.Close()
+	diskLines := []agent.TranscriptLine{
+		{Speaker: "Host", Role: agent.RoleHost, Text: "Welcome back."},
+		{Speaker: "Viewer", Role: agent.Role("user"), Text: "Can you explain the rollout risk?"},
+		{Speaker: "Host", Role: agent.RoleHost, Text: "Yes."},
+		{Speaker: "Host", Role: agent.RoleHost, Text: "Yes."},
+	}
+	for _, line := range diskLines {
+		diskStore.Append(line)
+	}
+
+	jobs.Add("job-a")
+	jobs.Update("job-a", func(j *Job) {
+		j.Status = JobRunning
+		j.HasAudio = true
+		j.AudioOnly = true
+	})
+	orch := contentcreator.NewForTest(func(any) {}, nil)
+	for _, line := range diskLines {
+		orch.Transcript.AppendLine(line)
+	}
+	orch.Transcript.AppendLine(agent.TranscriptLine{
+		Speaker: "Mina",
+		Role:    agent.RoleDiscussant,
+		Text:    "The rollout risk is operational drift.",
+	})
+	jobs.SetOrch("job-a", orch)
+	defer jobs.ClearOrch("job-a")
+
+	srv := New(Deps{Mode: ModeDashboard, Jobs: jobs, Discussions: store, UploadRoot: uploadRoot})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/jobs/job-a/transcript")
+	if err != nil {
+		t.Fatalf("get transcript: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got []transcriptDTO
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode transcript: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5: %+v", len(got), got)
+	}
+	if got[0].Speaker != "Host" || got[0].Text != "Welcome back." {
+		t.Fatalf("first line = %+v", got[0])
+	}
+	if got[1].Speaker != "Viewer" || got[1].Role != "user" ||
+		got[1].Text != "Can you explain the rollout risk?" {
+		t.Fatalf("second line = %+v", got[1])
+	}
+	if got[2].Speaker != "Host" || got[2].Text != "Yes." ||
+		got[3].Speaker != "Host" || got[3].Text != "Yes." {
+		t.Fatalf("repeated lines were not preserved: %+v", got[2:4])
+	}
+	if got[4].Speaker != "Mina" || got[4].Role != "discussant" ||
+		got[4].Text != "The rollout risk is operational drift." {
+		t.Fatalf("live suffix line = %+v", got[4])
+	}
+}
+
+func TestTransientDBConnectionErrorClassifier(t *testing.T) {
+	err := errors.New("stream is closed: driver: bad connection")
+	if !isTransientDBConnectionError(err) {
+		t.Fatal("expected stream closed bad connection to be transient")
+	}
+	if isTransientDBConnectionError(gorm.ErrRecordNotFound) {
+		t.Fatal("record-not-found must not be treated as transient")
 	}
 }
 

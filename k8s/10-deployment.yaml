@@ -38,21 +38,15 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: debate-bot
-          image: sirily11/debate-bot:latest
+          image: ghcr.io/rxtech-lab/podcast-bot:sha-590cd5b
           imagePullPolicy: Always
           args: ["server", "--mode", "video", "--addr", ":3000"]
           ports:
             - name: http
               containerPort: 3000
           env:
-            # Non-secret config. Point these at whatever providers you use; the
-            # API keys / password / Turso URL / S3 creds come from the Secret.
-            - name: OPENAI_BASE_URL
-              value: "https://api.openai.com/v1"
-            - name: HOST_MODEL
-              value: "gpt-4o"
-            - name: COMPRESSION_MODEL
-              value: "gpt-4o-mini"
+            # Provider endpoint/model config comes from debate-bot-secrets so
+            # Vercel AI Gateway keys are not accidentally sent to api.openai.com.
             - name: OUT_DIR
               value: "/app/out"
             - name: REDIS_URL

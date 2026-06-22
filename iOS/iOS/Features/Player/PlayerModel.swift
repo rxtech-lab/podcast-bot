@@ -100,6 +100,7 @@ final class PlayerModel {
     nonisolated private static let lyricGroupMaxLines = 3
     nonisolated private static let lyricGroupMaxGapSeconds = 1.25
     nonisolated private static let lyricGroupMaxDurationSeconds = 12.0
+    nonisolated static let minimumTranscriptLoadingSeconds = 1.0
 
     var discussion: Discussion
     private let api: APIClient
@@ -125,6 +126,7 @@ final class PlayerModel {
     var downloadErrorText: String?
     var showsDownloadDialog = false
     var downloadedPodcastFile: DownloadedPodcastFile?
+    var isTranscriptLoading = false
     var lines: [LiveLine] = []
     var transcriptScrollToken: TranscriptScrollToken {
         TranscriptScrollToken.make(for: lines)
@@ -172,6 +174,8 @@ final class PlayerModel {
     private var finalAudioInstalled = false
     private(set) var cues: [VTTCue] = []
     private var tasks: [Task<Void, Never>] = []
+    private var transcriptLoadingStartedAt: Date?
+    private var transcriptLoadingHideTask: Task<Void, Never>?
 
     /// Lyrics mode is available once we have final (seekable) caption timing and
     /// at least one cue. While streaming we only surface the current caption.
@@ -234,6 +238,9 @@ final class PlayerModel {
         lines = discussion.sortedLines.map {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true)
         }
+        if discussion.jobID != nil && !hasPodcastTranscript {
+            showTranscriptLoadingIfNeeded()
+        }
         if let s = discussion.downloadURLString { downloadURL = URL(string: s) }
         usageSummaryText = discussion.usageSummaryText ?? ""
         usageSummary = discussion.usageSummary
@@ -259,6 +266,7 @@ final class PlayerModel {
         itemStatusObservation = nil
         playbackRetryTask?.cancel()
         playbackRetryTask = nil
+        forceHideTranscriptLoading()
         socket?.close()
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
@@ -752,6 +760,7 @@ final class PlayerModel {
                                                              done: data.done == true) {
                 persist(line: completed)
             }
+            hideTranscriptLoadingIfReady()
         case "tick":
             updateJobProgress(elapsedMS: data.elapsed_ms, remainingMS: data.remaining_ms)
         case "phase":
@@ -810,7 +819,16 @@ final class PlayerModel {
     }
 
     private func loadTranscriptSnapshot(jobID: String) async {
-        guard let snapshot = try? await api.jobTranscript(id: jobID) else { return }
+        while !Task.isCancelled && !hasPodcastTranscript {
+            if let snapshot = try? await api.jobTranscript(id: jobID) {
+                mergeTranscriptSnapshot(snapshot)
+                if hasPodcastTranscript { return }
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    private func mergeTranscriptSnapshot(_ snapshot: [TranscriptDTO]) {
         var didChange = false
         for item in snapshot {
             let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -834,6 +852,73 @@ final class PlayerModel {
                 return leftIndex < rightIndex
             }
         }
+        hideTranscriptLoadingIfReady()
+    }
+
+    private var hasPodcastTranscript: Bool {
+        Self.containsPodcastTranscript(lines)
+    }
+
+    nonisolated static func containsPodcastTranscript(_ lines: [LiveLine]) -> Bool {
+        lines.contains { line in
+            let role = line.role.lowercased()
+            return !line.isUser
+                && role != "user"
+                && role != "viewer"
+                && !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    nonisolated static func remainingTranscriptLoadingDelay(startedAt: Date?,
+                                                            now: Date = Date()) -> TimeInterval {
+        guard let startedAt else { return 0 }
+        let elapsed = max(0, now.timeIntervalSince(startedAt))
+        return max(0, minimumTranscriptLoadingSeconds - elapsed)
+    }
+
+    nonisolated static func transcriptLoadingVisibleAfterTerminalFailure(wasVisible: Bool) -> Bool {
+        false
+    }
+
+    private func showTranscriptLoadingIfNeeded() {
+        guard !isTranscriptLoading else { return }
+        isTranscriptLoading = true
+        transcriptLoadingStartedAt = Date()
+        transcriptLoadingHideTask?.cancel()
+        transcriptLoadingHideTask = nil
+    }
+
+    private func forceHideTranscriptLoading() {
+        transcriptLoadingHideTask?.cancel()
+        transcriptLoadingHideTask = nil
+        transcriptLoadingStartedAt = nil
+        isTranscriptLoading = Self.transcriptLoadingVisibleAfterTerminalFailure(wasVisible: isTranscriptLoading)
+    }
+
+    private func hideTranscriptLoadingIfReady() {
+        guard isTranscriptLoading, hasPodcastTranscript else { return }
+
+        transcriptLoadingHideTask?.cancel()
+        let delay = Self.remainingTranscriptLoadingDelay(startedAt: transcriptLoadingStartedAt)
+        if delay <= 0 {
+            isTranscriptLoading = false
+            transcriptLoadingStartedAt = nil
+            transcriptLoadingHideTask = nil
+            return
+        }
+
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.hasPodcastTranscript else { return }
+                self.isTranscriptLoading = false
+                self.transcriptLoadingStartedAt = nil
+                self.transcriptLoadingHideTask = nil
+            }
+        }
+        transcriptLoadingHideTask = task
+        tasks.append(task)
     }
 
     // MARK: - Captions
@@ -872,10 +957,7 @@ final class PlayerModel {
                     await switchToFinalAudioIfNeeded(jobID: jobID)
                     return
                 } else if job.isError {
-                    isForceStopping = false
-                    isFinished = true
-                    statusText = job.error ?? "Generation failed"
-                    discussion.status = .failed
+                    markGenerationFailed(job.error)
                     return
                 }
             }
@@ -951,11 +1033,19 @@ final class PlayerModel {
         statusText = text
     }
 
+    func markGenerationFailed(_ error: String?) {
+        isForceStopping = false
+        isFinished = true
+        statusText = error ?? "Generation failed"
+        discussion.status = .failed
+        forceHideTranscriptLoading()
+    }
+
     private func updateNowPlayingInfo() {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: nowPlayingTitle,
             MPMediaItemPropertyArtist: nowPlayingSubtitle,
-            MPMediaItemPropertyAlbumTitle: "Debate Bot",
+            MPMediaItemPropertyAlbumTitle: "PanelFM",
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
         ]
@@ -987,7 +1077,7 @@ final class PlayerModel {
         }
         if !phaseLabel.isEmpty { return phaseLabel }
         if !statusText.isEmpty { return statusText }
-        return "Debate Bot"
+        return "PanelFM"
     }
 
     private var nowPlayingDuration: Double {

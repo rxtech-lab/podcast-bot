@@ -450,6 +450,19 @@ func writeTranscript(w http.ResponseWriter, lines []agent.TranscriptLine) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+func writeDiscussionTranscript(w http.ResponseWriter, lines []DiscussionLine) {
+	out := make([]transcriptDTO, len(lines))
+	for i, l := range lines {
+		out[i] = transcriptDTO{
+			Speaker: l.Speaker,
+			Role:    l.Role,
+			Side:    l.Side,
+			Text:    l.Text,
+		}
+	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // eventEnvelope is the JSON shape emitted to SSE clients. The bus carries
 // concrete debate.* event structs; we tag each with a string event name so
 // browsers (and the TUI bridge) can dispatch on it.

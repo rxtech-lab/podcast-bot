@@ -1,0 +1,38 @@
+name: iOS CI
+
+on:
+  push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    name: Build iOS App
+    runs-on: [self-hosted, macOS, ARM64, regular]
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build iOS app
+        run: ./scripts/ios-build.sh
+        env:
+          SCHEME: iOS
+          CONFIGURATION: Debug
+          SDK: iphonesimulator
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-build-log
+          path: build.log
+          retention-days: 7
+          if-no-files-found: ignore

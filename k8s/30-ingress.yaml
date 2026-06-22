@@ -23,10 +23,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - debatebot.rxlab.app
+        - server.podcast.rxlab.app
       secretName: debate-bot-tls   # created/renewed by cert-manager
   rules:
-    - host: debatebot.rxlab.app
+    - host: server.podcast.rxlab.app
       http:
         paths:
           - path: /

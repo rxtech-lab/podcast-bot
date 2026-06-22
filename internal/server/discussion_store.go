@@ -511,6 +511,26 @@ func (s *DiscussionStore) Lines(ctx context.Context, owner, id string) ([]Discus
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return nil, err
 	}
+	return s.lines(ctx, id)
+}
+
+func (s *DiscussionStore) LinesByJob(ctx context.Context, jobID string) ([]DiscussionLine, error) {
+	jobID = strings.TrimSpace(jobID)
+	if s == nil || jobID == "" {
+		return nil, nil
+	}
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM native_discussions WHERE job_id = ?`, jobID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return s.lines(ctx, id)
+}
+
+func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLine, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user
 		FROM native_discussion_lines WHERE discussion_id = ? ORDER BY id`, id)
 	if err != nil {
