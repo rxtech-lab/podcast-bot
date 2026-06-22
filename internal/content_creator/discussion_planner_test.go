@@ -13,7 +13,7 @@ func discTestAgent(name string, role agent.Role) agent.Agent {
 	base := agent.NewBase(name, role, nil, nil, nil, nil, nil)
 	switch role {
 	case agent.RoleHost:
-		return agent.NewHost(base)
+		return agent.NewDiscussionHost(base)
 	case agent.RoleDiscussant:
 		return agent.NewDiscussant(base, "")
 	}

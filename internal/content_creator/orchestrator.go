@@ -325,6 +325,11 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	})
 	switch role {
 	case agent.RoleHost:
+		// Discussions reuse the generic host role but need a facilitator
+		// prompt with no sides / judge / verdict; debate keeps the default.
+		if o.Topic.Type == config.ContentTypeDiscussion {
+			return agent.NewDiscussionHost(base)
+		}
 		return agent.NewHost(base)
 	case agent.RoleAffirmative, agent.RoleNegative:
 		return agent.NewCandidate(base)
