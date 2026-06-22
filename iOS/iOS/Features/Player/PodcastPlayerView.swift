@@ -108,9 +108,6 @@ struct PodcastPlayerView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
         }
-        // Extra breathing room below the navigation bar so the first/pinned
-        // message clears the toolbar instead of tucking under it.
-        .contentMargins(.top, 100, for: .scrollContent)
         .scrollDismissesKeyboard(.interactively)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {

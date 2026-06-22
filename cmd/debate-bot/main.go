@@ -244,6 +244,31 @@ func videoDataRoot(env *config.Env, mode string) string {
 	return filepath.Join(env.PersistentRoot, name)
 }
 
+// ownerPodName returns this pod's identity for cross-pod routing, or "" when
+// routing is disabled (which makes the server skip the job proxy entirely).
+func ownerPodName(enabled bool, podName string) string {
+	if !enabled {
+		return ""
+	}
+	return podName
+}
+
+// peerHostResolver returns a function that maps an owner pod name to the
+// host:port to dial for it, using the configured template (exactly one %s).
+// Returns nil when routing is disabled or the template is malformed, which
+// disables the proxy rather than dialing a bad address.
+func peerHostResolver(enabled bool, template string) func(string) string {
+	if !enabled || !strings.Contains(template, "%s") {
+		return nil
+	}
+	return func(pod string) string {
+		if pod == "" {
+			return ""
+		}
+		return fmt.Sprintf(template, pod)
+	}
+}
+
 // runtime owns every cross-channel resource: the shared event bus, server,
 // session registry, and the per-channel encoders/livestreams.
 //
@@ -767,11 +792,22 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		cancel()
 		return nil, 1
 	}
-	jobs, err := server.NewJobRegistry(filepath.Join(dataRoot, "jobs.db"))
+	jobs, err := server.NewJobRegistry(
+		filepath.Join(dataRoot, "jobs.db"),
+		env.TursoConnectionURL,
+		env.TursoAuthToken,
+	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jobs db:", err)
 		cancel()
 		return nil, 1
+	}
+	// Cross-pod routing is enabled only when this pod has both an identity and
+	// a way to address peers; otherwise jobs stay unstamped (single-pod mode).
+	routingEnabled := env.PodName != "" && env.PeerHostTemplate != ""
+	if routingEnabled {
+		jobs.SetPodName(env.PodName)
+		fmt.Fprintln(os.Stdout, "Cross-pod job routing enabled · pod:", env.PodName)
 	}
 	discussions, err := server.NewDiscussionStore(
 		filepath.Join(dataRoot, "native-discussions.db"),
@@ -841,6 +877,8 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		AuthIssuer:     env.AuthIssuer,
 		Uploader:       uploader,
 		ForceAudio:     forceAudio,
+		PodName:        ownerPodName(routingEnabled, env.PodName),
+		PeerHostFor:    peerHostResolver(routingEnabled, env.PeerHostTemplate),
 		// SubmitJob runs one upload through the orchestrator + stitch +
 		// (for series) zip pipeline. Defined as a closure so it can
 		// reach the env / bus / log without cycling the import graph.

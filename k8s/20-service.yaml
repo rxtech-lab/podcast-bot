@@ -1,3 +1,8 @@
+# Load-balanced entry point. The Ingress targets this; it round-robins
+# requests across all ready pods. Uploads, job listing, status polling, and
+# any finished-job download can be answered by any pod (shared Turso + S3).
+# Requests for an *in-flight* job that land on the wrong pod are transparently
+# reverse-proxied to the owner by the app (see PEER_HOST_TEMPLATE).
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,5 +17,29 @@ spec:
   ports:
     - name: http
       port: 80
+      targetPort: http
+      protocol: TCP
+---
+# Headless service: clusterIP None makes the StatefulSet pods individually
+# addressable as debate-bot-0.debate-bot-headless.debate-bot.svc.cluster.local
+# (etc.). This is the DNS the in-app cross-pod proxy dials via
+# PEER_HOST_TEMPLATE — NOT a load balancer. publishNotReadyAddresses keeps a
+# pod resolvable while it is briefly unready so in-flight proxying survives.
+apiVersion: v1
+kind: Service
+metadata:
+  name: debate-bot-headless
+  namespace: debate-bot
+  labels:
+    app: debate-bot
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: debate-bot
+  ports:
+    - name: http
+      port: 3000
       targetPort: http
       protocol: TCP
