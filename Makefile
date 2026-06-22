@@ -6,8 +6,8 @@ BIN_DIR   := bin
 
 # Docker image. The k8s cluster runs on linux/amd64, so images are always built
 # for that platform regardless of the host arch (e.g. an Apple-silicon Mac).
-IMAGE     := sirily11/debate-bot
-TAG       := latest
+IMAGE     := ghcr.io/rxtech-lab/podcast-bot
+TAG       := test
 PLATFORM  := linux/amd64
 BUILDER   := debate-bot-builder
 

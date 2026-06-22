@@ -31,10 +31,14 @@ struct PodcastPlayerView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
             if let model {
-                transcript(model)
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        footer(model)
-                    }
+                if model.isTranscriptLoading {
+                    PodcastTranscriptLoadingView()
+                } else {
+                    transcript(model)
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            footer(model)
+                        }
+                }
             } else {
                 ProgressView().tint(Theme.accent)
             }
@@ -264,6 +268,26 @@ struct PodcastPlayerView: View {
                 // user can retry. (Surfaced state would need a toast/banner.)
             }
         }
+    }
+}
+
+private struct PodcastTranscriptLoadingView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(Theme.accent)
+            VStack(spacing: 6) {
+                Text("Preparing Transcript")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text("Loading podcast...")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 }
 

@@ -1,13 +1,13 @@
 {
-  "originHash" : "2e79c46027739afa3c4e6edfcfd1e0171784a04c825ed93ac8af8fe8b38f64b7",
+  "originHash" : "0ff11f6442bdc794bc470cbd4e5e7f662a5f3abbd1acdeeb03e695c29db30d36",
   "pins" : [
     {
       "identity" : "equatable",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ordo-one/equatable",
       "state" : {
-        "revision" : "63e597c07e1e0622e6c8f2b33c972525a444c8eb",
-        "version" : "1.0.10"
+        "revision" : "597c2bb34af0c51331eb3b5e705f942d8ee20daa",
+        "version" : "1.4.1"
       }
     },
     {
@@ -67,8 +67,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax.git",
       "state" : {
-        "revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
-        "version" : "601.0.1"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {
@@ -77,7 +77,7 @@
       "location" : "https://github.com/sirily11/SwiftStreamingMarkdown",
       "state" : {
         "branch" : "main",
-        "revision" : "c80ee6eaac43445e72d10f794ce84db4d7aa01a3"
+        "revision" : "b0391263e0a1a096218897a8d77b83684adff646"
       }
     }
   ],

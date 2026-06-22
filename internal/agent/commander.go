@@ -79,9 +79,23 @@ When action="generate", scene_prompt must describe a cinematic, photographic or 
 		return DirectorCue{}, err
 	}
 	cue := DirectorCue{MusicIndex: -1}
-	trimmed := strings.TrimSpace(string(raw))
+	trimmed := cleanDirectorJSON(string(raw))
 	if err := json.Unmarshal([]byte(trimmed), &cue); err != nil {
 		return DirectorCue{}, fmt.Errorf("decode director cue: %w (raw=%s)", err, trimmed)
 	}
 	return cue, nil
+}
+
+func cleanDirectorJSON(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	if i := strings.IndexByte(trimmed, '\n'); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	trimmed = strings.TrimSpace(trimmed)
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	return strings.TrimSpace(trimmed)
 }

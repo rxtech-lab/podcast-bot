@@ -313,6 +313,17 @@ final class APIClient: Sendable {
         return nil
     }
 
+    nonisolated static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        if let urlError = error as? URLError {
+            return urlError.code == .cancelled
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
     private func hlsSegmentAvailable(jobID: String, segment: String, token: String) async -> Bool {
         guard let url = URL(string: segment, relativeTo: hlsURL(jobID: jobID))?.absoluteURL else {
             return false

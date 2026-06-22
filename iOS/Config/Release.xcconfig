@@ -2,7 +2,7 @@
 // Points the app at the deployed debate-bot engine.
 
 // Backend engine base URL (no trailing slash). AppConfig appends paths.
-AppAPIBaseURL = https:/$()/debatebot.rxlab.app
+AppAPIBaseURL = https:/$()/server.podcast.rxlab.app
 
 // rxlab OAuth (RxAuthSwift).
 AppAuthIssuer = https:/$()/auth.rxlab.app

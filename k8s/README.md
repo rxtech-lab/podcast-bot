@@ -1,13 +1,14 @@
 # Kubernetes deployment — debate-bot
 
-Deploys debate-bot behind `https://debatebot.rxlab.app`.
+Deploys debate-bot behind `https://server.podcast.rxlab.app`.
 
 | File | What it is |
 |------|-----------|
 | `00-namespace.yaml`   | `debate-bot` namespace |
 | `10-deployment.yaml`  | **StatefulSet** (video mode, port 3000), 3 replicas, per-pod 10Gi scratch PVC |
 | `20-service.yaml`     | Load-balanced ClusterIP `:80 -> 3000` **+ headless `debate-bot-headless`** for per-pod DNS |
-| `30-ingress.yaml`     | Ingress for `debatebot.rxlab.app` (class `nginx`) + TLS |
+| `30-ingress.yaml`     | Ingress for `server.podcast.rxlab.app` (class `nginx`) + TLS |
+| `kustomization.yaml`  | Kustomize base used by the GitHub Actions deploy workflow |
 | `secrets.example.yaml`  | Template for app keys, `APP_PASSWORD`, **Turso, and S3** Secret |
 
 ## Horizontal scaling
@@ -42,14 +43,14 @@ plus a `tls:` block; cert-manager creates and auto-renews the `debate-bot-tls` s
 Cloudflare token and no issuer manifest are needed — `letsencrypt-prod` already exists
 cluster-wide and is reused across apps.
 
-> HTTP-01 requires `debatebot.rxlab.app` to resolve to the nginx ingress controller's
+> HTTP-01 requires `server.podcast.rxlab.app` to resolve to the nginx ingress controller's
 > external IP **directly** (not proxied through Cloudflare's orange cloud), or the ACME
 > challenge on port 80 will fail.
 
 ## Deploy
 
 ```bash
-# 1. DNS: point debatebot.rxlab.app at the nginx ingress controller's external IP
+# 1. DNS: point server.podcast.rxlab.app at the nginx ingress controller's external IP
 #    (DNS-only / grey-cloud if the record is in Cloudflare, so HTTP-01 can reach it).
 
 # 2. Fill in secrets (provider keys + APP_PASSWORD + Turso + S3), then apply.
@@ -57,8 +58,9 @@ cp k8s/secrets.example.yaml k8s/secrets.yaml
 $EDITOR k8s/secrets.yaml
 kubectl apply -f k8s/secrets.yaml
 
-# 3. Apply the rest.
-kubectl apply -f k8s/
+# 3. Apply the non-secret resources. The Kustomize base deliberately excludes
+#    secrets.yaml and secrets.example.yaml.
+kubectl kustomize k8s/ | kubectl apply -f -
 
 # 4. Watch the cert go Ready (HTTP-01 is usually under a minute once DNS resolves).
 kubectl -n debate-bot get certificate,ingress,pods
@@ -67,8 +69,17 @@ kubectl -n debate-bot describe certificate debate-bot-tls
 
 ## Notes / things to adjust
 
-- **Image** — `sirily11/debate-bot:latest`. Build & push it (or repoint to your registry)
-  before applying. `imagePullPolicy: Always` picks up new `:latest` pushes on pod restart.
+- **Auto deploy** — `.github/workflows/docker-build.yaml` mirrors the
+  `linda-assistant` release flow: pushes and pull requests build the amd64 image
+  as a smoke check, while GitHub `release` events push `ghcr.io/rxtech-lab/podcast-bot:<tag>`,
+  apply `kubectl kustomize k8s/ | kubectl apply -f -`, run `kubectl set image`,
+  and wait for `statefulset/debate-bot` to roll out. Configure the repo secret
+  `K8S_CONFIG_FILE_B64` with a base64-encoded kubeconfig.
+- **Manual deploy** — run the same workflow with `workflow_dispatch`, set
+  `deploy=true`, and optionally provide `image_tag`; secrets still need to be
+  applied separately with `kubectl apply -f k8s/secrets.yaml`.
+- **Image** — the base manifest uses `ghcr.io/rxtech-lab/podcast-bot:sha-590cd5b`.
+  Release deploys replace it with the release tag via `kubectl set image`.
 - **Mode** — runs `--mode video` (browser uploads `script.md`, downloads `.mp4`). For
   TV-channel **stream** mode, drop the `args:` override and mount a topics dir + a
   `channels.json` configmap instead.

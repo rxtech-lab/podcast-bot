@@ -1,5 +1,7 @@
 .env
 bin
+.build/
+build.log
 mcp.json
 out
 .DS_Store
@@ -9,6 +11,8 @@ internal/server/web-dist/*
 !internal/server/web-dist/
 !internal/server/web-dist/.gitkeep
 *.png
+!iOS/icon.icon/Assets/image.png
+!iOS/iOS/Assets.xcassets/AppIcon.appiconset/image.png
 .playwright-mcp
 topics/*.md
 !internal/video/assets/*.png

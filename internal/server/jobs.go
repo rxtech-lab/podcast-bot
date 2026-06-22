@@ -291,6 +291,37 @@ func (r *JobRegistry) retryMissingTable(err error, op func() error) error {
 	return op()
 }
 
+func (r *JobRegistry) retryRecoverable(err error, op func() error) error {
+	err = r.retryMissingTable(err, op)
+	if err == nil || !isTransientDBConnectionError(err) {
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+		if retryErr := op(); retryErr != nil {
+			err = r.retryMissingTable(retryErr, op)
+			if err == nil || !isTransientDBConnectionError(err) {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	return err
+}
+
+func isTransientDBConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bad connection") ||
+		strings.Contains(msg, "stream is closed") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection closed")
+}
+
 // SetOrch records the live orchestrator for a running job. The video-job
 // runner calls this once the orchestrator is built, and pairs it with a
 // deferred ClearOrch so the entry never outlives the run.
@@ -332,7 +363,7 @@ func (r *JobRegistry) Add(id string) *Job {
 		UpdatedAt: now,
 	}
 	if err := r.db.Create(&rec).Error; err != nil {
-		_ = r.retryMissingTable(err, func() error {
+		_ = r.retryRecoverable(err, func() error {
 			return r.db.Create(&rec).Error
 		})
 	}
@@ -347,7 +378,7 @@ func (r *JobRegistry) Get(id string) *Job {
 		return r.db.First(&rec, "id = ?", id).Error
 	}
 	if err := query(); err != nil {
-		err = r.retryMissingTable(err, query)
+		err = r.retryRecoverable(err, query)
 		if err != nil {
 			return nil
 		}
@@ -365,7 +396,7 @@ func (r *JobRegistry) Update(id string, fn func(j *Job)) {
 		return r.db.First(&rec, "id = ?", id).Error
 	}
 	if err := query(); err != nil {
-		err = r.retryMissingTable(err, query)
+		err = r.retryRecoverable(err, query)
 		if err != nil {
 			return
 		}
@@ -378,7 +409,7 @@ func (r *JobRegistry) Update(id string, fn func(j *Job)) {
 	j.UpdatedAt = time.Now()
 	rec = recordFromJob(j)
 	if err := r.db.Save(&rec).Error; err != nil {
-		_ = r.retryMissingTable(err, func() error {
+		_ = r.retryRecoverable(err, func() error {
 			return r.db.Save(&rec).Error
 		})
 	}
@@ -402,7 +433,7 @@ func (r *JobRegistry) AppendLog(jobID, kind, text string, payload any) {
 		Payload: payloadJSON,
 	}
 	if err := r.db.Create(&rec).Error; err != nil {
-		_ = r.retryMissingTable(err, func() error {
+		_ = r.retryRecoverable(err, func() error {
 			return r.db.Create(&rec).Error
 		})
 	}
@@ -417,7 +448,7 @@ func (r *JobRegistry) List() []Job {
 		return r.db.Order("created_at desc").Find(&recs).Error
 	}
 	if err := query(); err != nil {
-		_ = r.retryMissingTable(err, query)
+		_ = r.retryRecoverable(err, query)
 	}
 	out := make([]Job, 0, len(recs))
 	for _, rec := range recs {
@@ -436,7 +467,7 @@ func (r *JobRegistry) logs(jobID string) []JobLog {
 			Find(&recs).Error
 	}
 	if err := query(); err != nil {
-		_ = r.retryMissingTable(err, query)
+		_ = r.retryRecoverable(err, query)
 	}
 	out := make([]JobLog, len(recs))
 	for i := range recs {

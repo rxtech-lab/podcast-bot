@@ -121,6 +121,38 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(before.count, afterTextUpdate.count)
     }
 
+    func testPodcastTranscriptReadinessIgnoresUserOnlyLines() {
+        let userOnly = [
+            LiveLine(speaker: "Qiwei", role: "user", text: "Are we ready?", isUser: true, done: true),
+            LiveLine(speaker: "Qiwei", role: "viewer", text: "Echoed from stream", isUser: false, done: true)
+        ]
+        let podcastLines = userOnly + [
+            LiveLine(speaker: "Host", role: "host", text: "Welcome to the discussion.", isUser: false, done: true)
+        ]
+
+        XCTAssertFalse(PlayerModel.containsPodcastTranscript(userOnly))
+        XCTAssertTrue(PlayerModel.containsPodcastTranscript(podcastLines))
+    }
+
+    func testTranscriptLoadingDelayKeepsOneSecondMinimum() {
+        let start = Date(timeIntervalSinceReferenceDate: 100)
+
+        XCTAssertEqual(PlayerModel.minimumTranscriptLoadingSeconds, 1.0)
+        XCTAssertEqual(PlayerModel.remainingTranscriptLoadingDelay(startedAt: start,
+                                                                   now: start.addingTimeInterval(0.25)),
+                       0.75,
+                       accuracy: 0.001)
+        XCTAssertEqual(PlayerModel.remainingTranscriptLoadingDelay(startedAt: start,
+                                                                   now: start.addingTimeInterval(1.25)),
+                       0,
+                       accuracy: 0.001)
+    }
+
+    func testTranscriptLoadingClearsWhenJobFailsWithoutTranscript() {
+        XCTAssertFalse(PlayerModel.transcriptLoadingVisibleAfterTerminalFailure(wasVisible: true))
+        XCTAssertFalse(PlayerModel.transcriptLoadingVisibleAfterTerminalFailure(wasVisible: false))
+    }
+
     func testCaptionTextSelectsCueForLookupTime() {
         let cues = [
             VTTCue(start: 0, end: 1, text: "First"),
@@ -223,6 +255,15 @@ final class iOSTests: XCTestCase {
 
         XCTAssertEqual(APIClient.firstHLSMediaSegment(in: playlist), "seg_00000.ts")
         XCTAssertNil(APIClient.firstHLSMediaSegment(in: "#EXTM3U\n#EXT-X-VERSION:3\n"))
+    }
+
+    func testCancellationErrorsAreRecognizedAsNonAlerting() {
+        XCTAssertTrue(APIClient.isCancellation(CancellationError()))
+        XCTAssertTrue(APIClient.isCancellation(URLError(.cancelled)))
+        XCTAssertTrue(APIClient.isCancellation(NSError(domain: NSURLErrorDomain,
+                                                       code: NSURLErrorCancelled)))
+        XCTAssertFalse(APIClient.isCancellation(URLError(.timedOut)))
+        XCTAssertFalse(APIClient.isCancellation(APIError.notAuthenticated))
     }
 }
 
