@@ -178,9 +178,11 @@ func (p *Planner) crawlURLs(ctx context.Context, urls []string) []config.Source 
 		return nil
 	}
 	out := make([]config.Source, 0, len(urls))
-	for _, u := range urls {
+	for i, u := range urls {
+		p.emit("read", fmt.Sprintf("Reading source %d of %d: %s", i+1, len(urls), shortURLForStatus(u)))
 		if s, ok := p.crawlURL(ctx, key, u); ok {
 			out = append(out, s)
+			p.emit("sources", fmt.Sprintf("Read %d of %d source%s", len(out), len(urls), plural(len(out))))
 		}
 	}
 	return out
@@ -224,6 +226,7 @@ func (p *Planner) crawlURL(ctx context.Context, key, url string) (config.Source,
 func (p *Planner) pollCrawl(ctx context.Context, key, id, fallbackURL string) (config.Source, bool) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	nextStatus := time.Now().Add(4 * time.Second)
 	for {
 		source, status, ok := p.getCrawlStatus(ctx, key, id, fallbackURL)
 		if ok {
@@ -231,6 +234,10 @@ func (p *Planner) pollCrawl(ctx context.Context, key, id, fallbackURL string) (c
 		}
 		if status == "failed" || status == "cancelled" {
 			return config.Source{}, false
+		}
+		if time.Now().After(nextStatus) {
+			p.emit("read", "Still reading "+shortURLForStatus(fallbackURL))
+			nextStatus = time.Now().Add(8 * time.Second)
 		}
 		select {
 		case <-ctx.Done():
@@ -262,6 +269,17 @@ func (p *Planner) getCrawlStatus(ctx context.Context, key, id, fallbackURL strin
 		return config.Source{}, status.Status, false
 	}
 	return crawlDocToSource(status.Data[0], fallbackURL)
+}
+
+func shortURLForStatus(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "source"
+	}
+	if len(raw) <= 64 {
+		return raw
+	}
+	return raw[:61] + "..."
 }
 
 func crawlDocToSource(d firecrawlCrawlDoc, fallbackURL string) (config.Source, string, bool) {

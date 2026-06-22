@@ -50,7 +50,10 @@ type discussionSourceSearchResponse struct {
 	Sources []config.Source `json:"sources"`
 }
 
-const addSourcesBackgroundTimeout = 5 * time.Minute
+const (
+	addSourcesBackgroundTimeout     = 5 * time.Minute
+	discussionStreamRecoveryTimeout = 10 * time.Minute
+)
 
 type discussionGenerateRequest struct {
 	VideoConfig videoConfigJSON `json:"videoConfig"`
@@ -68,16 +71,36 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range items {
 		s.applyDiscussionJobStatus(r, &items[i])
+		s.applyDiscussionProgress(r.Context(), &items[i])
 	}
 	writeJSON(w, items)
 }
 
 func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
+	editLimit := atoiDefault(r.URL.Query().Get("edit_limit"), 0)
+	editBefore, _ := strconv.ParseInt(r.URL.Query().Get("edit_before"), 10, 64)
+	if editLimit > 0 {
+		user := s.requestUser(r)
+		d, err := s.d.Discussions.GetWithEditTurnPage(r.Context(), user.ID, r.PathValue("id"), editLimit, editBefore)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if d == nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.applyDiscussionJobStatus(r, d)
+		s.applyDiscussionProgress(r.Context(), d)
+		writeJSON(w, d)
+		return
+	}
 	d := s.getOwnedDiscussion(w, r)
 	if d == nil {
 		return
 	}
 	s.applyDiscussionJobStatus(r, d)
+	s.applyDiscussionProgress(r.Context(), d)
 	writeJSON(w, d)
 }
 
@@ -238,25 +261,35 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	if strings.TrimSpace(req.Topic) == "" {
 		req.Topic = d.Topic
 	}
+	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
+	defer cancel()
 	sse := newSSEWriter(w)
 	_ = sse.comment("ok")
-	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
-	res, err := p.Generate(r.Context(), req)
+	s.recordDiscussionProgress(workCtx, id, "plan", planner.ProgressEvent{Phase: "thinking", Text: "Researching & planning..."})
+	p.WithProgress(func(ev planner.ProgressEvent) {
+		s.recordDiscussionProgress(workCtx, id, "plan", ev)
+		_ = sse.send("progress", ev)
+	})
+	res, err := p.Generate(workCtx, req)
 	if err != nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
-	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
+	updated, err := s.d.Discussions.UpdatePlan(workCtx, user.ID, id, resp)
 	if err != nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	if updated == nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
-	_ = s.d.Discussions.AppendPlanTurn(r.Context(), user.ID, id, "Current plan", resp)
+	_ = s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Current plan", resp)
+	s.clearDiscussionProgress(workCtx, id)
 	_ = sse.send("done", updated)
 }
 
@@ -289,31 +322,46 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
+	defer cancel()
 	sse := newSSEWriter(w)
 	_ = sse.comment("ok")
-	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
-	res, err := p.Improve(r.Context(), d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
-	if err != nil {
+	s.recordDiscussionProgress(workCtx, id, "improve", planner.ProgressEvent{Phase: "thinking", Text: "Updating plan..."})
+	p.WithProgress(func(ev planner.ProgressEvent) {
+		s.recordDiscussionProgress(workCtx, id, "improve", ev)
+		_ = sse.send("progress", ev)
+	})
+	if err := s.d.Discussions.AppendEditTurn(workCtx, user.ID, id, "user", instruction); err != nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", instruction)
+	res, err := p.Improve(workCtx, d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
+	if err != nil {
+		s.clearDiscussionProgress(workCtx, id)
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	// Append the plan snapshot before UpdatePlan reloads, so the "done" payload
 	// already carries the new plan card in its edit-turn history.
-	if err := s.d.Discussions.AppendPlanTurn(r.Context(), user.ID, id, "Updated plan", resp); err != nil {
+	if err := s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Updated plan", resp); err != nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
+	updated, err := s.d.Discussions.UpdatePlan(workCtx, user.ID, id, resp)
 	if err != nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	if updated == nil {
+		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
+	s.clearDiscussionProgress(workCtx, id)
 	_ = sse.send("done", updated)
 }
 
@@ -336,12 +384,7 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	urls := make([]string, 0, len(req.URLs))
-	for _, u := range req.URLs {
-		if u = strings.TrimSpace(u); u != "" {
-			urls = append(urls, u)
-		}
-	}
+	urls := cleanedSourceURLs(req.URLs)
 	if len(urls) == 0 {
 		http.Error(w, "at least one url is required", http.StatusBadRequest)
 		return
@@ -361,6 +404,81 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, d)
 }
 
+// handleDiscussionAddSourcesStream is the streaming source-update path used by
+// the native client. It mirrors the edit stream contract: progress events while
+// links are read and the plan is rewritten, then a terminal done/error event so
+// the UI never waits on blind polling.
+func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil || d.Script == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req discussionAddSourcesRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	urls := cleanedSourceURLs(req.URLs)
+	if len(urls) == 0 {
+		http.Error(w, "at least one url is required", http.StatusBadRequest)
+		return
+	}
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	prev := *d.Script
+	prev.Sources = append([]config.Source(nil), d.Sources...)
+
+	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
+	defer cancel()
+	sse := newSSEWriter(w)
+	_ = sse.comment("ok")
+	s.recordDiscussionProgress(workCtx, id, "sources", planner.ProgressEvent{Phase: "read", Text: "Reading added sources..."})
+	p.WithProgress(func(ev planner.ProgressEvent) {
+		s.recordDiscussionProgress(workCtx, id, "sources", ev)
+		_ = sse.send("progress", ev)
+	})
+
+	if err := s.d.Discussions.AppendEditTurn(workCtx, user.ID, id, "user", addSourcesTurnText(urls)); err != nil {
+		s.clearDiscussionProgress(workCtx, id)
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	res, err := p.AddSources(workCtx, &prev, urls)
+	if err != nil {
+		s.clearDiscussionProgress(workCtx, id)
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	if err := s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Updated plan with added sources", resp); err != nil {
+		s.clearDiscussionProgress(workCtx, id)
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	updated, err := s.d.Discussions.UpdatePlan(workCtx, user.ID, id, resp)
+	if err != nil {
+		s.clearDiscussionProgress(workCtx, id)
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	if updated == nil {
+		s.clearDiscussionProgress(workCtx, id)
+		_ = sse.send("error", map[string]string{"message": "discussion not found"})
+		return
+	}
+	s.clearDiscussionProgress(workCtx, id)
+	_ = sse.send("done", updated)
+}
+
 // pastUserMessages pulls the text of prior "user" edit turns (oldest first) so
 // the planner can revise a plan with the full editing conversation in view, not
 // just the latest instruction. Plan-snapshot turns are skipped.
@@ -375,6 +493,41 @@ func pastUserMessages(turns []DiscussionEditTurn) []string {
 		}
 	}
 	return out
+}
+
+func (s *Server) applyDiscussionProgress(ctx context.Context, d *Discussion) {
+	if d == nil || s.d.Progress == nil {
+		return
+	}
+	d.Progress = s.d.Progress.Get(ctx, d.ID)
+}
+
+func (s *Server) recordDiscussionProgress(ctx context.Context, id, operation string, ev planner.ProgressEvent) {
+	if s.d.Progress == nil {
+		return
+	}
+	s.d.Progress.Set(ctx, id, DiscussionProgress{
+		Active:    true,
+		Operation: operation,
+		Phase:     ev.Phase,
+		Text:      ev.Text,
+	})
+}
+
+func (s *Server) clearDiscussionProgress(ctx context.Context, id string) {
+	if s.d.Progress != nil {
+		s.d.Progress.Clear(ctx, id)
+	}
+}
+
+func cleanedSourceURLs(raw []string) []string {
+	urls := make([]string, 0, len(raw))
+	for _, u := range raw {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
 
 // addSourcesTurnText renders the user-visible chat bubble for an add-sources

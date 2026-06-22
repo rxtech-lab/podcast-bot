@@ -170,10 +170,12 @@ func (p *Planner) AddSources(ctx context.Context, prev *config.DebateTopic, urls
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("at least one url is required")
 	}
+	p.emit("read", "Reading added sources…")
 	added := p.crawlURLs(ctx, urls)
 	if len(added) == 0 {
 		return nil, fmt.Errorf("none of the added links could be read")
 	}
+	p.emit("sources", fmt.Sprintf("Found %d added source%s", len(added), plural(len(added))))
 	sources := mergeSources(prev.Sources, added)
 	instruction := "Incorporate the substance of the newly added sources into the background and, " +
 		"where relevant, the discussants' angles. Keep the existing roster and structure unless the " +

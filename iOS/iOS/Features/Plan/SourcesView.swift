@@ -8,18 +8,24 @@ struct SourcesSheet: View {
 
     @State private var discussion: Discussion
 
-    var onUpdateStarted: () -> Void
+    var allowsAddingSources: Bool
+    var onUpdateStarted: ([String]) -> Void
+    var onUpdateProgress: (PlanProgressEvent) -> Void
     var onUpdated: (Discussion) -> Void
     var onUpdateFailed: (String) -> Void
 
     init(
         discussion: Discussion,
-        onUpdateStarted: @escaping () -> Void = {},
+        allowsAddingSources: Bool = true,
+        onUpdateStarted: @escaping ([String]) -> Void = { _ in },
+        onUpdateProgress: @escaping (PlanProgressEvent) -> Void = { _ in },
         onUpdated: @escaping (Discussion) -> Void = { _ in },
         onUpdateFailed: @escaping (String) -> Void = { _ in }
     ) {
         _discussion = State(initialValue: discussion)
+        self.allowsAddingSources = allowsAddingSources
         self.onUpdateStarted = onUpdateStarted
+        self.onUpdateProgress = onUpdateProgress
         self.onUpdated = onUpdated
         self.onUpdateFailed = onUpdateFailed
     }
@@ -36,7 +42,9 @@ struct SourcesSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    addSourcesLink
+                    if allowsAddingSources {
+                        addSourcesLink
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }
@@ -49,7 +57,7 @@ struct SourcesSheet: View {
     private var list: some View {
         List {
             if sources.isEmpty {
-                Text("No sources yet. Add a source from the toolbar and the agent will research it and update the plan.")
+                Text(emptySourcesText)
                     .font(.callout)
                     .foregroundStyle(Theme.secondaryText)
                     .listRowBackground(Color.clear)
@@ -71,6 +79,13 @@ struct SourcesSheet: View {
         .interactiveDismissDisabled()
     }
 
+    private var emptySourcesText: String {
+        if allowsAddingSources {
+            return "No sources yet. Add a source from the toolbar and the agent will research it and update the plan."
+        }
+        return "No sources were saved for this plan."
+    }
+
     @ViewBuilder
     private func sourceRow(_ source: PlanSourceSnapshot) -> some View {
         NavigationLink {
@@ -80,7 +95,7 @@ struct SourcesSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(source.displayTitle)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     if !source.urlString.isEmpty {
                         Text(source.urlString)
                             .font(.caption2)
@@ -92,17 +107,18 @@ struct SourcesSheet: View {
             }
         }
         .buttonStyle(.plain)
-        .listRowBackground(Color.white.opacity(0.05))
+        .listRowBackground(Theme.rowBackground)
     }
 
     private var addSourcesLink: some View {
         NavigationLink {
             AddSourcesView(
                 discussionID: discussion.id,
-                onSaveStarted: {
-                    onUpdateStarted()
+                onSaveStarted: { urls in
+                    onUpdateStarted(urls)
                     dismiss()
                 },
+                onProgress: onUpdateProgress,
                 onUpdated: { updated in
                     discussion = updated
                     onUpdated(updated)
@@ -127,12 +143,14 @@ private struct AddSourcesView: View {
     @Environment(AuthManager.self) private var auth
 
     let discussionID: String
-    var onSaveStarted: () -> Void
+    var onSaveStarted: ([String]) -> Void
+    var onProgress: (PlanProgressEvent) -> Void
     var onUpdated: (Discussion) -> Void
     var onFailed: (String) -> Void
 
     @State private var inputText = ""
     @State private var links: [DraftWebLink] = []
+    @State private var selectedLinkIDs = Set<DraftWebLink.ID>()
     @State private var isSearching = false
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -175,19 +193,13 @@ private struct AddSourcesView: View {
                     .listRowBackground(Color.clear)
             } else {
                 ForEach(links) { link in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(link.displayTitle)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.white)
-                        Text(link.urlString)
-                            .font(.caption2)
-                            .foregroundStyle(Theme.accent)
-                            .lineLimit(1)
-                    }
-                    .listRowBackground(Color.white.opacity(0.05))
+                    linkRow(link)
+                    .listRowBackground(Theme.rowBackground)
                 }
                 .onDelete { offsets in
+                    let deletedIDs = offsets.map { links[$0].id }
                     links.remove(atOffsets: offsets)
+                    selectedLinkIDs.subtract(deletedIDs)
                 }
             }
             if let errorMessage {
@@ -212,6 +224,37 @@ private struct AddSourcesView: View {
         .scrollContentBackground(.hidden)
     }
 
+    private func linkRow(_ link: DraftWebLink) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Button {
+                toggleSelection(for: link)
+            } label: {
+                Image(systemName: selectedLinkIDs.contains(link.id) ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(selectedLinkIDs.contains(link.id) ? Theme.accent : Theme.secondaryText)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(selectedLinkIDs.contains(link.id) ? "Deselect source" : "Select source")
+            .accessibilityValue(link.displayTitle)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(link.displayTitle)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(link.urlString)
+                    .font(.caption2)
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                toggleSelection(for: link)
+            }
+        }
+    }
+
     private var trimmedInput: String {
         inputText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -220,8 +263,12 @@ private struct AddSourcesView: View {
         normalizedLink(inputText)
     }
 
+    private var selectedLinks: [DraftWebLink] {
+        links.filter { selectedLinkIDs.contains($0.id) }
+    }
+
     private var canSave: Bool {
-        !links.isEmpty && !isSearching && !isSaving
+        !selectedLinkIDs.isEmpty && !isSearching && !isSaving
     }
 
     private func submitInput() {
@@ -234,7 +281,7 @@ private struct AddSourcesView: View {
     }
 
     private func addLink(_ url: String) {
-        appendLinks([DraftWebLink(title: "", urlString: url)])
+        appendLinks([DraftWebLink(title: "", urlString: url)], selected: true)
         inputText = ""
     }
 
@@ -248,7 +295,7 @@ private struct AddSourcesView: View {
             do {
                 let found = try await api.searchDiscussionSources(id: discussionID, query: query)
                 let mapped = found.map { DraftWebLink(title: $0.title, urlString: $0.url) }
-                appendLinks(mapped)
+                appendLinks(mapped, selected: false)
                 isSearching = false
             } catch {
                 isSearching = false
@@ -258,17 +305,34 @@ private struct AddSourcesView: View {
     }
 
     private func save() {
-        guard !links.isEmpty, !isSaving else { return }
+        let chosenLinks = selectedLinks
+        guard !chosenLinks.isEmpty, !isSaving else { return }
         isSaving = true
         errorMessage = nil
-        let urls = links.map(\.urlString)
+        let urls = chosenLinks.map(\.urlString)
         let api = APIClient(tokens: auth)
-        onSaveStarted()
+        onSaveStarted(urls)
         Task {
             do {
-                let updated = try await api.addDiscussionSources(id: discussionID, urls: urls)
-                isSaving = false
-                onUpdated(updated)
+                var didFinish = false
+                for try await event in api.addDiscussionSourcesStream(id: discussionID, urls: urls) {
+                    switch event {
+                    case let .progress(step):
+                        onProgress(step)
+                    case let .done(updated):
+                        didFinish = true
+                        isSaving = false
+                        onUpdated(updated)
+                    case let .failed(message):
+                        didFinish = true
+                        isSaving = false
+                        onFailed(message)
+                    }
+                }
+                if !didFinish {
+                    isSaving = false
+                    onFailed("The plan update stopped before it finished. Please try again.")
+                }
             } catch {
                 let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
                 isSaving = false
@@ -278,11 +342,23 @@ private struct AddSourcesView: View {
         }
     }
 
-    private func appendLinks(_ candidates: [DraftWebLink]) {
+    private func toggleSelection(for link: DraftWebLink) {
+        if selectedLinkIDs.contains(link.id) {
+            selectedLinkIDs.remove(link.id)
+        } else {
+            selectedLinkIDs.insert(link.id)
+        }
+    }
+
+    private func appendLinks(_ candidates: [DraftWebLink], selected: Bool) {
         var seen = Set(links.map { $0.urlString })
         for candidate in candidates {
             guard let url = normalizedLink(candidate.urlString), !seen.contains(url) else { continue }
-            links.append(DraftWebLink(title: candidate.title, urlString: url))
+            let link = DraftWebLink(title: candidate.title, urlString: url)
+            links.append(link)
+            if selected {
+                selectedLinkIDs.insert(link.id)
+            }
             seen.insert(url)
         }
     }
@@ -315,7 +391,7 @@ private struct SourceDetailView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(source.displayTitle)
                             .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         if let url = source.url {
                             Link(source.urlString, destination: url)
                                 .font(.caption)

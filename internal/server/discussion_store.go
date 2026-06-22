@@ -43,6 +43,7 @@ type DiscussionLine struct {
 }
 
 type DiscussionEditTurn struct {
+	ID   int64  `json:"id,omitempty"`
 	Role string `json:"role"`
 	Text string `json:"text,omitempty"`
 	// Script/Sources/Markdown snapshot the plan as it stood at this turn so the
@@ -77,6 +78,9 @@ type Discussion struct {
 	Researched       bool                 `json:"researched"`
 	Lines            []DiscussionLine     `json:"lines,omitempty"`
 	EditTurns        []DiscussionEditTurn `json:"edit_turns,omitempty"`
+	EditTurnsHasMore bool                 `json:"edit_turns_has_more,omitempty"`
+	EditTurnsBefore  int64                `json:"edit_turns_before,omitempty"`
+	Progress         *DiscussionProgress  `json:"progress,omitempty"`
 	CreatedAt        time.Time            `json:"created_at"`
 	UpdatedAt        time.Time            `json:"updated_at"`
 }
@@ -314,6 +318,24 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 }
 
 func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussion, error) {
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return d, err
+	}
+	lines, err := s.Lines(ctx, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	d.Lines = lines
+	turns, err := s.EditTurns(ctx, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	d.EditTurns = turns
+	return d, nil
+}
+
+func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (*Discussion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
 		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 		tts_cost_usd, music_cost_usd,
@@ -326,17 +348,29 @@ func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussio
 		}
 		return nil, err
 	}
+	return &d, nil
+}
+
+func (s *DiscussionStore) GetWithEditTurnPage(ctx context.Context, owner, id string, limit int, beforeID int64) (*Discussion, error) {
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return d, err
+	}
 	lines, err := s.Lines(ctx, owner, id)
 	if err != nil {
 		return nil, err
 	}
 	d.Lines = lines
-	turns, err := s.EditTurns(ctx, owner, id)
+	turns, hasMore, err := s.EditTurnsPage(ctx, owner, id, limit, beforeID)
 	if err != nil {
 		return nil, err
 	}
 	d.EditTurns = turns
-	return &d, nil
+	d.EditTurnsHasMore = hasMore
+	if len(turns) > 0 {
+		d.EditTurnsBefore = turns[0].ID
+	}
+	return d, nil
 }
 
 func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp planResponse) (*Discussion, error) {
@@ -500,18 +534,59 @@ func (s *DiscussionStore) EditTurns(ctx context.Context, owner, id string) ([]Di
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT role, text, script_json, sources_json, markdown, created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, role, text, script_json, sources_json, markdown, created_at
 		FROM native_discussion_edit_turns WHERE discussion_id = ? ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanEditTurns(rows)
+}
+
+func (s *DiscussionStore) EditTurnsPage(ctx context.Context, owner, id string, limit int, beforeID int64) ([]DiscussionEditTurn, bool, error) {
+	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
+		return nil, false, err
+	}
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	args := []any{id}
+	where := "discussion_id = ?"
+	if beforeID > 0 {
+		where += " AND id < ?"
+		args = append(args, beforeID)
+	}
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, role, text, script_json, sources_json, markdown, created_at
+		FROM native_discussion_edit_turns WHERE `+where+` ORDER BY id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	out, err := scanEditTurns(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, hasMore, nil
+}
+
+func scanEditTurns(rows *sql.Rows) ([]DiscussionEditTurn, error) {
 	out := make([]DiscussionEditTurn, 0)
 	for rows.Next() {
 		var t DiscussionEditTurn
 		var scriptJSON, sourcesJSON string
 		var created int64
-		if err := rows.Scan(&t.Role, &t.Text, &scriptJSON, &sourcesJSON, &t.Markdown, &created); err != nil {
+		if err := rows.Scan(&t.ID, &t.Role, &t.Text, &scriptJSON, &sourcesJSON, &t.Markdown, &created); err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(scriptJSON) != "" {

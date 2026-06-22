@@ -25,6 +25,15 @@ struct PlanDetailView: View {
     @State private var progressText: String?
     /// Guards the one-time auto-stream of `initialPlan` so re-renders don't restart it.
     @State private var didStartInitialPlan = false
+    @State private var didLoadInitialHistory = false
+    @State private var isLoadingInitialHistory = false
+    @State private var isLoadingOlderHistory = false
+    @State private var hasMoreEditHistory = false
+    @State private var editHistoryBeforeID: Int64?
+    @State private var progressRecoveryTask: Task<Void, Never>?
+
+    private let historyPageSize = 20
+    private var recoveredLoadingID: String { "recovered-progress-\(discussion.id)" }
 
     init(discussion: Discussion, initialPlan: PlanRequest? = nil,
          onGenerated: @escaping (Discussion) -> Void = { _ in }) {
@@ -69,7 +78,7 @@ struct PlanDetailView: View {
                     }
                 }
                 .labelStyle(.iconOnly)
-                .disabled(isGenerating || isImproving || discussion.script == nil)
+                .disabled(isGenerating || isImproving || isEditStreaming || discussion.script == nil)
                 .accessibilityLabel("Generate podcast")
             }
         }
@@ -87,6 +96,7 @@ struct PlanDetailView: View {
             SourcesSheet(
                 discussion: discussion,
                 onUpdateStarted: beginSourceUpdate,
+                onUpdateProgress: { progressText = $0.text },
                 onUpdated: { updated in
                     discussion = updated
                     appendUpdatedPlan()
@@ -97,29 +107,67 @@ struct PlanDetailView: View {
     }
 
     private var content: some View {
-        MessageList(
-            messages: editTurns,
-            isStreaming: isEditStreaming,
-            isAtBottom: $editIsAtBottom
-        ) { turn in
-            PlanEditBubble(turn: turn, progressText: progressText) {
-                showingSources = true
+        ZStack {
+            MessageList(
+                messages: editTurns,
+                isStreaming: isEditStreaming,
+                isAtBottom: $editIsAtBottom,
+                hasMorePrevious: { hasMoreEditHistory },
+                loadMorePrevious: loadOlderHistory,
+                onLoadError: { _, error in
+                    errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                }
+            ) { turn in
+                PlanEditBubble(turn: turn, progressText: progressText) {
+                    showingSources = true
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
+            .scrollDismissesKeyboard(.interactively)
+            .contentMargins(.bottom, 96, for: .scrollContent)
+
+            if isShowingInitialHistoryLoading {
+                initialHistoryLoadingView
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .allowsHitTesting(false)
+            }
         }
-        .scrollDismissesKeyboard(.interactively)
-        .contentMargins(.bottom, 96, for: .scrollContent)
+        .animation(.easeInOut(duration: 0.18), value: isShowingInitialHistoryLoading)
         .onAppear {
             if initialPlan != nil, discussion.script == nil {
                 startInitialPlan()
-            } else {
+            } else if discussion.progress?.active == true {
+                restoreProgressIfNeeded(from: discussion)
+            } else if discussion.editTurns != nil || discussion.script != nil {
                 seedInitialTurnIfNeeded()
             }
         }
-        .task {
-            await loadFullHistory()
+        .task(id: discussion.id) {
+            await loadInitialHistory()
         }
+        .onDisappear {
+            stopProgressRecoveryPoll()
+        }
+    }
+
+    private var isShowingInitialHistoryLoading: Bool {
+        isLoadingInitialHistory && editTurns.isEmpty
+    }
+
+    private var initialHistoryLoadingView: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .tint(Theme.accent)
+            Text("Loading messages...")
+                .font(.callout)
+                .foregroundStyle(Theme.secondaryText)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(Theme.agentBubble, in: .rect(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading messages")
     }
 
     /// Streaming is in effect whenever a loading row is present — the user just
@@ -142,18 +190,156 @@ struct PlanDetailView: View {
     /// The discussion handed in from the library list doesn't carry edit history
     /// (only GET /api/discussions/{id} loads it). Fetch the full record once and,
     /// as long as the user hasn't started editing, rebuild the chat from it.
-    private func loadFullHistory() async {
+    private func loadInitialHistory() async {
         // A freshly-created discussion streams its plan via startInitialPlan(); it
         // has no prior history to load and a late fetch could clobber the result.
         guard initialPlan == nil else { return }
-        guard discussion.editTurns == nil else { return }
-        let api = APIClient(tokens: auth)
-        guard let full = try? await api.discussion(id: discussion.id) else { return }
-        let canRebuild = !isImproving && editTurns.allSatisfy { $0.role == .plan }
-        discussion = full
-        if canRebuild {
-            editTurns = rebuiltHistory()
+        guard !didLoadInitialHistory else { return }
+        didLoadInitialHistory = true
+        let shouldShowLoading = editTurns.isEmpty && discussion.progress?.active != true
+        if shouldShowLoading {
+            isLoadingInitialHistory = true
         }
+        defer {
+            if shouldShowLoading {
+                isLoadingInitialHistory = false
+            }
+        }
+        if discussion.editTurns != nil {
+            updateHistoryPaging(from: discussion)
+            if discussion.progress?.active == true {
+                restoreProgressIfNeeded(from: discussion)
+            } else if !isImproving {
+                editTurns = rebuiltHistory()
+            } else {
+                mergeHistoryRows(from: discussion)
+            }
+            return
+        }
+        let api = APIClient(tokens: auth)
+        guard let full = try? await api.discussion(id: discussion.id, editLimit: historyPageSize) else {
+            if discussion.progress?.active == true {
+                restoreProgressIfNeeded(from: discussion)
+            } else if editTurns.isEmpty {
+                seedInitialTurnIfNeeded()
+            }
+            return
+        }
+        discussion = full
+        updateHistoryPaging(from: full)
+        if full.progress?.active == true {
+            restoreProgressIfNeeded(from: full)
+            return
+        }
+        if !isImproving {
+            editTurns = rebuiltHistory()
+        } else {
+            mergeHistoryRows(from: full)
+        }
+    }
+
+    private func loadOlderHistory() async throws {
+        guard hasMoreEditHistory, !isLoadingOlderHistory, let beforeID = editHistoryBeforeID else { return }
+        isLoadingOlderHistory = true
+        defer { isLoadingOlderHistory = false }
+        let older = try await APIClient(tokens: auth).discussion(
+            id: discussion.id,
+            editLimit: historyPageSize,
+            editBefore: beforeID
+        )
+        updateHistoryPaging(from: older)
+        let olderTurns = older.editTurns ?? []
+        guard !olderTurns.isEmpty else { return }
+        let existingDTOs = discussion.editTurns ?? []
+        let existingIDs = Set(existingDTOs.compactMap(\.id))
+        discussion.editTurns = olderTurns.filter { turn in
+            guard let id = turn.id else { return true }
+            return !existingIDs.contains(id)
+        } + existingDTOs
+
+        let existingRows = Set(editTurns.map(\.id))
+        let rowsToPrepend = rows(from: olderTurns).filter { !existingRows.contains($0.id) }
+        guard !rowsToPrepend.isEmpty else { return }
+        editTurns = rowsToPrepend + editTurns
+    }
+
+    private func updateHistoryPaging(from loaded: Discussion) {
+        hasMoreEditHistory = loaded.editTurnsHasMore == true
+        editHistoryBeforeID = loaded.editTurnsBefore
+    }
+
+    private func restoreProgressIfNeeded(from loaded: Discussion) {
+        guard let progress = loaded.progress, progress.active else { return }
+        isImproving = true
+        progressText = progress.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? progress.text
+            : "Updating plan..."
+        mergeRecoveredHistory(from: loaded, progress: progress)
+        appendRecoveredLoadingRow()
+        startProgressRecoveryPoll()
+    }
+
+    private func recoveredHistory(from loaded: Discussion, progress: DiscussionProgressDTO) -> [PlanEditTurn] {
+        let historyRows = rows(from: loaded.editTurns ?? [])
+        if !historyRows.isEmpty {
+            return historyRows
+        }
+        if loaded.script != nil {
+            return [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: loaded))]
+        }
+        return [.user(recoveredContextText(for: progress, discussion: loaded), id: "recovered-context-\(loaded.id)")]
+    }
+
+    private func recoveredContextText(for progress: DiscussionProgressDTO, discussion: Discussion) -> String {
+        switch progress.operation {
+        case "sources":
+            return "Adding sources"
+        case "plan":
+            let topic = discussion.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+            return topic.isEmpty ? "Creating plan" : topic
+        default:
+            return "Updating plan"
+        }
+    }
+
+    private func startProgressRecoveryPoll(waitForActiveProgress: Bool = false) {
+        progressRecoveryTask?.cancel()
+        let discussionID = discussion.id
+        let api = APIClient(tokens: auth)
+        progressRecoveryTask = Task {
+            var observedActiveProgress = !waitForActiveProgress
+            for _ in 0 ..< 300 {
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .seconds(2))
+                guard let full = try? await api.discussion(id: discussionID, editLimit: historyPageSize) else {
+                    continue
+                }
+                discussion = full
+                updateHistoryPaging(from: full)
+                if let progress = full.progress, progress.active {
+                    observedActiveProgress = true
+                    progressText = progress.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? progress.text
+                        : progressText
+                    mergeRecoveredHistory(from: full, progress: progress)
+                    appendRecoveredLoadingRow()
+                    continue
+                }
+                if waitForActiveProgress && !observedActiveProgress {
+                    continue
+                }
+                progressText = nil
+                isImproving = false
+                editTurns = rebuiltHistory()
+                progressRecoveryTask = nil
+                return
+            }
+        }
+    }
+
+    private func stopProgressRecoveryPoll() {
+        progressRecoveryTask?.cancel()
+        progressRecoveryTask = nil
     }
 
     /// Builds the chat rows from the server-persisted edit history so the
@@ -163,47 +349,96 @@ struct PlanDetailView: View {
     /// snapshots existed, and to a single "Current plan" card when there's no
     /// history at all.
     private func rebuiltHistory() -> [PlanEditTurn] {
-        var rows: [PlanEditTurn] = []
-        if let history = discussion.editTurns, !history.isEmpty {
-            rows = history.compactMap { turn in
-                switch turn.role {
-                case "user":
-                    let text = (turn.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    return text.isEmpty ? nil : .user(text)
-                case "plan":
-                    let snapshot = turn.script != nil
-                        ? PlanSnapshot(turn: turn, topic: discussion.topic)
-                        : PlanSnapshot(discussion: discussion)
-                    let label = (turn.text?.isEmpty == false) ? turn.text! : "Plan"
-                    return .plan(label: label, snapshot: snapshot)
-                default:
-                    return nil
-                }
-            }
-        }
+        var rows = rows(from: discussion.editTurns ?? [])
         if rows.isEmpty {
             rows = [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: discussion))]
         }
         return rows
     }
 
-    private func appendUpdatedPlan() {
-        progressText = nil
-        editTurns.removeAll { $0.role == .loading }
-        editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion)))
+    private func rows(from history: [DiscussionEditTurnDTO]) -> [PlanEditTurn] {
+        history.compactMap { turn in
+            switch turn.role {
+            case "user":
+                let text = (turn.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.isEmpty ? nil : .user(text, id: turn.planEditTurnID)
+            case "plan":
+                let snapshot = turn.script != nil
+                    ? PlanSnapshot(turn: turn, topic: discussion.topic)
+                    : PlanSnapshot(discussion: discussion)
+                let label = (turn.text?.isEmpty == false) ? turn.text! : "Plan"
+                return .plan(label: label, snapshot: snapshot, id: turn.planEditTurnID)
+            default:
+                return nil
+            }
+        }
     }
 
-    private func beginSourceUpdate() {
-        errorMessage = nil
-        progressText = nil
+    private func mergeHistoryRows(from loaded: Discussion) {
+        let serverRows = rows(from: loaded.editTurns ?? [])
+        guard !serverRows.isEmpty else { return }
+        editTurns = mergedRows(serverRows: serverRows, existingRows: editTurns)
+    }
+
+    private func mergeRecoveredHistory(from loaded: Discussion, progress: DiscussionProgressDTO) {
+        let recoveredRows = recoveredHistory(from: loaded, progress: progress)
+        editTurns = mergedRows(serverRows: recoveredRows, existingRows: editTurns)
+    }
+
+    private func mergedRows(serverRows: [PlanEditTurn], existingRows: [PlanEditTurn]) -> [PlanEditTurn] {
+        guard !serverRows.isEmpty else {
+            return existingRows.filter { $0.role != .loading }
+        }
+        var merged = serverRows
+        for row in existingRows {
+            guard row.role != .loading, !row.isHistoryBacked, !row.isFallbackCurrentPlan else { continue }
+            guard row.role == .user || row.role == .error else { continue }
+            guard !merged.contains(where: { $0.representsSameVisibleTurn(as: row) }) else { continue }
+            merged.append(row)
+        }
+        return merged
+    }
+
+    private func appendRecoveredLoadingRow() {
         editTurns.removeAll { $0.role == .loading }
-        editTurns.append(.loading)
+        editTurns.append(.loading(id: recoveredLoadingID))
+    }
+
+    private func appendUpdatedPlan() {
+        stopProgressRecoveryPoll()
+        progressText = nil
+        isImproving = false
+        editTurns.removeAll { $0.role == .loading }
+        let historyRows = rows(from: discussion.editTurns ?? [])
+        if !historyRows.isEmpty {
+            editTurns = mergedRows(serverRows: historyRows, existingRows: editTurns)
+        } else {
+            editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion)))
+        }
+    }
+
+    private func beginSourceUpdate(urls: [String]) {
+        errorMessage = nil
+        isImproving = true
+        progressText = "Reading added sources..."
+        editTurns.removeAll { $0.role == .loading }
+        editTurns.append(.user(sourceUpdateText(urls: urls)))
+        editTurns.append(.loading())
+        startProgressRecoveryPoll(waitForActiveProgress: true)
     }
 
     private func appendError(_ message: String) {
+        stopProgressRecoveryPoll()
         progressText = nil
+        isImproving = false
         editTurns.removeAll { $0.role == .loading }
         editTurns.append(.error(message))
+    }
+
+    private func sourceUpdateText(urls: [String]) -> String {
+        var lines = ["Added \(urls.count) source\(urls.count == 1 ? "" : "s"):"]
+        lines.append(contentsOf: urls)
+        return lines.joined(separator: "\n")
     }
 
     private var editBar: some View {
@@ -239,7 +474,7 @@ struct PlanDetailView: View {
     /// Allow sending when there's an instruction (and nothing is in flight).
     private var canSend: Bool {
         !instruction.trimmingCharacters(in: .whitespaces).isEmpty
-            && !isImproving && !isGenerating && !attachments.isUploading
+            && !isImproving && !isEditStreaming && !isGenerating && !attachments.isUploading
     }
 
     /// Streams the initial plan into a freshly-created placeholder discussion,
@@ -249,7 +484,7 @@ struct PlanDetailView: View {
     private func startInitialPlan() {
         guard !didStartInitialPlan, let request = initialPlan else { return }
         didStartInitialPlan = true
-        editTurns = [.loading]
+        editTurns = [.loading()]
         isImproving = true
         errorMessage = nil
         progressText = "Researching & planning…"
@@ -315,7 +550,7 @@ struct PlanDetailView: View {
         instruction = ""
         attachments = []
         editTurns.append(.user(text))
-        editTurns.append(.loading)
+        editTurns.append(.loading())
         isImproving = true
         errorMessage = nil
         progressText = nil
@@ -403,7 +638,7 @@ private struct PlanEditTurn: Identifiable, MessageListItem {
         case error
     }
 
-    let id = UUID()
+    let id: String
     let role: Role
     let label: String?
     let text: String?
@@ -415,20 +650,45 @@ private struct PlanEditTurn: Identifiable, MessageListItem {
     /// updated plan (or an error) replaces it.
     var isMessageListAccessory: Bool { role == .loading }
 
-    static func user(_ text: String) -> PlanEditTurn {
-        PlanEditTurn(role: .user, label: nil, text: text, snapshot: nil)
+    static func user(_ text: String, id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .user, label: nil, text: text, snapshot: nil)
     }
 
-    static func plan(label: String, snapshot: PlanSnapshot) -> PlanEditTurn {
-        PlanEditTurn(role: .plan, label: label, text: nil, snapshot: snapshot)
+    static func plan(label: String, snapshot: PlanSnapshot, id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .plan, label: label, text: nil, snapshot: snapshot)
     }
 
-    static var loading: PlanEditTurn {
-        PlanEditTurn(role: .loading, label: nil, text: nil, snapshot: nil)
+    static func loading(id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .loading, label: nil, text: nil, snapshot: nil)
     }
 
-    static func error(_ message: String) -> PlanEditTurn {
-        PlanEditTurn(role: .error, label: nil, text: message, snapshot: nil)
+    static func error(_ message: String, id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .error, label: nil, text: message, snapshot: nil)
+    }
+
+    var isHistoryBacked: Bool {
+        id.hasPrefix("history-")
+    }
+
+    var isFallbackCurrentPlan: Bool {
+        role == .plan && !isHistoryBacked && label == "Current plan"
+    }
+
+    func representsSameVisibleTurn(as other: PlanEditTurn) -> Bool {
+        role == other.role
+            && normalized(text) == normalized(other.text)
+            && normalized(label) == normalized(other.label)
+    }
+
+    private func normalized(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private extension DiscussionEditTurnDTO {
+    var planEditTurnID: String {
+        if let id { return "history-\(id)" }
+        return "history-\(role)-\(createdAt ?? "")-\(text ?? "")"
     }
 }
 
@@ -573,7 +833,7 @@ private struct PlanDetailPinPreview: View {
         guard !text.isEmpty else { return }
         instruction = ""
         turns.append(.user(text))
-        turns.append(.loading)
+        turns.append(.loading())
         replyTask?.cancel()
         replyTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))

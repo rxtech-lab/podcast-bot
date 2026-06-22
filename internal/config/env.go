@@ -119,6 +119,12 @@ type Env struct {
 	TursoConnectionURL string
 	TursoAuthToken     string
 
+	// RedisURL configures cluster Redis for transient stream recovery state.
+	// Persistent discussion data remains in the database; Redis only stores
+	// latest progress/status so reconnecting clients can restore the visible
+	// loading state. Empty disables Redis-backed recovery.
+	RedisURL string
+
 	// PersistentRoot is the non-session base directory for cross-run
 	// archives — today only the series content type uses it (every
 	// episode writes its assets to
@@ -186,6 +192,7 @@ func LoadEnv() (*Env, error) {
 
 		TursoConnectionURL: strings.TrimSpace(os.Getenv("TURSO_CONNECTION_URL")),
 		TursoAuthToken:     strings.TrimSpace(os.Getenv("TURSO_AUTH_TOKEN")),
+		RedisURL:           strings.TrimSpace(os.Getenv("REDIS_URL")),
 	}
 
 	if e.CompressionBaseURL == "" {

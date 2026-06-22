@@ -91,7 +91,7 @@ struct PlanSnapshotCard: View {
                 if !snapshot.title.isEmpty {
                     Text(snapshot.title)
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                 }
                 if !snapshot.topic.isEmpty {
                     Text("Topic: \(snapshot.topic)")

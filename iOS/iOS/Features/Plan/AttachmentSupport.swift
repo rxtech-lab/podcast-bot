@@ -137,7 +137,7 @@ struct AttachmentsRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Attach files")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text("PDF, Word, slides, images")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondaryText)
@@ -169,7 +169,7 @@ struct AttachmentsRow: View {
             Text(att.filename)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             Button {
                 attachments.removeAll { $0.id == att.id }
             } label: {

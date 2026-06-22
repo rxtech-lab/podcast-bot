@@ -352,8 +352,6 @@ private struct PlanSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var discussion: Discussion
     @State private var showingSources = false
-    @State private var isUpdatingSources = false
-    @State private var sourceErrorMessage: String?
 
     init(discussion: Discussion) {
         _discussion = State(initialValue: discussion)
@@ -367,25 +365,6 @@ private struct PlanSheetView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion)) {
                             showingSources = true
-                        }
-                        if isUpdatingSources {
-                            HStack(spacing: 10) {
-                                ProgressView().tint(Theme.accent)
-                                Text("Updating plan...")
-                                    .font(.callout)
-                                    .foregroundStyle(Theme.secondaryText)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                            .background(Theme.agentBubble, in: .rect(cornerRadius: 20))
-                        }
-                        if let sourceErrorMessage {
-                            Text(sourceErrorMessage)
-                                .font(.callout)
-                                .foregroundStyle(.red)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 11)
-                                .background(Color.red.opacity(0.12), in: .rect(cornerRadius: 20))
                         }
                     }
                     .padding(16)
@@ -407,18 +386,7 @@ private struct PlanSheetView: View {
             .sheet(isPresented: $showingSources) {
                 SourcesSheet(
                     discussion: discussion,
-                    onUpdateStarted: {
-                        isUpdatingSources = true
-                        sourceErrorMessage = nil
-                    },
-                    onUpdated: { updated in
-                        discussion = updated
-                        isUpdatingSources = false
-                    },
-                    onUpdateFailed: { message in
-                        isUpdatingSources = false
-                        sourceErrorMessage = message
-                    }
+                    allowsAddingSources: false
                 )
             }
         }
@@ -665,7 +633,7 @@ private struct MusicPlayerBar: View {
             Button(action: model.togglePlay) {
                 Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                     .font(.title3)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .glassEffect(in: .circle)
             }

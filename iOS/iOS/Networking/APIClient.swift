@@ -60,8 +60,15 @@ final class APIClient: Sendable {
         ])
     }
 
-    func discussion(id: String) async throws -> Discussion {
-        try await get("/api/discussions/\(id)")
+    func discussion(id: String, editLimit: Int? = nil, editBefore: Int64? = nil) async throws -> Discussion {
+        var query: [URLQueryItem] = []
+        if let editLimit {
+            query.append(URLQueryItem(name: "edit_limit", value: String(editLimit)))
+        }
+        if let editBefore {
+            query.append(URLQueryItem(name: "edit_before", value: String(editBefore)))
+        }
+        return try await get("/api/discussions/\(id)", query: query)
     }
 
     func planDiscussion(_ req: PlanRequest) async throws -> Discussion {
@@ -100,6 +107,12 @@ final class APIClient: Sendable {
             body: DiscussionImproveRequest(instruction: instruction,
                                            attachments: attachments.isEmpty ? nil : attachments)
         )
+    }
+
+    /// Streaming re-research: reads the given links, folds them into the plan,
+    /// and emits the updated discussion as a terminal `.done` event.
+    func addDiscussionSourcesStream(id: String, urls: [String]) -> AsyncThrowingStream<PlanStreamEvent, Error> {
+        streamPlan(path: "/api/discussions/\(id)/sources/stream", body: AddSourcesRequest(urls: urls))
     }
 
     /// Re-research: starts a background server update for the given links, then

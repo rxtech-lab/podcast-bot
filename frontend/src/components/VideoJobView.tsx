@@ -268,7 +268,7 @@ export function VideoJobView() {
   }
 
   return (
-    <div className="dark relative flex min-h-screen flex-col bg-background text-foreground font-sans">
+    <div className="relative flex min-h-screen flex-col bg-background text-foreground font-sans">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-80"

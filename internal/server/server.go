@@ -73,6 +73,7 @@ type Deps struct {
 	Sessions    *SessionRegistry
 	Jobs        *JobRegistry
 	Discussions *DiscussionStore
+	Progress    *DiscussionProgressStore
 	Log         *slog.Logger
 	UploadRoot  string
 	SubmitJob   func(jobID string, sub JobSubmission) error
@@ -200,6 +201,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources", s.handleDiscussionAddSources)
+		s.mux.HandleFunc("POST /api/discussions/{id}/sources/stream", s.handleDiscussionAddSourcesStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)

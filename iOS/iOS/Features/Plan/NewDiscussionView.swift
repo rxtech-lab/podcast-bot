@@ -102,7 +102,7 @@ struct NewDiscussionView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Panelists")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text("\(discussants) people")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondaryText)
@@ -116,7 +116,7 @@ struct NewDiscussionView: View {
 
     private var rowDivider: some View {
         Divider()
-            .overlay(Color.white.opacity(0.1))
+            .overlay(Theme.divider.opacity(0.5))
             .padding(.leading, 46)
     }
 
@@ -195,7 +195,7 @@ struct DiscussionLanguageMenu: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.headline)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text(DiscussionLanguage.label(for: selection))
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondaryText)

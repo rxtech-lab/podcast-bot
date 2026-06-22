@@ -371,7 +371,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         }
 
         if isUserDrivenScroll, metrics.visibleMinY <= MessageListConstants.loadThreshold {
-            triggerLoadPreviousIfNeeded(contentHeight: metrics.contentHeight)
+            triggerLoadPreviousIfNeeded(contentHeight: metrics.contentHeight, proxy: proxy)
         } else if metrics.visibleMinY > MessageListConstants.loadThreshold {
             previousLoadContentHeight = nil
         }
@@ -474,14 +474,9 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         return UInt64(delay * 1_000_000_000)
     }
 
-    /// Positions the latest user turn by scrolling to the bottom anchor — NOT by
-    /// scrolling the user message to the top. Because the tail spacer is sized so that
-    /// `turnHeight + spacer == viewport`, scrolling to the bottom anchor lands the
-    /// latest user message at the top with the reserved space filling the rest. Using
-    /// the bottom anchor here (the same target the auto-scroll uses) means the two
-    /// never fight: a separate `scrollTo(userMessage, .top)` would disagree with the
-    /// auto-scroll whenever the spacer hadn't settled yet, which caused the visible
-    /// jump when a new message was added.
+    /// Positions the latest user turn after layout has measured its height. Short
+    /// turns use the bottom anchor plus tail spacer, while viewport-filling turns use
+    /// the user row's top edge because there is no spacer left to absorb the scroll.
     private func scrollLatestTurnIntoView(proxy: ScrollViewProxy, animated: Bool) {
         bottomScrollTask?.cancel()
         bottomScrollTask = nil
@@ -491,12 +486,11 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         pinTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled else { return }
+            await waitForPinnedTurnMeasurement()
+            guard !Task.isCancelled, pinning.pinnedUserMessageID != nil else { return }
 
             if animated {
-                ScrollToBottomDiag.record("scrollLatestTurnIntoView.animated", animated: true, streaming: isStreaming)
-                withAnimation(.spring(duration: MessageListConstants.pinAnimationSeconds, bounce: 0.05)) {
-                    proxy.scrollTo(MessageListConstants.bottomAnchorID, anchor: .bottom)
-                }
+                scrollPinnedTurnIntoPosition(proxy: proxy, animated: true, reason: "scrollLatestTurnIntoView.animated")
                 try? await Task.sleep(for: MessageListConstants.pinAnimationDuration)
             }
 
@@ -505,17 +499,47 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
             // two after the freshly-added content lays out).
             for attempt in 0 ..< 8 {
                 guard !Task.isCancelled else { return }
-                ScrollToBottomDiag.record("scrollLatestTurnIntoView.settle[\(attempt)]", animated: false, streaming: isStreaming)
-                var transaction = Transaction()
-                transaction.animation = nil
-                withTransaction(transaction) {
-                    proxy.scrollTo(MessageListConstants.bottomAnchorID, anchor: .bottom)
-                }
+                updateActiveTurnMaxMeasuredHeight()
+                scrollPinnedTurnIntoPosition(proxy: proxy, animated: false, reason: "scrollLatestTurnIntoView.settle[\(attempt)]")
                 try? await Task.sleep(for: .milliseconds(16))
             }
 
             guard !Task.isCancelled, pinning.isPinningUserMessage else { return }
             canReleasePinnedUserMessageByScroll = true
+        }
+    }
+
+    private func waitForPinnedTurnMeasurement() async {
+        for _ in 0 ..< MessageListConstants.pinMeasurementWaitFrames {
+            updateActiveTurnMaxMeasuredHeight()
+            guard pinning.pinnedUserMessageID != nil, activeTurnHeight <= 0 else { return }
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+    }
+
+    private func scrollPinnedTurnIntoPosition(proxy: ScrollViewProxy, animated: Bool, reason: String) {
+        guard let pinnedID = pinning.pinnedUserMessageID else { return }
+        let shouldUseUserTop = pinnedTurnFillsViewport
+        ScrollToBottomDiag.record("\(reason).\(shouldUseUserTop ? "userTop" : "bottom")", animated: animated, streaming: isStreaming)
+
+        func scroll() {
+            if shouldUseUserTop {
+                proxy.scrollTo(pinnedID, anchor: .top)
+            } else {
+                proxy.scrollTo(MessageListConstants.bottomAnchorID, anchor: .bottom)
+            }
+        }
+
+        if animated {
+            withAnimation(.spring(duration: MessageListConstants.pinAnimationSeconds, bounce: 0.05)) {
+                scroll()
+            }
+        } else {
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                scroll()
+            }
         }
     }
 
@@ -601,7 +625,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         }
     }
 
-    private func triggerLoadPreviousIfNeeded(contentHeight: CGFloat) {
+    private func triggerLoadPreviousIfNeeded(contentHeight: CGFloat, proxy: ScrollViewProxy) {
         guard !isLoadingPrevious,
               Date() >= previousLoadCooldownUntil,
               hasMorePrevious(),
@@ -611,6 +635,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
 
         previousLoadContentHeight = contentHeight
         isLoadingPrevious = true
+        let anchorID = messages.first?.id
         Task { @MainActor in
             defer {
                 previousLoadCooldownUntil = Date().addingTimeInterval(MessageListConstants.loadMoreCooldownSeconds)
@@ -618,6 +643,14 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
             }
             do {
                 try await loadMorePrevious()
+                await Task.yield()
+                if let anchorID {
+                    var transaction = Transaction()
+                    transaction.animation = nil
+                    withTransaction(transaction) {
+                        proxy.scrollTo(anchorID, anchor: .top)
+                    }
+                }
             } catch {
                 onLoadError(.previous, error)
             }
@@ -674,4 +707,5 @@ private nonisolated enum MessageListConstants {
     static let scrollAnimationSeconds: Double = 0.18
     static let pinAnimationDuration: Duration = .milliseconds(250)
     static let pinAnimationSeconds: Double = 0.25
+    static let pinMeasurementWaitFrames = 8
 }
