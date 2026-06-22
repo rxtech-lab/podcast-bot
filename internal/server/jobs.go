@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,11 +77,21 @@ type Job struct {
 	// object storage; empty when served from disk.
 	DownloadURL string `json:"download_url,omitempty"`
 
-	ElapsedMS   int64    `json:"elapsed_ms,omitempty"`
-	RemainingMS int64    `json:"remaining_ms,omitempty"`
-	Phase       string   `json:"phase,omitempty"`
-	PhaseLabel  string   `json:"phase_label,omitempty"`
-	Logs        []JobLog `json:"logs,omitempty"`
+	ElapsedMS        int64   `json:"elapsed_ms,omitempty"`
+	RemainingMS      int64   `json:"remaining_ms,omitempty"`
+	Phase            string  `json:"phase,omitempty"`
+	PhaseLabel       string  `json:"phase_label,omitempty"`
+	PromptTokens     int64   `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64   `json:"completion_tokens,omitempty"`
+	TotalTokens      int64   `json:"total_tokens,omitempty"`
+	LLMCostUSD       float64 `json:"llm_cost_usd,omitempty"`
+	LLMCostKnown     bool    `json:"llm_cost_known,omitempty"`
+	// TTSCostUSD and MusicCostUSD are the non-LLM API costs (Azure speech
+	// synthesis and Lyria music generation). They are added to LLMCostUSD to
+	// form the run's grand total cost shown to the user.
+	TTSCostUSD   float64  `json:"tts_cost_usd,omitempty"`
+	MusicCostUSD float64  `json:"music_cost_usd,omitempty"`
+	Logs         []JobLog `json:"logs,omitempty"`
 }
 
 // JobSubmission is the parsed multipart payload the server hands off to
@@ -106,6 +117,9 @@ type JobSubmission struct {
 	// the render stages, and all image generation, producing a downloadable
 	// mp3 (+ subtitles.vtt sidecar) instead of an mp4.
 	AudioOnly bool
+	// DiscussionID links a native-client discussion record to this render job.
+	// Empty for dashboard uploads and legacy multipart jobs.
+	DiscussionID string
 }
 
 // JobRegistry persists video-mode jobs and progress logs to SQLite.
@@ -123,29 +137,36 @@ type JobRegistry struct {
 }
 
 type videoJobRecord struct {
-	ID          string `gorm:"primaryKey"`
-	Status      string
-	Title       string
-	Type        string
-	Show        string
-	Season      int
-	Episode     int
-	Error       string
-	VideoPath   string
-	ArchivePath string
-	AudioPath   string
-	HasVideo    bool
-	HasArchive  bool
-	HasAudio    bool
-	AudioOnly   bool
-	S3Key       string
-	AudioS3Key  string
-	ElapsedMS   int64
-	RemainingMS int64
-	Phase       string
-	PhaseLabel  string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID               string `gorm:"primaryKey"`
+	Status           string
+	Title            string
+	Type             string
+	Show             string
+	Season           int
+	Episode          int
+	Error            string
+	VideoPath        string
+	ArchivePath      string
+	AudioPath        string
+	HasVideo         bool
+	HasArchive       bool
+	HasAudio         bool
+	AudioOnly        bool
+	S3Key            string
+	AudioS3Key       string
+	ElapsedMS        int64
+	RemainingMS      int64
+	Phase            string
+	PhaseLabel       string
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	LLMCostUSD       float64
+	LLMCostKnown     bool
+	TTSCostUSD       float64
+	MusicCostUSD     float64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (videoJobRecord) TableName() string { return "video_jobs" }
@@ -166,9 +187,15 @@ func NewJobRegistry(dbPath string) (*JobRegistry, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	gormLogger := logger.New(
+		stdlog.New(os.Stdout, "\r\n", stdlog.LstdFlags),
+		logger.Config{
+			SlowThreshold:             time.Second,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+		},
+	)
+	db, err := gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		return nil, err
 	}
@@ -371,56 +398,70 @@ func (r *JobRegistry) logs(jobID string) []JobLog {
 
 func jobFromRecord(rec videoJobRecord) Job {
 	return Job{
-		ID:          rec.ID,
-		Status:      JobStatus(rec.Status),
-		Title:       rec.Title,
-		Type:        rec.Type,
-		Show:        rec.Show,
-		Season:      rec.Season,
-		Episode:     rec.Episode,
-		Error:       rec.Error,
-		CreatedAt:   rec.CreatedAt,
-		UpdatedAt:   rec.UpdatedAt,
-		VideoPath:   rec.VideoPath,
-		ArchivePath: rec.ArchivePath,
-		AudioPath:   rec.AudioPath,
-		HasVideo:    rec.HasVideo,
-		HasArchive:  rec.HasArchive,
-		HasAudio:    rec.HasAudio,
-		AudioOnly:   rec.AudioOnly,
-		S3Key:       rec.S3Key,
-		AudioS3Key:  rec.AudioS3Key,
-		ElapsedMS:   rec.ElapsedMS,
-		RemainingMS: rec.RemainingMS,
-		Phase:       rec.Phase,
-		PhaseLabel:  rec.PhaseLabel,
+		ID:               rec.ID,
+		Status:           JobStatus(rec.Status),
+		Title:            rec.Title,
+		Type:             rec.Type,
+		Show:             rec.Show,
+		Season:           rec.Season,
+		Episode:          rec.Episode,
+		Error:            rec.Error,
+		CreatedAt:        rec.CreatedAt,
+		UpdatedAt:        rec.UpdatedAt,
+		VideoPath:        rec.VideoPath,
+		ArchivePath:      rec.ArchivePath,
+		AudioPath:        rec.AudioPath,
+		HasVideo:         rec.HasVideo,
+		HasArchive:       rec.HasArchive,
+		HasAudio:         rec.HasAudio,
+		AudioOnly:        rec.AudioOnly,
+		S3Key:            rec.S3Key,
+		AudioS3Key:       rec.AudioS3Key,
+		ElapsedMS:        rec.ElapsedMS,
+		RemainingMS:      rec.RemainingMS,
+		Phase:            rec.Phase,
+		PhaseLabel:       rec.PhaseLabel,
+		PromptTokens:     rec.PromptTokens,
+		CompletionTokens: rec.CompletionTokens,
+		TotalTokens:      rec.TotalTokens,
+		LLMCostUSD:       rec.LLMCostUSD,
+		LLMCostKnown:     rec.LLMCostKnown,
+		TTSCostUSD:       rec.TTSCostUSD,
+		MusicCostUSD:     rec.MusicCostUSD,
 	}
 }
 
 func recordFromJob(j Job) videoJobRecord {
 	return videoJobRecord{
-		ID:          j.ID,
-		Status:      string(j.Status),
-		Title:       j.Title,
-		Type:        j.Type,
-		Show:        j.Show,
-		Season:      j.Season,
-		Episode:     j.Episode,
-		Error:       j.Error,
-		VideoPath:   j.VideoPath,
-		ArchivePath: j.ArchivePath,
-		AudioPath:   j.AudioPath,
-		HasVideo:    j.HasVideo,
-		HasArchive:  j.HasArchive,
-		HasAudio:    j.HasAudio,
-		AudioOnly:   j.AudioOnly,
-		S3Key:       j.S3Key,
-		AudioS3Key:  j.AudioS3Key,
-		ElapsedMS:   j.ElapsedMS,
-		RemainingMS: j.RemainingMS,
-		Phase:       j.Phase,
-		PhaseLabel:  j.PhaseLabel,
-		CreatedAt:   j.CreatedAt,
-		UpdatedAt:   j.UpdatedAt,
+		ID:               j.ID,
+		Status:           string(j.Status),
+		Title:            j.Title,
+		Type:             j.Type,
+		Show:             j.Show,
+		Season:           j.Season,
+		Episode:          j.Episode,
+		Error:            j.Error,
+		VideoPath:        j.VideoPath,
+		ArchivePath:      j.ArchivePath,
+		AudioPath:        j.AudioPath,
+		HasVideo:         j.HasVideo,
+		HasArchive:       j.HasArchive,
+		HasAudio:         j.HasAudio,
+		AudioOnly:        j.AudioOnly,
+		S3Key:            j.S3Key,
+		AudioS3Key:       j.AudioS3Key,
+		ElapsedMS:        j.ElapsedMS,
+		RemainingMS:      j.RemainingMS,
+		Phase:            j.Phase,
+		PhaseLabel:       j.PhaseLabel,
+		PromptTokens:     j.PromptTokens,
+		CompletionTokens: j.CompletionTokens,
+		TotalTokens:      j.TotalTokens,
+		LLMCostUSD:       j.LLMCostUSD,
+		LLMCostKnown:     j.LLMCostKnown,
+		TTSCostUSD:       j.TTSCostUSD,
+		MusicCostUSD:     j.MusicCostUSD,
+		CreatedAt:        j.CreatedAt,
+		UpdatedAt:        j.UpdatedAt,
 	}
 }

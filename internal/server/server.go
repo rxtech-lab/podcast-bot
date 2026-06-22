@@ -68,13 +68,14 @@ const (
 // UploadRoot is the directory where uploaded scripts + priors zips
 // land. Each job gets its own subdirectory keyed by jobID.
 type Deps struct {
-	Mode       string
-	Bus        *eventbus.Bus
-	Sessions   *SessionRegistry
-	Jobs       *JobRegistry
-	Log        *slog.Logger
-	UploadRoot string
-	SubmitJob  func(jobID string, sub JobSubmission) error
+	Mode        string
+	Bus         *eventbus.Bus
+	Sessions    *SessionRegistry
+	Jobs        *JobRegistry
+	Discussions *DiscussionStore
+	Log         *slog.Logger
+	UploadRoot  string
+	SubmitJob   func(jobID string, sub JobSubmission) error
 	// Password, when non-empty, gates every /api/* route behind a login
 	// cookie. Empty disables auth entirely (the default).
 	Password string
@@ -97,6 +98,13 @@ type Deps struct {
 	// exposed to browsers — the dashboard forwards it server-side only.
 	ServiceToken string
 
+	// AuthIssuer, when non-empty (e.g. https://auth.rxlab.app), enables
+	// per-user rxlab OAuth: a request carrying `Authorization: Bearer
+	// <access token>` is validated against the issuer's OIDC userinfo
+	// endpoint. This lets native clients (the iOS app) authenticate directly
+	// with their RxAuthSwift access token, no service token required.
+	AuthIssuer string
+
 	// Uploader, when enabled, serves finished videos from S3 (presigned
 	// redirect) instead of local disk. nil / disabled keeps disk serving.
 	Uploader *storage.Uploader
@@ -116,6 +124,9 @@ type Server struct {
 	handler http.Handler
 	// authTok is the precomputed cookie token for the configured password.
 	authTok string
+	// oauth validates per-user rxlab bearer tokens via the issuer's userinfo
+	// endpoint (nil when AuthIssuer is unset).
+	oauth *oauthValidator
 }
 
 // New builds a Server with all routes mounted.
@@ -123,6 +134,9 @@ func New(d Deps) *Server {
 	s := &Server{d: d, mux: http.NewServeMux()}
 	if d.Password != "" {
 		s.authTok = authToken(d.Password)
+	}
+	if d.AuthIssuer != "" {
+		s.oauth = newOAuthValidator(d.AuthIssuer, d.Log)
 	}
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -162,11 +176,24 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/jobs/{id}", s.handleJobGet)
 		s.mux.HandleFunc("GET /api/jobs/{id}/video", s.handleJobVideo)
 		s.mux.HandleFunc("GET /api/jobs/{id}/audio", s.handleJobAudio)
+		s.mux.HandleFunc("GET /api/jobs/{id}/transcript", s.handleJobTranscript)
 		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles", s.handleJobSubtitles)
+		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles/live", s.handleJobSubtitlesLive)
 		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
 		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
 		s.mux.HandleFunc("GET /api/jobs/{id}/ws", s.handleJobWS)
 		s.mux.HandleFunc("POST /api/jobs/{id}/messages", s.handleJobMessage)
+		s.mux.HandleFunc("POST /api/jobs/{id}/stop", s.handleJobStop)
+	}
+
+	if d.Discussions != nil {
+		s.mux.HandleFunc("GET /api/discussions", s.handleDiscussionList)
+		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)
+		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
+		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
+		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
+		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
+		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
 	}
 
 	// The embedded TV SPA is served in stream + video modes. In dashboard
@@ -178,12 +205,16 @@ func New(d Deps) *Server {
 		s.mux.Handle("/", staticHandler())
 	}
 
-	// Auth engages when either a human password OR a service token is set.
-	// CORS, when configured, wraps the auth layer so cross-origin preflight
-	// (OPTIONS, which carries no credentials) is answered before auth runs.
+	// Auth engages when a human password, a service token, OR a per-user OAuth
+	// issuer is configured. CORS, when configured, wraps the auth layer so
+	// cross-origin preflight (OPTIONS, which carries no credentials) is answered
+	// before auth runs.
 	var handler http.Handler = s.mux
-	if s.authTok != "" || d.ServiceToken != "" {
+	if s.authTok != "" || d.ServiceToken != "" || d.AuthIssuer != "" {
+		s.logAuthStartup(true)
 		handler = s.withAuth(handler)
+	} else {
+		s.logAuthStartup(false)
 	}
 	if len(d.AllowedOrigins) > 0 {
 		handler = withCORS(d.AllowedOrigins, handler)

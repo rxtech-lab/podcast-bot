@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -51,47 +52,62 @@ func (s *Server) handleJobSubmitJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing 'script'", http.StatusBadRequest)
 		return
 	}
-
-	// Apply the same defaults LoadTopic would, then validate, so a topic
-	// built in the dashboard is held to the identical contract as an upload.
-	applyTopicDefaults(req.Script)
-	if err := config.ValidateTopic(req.Script); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	md, err := req.Script.RenderMarkdown()
+	jobID, err := s.submitJSONScript(req.Script, req.VideoConfig, "")
 	if err != nil {
-		http.Error(w, "render script: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	jobID := newJobID()
-	jobDir := filepath.Join(s.d.UploadRoot, jobID)
-	if err := os.MkdirAll(jobDir, 0o755); err != nil {
-		http.Error(w, "create job dir: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	scriptPath := filepath.Join(jobDir, jobScriptName)
-	if err := os.WriteFile(scriptPath, []byte(md), 0o644); err != nil {
-		http.Error(w, "save script: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	sub := JobSubmission{
-		ScriptPath:        scriptPath,
-		SoftSubs:          req.VideoConfig.SoftSubs,
-		BurnSubs:          req.VideoConfig.BurnSubs,
-		Resolution:        req.VideoConfig.Resolution,
-		SubtitleLanguages: req.VideoConfig.SubtitleLanguages,
-		AudioOnly:         req.VideoConfig.AudioOnly,
-	}
-	if err := s.submitStaged(jobID, sub); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": jobID})
+}
+
+func (s *Server) submitJSONScript(script *config.DebateTopic, videoConfig videoConfigJSON, discussionID string) (string, error) {
+	if s.d.SubmitJob == nil || s.d.Jobs == nil || s.d.UploadRoot == "" {
+		return "", httpErrorf("video mode not configured")
+	}
+	// Apply the same defaults LoadTopic would, then validate, so a topic
+	// built in the dashboard is held to the identical contract as an upload.
+	applyTopicDefaults(script)
+	if err := config.ValidateTopic(script); err != nil {
+		return "", err
+	}
+	md, err := script.RenderMarkdown()
+	if err != nil {
+		return "", err
+	}
+
+	jobID := newJobID()
+	jobDir := filepath.Join(s.d.UploadRoot, jobID)
+	if err := os.MkdirAll(jobDir, 0o755); err != nil {
+		return "", fmt.Errorf("create job dir: %w", err)
+	}
+	scriptPath := filepath.Join(jobDir, jobScriptName)
+	if err := os.WriteFile(scriptPath, []byte(md), 0o644); err != nil {
+		return "", fmt.Errorf("save script: %w", err)
+	}
+
+	sub := JobSubmission{
+		ScriptPath:        scriptPath,
+		SoftSubs:          videoConfig.SoftSubs,
+		BurnSubs:          videoConfig.BurnSubs,
+		Resolution:        videoConfig.Resolution,
+		SubtitleLanguages: videoConfig.SubtitleLanguages,
+		AudioOnly:         videoConfig.AudioOnly,
+		DiscussionID:      discussionID,
+	}
+	if err := s.submitStaged(jobID, sub); err != nil {
+		return "", err
+	}
+	return jobID, nil
+}
+
+type httpStringError string
+
+func (e httpStringError) Error() string { return string(e) }
+
+func httpErrorf(msg string) error {
+	return httpStringError(msg)
 }
 
 // applyTopicDefaults fills the same zero-value defaults LoadTopic applies after

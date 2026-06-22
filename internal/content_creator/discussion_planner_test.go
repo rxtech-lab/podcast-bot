@@ -77,3 +77,54 @@ func TestDiscussionPlannerTurnOrder(t *testing.T) {
 		t.Fatalf("planner should have ended after sign-off")
 	}
 }
+
+func TestDiscussionPlannerNaturalFinishRequestSkipsToClosing(t *testing.T) {
+	reg := &agent.Registry{
+		Host: discTestAgent("Mod", agent.RoleHost),
+		Discussants: []agent.Agent{
+			discTestAgent("Ann", agent.RoleDiscussant),
+			discTestAgent("Bo", agent.RoleDiscussant),
+		},
+	}
+	topic := &config.DebateTopic{SegmentMaxSeconds: 60, TotalMinutes: 30}
+	q := &userQueue{}
+	p := NewDiscussionPlanner(topic, NewTracker(30*time.Minute), reg, q, nil)
+	ctx := context.Background()
+
+	for i := 0; i < 4; i++ {
+		if _, ok := p.Next(ctx); !ok {
+			t.Fatalf("planner ended before free discussion")
+		}
+	}
+
+	q.push(userMessage{Username: "Qiwei", Text: "end it fast"})
+	turn, ok := p.Next(ctx)
+	if !ok {
+		t.Fatalf("planner ended before closing transition")
+	}
+	if got, want := turn.Speaker.Name(), "Mod"; got != want {
+		t.Fatalf("speaker = %q, want %q", got, want)
+	}
+	if got, want := turn.Directive, "transition:closing-thoughts"; got != want {
+		t.Fatalf("directive = %q, want %q", got, want)
+	}
+}
+
+func TestUserQueueEndRequestDetection(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"/end", true},
+		{"end it fast", true},
+		{"please skip to the end", true},
+		{"wrap it up please", true},
+		{"what did the host mean?", false},
+		{"tell me about the ending", false},
+	}
+	for _, tt := range tests {
+		if got := isEndRequest(tt.text); got != tt.want {
+			t.Fatalf("isEndRequest(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}

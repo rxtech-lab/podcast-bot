@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 )
 
-// NewFileLogger returns a slog.Logger writing JSON lines to <dir>/run.log.
-// Errors creating the file fall back to stderr so the TUI never sees stray output.
+// NewFileLogger returns a slog.Logger writing JSON lines to <dir>/run.log and
+// stderr, so long-running server modes remain inspectable from the terminal.
+// Errors creating the file fall back to stderr.
 func NewFileLogger(dir string) (*slog.Logger, io.Closer, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, nil, err
@@ -17,6 +18,6 @@ func NewFileLogger(dir string) (*slog.Logger, io.Closer, error) {
 	if err != nil {
 		return slog.New(slog.NewJSONHandler(os.Stderr, nil)), io.NopCloser(nil), err
 	}
-	h := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo})
+	h := slog.NewJSONHandler(io.MultiWriter(f, os.Stderr), &slog.HandlerOptions{Level: slog.LevelInfo})
 	return slog.New(h), f, nil
 }

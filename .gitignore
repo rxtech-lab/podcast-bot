@@ -30,3 +30,4 @@ channels
 
 # k8s filled-in secrets (never commit)
 k8s/secrets.yaml
+*.xcuserstate

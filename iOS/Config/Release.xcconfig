@@ -1,0 +1,11 @@
+// Release.xcconfig — production.
+// Points the app at the deployed debate-bot engine.
+
+// Backend engine base URL (no trailing slash). AppConfig appends paths.
+AppAPIBaseURL = https:/$()/debatebot.rxlab.app
+
+// rxlab OAuth (RxAuthSwift).
+AppAuthIssuer = https:/$()/auth.rxlab.app
+AppAuthClientID = client_a22a1a75102a4279bcb893f437e74027
+AppAuthRedirectURI = debatepod:/$()/oauth-callback
+AppAuthScopes = openid profile email

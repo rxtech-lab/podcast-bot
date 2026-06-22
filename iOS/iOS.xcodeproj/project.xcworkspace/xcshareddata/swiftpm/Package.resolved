@@ -1,0 +1,85 @@
+{
+  "originHash" : "2e79c46027739afa3c4e6edfcfd1e0171784a04c825ed93ac8af8fe8b38f64b7",
+  "pins" : [
+    {
+      "identity" : "equatable",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ordo-one/equatable",
+      "state" : {
+        "revision" : "63e597c07e1e0622e6c8f2b33c972525a444c8eb",
+        "version" : "1.0.10"
+      }
+    },
+    {
+      "identity" : "highlightswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/appstefan/highlightswift",
+      "state" : {
+        "revision" : "99c431b38a1444a5fd6a4978307fbbefe3a7af53"
+      }
+    },
+    {
+      "identity" : "iosmath",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/maitbayev/iosMath",
+      "state" : {
+        "revision" : "066ba2f8353782a644889efe9ceb884ea844180b"
+      }
+    },
+    {
+      "identity" : "rxauthswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/rxtech-lab/RxAuthSwift",
+      "state" : {
+        "branch" : "main",
+        "revision" : "f1bc8a1004c58f7eae628eaf8ae705e4f8c21c51"
+      }
+    },
+    {
+      "identity" : "swift-cmark",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-cmark.git",
+      "state" : {
+        "revision" : "924936d0427cb25a61169739a7660230bffa6ea6",
+        "version" : "0.8.0"
+      }
+    },
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log.git",
+      "state" : {
+        "revision" : "92448c359f00ebe36ae97d3bd9086f13c7692b5a",
+        "version" : "1.13.2"
+      }
+    },
+    {
+      "identity" : "swift-markdown",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-markdown.git",
+      "state" : {
+        "revision" : "7d9a5ce307528578dfa777d505496bd5f544ad94",
+        "version" : "0.7.3"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
+        "version" : "601.0.1"
+      }
+    },
+    {
+      "identity" : "swiftstreamingmarkdown",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sirily11/SwiftStreamingMarkdown",
+      "state" : {
+        "branch" : "main",
+        "revision" : "c80ee6eaac43445e72d10f794ce84db4d7aa01a3"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -20,7 +20,7 @@ func prepareDiscussionAssets(ctx context.Context, log *slog.Logger, env *config.
 	ch *channelRuntime, d loadedDebate, orch *contentcreator.Orchestrator) {
 	fmt.Fprintf(os.Stdout, "▶ ch %d [%s] generating discussion backgrounds + music (first run only; cached afterwards)\n",
 		ch.def.Number, ch.def.ID)
-	discussion.PrepareAssets(ctx, log, env.OutDir, ch.discussionStage, d.topic, orch)
+	discussion.PrepareAssets(ctx, log, env.OutDir, ch.discussionStage, d.topic, orch, orch.RecordMusicGeneration)
 }
 
 // buildDiscussionTopicMsg fills the panel roster into the TopicMsg. The

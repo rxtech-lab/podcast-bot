@@ -236,6 +236,14 @@ const (
 	modeDashboard = "dashboard"
 )
 
+func videoDataRoot(env *config.Env, mode string) string {
+	name := "video"
+	if mode == modeDashboard {
+		name = "dashboard"
+	}
+	return filepath.Join(env.PersistentRoot, name)
+}
+
 // runtime owns every cross-channel resource: the shared event bus, server,
 // session registry, and the per-channel encoders/livestreams.
 //
@@ -254,6 +262,7 @@ type runtime struct {
 	srv         *server.Server
 	sessions    *server.SessionRegistry
 	jobs        *server.JobRegistry
+	discussions *server.DiscussionStore
 	channels    []*channelRuntime
 	channelByID map[string]*channelRuntime
 	addr        string
@@ -689,6 +698,7 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		MCPCfg:         mcpCfg,
 		AllowedOrigins: env.DashboardOrigins,
 		ServiceToken:   env.DashboardServiceToken,
+		AuthIssuer:     env.AuthIssuer,
 	})
 
 	return rt, 0
@@ -749,9 +759,27 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 	}()
 
 	bus := eventbus.New(log)
-	jobs, err := server.NewJobRegistry(filepath.Join(env.OutDir, "jobs.db"))
+	dataRoot := videoDataRoot(env, mode)
+	jobEnv := *env
+	jobEnv.OutDir = dataRoot
+	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, "data dir:", err)
+		cancel()
+		return nil, 1
+	}
+	jobs, err := server.NewJobRegistry(filepath.Join(dataRoot, "jobs.db"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jobs db:", err)
+		cancel()
+		return nil, 1
+	}
+	discussions, err := server.NewDiscussionStore(
+		filepath.Join(dataRoot, "native-discussions.db"),
+		env.TursoConnectionURL,
+		env.TursoAuthToken,
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "discussion db:", err)
 		cancel()
 		return nil, 1
 	}
@@ -765,14 +793,14 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
 		mode: mode,
-		env:  env, mcpCfg: mcpCfg, bus: bus, jobs: jobs,
+		env:  &jobEnv, mcpCfg: mcpCfg, bus: bus, jobs: jobs, discussions: discussions,
 		addr: addr, stopSig: stopSig,
 		channelByID:   map[string]*channelRuntime{},
 		loadedDebates: map[string]loadedRef{},
 		usedIDs:       map[string]int{},
 	}
 
-	uploadRoot := filepath.Join(env.OutDir, "uploads")
+	uploadRoot := filepath.Join(dataRoot, "uploads")
 	if err := os.MkdirAll(uploadRoot, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, "upload dir:", err)
 		cancel()
@@ -780,10 +808,13 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 	}
 
 	uploader, err := storage.New(ctx, storage.Config{
-		Bucket:   env.S3Bucket,
-		Region:   env.S3Region,
-		Endpoint: env.S3Endpoint,
-		Prefix:   env.S3Prefix,
+		Bucket:          env.S3Bucket,
+		Region:          env.S3Region,
+		Endpoint:        env.S3Endpoint,
+		Prefix:          env.S3Prefix,
+		DownloadBaseURL: env.S3DownloadBaseURL,
+		AccessKeyID:     env.S3AccessKeyID,
+		SecretAccessKey: env.S3SecretAccessKey,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "s3:", err)
@@ -798,13 +829,15 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		Mode:           mode,
 		Bus:            bus,
 		Jobs:           jobs,
+		Discussions:    discussions,
 		Log:            log,
 		UploadRoot:     uploadRoot,
 		Password:       password,
-		Env:            env,
+		Env:            &jobEnv,
 		MCPCfg:         mcpCfg,
 		AllowedOrigins: env.DashboardOrigins,
 		ServiceToken:   env.DashboardServiceToken,
+		AuthIssuer:     env.AuthIssuer,
 		Uploader:       uploader,
 		ForceAudio:     forceAudio,
 		// SubmitJob runs one upload through the orchestrator + stitch +
@@ -819,13 +852,14 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 				req.AudioOnly = true
 			}
 			return videojob.Submit(rt.ctx, videojob.Deps{
-				Env:      env,
-				MCPCfg:   mcpCfg,
-				Bus:      bus,
-				Jobs:     jobs,
-				Queue:    queue,
-				Log:      log,
-				Uploader: uploader,
+				Env:         &jobEnv,
+				MCPCfg:      mcpCfg,
+				Bus:         bus,
+				Jobs:        jobs,
+				Discussions: discussions,
+				Queue:       queue,
+				Log:         log,
+				Uploader:    uploader,
 			}, jobID, req)
 		},
 	})
@@ -856,6 +890,9 @@ func (r *runtime) shutdown() {
 	}
 	if r.closer != nil {
 		_ = r.closer.Close()
+	}
+	if r.discussions != nil {
+		_ = r.discussions.Close()
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 type planResponse struct {
 	Script     *config.DebateTopic `json:"script"`
 	Markdown   string              `json:"markdown"`
+	Sources    []config.Source     `json:"sources,omitempty"`
 	Researched bool                `json:"researched"`
 }
 
@@ -34,7 +35,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, planResponse{Script: res.Script, Markdown: res.Markdown, Researched: res.Researched})
+	writeJSON(w, planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched})
 }
 
 // planImproveRequest carries the prior script plus the revision instruction.
@@ -59,7 +60,7 @@ func (s *Server) handlePlanImprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, planResponse{Script: res.Script, Markdown: res.Markdown, Researched: res.Researched})
+	writeJSON(w, planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched})
 }
 
 // decodeJSONBody reads + unmarshals a small JSON request body, writing a 400

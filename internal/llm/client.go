@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 )
 
@@ -23,8 +25,11 @@ const maxToolRounds = 8
 // Client wraps an OpenAI-compatible chat completions endpoint with a fixed model.
 // One Client per agent so per-agent BaseURL/API-key overrides are simple.
 type Client struct {
-	c     openai.Client
-	model string
+	c                 openai.Client
+	model             string
+	usageRecorder     func(Usage)
+	inputCostPerMTok  float64
+	outputCostPerMTok float64
 }
 
 // New constructs a Client. baseURL must include scheme + path (e.g.
@@ -39,6 +44,28 @@ func New(baseURL, apiKey, model string) *Client {
 
 // Model returns the configured model name.
 func (c *Client) Model() string { return c.model }
+
+// WithUsageRecorder returns a copy that records usage from completed calls.
+func (c *Client) WithUsageRecorder(record func(Usage)) *Client {
+	if c == nil {
+		return nil
+	}
+	next := *c
+	next.usageRecorder = record
+	return &next
+}
+
+// WithPricing returns a copy that estimates cost when the provider does not
+// include cost in usage metadata. Values are dollars per million tokens.
+func (c *Client) WithPricing(inputPerMTok, outputPerMTok float64) *Client {
+	if c == nil {
+		return nil
+	}
+	next := *c
+	next.inputCostPerMTok = inputPerMTok
+	next.outputCostPerMTok = outputPerMTok
+	return &next
+}
 
 // Stream starts a streaming chat completion. The returned Stream emits Deltas
 // until the channel closes; callers should drain it.
@@ -57,6 +84,9 @@ func (c *Client) Stream(
 	params := openai.ChatCompletionNewParams{
 		Model:    c.model,
 		Messages: msgs,
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
 	}
 	if len(tools) > 0 {
 		params.Tools = tools
@@ -72,34 +102,13 @@ func (c *Client) Stream(
 	}
 	go func() {
 		defer close(out.deltas)
-		defer raw.Close()
-		for raw.Next() {
-			chunk := raw.Current()
-			if len(chunk.Choices) == 0 {
-				continue
-			}
-			d := chunk.Choices[0].Delta
-			if d.Content != "" {
-				select {
-				case out.deltas <- Delta{TextChunk: d.Content}:
-				case <-streamCtx.Done():
-					return
-				}
-			}
-			for _, tc := range d.ToolCalls {
-				select {
-				case out.deltas <- Delta{ToolCall: &DeltaToolCall{
-					Index:     int(tc.Index),
-					ID:        tc.ID,
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-				}}:
-				case <-streamCtx.Done():
-					return
-				}
-			}
+		emitted, err := c.consumeChatStream(streamCtx, raw, out)
+		if err != nil && !emitted && isStreamOptionsRejection(err) {
+			params.StreamOptions = openai.ChatCompletionStreamOptionsParam{}
+			fallback := c.c.Chat.Completions.NewStreaming(streamCtx, params)
+			_, err = c.consumeChatStream(streamCtx, fallback, out)
 		}
-		if err := raw.Err(); err != nil {
+		if err != nil {
 			select {
 			case out.errCh <- err:
 			default:
@@ -111,6 +120,48 @@ func (c *Client) Stream(
 		}
 	}()
 	return out, nil
+}
+
+func (c *Client) consumeChatStream(
+	ctx context.Context,
+	raw *ssestream.Stream[openai.ChatCompletionChunk],
+	out *Stream,
+) (bool, error) {
+	defer raw.Close()
+	emitted := false
+	for raw.Next() {
+		chunk := raw.Current()
+		if usage := c.usageFromCompletion(chunk.Usage); usage.TotalTokens > 0 {
+			out.addUsage(usage)
+			c.recordUsage(usage)
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		d := chunk.Choices[0].Delta
+		if d.Content != "" {
+			emitted = true
+			select {
+			case out.deltas <- Delta{TextChunk: d.Content}:
+			case <-ctx.Done():
+				return emitted, ctx.Err()
+			}
+		}
+		for _, tc := range d.ToolCalls {
+			emitted = true
+			select {
+			case out.deltas <- Delta{ToolCall: &DeltaToolCall{
+				Index:     int(tc.Index),
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			}}:
+			case <-ctx.Done():
+				return emitted, ctx.Err()
+			}
+		}
+	}
+	return emitted, raw.Err()
 }
 
 // StreamWithTools runs a multi-round streaming conversation that handles tool
@@ -173,6 +224,7 @@ func (c *Client) StreamWithTools(
 				}
 				return
 			}
+			out.addUsage(inner.Usage())
 
 			// Tool-call-free round → we're done; surface the terminal Done.
 			if len(tcDeltas) == 0 {
@@ -254,7 +306,66 @@ func (c *Client) JSON(ctx context.Context, system, user string) ([]byte, error) 
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("empty completion")
 	}
+	c.recordUsage(c.usageFromCompletion(resp.Usage))
 	return []byte(resp.Choices[0].Message.Content), nil
+}
+
+func (c *Client) recordUsage(u Usage) {
+	if c == nil || c.usageRecorder == nil || u.TotalTokens == 0 {
+		return
+	}
+	c.usageRecorder(u)
+}
+
+func (c *Client) usageFromCompletion(u openai.CompletionUsage) Usage {
+	if u.TotalTokens == 0 {
+		return Usage{}
+	}
+	out := Usage{
+		Model:            c.model,
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+	if cost, ok := usageCostUSD(u.RawJSON()); ok {
+		out.CostUSD = cost
+		out.CostKnown = true
+	} else if c.inputCostPerMTok > 0 || c.outputCostPerMTok > 0 {
+		out.CostUSD = (float64(out.PromptTokens)*c.inputCostPerMTok +
+			float64(out.CompletionTokens)*c.outputCostPerMTok) / 1_000_000
+		out.CostKnown = true
+	}
+	return out
+}
+
+func usageCostUSD(raw string) (float64, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return 0, false
+	}
+	for _, key := range []string{"cost_usd", "total_cost_usd", "cost", "total_cost"} {
+		if v, ok := obj[key]; ok {
+			if f, ok := numberValue(v); ok {
+				return f, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func numberValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // isResponseFormatRejection reports whether err is the AI Gateway's
@@ -271,6 +382,17 @@ func isResponseFormatRejection(err error) bool {
 	return strings.Contains(msg, "response_format") &&
 		(strings.Contains(msg, "Invalid input") ||
 			strings.Contains(msg, "invalid_request_error"))
+}
+
+func isStreamOptionsRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "stream_options") &&
+		(strings.Contains(msg, "Invalid input") ||
+			strings.Contains(msg, "invalid_request_error") ||
+			strings.Contains(msg, "unsupported"))
 }
 
 // AssembleToolCalls turns a sequence of streamed tool-call deltas into

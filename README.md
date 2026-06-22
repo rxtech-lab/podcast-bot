@@ -89,6 +89,8 @@ Required vars (validated at startup — the process refuses to boot if any are m
 | `COMPRESSION_BASE_URL` | — | defaults to `OPENAI_BASE_URL` |
 | `COMPRESSION_API_KEY` | — | defaults to `OPENAI_API_KEY` |
 | `SCENE_PLANNER_MODEL` | — | model for the visual-director pass; defaults to `HOST_MODEL` |
+| `LLM_INPUT_COST_PER_MILLION` | — | optional input-token price used when the provider does not return cost usage |
+| `LLM_OUTPUT_COST_PER_MILLION` | — | optional output-token price used when the provider does not return cost usage |
 | `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` | when `tts_provider: azure` | Azure Speech credentials |
 | `ELEVENLABS_API_KEY` | when `tts_provider: eleven` | ElevenLabs credentials |
 | `OUT_DIR` | — | output root for audio/video/transcripts (default `./out`) |
@@ -180,6 +182,26 @@ Two ways to enable it:
 
 Download the artefacts from `GET /api/jobs/{id}/audio` (the `.mp3`) and
 `GET /api/jobs/{id}/subtitles` (the `.vtt`).
+
+For S3-compatible storage, set the engine environment:
+
+```bash
+S3_BUCKET=your-bucket
+S3_REGION=auto
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+S3_PREFIX=podcasts
+S3_ACCESS_KEY_ID=your-access-key
+S3_SECRET_ACCESS_KEY=your-secret-key
+S3_DOWNLOAD_BASE_URL=https://media.example.com
+```
+
+`S3_ENDPOINT` supports R2/MinIO/custom S3 APIs. `S3_DOWNLOAD_BASE_URL` is
+optional; when set, download URLs use that public/custom domain. When omitted,
+the engine returns presigned S3 URLs. `S3_ACCESS_KEY_ID` and
+`S3_SECRET_ACCESS_KEY` configure explicit S3/R2 credentials; if they are empty,
+the AWS SDK falls back to its standard credential chain. With S3 enabled,
+audio-only jobs must upload the final MP3 successfully and the job download
+source is the S3 object, not the local staging file.
 
 ### Dev (hot-reload frontend)
 

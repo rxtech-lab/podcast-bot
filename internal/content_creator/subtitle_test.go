@@ -47,6 +47,28 @@ func TestPipeline_VTTBiasAddsDiscussionDelay(t *testing.T) {
 	}
 }
 
+func TestPipeline_VTTBiasZeroForAudioOnly(t *testing.T) {
+	// Audio-only feeds record audio.mp3 straight from the LiveStream at t=0
+	// with no stitch StartOffset trim, so vttBias (which only realigns cues
+	// against the trimmed mp4) must be zero — otherwise captions land ~2.5s
+	// late against the untrimmed recording.
+	discussion := NewPipeline(Deps{
+		ContentType: config.ContentTypeDiscussion,
+		AudioOnly:   true,
+	}).vttBias()
+	if got, want := discussion, time.Duration(0); got != want {
+		t.Fatalf("audio-only discussion vtt bias = %v, want %v", got, want)
+	}
+
+	debate := NewPipeline(Deps{
+		ContentType: config.ContentTypeDebate,
+		AudioOnly:   true,
+	}).vttBias()
+	if got, want := debate, time.Duration(0); got != want {
+		t.Fatalf("audio-only debate vtt bias = %v, want %v", got, want)
+	}
+}
+
 func TestVTTWriter_AppendIgnoresEmpty(t *testing.T) {
 	w := newVTTWriter()
 	w.Append("", 0, 5*time.Second)
@@ -196,7 +218,7 @@ func TestVTTWriter_StripsPunct(t *testing.T) {
 // proportion to each chunk's content-rune count.
 func TestVTTWriter_SplitsLongSentence(t *testing.T) {
 	w := newVTTWriter()
-	// 60-char CJK string — more than vttMaxRunesPerCue (~22) so it
+	// 60-char CJK string — more than vttMaxRunesPerCue so it
 	// must split into multiple cues.
 	long := strings.Repeat("夜深了我得走前要把這封信交給你保管", 3)
 	w.Append(long, 0, 6*time.Second)

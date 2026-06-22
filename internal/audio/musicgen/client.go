@@ -34,6 +34,23 @@ const LyriaURL = "https://generativelanguage.googleapis.com/v1beta/models/lyria-
 type Client struct {
 	httpClient *http.Client
 	apiKey     string
+
+	// usageRecorder, when set via WithUsageRecorder, is invoked once per
+	// successful generation (one billed API call) so callers can fold Lyria
+	// cost into a run total. Retries that ultimately succeed count once.
+	usageRecorder func()
+}
+
+// WithUsageRecorder returns a shallow copy of c whose Generate calls invoke rec
+// once each time a generation succeeds (returns audio). Pass nil to disable.
+// Used by asset-prep code to meter music-generation cost per run.
+func (c *Client) WithUsageRecorder(rec func()) *Client {
+	if c == nil {
+		return nil
+	}
+	next := *c
+	next.usageRecorder = rec
+	return &next
 }
 
 // New builds a Client. apiKey may be empty — in that case New reads from
@@ -85,6 +102,9 @@ func (c *Client) Generate(ctx context.Context, req Request) ([]byte, error) {
 		}
 		raw, err := c.generateOnce(ctx, req)
 		if err == nil {
+			if c.usageRecorder != nil {
+				c.usageRecorder()
+			}
 			return raw, nil
 		}
 		lastErr = err

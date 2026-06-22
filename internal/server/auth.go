@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -58,7 +59,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !s.requestAuthorized(r) {
+		decision := s.authorizeRequest(r)
+		if !decision.authorized {
+			s.logAuthDenied(r, decision)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -66,19 +69,101 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
+type authDecision struct {
+	authorized bool
+	method     string
+	reason     string
+	hasBearer  bool
+	hasCookie  bool
+}
+
 // requestAuthorized reports whether the request may reach a protected route,
 // via the password cookie or the service-token bearer header.
 func (s *Server) requestAuthorized(r *http.Request) bool {
+	return s.authorizeRequest(r).authorized
+}
+
+func (s *Server) authorizeRequest(r *http.Request) authDecision {
+	tok := bearerToken(r)
+	decision := authDecision{
+		reason:    "no accepted credentials",
+		hasBearer: tok != "",
+		hasCookie: s.authEnabled() && s.requestAuthed(r),
+	}
 	if s.authEnabled() && s.requestAuthed(r) {
-		return true
+		decision.authorized = true
+		decision.method = "cookie"
+		decision.reason = "password cookie accepted"
+		return decision
 	}
 	if s.d.ServiceToken != "" {
 		if tok := bearerToken(r); tok != "" &&
 			subtle.ConstantTimeCompare([]byte(tok), []byte(s.d.ServiceToken)) == 1 {
-			return true
+			decision.authorized = true
+			decision.method = "service_token"
+			decision.reason = "service token accepted"
+			return decision
+		}
+		if tok != "" {
+			decision.reason = "bearer did not match service token"
 		}
 	}
-	return false
+	// Per-user rxlab OAuth: validate the access token against the issuer's
+	// userinfo endpoint (native iOS clients). Cached so a burst of streaming
+	// requests doesn't hammer the auth server.
+	if s.oauth != nil {
+		if tok := bearerToken(r); tok != "" && s.oauth.valid(r.Context(), tok) {
+			decision.authorized = true
+			decision.method = "oauth"
+			decision.reason = "oauth bearer accepted"
+			return decision
+		}
+		if tok == "" {
+			decision.reason = "missing bearer token for oauth"
+		} else {
+			decision.reason = "oauth bearer rejected by userinfo"
+		}
+	} else if tok != "" {
+		decision.reason = "bearer present but oauth issuer not configured"
+	} else if s.authEnabled() {
+		decision.reason = "missing or invalid password cookie"
+	} else if s.d.ServiceToken != "" {
+		decision.reason = "missing bearer service token"
+	}
+	return decision
+}
+
+func (s *Server) logAuthDenied(r *http.Request, decision authDecision) {
+	s.logger().Warn("request denied by auth middleware",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"mode", s.d.Mode,
+		"reason", decision.reason,
+		"has_bearer", decision.hasBearer,
+		"has_valid_cookie", decision.hasCookie,
+		"password_auth_enabled", s.authEnabled(),
+		"service_token_enabled", s.d.ServiceToken != "",
+		"oauth_enabled", s.oauth != nil,
+		"auth_issuer", s.d.AuthIssuer,
+	)
+}
+
+func (s *Server) logAuthStartup(enabled bool) {
+	s.logger().Info("auth middleware configured",
+		"enabled", enabled,
+		"mode", s.d.Mode,
+		"password_auth_enabled", s.authTok != "",
+		"service_token_enabled", s.d.ServiceToken != "",
+		"oauth_enabled", s.oauth != nil,
+		"auth_issuer", s.d.AuthIssuer,
+	)
+}
+
+func (s *Server) logger() *slog.Logger {
+	if s.d.Log != nil {
+		return s.d.Log
+	}
+	return slog.Default()
 }
 
 // bearerToken extracts the token from an `Authorization: Bearer <token>`
@@ -90,6 +175,37 @@ func bearerToken(r *http.Request) string {
 		return strings.TrimSpace(h[len(prefix):])
 	}
 	return ""
+}
+
+type requestUser struct {
+	ID    string
+	Name  string
+	Email string
+}
+
+func (s *Server) requestUser(r *http.Request) requestUser {
+	if tok := bearerToken(r); tok != "" {
+		sum := sha256.Sum256([]byte(tok))
+		fallback := "bearer:" + hex.EncodeToString(sum[:])
+		if s.oauth != nil {
+			if user, ok := s.oauth.user(r.Context(), tok); ok {
+				id := strings.TrimSpace(user.Subject)
+				if id == "" {
+					id = fallback
+				}
+				return requestUser{ID: "oauth:" + id, Name: user.Name, Email: user.Email}
+			}
+		}
+		if s.d.ServiceToken != "" &&
+			subtle.ConstantTimeCompare([]byte(tok), []byte(s.d.ServiceToken)) == 1 {
+			return requestUser{ID: "service:dashboard", Name: "Dashboard"}
+		}
+		return requestUser{ID: fallback}
+	}
+	if name := usernameFromRequest(r); name != "" {
+		return requestUser{ID: "cookie:" + name, Name: name}
+	}
+	return requestUser{ID: "anonymous", Name: "viewer"}
 }
 
 type loginRequest struct {

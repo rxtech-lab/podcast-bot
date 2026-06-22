@@ -1,6 +1,6 @@
 // Package discussion holds the shared asset-prep for the panel-discussion
 // content type: it renders the pre-generated background palette and the short
-// music beds the silent commander crossfades between.
+// music bed used under the discussion.
 //
 // The logic lived in cmd/debate-bot (stream mode) only, which is why
 // discussion jobs submitted to video mode rendered over a bare background with
@@ -30,7 +30,7 @@ type PaletteStage interface {
 	AttachPaletteFrame(*image.RGBA)
 }
 
-// AudioSink installs the generated music beds before the orchestrator runs.
+// AudioSink installs the generated music bed before the orchestrator runs.
 // *contentcreator.Orchestrator satisfies this via SetDiscussionAudio.
 type AudioSink interface {
 	SetDiscussionAudio(beds map[string]string, sounds, moods []string)
@@ -52,11 +52,10 @@ var paletteMoods = []string{
 // far faster than a 1-2 minute one, which is the dominant first-run cost.
 const bedDurationSeconds = 45
 
-// bedSpecs are the short beds generated for a discussion: a calm always-on
-// session bed plus a tenser alternate the commander can crossfade to.
+// bedSpecs are the short beds generated for a discussion. Keep this to one
+// session bed so each discussion spends one billed Lyria call instead of two.
 var bedSpecs = []struct{ label, prompt, mood string }{
 	{"calm", "A calm, warm, instrumental ambient bed for a thoughtful panel discussion. Soft pads, gentle and unobtrusive, no drums, loops cleanly.", "calm, reflective ambient bed"},
-	{"tense", "A subtly tense, dramatic instrumental bed for a heated panel debate. Low pulse, mild urgency, no drums, loops cleanly.", "tense, dramatic bed"},
 }
 
 // Music bundles the music wiring handed to the orchestrator.
@@ -67,23 +66,27 @@ type Music struct {
 }
 
 // PrepareAssets gets the show started as fast as possible: it blocks only on
-// the FIRST background frame plus the music beds (the session bed must be set
+// the FIRST background frame plus the music bed (the session bed must be set
 // before orch.Run), and streams the remaining palette frames onto the live
 // stage afterward. The silent commander (started inside orch.Run) then
-// generates fresh backgrounds on the fly and crossfades the beds.
+// generates fresh backgrounds on the fly.
 //
 // Everything degrades gracefully: failed image/music gen just means fewer
 // frames / no bed, and the show still runs. outDir is the per-run output
 // directory used to cache the generated music.
+// musicRecorder is invoked once per billed Lyria generation so callers can fold
+// music cost into a run total. nil disables metering (e.g. smoke tools).
+type musicRecorder = func()
+
 func PrepareAssets(ctx context.Context, log *slog.Logger, outDir string,
-	stage PaletteStage, topic *config.DebateTopic, orch AudioSink) {
+	stage PaletteStage, topic *config.DebateTopic, orch AudioSink, rec musicRecorder) {
 	// Palette: stream frames onto the stage; signal as soon as the first lands.
 	firstReady := make(chan struct{})
 	go GeneratePalette(ctx, log, stage, topic, firstReady)
 
 	// Music: generate the beds in parallel (they're the long pole on a cold run).
 	musicCh := make(chan Music, 1)
-	go func() { musicCh <- GenerateMusic(ctx, log, topic, outDir) }()
+	go func() { musicCh <- GenerateMusic(ctx, log, topic, outDir, rec) }()
 
 	// Block only on what's needed to start: the first background + music.
 	select {
@@ -106,8 +109,8 @@ func PrepareAssets(ctx context.Context, log *slog.Logger, outDir string,
 // against. Degrades gracefully: failed music gen just means the discussion
 // plays dry.
 func PrepareAudioOnly(ctx context.Context, log *slog.Logger, outDir string,
-	topic *config.DebateTopic, orch AudioSink) {
-	music := GenerateMusic(ctx, log, topic, outDir)
+	topic *config.DebateTopic, orch AudioSink, rec musicRecorder) {
+	music := GenerateMusic(ctx, log, topic, outDir, rec)
 	if len(music.Beds) > 0 || len(music.Sounds) > 0 {
 		orch.SetDiscussionAudio(music.Beds, music.Sounds, music.Moods)
 		log.Info("discussion music ready (audio-only)",
@@ -173,12 +176,13 @@ func GeneratePalette(ctx context.Context, log *slog.Logger,
 // explicit short duration so Lyria returns quickly (the bed loops, so length
 // doesn't matter for playback). Returns empty fields on failure.
 func GenerateMusic(ctx context.Context, log *slog.Logger,
-	topic *config.DebateTopic, outDir string) Music {
+	topic *config.DebateTopic, outDir string, rec musicRecorder) Music {
 	client, err := musicgen.New("")
 	if err != nil {
 		log.Warn("discussion music gen disabled", "err", err)
 		return Music{}
 	}
+	client = client.WithUsageRecorder(rec)
 	cacheDir := outDir + "/discussion-music"
 	t0 := time.Now()
 	paths := make([]string, len(bedSpecs))

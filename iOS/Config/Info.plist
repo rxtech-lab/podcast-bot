@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Standard bundle metadata. -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Debate Bot</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!-- App-specific configuration surfaced to AppConfig via Bundle.main.infoDictionary.
+	     Values come from the active xcconfig (Debug/Release). -->
+	<key>AppAPIBaseURL</key>
+	<string>$(AppAPIBaseURL)</string>
+	<key>AppAuthIssuer</key>
+	<string>$(AppAuthIssuer)</string>
+	<key>AppAuthClientID</key>
+	<string>$(AppAuthClientID)</string>
+	<key>AppAuthRedirectURI</key>
+	<string>$(AppAuthRedirectURI)</string>
+	<key>AppAuthScopes</key>
+	<string>$(AppAuthScopes)</string>
+
+	<!-- OAuth redirect custom URL scheme (debatepod://oauth-callback). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.rxlab.debate-bot.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>debatepod</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- Keep audio playing when backgrounded / screen locked. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
+
+	<!-- Allow http to the local dev engine (localhost:8000). Production is https. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+
+	<!-- Standard generated keys (GENERATE_INFOPLIST_FILE is off when this file is used). -->
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

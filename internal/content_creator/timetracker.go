@@ -3,24 +3,73 @@ package contentcreator
 import (
 	"sync"
 	"time"
+
+	"github.com/sirily11/debate-bot/internal/llm"
 )
 
 // Tracker tracks elapsed time and per-speaker speaking budget.
 type Tracker struct {
-	mu          sync.RWMutex
-	start       time.Time
-	total       time.Duration
-	perSpeaker  map[string]time.Duration
-	overallUsed time.Duration
+	mu           sync.RWMutex
+	start        time.Time
+	total        time.Duration
+	perSpeaker   map[string]time.Duration
+	overallUsed  time.Duration
+	usageByModel map[string]llm.Usage
+
+	// Non-LLM API usage, accumulated so the run's total cost reflects every
+	// paid call. ttsChars is the running character count handed to the TTS
+	// provider; musicGens is the count of billed Lyria generations. The
+	// per-unit prices are set once via SetMediaPricing from env config.
+	ttsChars               int64
+	musicGens              int64
+	ttsCostPerMillionChars float64
+	lyriaCostPerGen        float64
 }
 
 // NewTracker starts the clock.
 func NewTracker(total time.Duration) *Tracker {
 	return &Tracker{
-		start:      time.Now(),
-		total:      total,
-		perSpeaker: map[string]time.Duration{},
+		start:        time.Now(),
+		total:        total,
+		perSpeaker:   map[string]time.Duration{},
+		usageByModel: map[string]llm.Usage{},
 	}
+}
+
+// SetMediaPricing records the per-unit prices used to value TTS and music
+// usage in the run summary. ttsPerMillionChars is dollars per 1M synthesised
+// characters; lyriaPerGen is dollars per billed music generation. Safe to call
+// once at construction before any usage is recorded.
+func (t *Tracker) SetMediaPricing(ttsPerMillionChars, lyriaPerGen float64) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ttsCostPerMillionChars = ttsPerMillionChars
+	t.lyriaCostPerGen = lyriaPerGen
+}
+
+// AddTTSCharacters adds n characters to the TTS usage counter (one synthesis
+// call's worth of text). No-op for n <= 0 so a failed/empty call costs nothing.
+func (t *Tracker) AddTTSCharacters(n int64) {
+	if t == nil || n <= 0 {
+		return
+	}
+	t.mu.Lock()
+	t.ttsChars += n
+	t.mu.Unlock()
+}
+
+// AddMusicGeneration records one billed Lyria music-generation API call. Cache
+// hits do not call this, so the count tracks real spend.
+func (t *Tracker) AddMusicGeneration() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.musicGens++
+	t.mu.Unlock()
 }
 
 // Elapsed returns wall-clock time since the tracker started.
@@ -61,4 +110,52 @@ func (t *Tracker) FairShare(speakers int) time.Duration {
 		return t.total
 	}
 	return t.total / time.Duration(speakers)
+}
+
+// AddLLMUsage records one completed LLM call.
+func (t *Tracker) AddLLMUsage(u llm.Usage) {
+	if t == nil || u.TotalTokens == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	model := u.Model
+	if model == "" {
+		model = "unknown"
+	}
+	current := t.usageByModel[model]
+	current.Model = model
+	current.PromptTokens += u.PromptTokens
+	current.CompletionTokens += u.CompletionTokens
+	current.TotalTokens += u.TotalTokens
+	if u.CostKnown {
+		current.CostUSD += u.CostUSD
+		current.CostKnown = true
+	}
+	t.usageByModel[model] = current
+}
+
+// LLMSummary returns aggregate LLM token and cost usage for the run.
+func (t *Tracker) LLMSummary() llm.UsageSummary {
+	if t == nil {
+		return llm.UsageSummary{}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := llm.UsageSummary{ByModel: map[string]llm.Usage{}}
+	for model, usage := range t.usageByModel {
+		out.PromptTokens += usage.PromptTokens
+		out.CompletionTokens += usage.CompletionTokens
+		out.TotalTokens += usage.TotalTokens
+		if usage.CostKnown {
+			out.CostUSD += usage.CostUSD
+			out.CostKnown = true
+		}
+		out.ByModel[model] = usage
+	}
+	out.TTSCharacters = t.ttsChars
+	out.TTSCostUSD = float64(t.ttsChars) * t.ttsCostPerMillionChars / 1_000_000
+	out.MusicGenerations = t.musicGens
+	out.MusicCostUSD = float64(t.musicGens) * t.lyriaCostPerGen
+	return out
 }

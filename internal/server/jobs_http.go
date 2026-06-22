@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 )
 
 // jobScriptName / jobPriorsName are the filenames the handler saves
@@ -127,8 +129,9 @@ func (s *Server) submitStaged(jobID string, sub JobSubmission) error {
 // jobMessageReq is the body of POST /api/jobs/{id}/messages — a viewer
 // participation message for a running video job.
 type jobMessageReq struct {
-	Text     string `json:"text"`
-	Username string `json:"username"`
+	Text         string `json:"text"`
+	Username     string `json:"username"`
+	DiscussionID string `json:"discussion_id"`
 }
 
 // handleJobMessage injects a viewer message into a running video job's
@@ -160,7 +163,33 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 		username = "viewer"
 	}
 	orch.PushUserMessage(req.Text, username)
+	if s.d.Discussions != nil && strings.TrimSpace(req.DiscussionID) != "" {
+		_ = s.d.Discussions.AppendLine(r.Context(), s.requestUser(r).ID, req.DiscussionID, DiscussionLine{
+			Speaker: username,
+			Role:    "user",
+			Text:    req.Text,
+			IsUser:  true,
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleJobStop force-stops generation for a running job. The runner still
+// finalizes and uploads any audio/video already produced.
+func (s *Server) handleJobStop(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	orch := s.d.Jobs.Orch(id)
+	if orch == nil {
+		http.Error(w, "no active job", http.StatusServiceUnavailable)
+		return
+	}
+	s.d.Jobs.AppendLog(id, "status", "force stop requested - finalising generated audio...", nil)
+	orch.ForceStop()
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // handleJobList returns every job currently tracked by the registry.
@@ -191,21 +220,8 @@ func (s *Server) handleJobGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// When the finished artefact lives in S3, hand the client a fresh presigned
-	// download link directly on the job snapshot so the dashboard can show a
-	// download button without a redirect round-trip. Audio-only jobs expose the
-	// mp3 key; everything else the mp4 key. (A job is exclusively one or the
-	// other, so the keys never both apply.)
-	if j.Status == JobDone && s.d.Uploader.Enabled() {
-		key := j.S3Key
-		if j.AudioOnly {
-			key = j.AudioS3Key
-		}
-		if key != "" {
-			if url, err := s.d.Uploader.PresignGet(r.Context(), key, time.Hour); err == nil {
-				j.DownloadURL = url
-			}
-		}
+	if url := s.jobDownloadURL(r.Context(), j); url != "" {
+		j.DownloadURL = url
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(j)
@@ -232,22 +248,20 @@ func (s *Server) handleJobVideo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "video not ready", http.StatusTooEarly)
 		return
 	}
+	if j.S3Key != "" && s.d.Uploader.Enabled() {
+		url, err := s.d.Uploader.DownloadURL(r.Context(), j.S3Key, time.Hour)
+		if err != nil {
+			http.Error(w, "download url failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, url, http.StatusFound)
+		return
+	}
 	// Audio-only (and failed-before-stitch) jobs have no video; don't fall
 	// through to the S3 redirect, which keys off the generic S3Key field and
 	// would otherwise hand back the .mp3.
 	if !j.HasVideo {
 		http.NotFound(w, r)
-		return
-	}
-	// Prefer object storage: mint a fresh presigned URL each request (never
-	// persisted, so it can't go stale) and redirect the browser to it.
-	if j.S3Key != "" && s.d.Uploader.Enabled() {
-		url, err := s.d.Uploader.PresignGet(r.Context(), j.S3Key, time.Hour)
-		if err != nil {
-			http.Error(w, "presign failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, r, url, http.StatusFound)
 		return
 	}
 	if j.VideoPath == "" {
@@ -283,9 +297,9 @@ func (s *Server) handleJobAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if j.AudioS3Key != "" && s.d.Uploader.Enabled() {
-		url, err := s.d.Uploader.PresignGet(r.Context(), j.AudioS3Key, time.Hour)
+		url, err := s.d.Uploader.DownloadURL(r.Context(), j.AudioS3Key, time.Hour)
 		if err != nil {
-			http.Error(w, "presign failed: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "download url failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		http.Redirect(w, r, url, http.StatusFound)
@@ -299,6 +313,50 @@ func (s *Server) handleJobAudio(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="%s.mp3"`, jobDownloadStem(j)))
 	http.ServeFile(w, r, j.AudioPath)
+}
+
+// handleJobTranscript returns a job's transcript as structured JSON. While the
+// orchestrator is live it serves the in-memory snapshot; after completion or a
+// server restart it falls back to the job's session.db so native clients can
+// backfill missed transcript lines into their local store.
+func (s *Server) handleJobTranscript(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if orch := s.d.Jobs.Orch(id); orch != nil {
+		writeTranscript(w, orch.Transcript.Snapshot())
+		return
+	}
+	if s.d.Jobs.Get(id) == nil {
+		if recovered := s.recoverJob(id); recovered == nil {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	if s.d.UploadRoot == "" {
+		writeTranscript(w, nil)
+		return
+	}
+	jobDir := s.jobArtifactDir(id)
+	if jobDir == "" {
+		writeTranscript(w, nil)
+		return
+	}
+	dbPath := filepath.Join(jobDir, "session.db")
+	lines, err := contentcreator.LoadSnapshot(dbPath)
+	if err != nil {
+		s.logger().Warn("job transcript disk load failed", "job", id, "path", dbPath, "err", err)
+		writeTranscript(w, nil)
+		return
+	}
+	writeTranscript(w, lines)
 }
 
 // handleJobSubtitles serves the WebVTT sidecar the pipeline writes next to the
@@ -322,13 +380,47 @@ func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitles not ready", http.StatusTooEarly)
 		return
 	}
-	subPath := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id, "subtitles.vtt")
+	jobDir := s.jobArtifactDir(id)
+	if jobDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+	subPath := filepath.Join(jobDir, "subtitles.vtt")
 	if _, err := os.Stat(subPath); err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	http.ServeFile(w, r, subPath)
+}
+
+// handleJobSubtitlesLive serves the captions accumulated so far as WebVTT while
+// a job is still generating, so a client streaming the live audio can show
+// synced captions before the final sidecar exists. Unlike handleJobSubtitles it
+// never returns 425: a running job yields cues-so-far (just the WEBVTT header
+// early on), and once the run has ended it falls back to the written sidecar.
+func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if orch := s.d.Jobs.Orch(id); orch != nil {
+		_, _ = io.WriteString(w, contentcreator.FormatSubtitleCues(orch.LiveSubtitleCues()))
+		return
+	}
+	// No running orchestrator: serve the final sidecar if present, else an
+	// empty (header-only) WebVTT so the client always gets a valid document.
+	if jobDir := s.jobArtifactDir(id); jobDir != "" {
+		subPath := filepath.Join(jobDir, "subtitles.vtt")
+		if _, err := os.Stat(subPath); err == nil {
+			http.ServeFile(w, r, subPath)
+			return
+		}
+	}
+	_, _ = io.WriteString(w, "WEBVTT\n\n")
 }
 
 // handleJobArchive serves the per-job zip of the persistent show
@@ -416,7 +508,10 @@ func (s *Server) recoverJob(id string) *Job {
 	if s.d.Jobs == nil || s.d.UploadRoot == "" {
 		return nil
 	}
-	jobOutDir := filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id)
+	jobOutDir := s.jobArtifactDir(id)
+	if jobOutDir == "" {
+		return nil
+	}
 	mp4Path := filepath.Join(jobOutDir, "video.mp4")
 	archivePath := filepath.Join(jobOutDir, "archive.zip")
 	audioPath := filepath.Join(jobOutDir, "audio.mp3")
@@ -447,7 +542,8 @@ func (s *Server) recoverJob(id string) *Job {
 				j.AudioOnly = true
 			}
 		}
-		if topic, err := config.LoadTopic(filepath.Join(s.d.UploadRoot, id, jobScriptName)); err == nil {
+		scriptPath := filepath.Join(filepath.Dir(filepath.Dir(jobOutDir)), "uploads", id, jobScriptName)
+		if topic, err := config.LoadTopic(scriptPath); err == nil {
 			j.Title = topic.Title
 			j.Type = topic.Type
 			j.Show = topic.Show
@@ -473,6 +569,82 @@ func (s *Server) recoverJob(id string) *Job {
 		return recovered
 	}
 	return j
+}
+
+func (s *Server) jobDownloadURL(ctx context.Context, j *Job) string {
+	if j == nil || j.Status != JobDone || !s.d.Uploader.Enabled() {
+		return ""
+	}
+	key := j.S3Key
+	if j.AudioOnly {
+		key = j.AudioS3Key
+	}
+	if key == "" {
+		return ""
+	}
+	url, err := s.d.Uploader.DownloadURL(ctx, key, time.Hour)
+	if err != nil {
+		s.logger().Warn("job download url failed", "job", j.ID, "key", key, "err", err)
+		return ""
+	}
+	return url
+}
+
+func (s *Server) jobArtifactDir(id string) string {
+	for _, dir := range s.jobArtifactDirs(id) {
+		if _, err := os.Stat(filepath.Join(dir, "video.mp4")); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(filepath.Join(dir, "audio.mp3")); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(filepath.Join(dir, "archive.zip")); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(filepath.Join(dir, "session.db")); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(filepath.Join(dir, "subtitles.vtt")); err == nil {
+			return dir
+		}
+	}
+	return ""
+}
+
+func (s *Server) jobArtifactDirs(id string) []string {
+	if id == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	add := func(dir string, out *[]string) {
+		if dir == "" {
+			return
+		}
+		clean := filepath.Clean(dir)
+		if seen[clean] {
+			return
+		}
+		seen[clean] = true
+		*out = append(*out, clean)
+	}
+
+	var out []string
+	if s.d.UploadRoot != "" {
+		add(filepath.Join(filepath.Dir(s.d.UploadRoot), "jobs", id), &out)
+	}
+	if s.d.Env != nil {
+		if s.d.Env.OutDir != "" {
+			add(filepath.Join(s.d.Env.OutDir, "jobs", id), &out)
+		}
+		if s.d.Env.PersistentRoot != "" {
+			add(filepath.Join(s.d.Env.PersistentRoot, "jobs", id), &out)
+			matches, _ := filepath.Glob(filepath.Join(s.d.Env.PersistentRoot, "session-*", "jobs", id))
+			for _, match := range matches {
+				add(match, &out)
+			}
+		}
+	}
+	return out
 }
 
 func formBool(r *http.Request, name string) bool {

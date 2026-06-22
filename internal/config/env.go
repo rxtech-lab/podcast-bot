@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -28,6 +29,25 @@ type Env struct {
 	CompressionKey     string
 	CompressionModel   string
 
+	// Optional pricing override for OpenAI-compatible chat calls. Values are
+	// dollars per million tokens and are used only when the provider response
+	// does not include a cost field in the usage payload.
+	LLMInputCostPerMillion  float64
+	LLMOutputCostPerMillion float64
+
+	// AzureTTSCostPerMillionChars is the Azure neural TTS price in dollars per
+	// one million synthesised characters. Used to fold speech-synthesis cost
+	// into the per-run total. Defaults to $15/1M (Azure prebuilt neural,
+	// pay-as-you-go); override with AZURE_TTS_COST_PER_MILLION_CHARS (e.g. set
+	// to a commitment-tier rate, or 22 for Neural HD voices).
+	AzureTTSCostPerMillionChars float64
+
+	// LyriaCostPerGeneration is the Google Lyria 3 Pro price in dollars per
+	// successful music-generation API call (one returned clip). Defaults to
+	// $0.08/generation; override with LYRIA_COST_PER_GENERATION. Cache hits do
+	// not hit the API and are not billed.
+	LyriaCostPerGeneration float64
+
 	AzureSpeechKey    string
 	AzureSpeechRegion string
 
@@ -51,12 +71,38 @@ type Env struct {
 	// of the human password cookie. Never exposed to browsers.
 	DashboardServiceToken string
 
-	// S3 settings for uploading finished videos. When S3Bucket is empty the
-	// engine keeps serving videos from local disk (no upload).
-	S3Bucket   string
-	S3Region   string
-	S3Endpoint string
-	S3Prefix   string
+	// AuthIssuer, when set (AUTH_ISSUER, e.g. https://auth.rxlab.app), enables
+	// per-user rxlab OAuth authentication: a request carrying
+	// `Authorization: Bearer <access token>` is validated by calling the
+	// issuer's OIDC userinfo endpoint, so native apps (iOS) can authenticate
+	// directly with the access token from RxAuthSwift. Empty disables it.
+	AuthIssuer string
+
+	// SearchAPIKey / SearchAPIURL configure the web-search backend the planner
+	// uses to ground a discussion plan in real sources when research is
+	// requested. SearchAPIKey comes from SEARCH_API_KEY; SearchAPIURL
+	// (SEARCH_API_URL) defaults to Tavily's search endpoint. When the key is
+	// empty, planning still works but returns researched=false (no sources).
+	SearchAPIKey string
+	SearchAPIURL string
+
+	// S3 settings for uploading finished media. When S3Bucket is empty the
+	// engine keeps serving media from local disk (no upload). S3Endpoint is
+	// for S3-compatible APIs such as R2; S3DownloadBaseURL is an optional
+	// public/custom download domain used instead of presigned URLs.
+	S3Bucket          string
+	S3Region          string
+	S3Endpoint        string
+	S3Prefix          string
+	S3DownloadBaseURL string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+
+	// Turso/libSQL database for durable native-client discussion storage.
+	// TURSO_CONNECTION_URL is the primary database URL. TURSO_AUTH_TOKEN is
+	// required for remote Turso databases and may be empty for local testing.
+	TursoConnectionURL string
+	TursoAuthToken     string
 
 	// PersistentRoot is the non-session base directory for cross-run
 	// archives — today only the series content type uses it (every
@@ -87,20 +133,41 @@ func LoadEnv() (*Env, error) {
 		CompressionBaseURL: strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
 		CompressionKey:     strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
 		CompressionModel:   strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
-		AzureSpeechKey:     strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
-		AzureSpeechRegion:  strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
-		ElevenLabsAPIKey:   strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
-		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		OutDir:             strings.TrimSpace(os.Getenv("OUT_DIR")),
-		PersistentRoot:     strings.TrimSpace(os.Getenv("SERIES_ROOT")),
+		LLMInputCostPerMillion: parseFloatEnv(
+			"LLM_INPUT_COST_PER_MILLION",
+		),
+		LLMOutputCostPerMillion: parseFloatEnv(
+			"LLM_OUTPUT_COST_PER_MILLION",
+		),
+		AzureTTSCostPerMillionChars: parseFloatEnvDefault(
+			"AZURE_TTS_COST_PER_MILLION_CHARS", 15.0,
+		),
+		LyriaCostPerGeneration: parseFloatEnvDefault(
+			"LYRIA_COST_PER_GENERATION", 0.08,
+		),
+		AzureSpeechKey:    strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
+		AzureSpeechRegion: strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
+		ElevenLabsAPIKey:  strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
+		GeminiAPIKey:      strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		OutDir:            strings.TrimSpace(os.Getenv("OUT_DIR")),
+		PersistentRoot:    strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 
 		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
+		AuthIssuer:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
+		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
+		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
 
-		S3Bucket:   strings.TrimSpace(os.Getenv("S3_BUCKET")),
-		S3Region:   strings.TrimSpace(os.Getenv("S3_REGION")),
-		S3Endpoint: strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
-		S3Prefix:   strings.TrimSpace(os.Getenv("S3_PREFIX")),
+		S3Bucket:          strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		S3Region:          strings.TrimSpace(os.Getenv("S3_REGION")),
+		S3Endpoint:        strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
+		S3Prefix:          strings.TrimSpace(os.Getenv("S3_PREFIX")),
+		S3DownloadBaseURL: strings.TrimSpace(os.Getenv("S3_DOWNLOAD_BASE_URL")),
+		S3AccessKeyID:     strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID")),
+		S3SecretAccessKey: strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY")),
+
+		TursoConnectionURL: strings.TrimSpace(os.Getenv("TURSO_CONNECTION_URL")),
+		TursoAuthToken:     strings.TrimSpace(os.Getenv("TURSO_AUTH_TOKEN")),
 	}
 
 	if e.CompressionBaseURL == "" {
@@ -161,6 +228,33 @@ func splitCSV(s string) []string {
 		return nil
 	}
 	return out
+}
+
+func parseFloatEnv(key string) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f < 0 {
+		return 0
+	}
+	return f
+}
+
+// parseFloatEnvDefault is parseFloatEnv but returns def when the var is unset
+// or invalid, so a sensible non-zero default (e.g. a published price) applies
+// unless the operator explicitly overrides it. Set the var to "0" to disable.
+func parseFloatEnvDefault(key string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f < 0 {
+		return def
+	}
+	return f
 }
 
 // ErrEnvNotLoaded is returned when an Env was expected but not initialised.

@@ -44,12 +44,14 @@ type Queue interface {
 // to each per-job orchestrator; today most uploads run with empty mcp
 // configs but the seam is here for future tools.
 type Deps struct {
-	Env    *config.Env
-	MCPCfg *config.MCPConfig
-	Bus    *eventbus.Bus
-	Jobs   *server.JobRegistry
-	Queue  Queue
-	Log    *slog.Logger
+	Env          *config.Env
+	MCPCfg       *config.MCPConfig
+	Bus          *eventbus.Bus
+	Jobs         *server.JobRegistry
+	Discussions  *server.DiscussionStore
+	Queue        Queue
+	Log          *slog.Logger
+	DiscussionID string
 	// Uploader, when enabled, pushes the finished mp4 to S3 after stitching.
 	// nil / disabled leaves the video on local disk.
 	Uploader *storage.Uploader
@@ -69,6 +71,7 @@ type Deps struct {
 // process-wide goqueue worker pool so video mode cannot start
 // unbounded parallel encoders.
 func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmission) error {
+	deps.DiscussionID = sub.DiscussionID
 	if deps.Queue == nil {
 		return errors.New("video job queue is not configured")
 	}
@@ -284,6 +287,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// recDone fires.
 	audioPath := filepath.Join(jobOutDir, "audio.mp3")
 	var recDone chan struct{}
+	var hlsWait func()
 	if audioOnly {
 		recFile, ferr := os.Create(audioPath)
 		if ferr != nil {
@@ -302,6 +306,17 @@ func run(ctx context.Context, deps Deps, jobID string,
 				}
 			}
 		}()
+
+		// Live HLS audio rendition: a second LiveStream subscriber feeds an
+		// ffmpeg HLS muxer writing into the job's hls dir, so a native client
+		// can stream the audio while it generates via GET
+		// /api/jobs/{id}/hls/stream.m3u8 (served by handleJobHLS). Best-effort:
+		// a failure here only disables live streaming, not the final download.
+		if wait, herr := audio.StartHLSAudio(ctx, live, filepath.Join(jobOutDir, "hls"), logger); herr != nil {
+			logger.Warn("audio-only live HLS disabled", "err", herr)
+		} else {
+			hlsWait = wait
+		}
 	}
 
 	orch, err := contentcreator.New(&jobEnv, topic, deps.MCPCfg, send, logger, live)
@@ -316,6 +331,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// generation). The director still crossfades the pre-generated music beds.
 	if audioOnly {
 		orch.SetDisableImages(true)
+		orch.SetAudioOnly(true)
 	}
 
 	// Expose the live orchestrator so the WebSocket endpoint can inject
@@ -358,10 +374,10 @@ func run(ctx context.Context, deps Deps, jobID string,
 		t0 := time.Now()
 		if audioOnly {
 			status("preparing discussion audio (music)…")
-			discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch)
+			discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch, orch.RecordMusicGeneration)
 		} else {
 			status("preparing discussion assets (backgrounds, music)…")
-			discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch)
+			discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch, orch.RecordMusicGeneration)
 		}
 		logger.Info("discussion asset prep done",
 			"audio_only", audioOnly,
@@ -376,6 +392,8 @@ func run(ctx context.Context, deps Deps, jobID string,
 		fail(deps, jobID, logger, fmt.Errorf("orch.Run: %w", err))
 		return
 	}
+	persistUsageSummary(ctx, deps, jobID, logger, orch)
+	persistDiscussionTranscript(ctx, deps, logger, orch)
 	status(fmt.Sprintf("orchestrator done (%s)",
 		time.Since(tRun).Round(time.Second)))
 
@@ -399,6 +417,18 @@ func run(ctx context.Context, deps Deps, jobID string,
 			case <-ctx.Done():
 			}
 		}
+		// Let the HLS muxer flush its final segment + #EXT-X-ENDLIST so the
+		// playlist is complete for on-demand playback after the job finishes.
+		if hlsWait != nil {
+			fin := make(chan struct{})
+			go func() { hlsWait(); close(fin) }()
+			select {
+			case <-fin:
+			case <-time.After(30 * time.Second):
+				logger.Warn("audio HLS finalize timed out — playlist may lack ENDLIST")
+			case <-ctx.Done():
+			}
+		}
 
 		info, statErr := os.Stat(audioPath)
 		if statErr != nil || info.Size() == 0 {
@@ -408,14 +438,26 @@ func run(ctx context.Context, deps Deps, jobID string,
 		status(fmt.Sprintf("audio ready · %.1f MB", float64(info.Size())/(1024*1024)))
 
 		var s3Key string
+		var downloadURL string
+		audioPathForJob := audioPath
 		if deps.Uploader.Enabled() {
 			status("uploading to S3...")
 			key := deps.Uploader.Key(jobID + ".mp3")
 			if err := deps.Uploader.Upload(ctx, audioPath, key); err != nil {
 				logger.Error("s3 upload failed", "err", err)
-				status("S3 upload failed (serving from disk)")
+				fail(deps, jobID, logger, fmt.Errorf("s3 audio upload: %w", err))
+				return
 			} else {
 				s3Key = key
+				audioPathForJob = ""
+				if url, err := deps.Uploader.DownloadURL(ctx, key, time.Hour); err == nil {
+					downloadURL = url
+				} else {
+					logger.Warn("s3 audio download url failed", "key", key, "err", err)
+				}
+				if err := os.Remove(audioPath); err != nil {
+					logger.Warn("remove staged audio after S3 upload failed", "path", audioPath, "err", err)
+				}
 				status("uploaded to S3")
 			}
 		}
@@ -423,11 +465,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 		status("done")
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.Status = server.JobDone
-			j.AudioPath = audioPath
+			j.AudioPath = audioPathForJob
 			j.HasAudio = true
 			j.AudioOnly = true
 			j.AudioS3Key = s3Key
+			j.DownloadURL = downloadURL
 		})
+		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
 		return
 	}
 
@@ -571,6 +615,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// off the engine's disk. Failure is non-fatal — the local file remains
 	// servable.
 	var s3Key string
+	var downloadURL string
 	if deps.Uploader.Enabled() {
 		status("uploading to S3...")
 		key := deps.Uploader.Key(jobID + ".mp4")
@@ -579,6 +624,11 @@ func run(ctx context.Context, deps Deps, jobID string,
 			status("S3 upload failed (serving from disk)")
 		} else {
 			s3Key = key
+			if url, err := deps.Uploader.DownloadURL(ctx, key, time.Hour); err == nil {
+				downloadURL = url
+			} else {
+				logger.Warn("s3 video download url failed", "key", key, "err", err)
+			}
 			status("uploaded to S3")
 		}
 	}
@@ -590,11 +640,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 		j.VideoPath = mp4Path
 		j.HasVideo = true
 		j.S3Key = s3Key
+		j.DownloadURL = downloadURL
 		if archivePath != "" {
 			j.ArchivePath = archivePath
 			j.HasArchive = true
 		}
 	})
+	persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
 }
 
 func fail(deps Deps, jobID string, log *slog.Logger, err error) {
@@ -604,6 +656,63 @@ func fail(deps Deps, jobID string, log *slog.Logger, err error) {
 		j.Error = err.Error()
 	})
 	deps.Jobs.AppendLog(jobID, "error", err.Error(), nil)
+	persistDiscussionResult(context.Background(), deps, server.DiscussionFailed, "")
+}
+
+func persistDiscussionTranscript(ctx context.Context, deps Deps, log *slog.Logger, orch *contentcreator.Orchestrator) {
+	if deps.Discussions == nil || deps.DiscussionID == "" || orch == nil {
+		return
+	}
+	if err := deps.Discussions.ReplaceTranscript(ctx, deps.DiscussionID, orch.Transcript.Snapshot()); err != nil {
+		log.Warn("native discussion transcript persist failed",
+			"discussion_id", deps.DiscussionID,
+			"err", err,
+		)
+	}
+}
+
+func persistDiscussionResult(ctx context.Context, deps Deps, status server.DiscussionStatus, downloadURL string) {
+	if deps.Discussions == nil || deps.DiscussionID == "" {
+		return
+	}
+	_ = deps.Discussions.SetJobResult(ctx, deps.DiscussionID, status, downloadURL)
+}
+
+func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog.Logger, orch *contentcreator.Orchestrator) {
+	if orch == nil {
+		return
+	}
+	usage := orch.UsageSummary()
+	if usage.TotalTokens == 0 {
+		return
+	}
+	text := contentcreator.FormatUsageSummary(usage)
+	log.Info("llm usage summary",
+		"prompt_tokens", usage.PromptTokens,
+		"completion_tokens", usage.CompletionTokens,
+		"total_tokens", usage.TotalTokens,
+		"cost_usd", usage.CostUSD,
+		"cost_known", usage.CostKnown,
+		"tts_chars", usage.TTSCharacters,
+		"tts_cost_usd", usage.TTSCostUSD,
+		"music_gens", usage.MusicGenerations,
+		"music_cost_usd", usage.MusicCostUSD,
+		"total_cost_usd", usage.TotalCostUSD())
+	deps.Jobs.Update(jobID, func(j *server.Job) {
+		j.PromptTokens = usage.PromptTokens
+		j.CompletionTokens = usage.CompletionTokens
+		j.TotalTokens = usage.TotalTokens
+		j.LLMCostUSD = usage.CostUSD
+		j.LLMCostKnown = usage.CostKnown
+		j.TTSCostUSD = usage.TTSCostUSD
+		j.MusicCostUSD = usage.MusicCostUSD
+	})
+	deps.Jobs.AppendLog(jobID, "usage", text, usage)
+	if deps.Discussions != nil && deps.DiscussionID != "" {
+		_ = deps.Discussions.SetUsage(ctx, deps.DiscussionID,
+			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
+			usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
+	}
 }
 
 func persistEvent(jobs *server.JobRegistry, jobID string, v any) {

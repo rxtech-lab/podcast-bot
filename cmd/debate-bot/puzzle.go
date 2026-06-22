@@ -37,7 +37,7 @@ func preparePuzzleAssets(ctx context.Context, log *slog.Logger, env *config.Env,
 	// below. Saves the plan latency (~4s) off the music critical path.
 	musicCh := make(chan *musicgen.PuzzleMusic, 1)
 	go func() {
-		musicCh <- generatePuzzleMusic(ctx, log, d.topic, musicCacheDir)
+		musicCh <- generatePuzzleMusic(ctx, log, d.topic, musicCacheDir, orch.RecordMusicGeneration)
 	}()
 
 	// Plan synchronously; phase-1 + conclusion both need it.
@@ -76,7 +76,7 @@ func preparePuzzleAssets(ctx context.Context, log *slog.Logger, env *config.Env,
 	// the host (the prompt content is captured at construction time);
 	// a typical 1–2 cue plan finishes well within the surface-priority
 	// gate. Failures are non-fatal — Setup still runs without sound.
-	soundDirs, soundPaths := generatePuzzleSounds(ctx, log, d.topic, plan, musicCacheDir)
+	soundDirs, soundPaths := generatePuzzleSounds(ctx, log, d.topic, plan, musicCacheDir, orch.RecordMusicGeneration)
 	if len(soundDirs) > 0 && len(soundPaths) > 0 {
 		orch.SetSoundPlan(soundDirs, soundPaths)
 	}
@@ -306,7 +306,7 @@ func generatePuzzleSurfaceStreaming(ctx context.Context, log *slog.Logger,
 // warning at runtime).
 func generatePuzzleSounds(ctx context.Context, log *slog.Logger,
 	topic *config.DebateTopic, plan *scenes.ScenePlan,
-	musicCacheDir string) ([]contentcreator.SoundCueDirection, []string) {
+	musicCacheDir string, rec func()) ([]contentcreator.SoundCueDirection, []string) {
 	if plan == nil || len(plan.Sounds) == 0 {
 		return nil, nil
 	}
@@ -315,6 +315,7 @@ func generatePuzzleSounds(ctx context.Context, log *slog.Logger,
 		log.Warn("puzzle sound gen disabled", "err", err)
 		return nil, nil
 	}
+	client = client.WithUsageRecorder(rec)
 	dirs := make([]contentcreator.SoundCueDirection, len(plan.Sounds))
 	paths := make([]string, len(plan.Sounds))
 	var wg sync.WaitGroup
@@ -374,12 +375,13 @@ func generatePuzzleSounds(ctx context.Context, log *slog.Logger,
 // the topic is admitted, in parallel with planPuzzleScenes. That trims
 // the planning latency (~4s) off the music critical path on first runs.
 func generatePuzzleMusic(ctx context.Context, log *slog.Logger,
-	topic *config.DebateTopic, musicCacheDir string) *musicgen.PuzzleMusic {
+	topic *config.DebateTopic, musicCacheDir string, rec func()) *musicgen.PuzzleMusic {
 	client, err := musicgen.New("")
 	if err != nil {
 		log.Warn("puzzle music gen disabled", "err", err)
 		return nil
 	}
+	client = client.WithUsageRecorder(rec)
 	t0 := time.Now()
 	pm, err := musicgen.Generate(ctx, client, topic, musicCacheDir)
 	if err != nil {

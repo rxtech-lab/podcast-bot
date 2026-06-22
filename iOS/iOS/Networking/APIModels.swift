@@ -1,0 +1,249 @@
+import Foundation
+
+/// DTOs mirroring the debate-bot engine JSON. Field names match the Go structs'
+/// json tags (snake_case).
+
+struct EmptyRequest: Codable, Sendable {}
+
+struct AgentDTO: Codable, Hashable, Sendable {
+    var name: String
+    var model: String?
+    var aspect: String?
+}
+
+struct SourceDTO: Codable, Hashable, Sendable {
+    var title: String
+    var url: String
+    var snippet: String?
+}
+
+/// The discussion script (config.DebateTopic). Only the discussion-relevant
+/// fields are modeled; the engine fills defaults for anything omitted.
+struct ScriptDTO: Codable, Hashable, Sendable {
+    var title: String
+    var type: String
+    var language: String
+    var channel: String?
+    var total_minutes: Int?
+    var segment_max_seconds: Int?
+    var tts_provider: String?
+    var resolution: String?
+    var storage: String?
+    var host: AgentDTO?
+    var discussants: [AgentDTO]?
+    var commander: AgentDTO?
+    var background: String?
+    var sources: [SourceDTO]?
+}
+
+/// POST /api/plan request body.
+struct PlanRequest: Codable, Sendable {
+    var type: String = "discussion"
+    var topic: String
+    var language: String = "en-US"
+    var discussants: Int = 3
+    var research: Bool = true
+}
+
+/// POST /api/plan and /api/plan/improve response body.
+struct PlanResponse: Codable, Sendable {
+    var script: ScriptDTO
+    var markdown: String?
+    var sources: [SourceDTO]?
+    var researched: Bool?
+}
+
+/// POST /api/plan/improve request body.
+struct PlanImproveRequest: Codable, Sendable {
+    var previousScript: ScriptDTO
+    var instruction: String
+}
+
+struct DiscussionImproveRequest: Codable, Sendable {
+    var instruction: String
+}
+
+/// videoConfig portion of POST /api/jobs/json (audio-only feed).
+struct VideoConfigDTO: Codable, Sendable {
+    var audio_only: Bool = true
+    var soft_subs: Bool = true
+    var burn_subs: Bool = false
+    var resolution: String = "1080p"
+}
+
+/// POST /api/jobs/json request body.
+struct JobSubmitRequest: Codable, Sendable {
+    var script: ScriptDTO
+    var videoConfig: VideoConfigDTO = VideoConfigDTO()
+}
+
+/// POST /api/jobs/json response.
+struct JobSubmitResponse: Codable, Sendable {
+    var id: String
+}
+
+struct JobMessageRequest: Codable, Sendable {
+    var text: String
+    var username: String
+    var discussionID: String
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case username
+        case discussionID = "discussion_id"
+    }
+}
+
+struct DiscussionGenerateRequest: Codable, Sendable {
+    var videoConfig: VideoConfigDTO = VideoConfigDTO()
+    var language: String?
+}
+
+/// GET /api/jobs/{id} response.
+struct JobLogDTO: Codable, Hashable, Sendable {
+    var ts: Int
+    var kind: String
+    var text: String
+}
+
+struct JobStatusDTO: Codable, Sendable {
+    var id: String
+    var status: String          // pending | running | done | error
+    var title: String?
+    var type: String?
+    var error: String?
+    var has_audio: Bool?
+    var audio_only: Bool?
+    var download_url: String?
+    var phase: String?
+    var phase_label: String?
+    var elapsed_ms: Int?
+    var remaining_ms: Int?
+    var prompt_tokens: Int?
+    var completion_tokens: Int?
+    var total_tokens: Int?
+    var llm_cost_usd: Double?
+    var llm_cost_known: Bool?
+    var tts_cost_usd: Double?
+    var music_cost_usd: Double?
+    var logs: [JobLogDTO]?
+
+    var isDone: Bool { status == "done" }
+    var isError: Bool { status == "error" }
+
+    /// Structured cost/token breakdown for the "Generation summary" card.
+    var usageSummary: UsageSummary? {
+        guard let total = total_tokens, total > 0 else { return nil }
+        return UsageSummary(
+            totalTokens: total,
+            promptTokens: prompt_tokens ?? 0,
+            completionTokens: completion_tokens ?? 0,
+            llmCostUSD: llm_cost_known == true ? llm_cost_usd : nil,
+            ttsCostUSD: tts_cost_usd ?? 0,
+            musicCostUSD: music_cost_usd ?? 0
+        )
+    }
+
+    /// Single-line fallback (now-playing / status text). Prefers a server "usage" log line.
+    var usageSummaryText: String? {
+        if let log = logs?.last(where: { $0.kind == "usage" }),
+           !log.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return log.text
+        }
+        return usageSummary?.singleLineText
+    }
+}
+
+/// Itemized token + cost breakdown rendered by the "Generation summary" card.
+/// Costs are sub-cent, so values are formatted with enough precision to stay non-zero.
+struct UsageSummary: Equatable, Sendable {
+    var totalTokens: Int
+    var promptTokens: Int
+    var completionTokens: Int
+    /// `nil` when the LLM price for the model is unknown (cost can't be totalled).
+    var llmCostUSD: Double?
+    var ttsCostUSD: Double
+    var musicCostUSD: Double
+
+    var costKnown: Bool { llmCostUSD != nil }
+
+    /// LLM + Azure TTS + Lyria music. `nil` when the LLM price is unknown.
+    var totalCostUSD: Double? {
+        guard let llm = llmCostUSD else { return nil }
+        return llm + ttsCostUSD + musicCostUSD
+    }
+
+    /// Collapsed one-line form for now-playing info and status text.
+    var singleLineText: String {
+        var text = "Token usage: \(Self.formatInt(totalTokens)) total "
+            + "(\(Self.formatInt(promptTokens)) input, \(Self.formatInt(completionTokens)) output)"
+        if let total = totalCostUSD {
+            text += " · total cost \(Self.formatUSD(total))"
+        } else {
+            text += " · total cost unavailable"
+        }
+        return text
+    }
+
+    static func formatInt(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    /// Sub-cent costs need more than 2 decimals; pad small values so they don't read as "$0.00".
+    static func formatUSD(_ value: Double) -> String {
+        if value > 0, value < 0.01 {
+            return String(format: "$%.6f", value)
+        }
+        return String(format: "$%.4f", value)
+    }
+}
+
+/// One persisted transcript line returned by GET /api/jobs/{id}/transcript.
+struct TranscriptDTO: Codable, Hashable, Sendable {
+    var speaker: String
+    var role: String
+    var side: String?
+    var text: String
+    var at: String?
+}
+
+/// One event from GET /api/jobs/{id}/ws: `{ "event": ..., "data": {...} }`.
+struct JobEventEnvelope: Decodable, Sendable {
+    var event: String
+    var data: JobEventData?
+}
+
+struct JobEventData: Decodable, Sendable {
+    var channel_id: String?
+    var speaker: String?
+    var role: String?
+    var text: String?
+    var done: Bool?
+    var agent: String?
+    var activity: String?
+    var detail: String?
+    var phase: String?
+    var label: String?
+    var elapsed_ms: Int?
+    var remaining_ms: Int?
+}
+
+struct DiscussionLineRequest: Codable, Sendable {
+    var speaker: String
+    var role: String
+    var side: String?
+    var text: String
+    var startMS: Int?
+    var isUser: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case speaker
+        case role
+        case side
+        case text
+        case startMS = "start_ms"
+        case isUser = "is_user"
+    }
+}

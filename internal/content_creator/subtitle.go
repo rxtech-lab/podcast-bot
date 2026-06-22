@@ -35,16 +35,11 @@ type SubtitleCue struct {
 	Text  string
 }
 
-// vttMaxRunesPerCue caps the visible text per cue. The burned-in
-// renderer paints one wrapped line at a time (puzzleSubtitleMaxLines = 1
-// in internal/video) and scrolls overflow lines through it weighted by
-// audio duration. The sidecar mirrors that one-line-at-a-time feel by
-// splitting a long sentence into multiple cues, each holding a single
-// readable chunk. ~22 runes is the sweet spot for CJK content (the
-// project's primary language) — long enough to fit a full clause,
-// short enough that a player without auto-scroll doesn't show a wall of
-// text.
-const vttMaxRunesPerCue = 22
+// vttMaxRunesPerCue caps the visible text per cue. Native audio clients have
+// room for a multi-line caption, so keep enough text to show a complete phrase
+// instead of flickering through only a few words. Long sentences still split
+// into bounded chunks whose durations are proportional to content length.
+const vttMaxRunesPerCue = 44
 
 // vttWriter accumulates one cue per synthesised sentence and writes a
 // sidecar .vtt file at the end of the run. Toggling captions off in the
@@ -190,13 +185,21 @@ func WriteSubtitleCues(path string, cues []SubtitleCue) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("subtitle mkdir: %w", err)
 	}
+	return os.WriteFile(path, []byte(FormatSubtitleCues(cues)), 0o644)
+}
+
+// FormatSubtitleCues renders cues as a WebVTT document string. It is the
+// in-memory counterpart of WriteSubtitleCues, used by the live captions
+// endpoint to serve cues-so-far mid-generation without touching disk. An empty
+// cue list still yields a valid (header-only) WebVTT body.
+func FormatSubtitleCues(cues []SubtitleCue) string {
 	var sb strings.Builder
 	sb.WriteString("WEBVTT\n\n")
 	for i, c := range cues {
 		fmt.Fprintf(&sb, "%d\n%s --> %s\n%s\n\n",
 			i+1, formatVTT(c.Start), formatVTT(c.End), escapeVTT(c.Text))
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return sb.String()
 }
 
 func exportVTTCues(cues []vttCue) []SubtitleCue {
