@@ -5,7 +5,9 @@ out
 .DS_Store
 frontend/node_modules
 frontend/dist
-internal/server/web-dist
+internal/server/web-dist/*
+!internal/server/web-dist/
+!internal/server/web-dist/.gitkeep
 *.png
 .playwright-mcp
 topics/*.md

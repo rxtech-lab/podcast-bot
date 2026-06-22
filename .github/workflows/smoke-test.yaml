@@ -3,6 +3,27 @@ on:
   push:
 
 jobs:
+  go-tests:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache style font
+        uses: actions/cache@v4
+        with:
+          path: internal/video/testdata/fonts/NotoSansSC-Regular.otf
+          key: style-font-${{ hashFiles('scripts/fetch-style-font.sh') }}
+      - name: Fetch style font
+        run: make style-font
+      - name: Run Go tests
+        run: go test ./...
+
   style-smoke:
     name: Style golden smoke test
     runs-on: ubuntu-latest

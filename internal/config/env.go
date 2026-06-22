@@ -125,6 +125,18 @@ type Env struct {
 	// loading state. Empty disables Redis-backed recovery.
 	RedisURL string
 
+	// PodName is this process's stable network identity in a horizontally
+	// scaled deployment (the StatefulSet pod hostname, injected via the
+	// downward API as POD_NAME, falling back to HOSTNAME). Empty in single-pod
+	// / local runs, which disables cross-pod job routing.
+	PodName string
+
+	// PeerHostTemplate builds the host:port to dial for a peer pod given its
+	// name. It must contain exactly one %s, replaced with the owner pod name —
+	// e.g. "%s.debate-bot-headless.debate-bot.svc.cluster.local:3000". Empty
+	// disables cross-pod job routing.
+	PeerHostTemplate string
+
 	// PersistentRoot is the non-session base directory for cross-run
 	// archives — today only the series content type uses it (every
 	// episode writes its assets to
@@ -193,6 +205,9 @@ func LoadEnv() (*Env, error) {
 		TursoConnectionURL: strings.TrimSpace(os.Getenv("TURSO_CONNECTION_URL")),
 		TursoAuthToken:     strings.TrimSpace(os.Getenv("TURSO_AUTH_TOKEN")),
 		RedisURL:           strings.TrimSpace(os.Getenv("REDIS_URL")),
+
+		PodName:          podIdentity(),
+		PeerHostTemplate: strings.TrimSpace(os.Getenv("PEER_HOST_TEMPLATE")),
 	}
 
 	if e.CompressionBaseURL == "" {
@@ -241,6 +256,16 @@ func LoadEnv() (*Env, error) {
 }
 
 // splitCSV parses a comma-separated env value into a trimmed, non-empty slice.
+// podIdentity returns this process's pod name for cross-pod routing, preferring
+// the explicit POD_NAME (set via the k8s downward API) and falling back to
+// HOSTNAME (which on a StatefulSet pod is the stable "<name>-<ordinal>").
+func podIdentity() string {
+	if v := strings.TrimSpace(os.Getenv("POD_NAME")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv("HOSTNAME"))
+}
+
 func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))

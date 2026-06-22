@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	libsql "github.com/tursodatabase/libsql-client-go/libsql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -45,8 +47,11 @@ type JobLog struct {
 // Topic / Show / Type are echoed back so the SPA can render a finished-
 // job header without re-parsing the user's upload.
 type Job struct {
-	ID          string    `json:"id"`
-	Status      JobStatus `json:"status"`
+	ID     string    `json:"id"`
+	Status JobStatus `json:"status"`
+	// OwnerPod is the pod hostname that runs this job's live orchestrator;
+	// used by the cross-pod proxy. Not exposed to clients.
+	OwnerPod    string    `json:"-"`
 	Title       string    `json:"title,omitempty"`
 	Type        string    `json:"type,omitempty"`
 	Show        string    `json:"show,omitempty"`
@@ -128,6 +133,11 @@ type JobRegistry struct {
 	logLimit int
 	mu       sync.Mutex
 
+	// podName, when set, is stamped onto every job this registry creates so a
+	// horizontally-scaled deployment can route in-flight requests back to the
+	// pod running the job's live orchestrator. Empty in single-pod / local mode.
+	podName string
+
 	// orchs tracks the live orchestrator for each currently-running job so
 	// the WebSocket endpoint can inject viewer participation messages into
 	// an in-flight discussion. Entries exist only while a job is running
@@ -137,8 +147,14 @@ type JobRegistry struct {
 }
 
 type videoJobRecord struct {
-	ID               string `gorm:"primaryKey"`
-	Status           string
+	ID     string `gorm:"primaryKey"`
+	Status string
+	// OwnerPod is the StatefulSet pod (hostname) that ran this job's live
+	// orchestrator + audio stream. In a multi-pod deployment the HTTP layer
+	// reverse-proxies in-flight job requests to this pod so the caller always
+	// reaches the instance holding the live LiveStream. Empty for local /
+	// single-pod runs.
+	OwnerPod         string
 	Title            string
 	Type             string
 	Show             string
@@ -182,11 +198,11 @@ type videoJobLogRecord struct {
 
 func (videoJobLogRecord) TableName() string { return "video_job_logs" }
 
-// NewJobRegistry opens or creates a SQLite-backed registry at dbPath.
-func NewJobRegistry(dbPath string) (*JobRegistry, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, err
-	}
+// NewJobRegistry opens the job registry. When primaryURL is set it talks to a
+// shared Turso/libSQL database (so every pod in a horizontally-scaled
+// deployment sees the same jobs); otherwise it falls back to a local SQLite
+// file at dbPath for single-pod / dev / test use.
+func NewJobRegistry(dbPath, primaryURL, authToken string) (*JobRegistry, error) {
 	gormLogger := logger.New(
 		stdlog.New(os.Stdout, "\r\n", stdlog.LstdFlags),
 		logger.Config{
@@ -195,21 +211,52 @@ func NewJobRegistry(dbPath string) (*JobRegistry, error) {
 			IgnoreRecordNotFoundError: true,
 		},
 	)
-	db, err := gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{Logger: gormLogger})
+
+	var (
+		db     *gorm.DB
+		err    error
+		remote = primaryURL != ""
+	)
+	if remote {
+		var opts []libsql.Option
+		if authToken != "" {
+			opts = append(opts, libsql.WithAuthToken(authToken))
+		}
+		c, cerr := libsql.NewConnector(primaryURL, opts...)
+		if cerr != nil {
+			return nil, fmt.Errorf("jobs libsql connector: %w", cerr)
+		}
+		sqlDB := sql.OpenDB(c)
+		// libSQL is single-writer; keep one conn to serialise writes and avoid
+		// "database is locked" churn, mirroring the local SQLite tuning.
+		sqlDB.SetMaxOpenConns(1)
+		db, err = gorm.Open(sqlite.New(sqlite.Config{Conn: sqlDB}), &gorm.Config{Logger: gormLogger})
+	} else {
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+			return nil, err
+		}
+		db, err = gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{Logger: gormLogger})
+	}
 	if err != nil {
 		return nil, err
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, err
+
+	if !remote {
+		sqlDB, derr := db.DB()
+		if derr != nil {
+			return nil, derr
+		}
+		sqlDB.SetMaxOpenConns(1)
+		// PRAGMAs only apply to a real local SQLite file; libSQL ignores/rejects
+		// the journal-mode switch since durability is server-side.
+		if err := db.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
+			return nil, err
+		}
+		if err := db.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
+			return nil, err
+		}
 	}
-	sqlDB.SetMaxOpenConns(1)
-	if err := db.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
-		return nil, err
-	}
-	if err := db.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		return nil, err
-	}
+
 	r := &JobRegistry{db: db, logLimit: 500, orchs: map[string]*contentcreator.Orchestrator{}}
 	if err := r.ensureSchema(); err != nil {
 		return nil, err
@@ -268,12 +315,19 @@ func (r *JobRegistry) ClearOrch(id string) {
 	r.orchMu.Unlock()
 }
 
-// Add inserts a fresh pending job. Caller picks the id.
+// SetPodName records this process's pod identity (StatefulSet hostname) so
+// jobs created here are tagged with their owning pod for cross-pod routing.
+func (r *JobRegistry) SetPodName(name string) { r.podName = name }
+
+// Add inserts a fresh pending job. Caller picks the id. The job is stamped
+// with this pod's name (when set) since the runner executes in-process on the
+// pod that accepted the upload.
 func (r *JobRegistry) Add(id string) *Job {
 	now := time.Now()
 	rec := videoJobRecord{
 		ID:        id,
 		Status:    string(JobPending),
+		OwnerPod:  r.podName,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -400,6 +454,7 @@ func jobFromRecord(rec videoJobRecord) Job {
 	return Job{
 		ID:               rec.ID,
 		Status:           JobStatus(rec.Status),
+		OwnerPod:         rec.OwnerPod,
 		Title:            rec.Title,
 		Type:             rec.Type,
 		Show:             rec.Show,
@@ -435,6 +490,7 @@ func recordFromJob(j Job) videoJobRecord {
 	return videoJobRecord{
 		ID:               j.ID,
 		Status:           string(j.Status),
+		OwnerPod:         j.OwnerPod,
 		Title:            j.Title,
 		Type:             j.Type,
 		Show:             j.Show,

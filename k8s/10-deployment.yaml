@@ -1,18 +1,30 @@
 # The `debate-bot-secrets` Secret referenced below is NOT defined here.
 # Create it from secrets.example.yaml (copy -> secrets.yaml -> fill -> apply).
+#
+# A StatefulSet (not a Deployment) gives every pod a stable identity
+# (debate-bot-0, debate-bot-1, ...) and a stable DNS name via the headless
+# service below. That stable name is what the in-app cross-pod proxy dials:
+# a request for an in-flight job that landed on the wrong pod is reverse-
+# proxied to the pod that owns the job's live audio stream (PEER_HOST_TEMPLATE).
+#
+# Shared state lives off-pod so any replica can serve any finished job:
+#   - job + discussion metadata -> Turso/libSQL (TURSO_CONNECTION_URL)
+#   - finished mp3/mp4/vtt        -> S3 / R2 (S3_* in the Secret)
+# Each pod keeps only its own scratch render output on a per-pod PVC
+# (volumeClaimTemplates), so we can run RollingUpdate with N replicas.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: debate-bot
   namespace: debate-bot
   labels:
     app: debate-bot
 spec:
-  replicas: 1
-  # SQLite + on-disk render output live on a single RWO PVC, so we can't run two
-  # pods at once. Recreate (not RollingUpdate) avoids two pods sharing the volume.
-  strategy:
-    type: Recreate
+  serviceName: debate-bot-headless   # must match the headless Service name
+  replicas: 3
+  podManagementPolicy: Parallel      # boot pods concurrently, not one-by-one
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       app: debate-bot
@@ -21,21 +33,20 @@ spec:
       labels:
         app: debate-bot
     spec:
+      # Give in-flight HTTP/SSE/audio streams time to drain (or be re-issued by
+      # clients) before a pod is killed during a rollout.
+      terminationGracePeriodSeconds: 60
       containers:
         - name: debate-bot
           image: sirily11/debate-bot:latest
           imagePullPolicy: Always
-          # Serve the self-contained "video" web app: the browser uploads a
-          # script.md and downloads the rendered .mp4 — no channels/topics dir to
-          # mount. For TV-channel "stream" mode instead, drop these args (the
-          # image's default CMD) and mount a topics volume + channels.json.
           args: ["server", "--mode", "video", "--addr", ":3000"]
           ports:
             - name: http
               containerPort: 3000
           env:
             # Non-secret config. Point these at whatever providers you use; the
-            # API keys / password themselves come from the Secret below.
+            # API keys / password / Turso URL / S3 creds come from the Secret.
             - name: OPENAI_BASE_URL
               value: "https://api.openai.com/v1"
             - name: HOST_MODEL
@@ -46,6 +57,18 @@ spec:
               value: "/app/out"
             - name: REDIS_URL
               value: "redis://redis.redis.svc.cluster.local:6379"
+            # POD_NAME is this pod's stable identity (debate-bot-N), injected via
+            # the downward API. The server stamps it onto jobs it runs and uses
+            # it to know which requests are "mine" vs "proxy to the owner".
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # PEER_HOST_TEMPLATE builds the address of a peer pod from its name.
+            # The %s is replaced with the owner pod (e.g. debate-bot-0); the
+            # suffix is <headless-service>.<namespace>.svc.cluster.local:<port>.
+            - name: PEER_HOST_TEMPLATE
+              value: "%s.debate-bot-headless.debate-bot.svc.cluster.local:3000"
           envFrom:
             - secretRef:
                 name: debate-bot-secrets
@@ -72,23 +95,19 @@ spec:
           volumeMounts:
             - name: out
               mountPath: /app/out
-      volumes:
-        - name: out
-          persistentVolumeClaim:
-            claimName: debate-bot-out
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: debate-bot-out
-  namespace: debate-bot
-  labels:
-    app: debate-bot
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-  # Uses the cluster default StorageClass (microk8s hostpath-storage). Set
-  # storageClassName explicitly here if your cluster's default differs.
+  # Per-pod scratch volume for in-progress render output (HLS segments, the
+  # working mp3/mp4 before S3 upload). Each replica gets its own PVC, so pods
+  # never share a volume and RollingUpdate is safe.
+  volumeClaimTemplates:
+    - metadata:
+        name: out
+        labels:
+          app: debate-bot
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        # Uses the cluster default StorageClass (microk8s hostpath-storage).
+        # Set storageClassName explicitly here if your cluster's default differs.

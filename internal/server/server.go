@@ -114,6 +114,18 @@ type Deps struct {
 	// job renders as an audio-only feed regardless of the request. Surfaced on
 	// GET /api/config so a frontend can hide video-only controls.
 	ForceAudio bool
+
+	// PodName is this process's stable identity in a horizontally-scaled
+	// deployment (the StatefulSet pod hostname). When set together with
+	// PeerHostFor, the server reverse-proxies requests for an in-flight job to
+	// the pod that owns its live orchestrator + audio stream. Empty disables
+	// cross-pod routing (single-pod / local).
+	PodName string
+
+	// PeerHostFor maps an owner pod name to the host:port to dial for it
+	// (typically "<pod>.<headless-svc>.<ns>.svc.cluster.local:<port>"). nil
+	// disables cross-pod routing.
+	PeerHostFor func(pod string) string
 }
 
 // Server is the HTTP front-end.
@@ -226,6 +238,13 @@ func New(d Deps) *Server {
 		handler = s.withAuth(handler)
 	} else {
 		s.logAuthStartup(false)
+	}
+	// Cross-pod routing wraps the local (auth+mux) handler: a request for an
+	// in-flight job that this pod does not own is reverse-proxied to the owner
+	// (which re-runs auth on the forwarded credentials); everything else falls
+	// through to the local handler. No-op when PodName/PeerHostFor are unset.
+	if jobsMode {
+		handler = s.withJobProxy(handler)
 	}
 	if len(d.AllowedOrigins) > 0 {
 		handler = withCORS(d.AllowedOrigins, handler)

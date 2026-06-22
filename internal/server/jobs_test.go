@@ -18,7 +18,7 @@ import (
 
 func TestJobRegistryPersistsJobsAndLogs(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "jobs.db")
-	jobs, err := NewJobRegistry(dbPath)
+	jobs, err := NewJobRegistry(dbPath, "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestJobRegistryPersistsJobsAndLogs(t *testing.T) {
 	jobs.AppendLog("job-a", "status", "queued", nil)
 	jobs.AppendLog("job-a", "phase", "Done", map[string]string{"phase": "ended"})
 
-	reopened, err := NewJobRegistry(dbPath)
+	reopened, err := NewJobRegistry(dbPath, "", "")
 	if err != nil {
 		t.Fatalf("reopen NewJobRegistry: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestJobRegistryPersistsJobsAndLogs(t *testing.T) {
 }
 
 func TestJobRegistryListNewestFirst(t *testing.T) {
-	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestJobRegistryListNewestFirst(t *testing.T) {
 }
 
 func TestJobRegistryRecreatesMissingTables(t *testing.T) {
-	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestJobRegistryRecreatesMissingTables(t *testing.T) {
 }
 
 func TestJobStopRequiresActiveJob(t *testing.T) {
-	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestJobStopRequiresActiveJob(t *testing.T) {
 }
 
 func TestJobStopRequestsActiveOrchestratorFinalization(t *testing.T) {
-	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestRecoverJobFromArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobs, err := NewJobRegistry(filepath.Join(root, "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(root, "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestRecoverJobFromLegacySessionArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobs, err := NewJobRegistry(filepath.Join(root, "dashboard", "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(root, "dashboard", "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestRecoverJobFromLegacySessionArtifacts(t *testing.T) {
 }
 
 func TestAudioDownloadRedirectsToCustomS3Domain(t *testing.T) {
-	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestApplyDiscussionJobStatusMarksMissingGeneratingJobFailed(t *testing.T) {
 		t.Fatalf("NewDiscussionStore: %v", err)
 	}
 	defer store.Close()
-	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestJobTranscriptReturnsPersistedJobTranscript(t *testing.T) {
 		At:      time.Now(),
 	})
 
-	jobs, err := NewJobRegistry(filepath.Join(root, "jobs.db"))
+	jobs, err := NewJobRegistry(filepath.Join(root, "jobs.db"), "", "")
 	if err != nil {
 		t.Fatalf("NewJobRegistry: %v", err)
 	}
