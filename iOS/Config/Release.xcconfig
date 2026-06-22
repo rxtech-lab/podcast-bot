@@ -1,6 +1,9 @@
 // Release.xcconfig — production.
 // Points the app at the deployed debate-bot engine.
 
+// Include secrets if available (gitignored).
+#include? "Secrets.xcconfig"
+
 // Backend engine base URL (no trailing slash). AppConfig appends paths.
 AppAPIBaseURL = https:/$()/server.podcast.rxlab.app
 

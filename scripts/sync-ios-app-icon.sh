@@ -38,4 +38,12 @@ cat > "$APP_ICON_CONTENTS" <<'JSON'
 }
 JSON
 
+# App Store rejects icons with an alpha channel (error 90717). Fail loudly here
+# rather than during "Prepare Build for App Store Connect".
+if sips -g hasAlpha "$APP_ICON_IMAGE" | grep -q "hasAlpha: yes"; then
+  echo "Error: $APP_ICON_IMAGE has an alpha channel; App Store icons must be opaque." >&2
+  echo "Flatten the source ($ICON_SOURCE) onto an opaque background and re-run." >&2
+  exit 1
+fi
+
 echo "Synced AppIcon.appiconset from icon.icon"

@@ -6,3 +6,6 @@ xcuserdata/
 # Build
 build/
 DerivedData/
+
+# Secrets (decoded from CI base64 / copied from Secrets.xcconfig.example)
+Config/Secrets.xcconfig

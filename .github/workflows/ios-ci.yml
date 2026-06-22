@@ -21,6 +21,19 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Setup Secrets.xcconfig from GitHub Secrets
+        env:
+          SECRETS_XCCONFIG_BASE64: ${{ secrets.SECRETS_XCCONFIG_BASE64 }}
+        run: |
+          if [ -z "$SECRETS_XCCONFIG_BASE64" ]; then
+            echo "⚠️ SECRETS_XCCONFIG_BASE64 not set; skipping Secrets.xcconfig setup"
+          else
+            echo "✅ Decoding Secrets.xcconfig from GitHub secrets"
+            echo "$SECRETS_XCCONFIG_BASE64" | base64 --decode > iOS/Config/Secrets.xcconfig
+            echo "Contents of Secrets.xcconfig (with secrets masked):"
+            sed -E 's/(REVENUECAT_API_KEY.*=).*/\1 ***/' iOS/Config/Secrets.xcconfig
+          fi
+
       - name: Build iOS app
         run: ./scripts/ios-build.sh
         env:
