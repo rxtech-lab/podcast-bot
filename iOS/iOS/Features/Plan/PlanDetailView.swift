@@ -46,6 +46,7 @@ struct PlanDetailView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     DiscussionLanguageMenu(selection: $selectedLanguage)
+                        .disabled(isGenerating)
 
                     ForEach(editTurns) { turn in
                         PlanEditBubble(turn: turn)
@@ -104,16 +105,17 @@ struct PlanDetailView: View {
                     .font(.title2)
                     .foregroundStyle(Theme.accent)
             }
-            .disabled(instruction.trimmingCharacters(in: .whitespaces).isEmpty || isImproving)
+            .disabled(instruction.trimmingCharacters(in: .whitespaces).isEmpty || isImproving || isGenerating)
         }
         .padding(12)
         .glassEffect(in: .capsule)
         .padding(16)
+        .disabled(isGenerating)
     }
 
     private func improve() {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !isGenerating else { return }
         instruction = ""
         editTurns.append(.user(text))
         editTurns.append(.loading)

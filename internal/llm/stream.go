@@ -13,7 +13,10 @@ type Usage struct {
 	CostKnown        bool    `json:"cost_known,omitempty"`
 }
 
-// UsageSummary is the aggregate usage for a full generation.
+// UsageSummary is the aggregate usage for a full generation. CostUSD covers
+// only the LLM token spend; the media fields below carry the non-LLM API costs
+// (Azure speech synthesis, Lyria music generation) so the per-run total can
+// reflect every paid call, not just the chat models.
 type UsageSummary struct {
 	PromptTokens     int64
 	CompletionTokens int64
@@ -21,6 +24,21 @@ type UsageSummary struct {
 	CostUSD          float64
 	CostKnown        bool
 	ByModel          map[string]Usage
+
+	// TTSCharacters is the number of characters sent to the TTS provider and
+	// TTSCostUSD is their dollar cost (Azure neural pricing × characters).
+	TTSCharacters int64
+	TTSCostUSD    float64
+	// MusicGenerations is the count of billed Lyria music-generation API calls
+	// (cache hits excluded) and MusicCostUSD is their dollar cost.
+	MusicGenerations int64
+	MusicCostUSD     float64
+}
+
+// TotalCostUSD is the grand total across LLM tokens, TTS synthesis, and music
+// generation — the figure surfaced to the user as the run's "final cost".
+func (u UsageSummary) TotalCostUSD() float64 {
+	return u.CostUSD + u.TTSCostUSD + u.MusicCostUSD
 }
 
 // Delta is one streamed event from the LLM: a text chunk, a (partial) tool call,

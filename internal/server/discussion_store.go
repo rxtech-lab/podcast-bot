@@ -27,6 +27,12 @@ const (
 	DiscussionFailed     DiscussionStatus = "failed"
 )
 
+// Pagination bounds for listing discussions.
+const (
+	defaultDiscussionPageSize = 20
+	maxDiscussionPageSize     = 100
+)
+
 type DiscussionLine struct {
 	Speaker string `json:"speaker"`
 	Role    string `json:"role"`
@@ -57,6 +63,8 @@ type Discussion struct {
 	TotalTokens      int64                `json:"total_tokens,omitempty"`
 	LLMCostUSD       float64              `json:"llm_cost_usd,omitempty"`
 	LLMCostKnown     bool                 `json:"llm_cost_known,omitempty"`
+	TTSCostUSD       float64              `json:"tts_cost_usd,omitempty"`
+	MusicCostUSD     float64              `json:"music_cost_usd,omitempty"`
 	Script           *config.DebateTopic  `json:"script,omitempty"`
 	Markdown         string               `json:"markdown,omitempty"`
 	Sources          []config.Source      `json:"sources,omitempty"`
@@ -141,6 +149,8 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS native_discussions_owner_updated_idx
 			ON native_discussions(owner_user_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS native_discussions_owner_created_idx
+			ON native_discussions(owner_user_id, created_at DESC, id DESC)`,
 		`CREATE TABLE IF NOT EXISTS native_discussion_lines (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			discussion_id TEXT NOT NULL,
@@ -179,6 +189,8 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"total_tokens", "total_tokens INTEGER NOT NULL DEFAULT 0"},
 		{"llm_cost_usd", "llm_cost_usd REAL NOT NULL DEFAULT 0"},
 		{"llm_cost_known", "llm_cost_known INTEGER NOT NULL DEFAULT 0"},
+		{"tts_cost_usd", "tts_cost_usd REAL NOT NULL DEFAULT 0"},
+		{"music_cost_usd", "music_cost_usd REAL NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
@@ -219,11 +231,25 @@ func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp 
 	return s.Get(ctx, owner, id)
 }
 
-func (s *DiscussionStore) List(ctx context.Context, owner string) ([]Discussion, error) {
+// List returns discussions for an owner sorted by creation time, newest first.
+// limit/offset paginate the result; a non-positive limit falls back to the
+// default page size and offsets below zero are clamped to zero.
+func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset int) ([]Discussion, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
 		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
+		tts_cost_usd, music_cost_usd,
 		script_json, markdown, sources_json, researched, created_at, updated_at
-		FROM native_discussions WHERE owner_user_id = ? ORDER BY updated_at DESC`, owner)
+		FROM native_discussions WHERE owner_user_id = ?
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +268,7 @@ func (s *DiscussionStore) List(ctx context.Context, owner string) ([]Discussion,
 func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
 		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
+		tts_cost_usd, music_cost_usd,
 		script_json, markdown, sources_json, researched, created_at, updated_at
 		FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
 	d, err := scanDiscussion(row)
@@ -295,7 +322,7 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (*Discussion, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
 		status = ?, job_id = ?, prompt_tokens = 0, completion_tokens = 0, total_tokens = 0,
-		llm_cost_usd = 0, llm_cost_known = 0, updated_at = ?
+		llm_cost_usd = 0, llm_cost_known = 0, tts_cost_usd = 0, music_cost_usd = 0, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
 		DiscussionGenerating, jobID, time.Now().UnixMilli(), owner, id)
 	if err != nil {
@@ -313,11 +340,13 @@ func (s *DiscussionStore) SetJobResult(ctx context.Context, id string, status Di
 	return err
 }
 
-func (s *DiscussionStore) SetUsage(ctx context.Context, id string, promptTokens, completionTokens, totalTokens int64, costUSD float64, costKnown bool) error {
+func (s *DiscussionStore) SetUsage(ctx context.Context, id string, promptTokens, completionTokens, totalTokens int64, costUSD float64, costKnown bool, ttsCostUSD, musicCostUSD float64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
-		prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, llm_cost_usd = ?, llm_cost_known = ?, updated_at = ?
+		prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, llm_cost_usd = ?, llm_cost_known = ?,
+		tts_cost_usd = ?, music_cost_usd = ?, updated_at = ?
 		WHERE id = ?`,
-		promptTokens, completionTokens, totalTokens, costUSD, boolInt(costKnown), time.Now().UnixMilli(), id)
+		promptTokens, completionTokens, totalTokens, costUSD, boolInt(costKnown),
+		ttsCostUSD, musicCostUSD, time.Now().UnixMilli(), id)
 	return err
 }
 
@@ -457,6 +486,7 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 	var costKnown int
 	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
 		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
+		&d.TTSCostUSD, &d.MusicCostUSD,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
 		&created, &updated)
 	if err != nil {

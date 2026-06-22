@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
@@ -19,7 +20,7 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 
 	owner := "oauth:user-1"
 	otherOwner := "oauth:user-2"
-	empty, err := store.List(ctx, owner)
+	empty, err := store.List(ctx, owner, 0, 0)
 	if err != nil {
 		t.Fatalf("List empty: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 	if generated == nil || generated.Status != DiscussionGenerating || generated.JobID != "job-123" {
 		t.Fatalf("SetJob mismatch: %+v", generated)
 	}
-	if err := store.SetUsage(ctx, created.ID, 1000, 250, 1250, 0.00375, true); err != nil {
+	if err := store.SetUsage(ctx, created.ID, 1000, 250, 1250, 0.00375, true, 0.0012, 0.16); err != nil {
 		t.Fatalf("SetUsage: %v", err)
 	}
 	if err := store.SetJobResult(ctx, created.ID, DiscussionReady, "https://example.com/audio.m4a"); err != nil {
@@ -117,11 +118,12 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 		t.Fatalf("ready mismatch: %+v", ready)
 	}
 	if ready.PromptTokens != 1000 || ready.CompletionTokens != 250 || ready.TotalTokens != 1250 ||
-		ready.LLMCostUSD != 0.00375 || !ready.LLMCostKnown {
+		ready.LLMCostUSD != 0.00375 || !ready.LLMCostKnown ||
+		ready.TTSCostUSD != 0.0012 || ready.MusicCostUSD != 0.16 {
 		t.Fatalf("usage mismatch: %+v", ready)
 	}
 
-	list, err := store.List(ctx, owner)
+	list, err := store.List(ctx, owner, 0, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -140,5 +142,63 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 		t.Fatalf("Get after delete: %v", err)
 	} else if got != nil {
 		t.Fatalf("Get after delete returned %+v", got)
+	}
+}
+
+func TestDiscussionStoreListOrderingAndPagination(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	// Create discussions in a known order; each Create stamps created_at = time.Now(),
+	// so later creations are newer and must sort first.
+	var ids []string
+	for i := 0; i < 5; i++ {
+		d, err := store.Create(ctx, owner, "topic", planResponse{
+			Script: &config.DebateTopic{Title: "T", Type: config.ContentTypeDiscussion, Language: "en-US"},
+		})
+		if err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+		ids = append(ids, d.ID)
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// Newest first: the reverse of creation order.
+	page1, err := store.List(ctx, owner, 2, 0)
+	if err != nil {
+		t.Fatalf("List page1: %v", err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1 len = %d, want 2", len(page1))
+	}
+	if page1[0].ID != ids[4] || page1[1].ID != ids[3] {
+		t.Fatalf("page1 order = [%s %s], want newest-first [%s %s]",
+			page1[0].ID, page1[1].ID, ids[4], ids[3])
+	}
+	if !page1[0].CreatedAt.After(page1[1].CreatedAt) && !page1[0].CreatedAt.Equal(page1[1].CreatedAt) {
+		t.Fatalf("page1 not sorted by created_at desc: %v then %v", page1[0].CreatedAt, page1[1].CreatedAt)
+	}
+
+	// Offset paginates without overlap.
+	page2, err := store.List(ctx, owner, 2, 2)
+	if err != nil {
+		t.Fatalf("List page2: %v", err)
+	}
+	if len(page2) != 2 || page2[0].ID != ids[2] || page2[1].ID != ids[1] {
+		t.Fatalf("page2 unexpected: %+v", page2)
+	}
+
+	// Past the end yields an empty (non-nil) slice.
+	page4, err := store.List(ctx, owner, 2, 10)
+	if err != nil {
+		t.Fatalf("List page4: %v", err)
+	}
+	if page4 == nil || len(page4) != 0 {
+		t.Fatalf("page4 = %+v, want empty slice", page4)
 	}
 }

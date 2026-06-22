@@ -2,10 +2,23 @@ package server
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/planner"
 )
+
+// atoiDefault parses s as an int, returning def when s is empty or invalid.
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}
 
 type discussionImproveRequest struct {
 	Instruction string `json:"instruction"`
@@ -18,7 +31,9 @@ type discussionGenerateRequest struct {
 
 func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
-	items, err := s.d.Discussions.List(r.Context(), user.ID)
+	limit := atoiDefault(r.URL.Query().Get("limit"), 0)
+	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
+	items, err := s.d.Discussions.List(r.Context(), user.ID, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -229,8 +244,11 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 			d.TotalTokens = j.TotalTokens
 			d.LLMCostUSD = j.LLMCostUSD
 			d.LLMCostKnown = j.LLMCostKnown
+			d.TTSCostUSD = j.TTSCostUSD
+			d.MusicCostUSD = j.MusicCostUSD
 			_ = s.d.Discussions.SetUsage(r.Context(), d.ID,
-				j.PromptTokens, j.CompletionTokens, j.TotalTokens, j.LLMCostUSD, j.LLMCostKnown)
+				j.PromptTokens, j.CompletionTokens, j.TotalTokens, j.LLMCostUSD, j.LLMCostKnown,
+				j.TTSCostUSD, j.MusicCostUSD)
 		}
 	case j.Status == JobError:
 		d.Status = DiscussionFailed

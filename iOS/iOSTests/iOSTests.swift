@@ -151,40 +151,78 @@ final class iOSTests: XCTestCase {
         XCTAssertNil(PlayerModel.captionSpeaker(for: "not in the transcript", in: lines))
     }
 
-    func testLiveCaptionLeadMatchesObservedDelay() {
+    func testLiveCaptionHasNoManualLead() {
+        // The backend now emits zero-bias VTT for audio-only feeds, so cues align
+        // with the recording and the frontend must not advance the lookup time —
+        // a non-zero lead would surface captions early.
         let cues = [
             VTTCue(start: 1.5, end: 3, text: "Now audible")
         ]
-        let correctedLiveTime = 0.0 + PlayerModel.liveCaptionLeadSeconds
 
-        XCTAssertEqual(PlayerModel.liveCaptionLeadSeconds, 1.5)
+        XCTAssertEqual(PlayerModel.liveCaptionLeadSeconds, 0.0)
         XCTAssertEqual(PlayerModel.captionText(in: cues, at: 0.0), "")
-        XCTAssertEqual(PlayerModel.captionText(in: cues, at: correctedLiveTime), "Now audible")
+        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 1.5), "Now audible")
     }
 
-    func testLiveCaptionLeadPersistsUntilPlayerSwitchesToFinalAudio() {
+    func testCaptionLookupTimeIsUnshiftedRegardlessOfTimingMode() {
         let playbackTime = 10.0
 
         let duringLivePlayback = PlayerModel.captionLookupTime(playbackTime: playbackTime,
                                                                usesLiveCaptionTiming: true)
-        let afterJobFinishedButStillPlayingLiveHLS = PlayerModel.captionLookupTime(playbackTime: playbackTime,
-                                                                                   usesLiveCaptionTiming: true)
         let afterFinalAudioLoaded = PlayerModel.captionLookupTime(playbackTime: playbackTime,
                                                                   usesLiveCaptionTiming: false)
 
-        XCTAssertEqual(duringLivePlayback, playbackTime + PlayerModel.liveCaptionLeadSeconds)
-        XCTAssertEqual(afterJobFinishedButStillPlayingLiveHLS, playbackTime + PlayerModel.liveCaptionLeadSeconds)
+        XCTAssertEqual(duringLivePlayback, playbackTime)
         XCTAssertEqual(afterFinalAudioLoaded, playbackTime)
     }
 
-    func testAutoplayRetryRequiresPlaybackTimeToAdvance() {
-        let startTime = 12.0
+    func testFinalLyricsGroupAdjacentShortCues() {
+        let cues = [
+            VTTCue(start: 0.0, end: 1.0, text: "Yes"),
+            VTTCue(start: 1.1, end: 2.0, text: "that is the point"),
+            VTTCue(start: 2.1, end: 3.0, text: "we should pause"),
+            VTTCue(start: 8.0, end: 9.0, text: "A later caption stands alone")
+        ]
 
-        XCTAssertFalse(PlayerModel.playbackHasAdvanced(from: startTime, to: startTime))
-        XCTAssertFalse(PlayerModel.playbackHasAdvanced(from: startTime, to: startTime + 0.05))
-        XCTAssertTrue(PlayerModel.playbackHasAdvanced(from: startTime, to: startTime + 0.25))
-        XCTAssertFalse(PlayerModel.playbackHasAdvanced(from: .nan, to: startTime + 0.25))
-        XCTAssertFalse(PlayerModel.playbackHasAdvanced(from: startTime, to: .infinity))
+        let groups = PlayerModel.groupLyricCues(cues)
+
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].start, 0.0)
+        XCTAssertEqual(groups[0].end, 3.0)
+        XCTAssertEqual(groups[0].text, "Yes\nthat is the point\nwe should pause")
+        XCTAssertEqual(groups[0].firstCueIndex, 0)
+        XCTAssertEqual(groups[0].lastCueIndex, 2)
+        XCTAssertEqual(groups[1].text, "A later caption stands alone")
+    }
+
+    func testFinalLyricsDoNotGroupKnownSpeakerChanges() {
+        let cues = [
+            VTTCue(start: 0.0, end: 1.0, text: "Yes"),
+            VTTCue(start: 1.1, end: 2.0, text: "No")
+        ]
+
+        let groups = PlayerModel.groupLyricCues(cues) { cue in
+            cue.text == "Yes" ? "Speaker A" : "Speaker B"
+        }
+
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].text, "Yes")
+        XCTAssertEqual(groups[1].text, "No")
+    }
+
+    func testHLSReadinessFindsFirstMediaSegment() {
+        let playlist = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-TARGETDURATION:4
+        #EXTINF:4.000000,
+        seg_00000.ts
+        #EXTINF:4.000000,
+        seg_00001.ts
+        """
+
+        XCTAssertEqual(APIClient.firstHLSMediaSegment(in: playlist), "seg_00000.ts")
+        XCTAssertNil(APIClient.firstHLSMediaSegment(in: "#EXTM3U\n#EXT-X-VERSION:3\n"))
     }
 }
 

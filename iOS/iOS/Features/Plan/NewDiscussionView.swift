@@ -25,6 +25,7 @@ struct NewDiscussionView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .disabled(isPlanning)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -76,6 +77,7 @@ struct NewDiscussionView: View {
             .padding(16)
         }
         .scrollDismissesKeyboard(.interactively)
+        .disabled(isPlanning)
     }
 
     private func plan() {

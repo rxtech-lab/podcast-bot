@@ -15,6 +15,15 @@ type Tracker struct {
 	perSpeaker   map[string]time.Duration
 	overallUsed  time.Duration
 	usageByModel map[string]llm.Usage
+
+	// Non-LLM API usage, accumulated so the run's total cost reflects every
+	// paid call. ttsChars is the running character count handed to the TTS
+	// provider; musicGens is the count of billed Lyria generations. The
+	// per-unit prices are set once via SetMediaPricing from env config.
+	ttsChars               int64
+	musicGens              int64
+	ttsCostPerMillionChars float64
+	lyriaCostPerGen        float64
 }
 
 // NewTracker starts the clock.
@@ -25,6 +34,42 @@ func NewTracker(total time.Duration) *Tracker {
 		perSpeaker:   map[string]time.Duration{},
 		usageByModel: map[string]llm.Usage{},
 	}
+}
+
+// SetMediaPricing records the per-unit prices used to value TTS and music
+// usage in the run summary. ttsPerMillionChars is dollars per 1M synthesised
+// characters; lyriaPerGen is dollars per billed music generation. Safe to call
+// once at construction before any usage is recorded.
+func (t *Tracker) SetMediaPricing(ttsPerMillionChars, lyriaPerGen float64) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ttsCostPerMillionChars = ttsPerMillionChars
+	t.lyriaCostPerGen = lyriaPerGen
+}
+
+// AddTTSCharacters adds n characters to the TTS usage counter (one synthesis
+// call's worth of text). No-op for n <= 0 so a failed/empty call costs nothing.
+func (t *Tracker) AddTTSCharacters(n int64) {
+	if t == nil || n <= 0 {
+		return
+	}
+	t.mu.Lock()
+	t.ttsChars += n
+	t.mu.Unlock()
+}
+
+// AddMusicGeneration records one billed Lyria music-generation API call. Cache
+// hits do not call this, so the count tracks real spend.
+func (t *Tracker) AddMusicGeneration() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.musicGens++
+	t.mu.Unlock()
 }
 
 // Elapsed returns wall-clock time since the tracker started.
@@ -108,5 +153,9 @@ func (t *Tracker) LLMSummary() llm.UsageSummary {
 		}
 		out.ByModel[model] = usage
 	}
+	out.TTSCharacters = t.ttsChars
+	out.TTSCostUSD = float64(t.ttsChars) * t.ttsCostPerMillionChars / 1_000_000
+	out.MusicGenerations = t.musicGens
+	out.MusicCostUSD = float64(t.musicGens) * t.lyriaCostPerGen
 	return out
 }

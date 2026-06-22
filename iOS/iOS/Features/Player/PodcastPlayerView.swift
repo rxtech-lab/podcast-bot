@@ -14,6 +14,7 @@ struct PodcastPlayerView: View {
     @State private var model: PlayerModel?
     @State private var message = ""
     @State private var showingPlan = false
+    @State private var showingFullPlayer = false
 
     var body: some View {
         ZStack {
@@ -63,6 +64,11 @@ struct PodcastPlayerView: View {
         )) { file in
             PodcastDocumentExporter(url: file.url)
         }
+        .fullScreenCover(isPresented: $showingFullPlayer) {
+            if let model {
+                FullScreenPlayerView(model: model)
+            }
+        }
         .task {
             if model == nil {
                 let m = PlayerModel(discussion: discussion,
@@ -72,7 +78,12 @@ struct PodcastPlayerView: View {
                 model = m
             }
         }
-        .onDisappear { model?.stop() }
+        .onDisappear {
+            // Presenting the full-screen cover disappears this view; don't tear
+            // down the shared model in that case — only on real navigation exit.
+            guard !showingFullPlayer else { return }
+            model?.stop()
+        }
     }
 
     private func transcript(_ model: PlayerModel) -> some View {
@@ -82,8 +93,11 @@ struct PodcastPlayerView: View {
                     ForEach(model.lines) { line in
                         TranscriptBubble(line: line).id(line.id)
                     }
-                    if !model.usageSummaryText.isEmpty {
-                        UsageSummaryBubble(text: model.usageSummaryText)
+                    if let summary = model.usageSummary {
+                        UsageSummaryBubble(summary: summary)
+                            .id("usage-summary")
+                    } else if !model.usageSummaryText.isEmpty {
+                        UsageSummaryBubble(fallbackText: model.usageSummaryText)
                             .id("usage-summary")
                     }
                     Color.clear
@@ -114,7 +128,7 @@ struct PodcastPlayerView: View {
     @ViewBuilder
     private func footer(_ model: PlayerModel) -> some View {
         VStack(spacing: 10) {
-            MusicPlayerBar(model: model)
+            MusicPlayerBar(model: model) { showingFullPlayer = true }
             inputBar(model)
         }
         .padding(16)
@@ -138,7 +152,7 @@ struct PodcastPlayerView: View {
     }
 }
 
-private struct PodcastActionsMenu: View {
+struct PodcastActionsMenu: View {
     @Bindable var model: PlayerModel
 
     var body: some View {
@@ -167,7 +181,7 @@ private struct PodcastActionsMenu: View {
     }
 }
 
-private struct DownloadProgressSheet: View {
+struct DownloadProgressSheet: View {
     @Bindable var model: PlayerModel
 
     var body: some View {
@@ -204,7 +218,7 @@ private struct DownloadProgressSheet: View {
     }
 }
 
-private struct PodcastDocumentExporter: UIViewControllerRepresentable {
+struct PodcastDocumentExporter: UIViewControllerRepresentable {
     let url: URL
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
@@ -284,21 +298,87 @@ private struct TranscriptBubble: View {
 }
 
 private struct UsageSummaryBubble: View {
-    let text: String
+    private let summary: UsageSummary?
+    private let fallbackText: String?
+
+    init(summary: UsageSummary) {
+        self.summary = summary
+        self.fallbackText = nil
+    }
+
+    init(fallbackText: String) {
+        self.summary = nil
+        self.fallbackText = fallbackText
+    }
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Generation summary", systemImage: "number")
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Generation summary", systemImage: "wand.and.stars")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Theme.accent)
-                Text(text)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.primary)
+                if let summary {
+                    breakdown(summary)
+                } else if let fallbackText {
+                    Text(fallbackText)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                }
             }
-            .padding(12)
+            .padding(14)
             .background(Theme.agentBubble, in: .rect(cornerRadius: 14))
             Spacer(minLength: 40)
+        }
+    }
+
+    @ViewBuilder
+    private func breakdown(_ s: UsageSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Tokens
+            VStack(alignment: .leading, spacing: 4) {
+                row("Tokens", value: UsageSummary.formatInt(s.totalTokens), emphasized: true)
+                row("Input", value: UsageSummary.formatInt(s.promptTokens), indented: true)
+                row("Output", value: UsageSummary.formatInt(s.completionTokens), indented: true)
+            }
+
+            Divider().overlay(Theme.secondaryText.opacity(0.3))
+
+            // Cost
+            if s.costKnown {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let llm = s.llmCostUSD {
+                        row("Language model", value: UsageSummary.formatUSD(llm))
+                    }
+                    if s.ttsCostUSD > 0 {
+                        row("Speech (TTS)", value: UsageSummary.formatUSD(s.ttsCostUSD))
+                    }
+                    if s.musicCostUSD > 0 {
+                        row("Music", value: UsageSummary.formatUSD(s.musicCostUSD))
+                    }
+                }
+                if let total = s.totalCostUSD {
+                    Divider().overlay(Theme.secondaryText.opacity(0.3))
+                    row("Total cost", value: UsageSummary.formatUSD(total), emphasized: true)
+                }
+            } else {
+                Text("Total cost unavailable")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+        }
+    }
+
+    private func row(_ label: String, value: String, emphasized: Bool = false, indented: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(indented ? .caption.weight(.medium) : .callout.weight(emphasized ? .semibold : .regular))
+                .foregroundStyle(indented ? Theme.secondaryText : .primary)
+                .padding(.leading, indented ? 12 : 0)
+            Spacer(minLength: 16)
+            Text(value)
+                .font(.callout.weight(emphasized ? .bold : .medium))
+                .foregroundStyle(emphasized ? Theme.accent : .primary)
+                .monospacedDigit()
         }
     }
 }
@@ -306,8 +386,7 @@ private struct UsageSummaryBubble: View {
 /// Liquid Glass transport bar: title/phase, play-pause, progress.
 private struct MusicPlayerBar: View {
     @Bindable var model: PlayerModel
-    @State private var isScrubbing = false
-    @State private var scrubTime = 0.0
+    var onExpand: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 14) {
@@ -319,7 +398,13 @@ private struct MusicPlayerBar: View {
                     .glassEffect(in: .circle)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text(headerLine).font(.subheadline.weight(.medium)).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(headerLine).font(.subheadline.weight(.medium)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.secondaryText)
+                }
                 if !model.caption.isEmpty {
                     Text(model.caption)
                         .font(.callout.weight(.medium))
@@ -327,9 +412,10 @@ private struct MusicPlayerBar: View {
                         .lineLimit(4)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                timeline
+                ProgressView(value: progress)
+                    .tint(Theme.accent)
                 HStack {
-                    Text(timeString(displayTime)).font(.caption2).foregroundStyle(Theme.secondaryText)
+                    Text(timeString(progressTime)).font(.caption2).foregroundStyle(Theme.secondaryText)
                     Spacer()
                     if model.canDownloadPodcast {
                         Label("Ready", systemImage: "checkmark.circle.fill")
@@ -339,6 +425,8 @@ private struct MusicPlayerBar: View {
                     }
                 }
             }
+            .contentShape(.rect)
+            .onTapGesture(perform: onExpand)
             if model.canDownloadPodcast {
                 Button {
                     model.downloadPodcast()
@@ -350,31 +438,6 @@ private struct MusicPlayerBar: View {
         }
         .padding(12)
         .glassEffect(in: .rect(cornerRadius: 20))
-    }
-
-    @ViewBuilder
-    private var timeline: some View {
-        if model.canSeek {
-            Slider(value: Binding(
-                get: { isScrubbing ? scrubTime : model.currentTime },
-                set: { value in
-                    scrubTime = value
-                    isScrubbing = true
-                }
-            ), in: 0...max(model.duration, 0.1), onEditingChanged: { editing in
-                if editing {
-                    scrubTime = model.currentTime
-                    isScrubbing = true
-                } else {
-                    model.seek(to: scrubTime)
-                    isScrubbing = false
-                }
-            })
-            .tint(Theme.accent)
-        } else {
-            ProgressView(value: progress)
-                .tint(Theme.accent)
-        }
     }
 
     private var titleLine: String {
@@ -396,10 +459,6 @@ private struct MusicPlayerBar: View {
     private var progressTime: Double {
         if model.duration > 0 { return model.currentTime }
         return max(model.currentTime, model.elapsedTime)
-    }
-
-    private var displayTime: Double {
-        isScrubbing ? scrubTime : progressTime
     }
 
     private var progressDuration: Double {

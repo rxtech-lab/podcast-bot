@@ -77,16 +77,21 @@ type Job struct {
 	// object storage; empty when served from disk.
 	DownloadURL string `json:"download_url,omitempty"`
 
-	ElapsedMS        int64    `json:"elapsed_ms,omitempty"`
-	RemainingMS      int64    `json:"remaining_ms,omitempty"`
-	Phase            string   `json:"phase,omitempty"`
-	PhaseLabel       string   `json:"phase_label,omitempty"`
-	PromptTokens     int64    `json:"prompt_tokens,omitempty"`
-	CompletionTokens int64    `json:"completion_tokens,omitempty"`
-	TotalTokens      int64    `json:"total_tokens,omitempty"`
-	LLMCostUSD       float64  `json:"llm_cost_usd,omitempty"`
-	LLMCostKnown     bool     `json:"llm_cost_known,omitempty"`
-	Logs             []JobLog `json:"logs,omitempty"`
+	ElapsedMS        int64   `json:"elapsed_ms,omitempty"`
+	RemainingMS      int64   `json:"remaining_ms,omitempty"`
+	Phase            string  `json:"phase,omitempty"`
+	PhaseLabel       string  `json:"phase_label,omitempty"`
+	PromptTokens     int64   `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64   `json:"completion_tokens,omitempty"`
+	TotalTokens      int64   `json:"total_tokens,omitempty"`
+	LLMCostUSD       float64 `json:"llm_cost_usd,omitempty"`
+	LLMCostKnown     bool    `json:"llm_cost_known,omitempty"`
+	// TTSCostUSD and MusicCostUSD are the non-LLM API costs (Azure speech
+	// synthesis and Lyria music generation). They are added to LLMCostUSD to
+	// form the run's grand total cost shown to the user.
+	TTSCostUSD   float64  `json:"tts_cost_usd,omitempty"`
+	MusicCostUSD float64  `json:"music_cost_usd,omitempty"`
+	Logs         []JobLog `json:"logs,omitempty"`
 }
 
 // JobSubmission is the parsed multipart payload the server hands off to
@@ -158,6 +163,8 @@ type videoJobRecord struct {
 	TotalTokens      int64
 	LLMCostUSD       float64
 	LLMCostKnown     bool
+	TTSCostUSD       float64
+	MusicCostUSD     float64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -419,6 +426,8 @@ func jobFromRecord(rec videoJobRecord) Job {
 		TotalTokens:      rec.TotalTokens,
 		LLMCostUSD:       rec.LLMCostUSD,
 		LLMCostKnown:     rec.LLMCostKnown,
+		TTSCostUSD:       rec.TTSCostUSD,
+		MusicCostUSD:     rec.MusicCostUSD,
 	}
 }
 
@@ -450,6 +459,8 @@ func recordFromJob(j Job) videoJobRecord {
 		TotalTokens:      j.TotalTokens,
 		LLMCostUSD:       j.LLMCostUSD,
 		LLMCostKnown:     j.LLMCostKnown,
+		TTSCostUSD:       j.TTSCostUSD,
+		MusicCostUSD:     j.MusicCostUSD,
 		CreatedAt:        j.CreatedAt,
 		UpdatedAt:        j.UpdatedAt,
 	}

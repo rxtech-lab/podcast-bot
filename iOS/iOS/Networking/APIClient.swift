@@ -53,8 +53,11 @@ final class APIClient: Sendable {
 
     // MARK: - Server-owned discussions
 
-    func discussions() async throws -> [Discussion] {
-        try await get("/api/discussions")
+    func discussions(limit: Int = 20, offset: Int = 0) async throws -> [Discussion] {
+        try await get("/api/discussions", query: [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ])
     }
 
     func discussion(id: String) async throws -> Discussion {
@@ -178,9 +181,47 @@ final class APIClient: Sendable {
                 return .notReady
             }
             let playlist = String(decoding: data, as: UTF8.self)
-            return playlist.contains("#EXTM3U") && playlist.contains("#EXTINF") ? .ready : .notReady
+            guard playlist.contains("#EXTM3U"),
+                  playlist.contains("#EXTINF"),
+                  let segment = Self.firstHLSMediaSegment(in: playlist) else {
+                return .notReady
+            }
+            return await hlsSegmentAvailable(jobID: jobID, segment: segment, token: token) ? .ready : .notReady
         } catch {
             return .notReady
+        }
+    }
+
+    nonisolated static func firstHLSMediaSegment(in playlist: String) -> String? {
+        var sawMediaInfo = false
+        for rawLine in playlist.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            if line.hasPrefix("#EXTINF") {
+                sawMediaInfo = true
+                continue
+            }
+            if line.hasPrefix("#") { continue }
+            if sawMediaInfo { return line }
+        }
+        return nil
+    }
+
+    private func hlsSegmentAvailable(jobID: String, segment: String, token: String) async -> Bool {
+        guard let url = URL(string: segment, relativeTo: hlsURL(jobID: jobID))?.absoluteURL else {
+            return false
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        do {
+            let (_, resp) = try await session.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return false }
+            return http.statusCode == 200 || http.statusCode == 206
+        } catch {
+            return false
         }
     }
 
@@ -258,8 +299,8 @@ final class APIClient: Sendable {
         }
     }
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        let (data, _) = try await perform(request(method: "GET", path: path))
+    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
+        let (data, _) = try await perform(request(method: "GET", path: path, query: query))
         return try decode(data)
     }
 
@@ -274,8 +315,14 @@ final class APIClient: Sendable {
         _ = try await perform(request(method: method, path: path, body: payload))
     }
 
-    private func request(method: String, path: String, body: Data? = nil) -> URLRequest {
-        var req = URLRequest(url: baseURL.appendingPathComponent(String(path.dropFirst())))
+    private func request(method: String, path: String, body: Data? = nil, query: [URLQueryItem] = []) -> URLRequest {
+        var url = baseURL.appendingPathComponent(String(path.dropFirst()))
+        if !query.isEmpty,
+           var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            comps.queryItems = query
+            url = comps.url ?? url
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         if let body {
             req.httpBody = body

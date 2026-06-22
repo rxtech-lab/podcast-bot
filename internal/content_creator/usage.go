@@ -15,6 +15,17 @@ func (o *Orchestrator) UsageSummary() llm.UsageSummary {
 	return o.Tracker.LLMSummary()
 }
 
+// RecordMusicGeneration records one billed Lyria music-generation call against
+// the run tracker. Asset-prep code (discussion/series music) passes this as the
+// musicgen client's usage recorder so generation cost lands in the run total;
+// cache hits never call it. Safe on a nil orchestrator/tracker.
+func (o *Orchestrator) RecordMusicGeneration() {
+	if o == nil {
+		return
+	}
+	o.Tracker.AddMusicGeneration()
+}
+
 // FormatUsageSummary renders the short user-visible usage line stored in
 // server logs and shown by the iOS player.
 func FormatUsageSummary(u llm.UsageSummary) string {
@@ -23,11 +34,22 @@ func FormatUsageSummary(u llm.UsageSummary) string {
 	}
 	text := fmt.Sprintf("Token usage: %s total (%s input, %s output)",
 		formatInt(u.TotalTokens), formatInt(u.PromptTokens), formatInt(u.CompletionTokens))
-	if u.CostKnown {
-		text += fmt.Sprintf(" · total cost $%.6f", u.CostUSD)
-	} else {
+	if !u.CostKnown {
 		text += " · total cost unavailable"
+		return text
 	}
+	// Break the spend down by source so the user can see what drives the bill,
+	// then report the grand total (LLM tokens + TTS synthesis + music gen).
+	if u.TTSCostUSD > 0 || u.MusicCostUSD > 0 {
+		text += fmt.Sprintf(" · LLM $%.6f", u.CostUSD)
+		if u.TTSCostUSD > 0 {
+			text += fmt.Sprintf(" · TTS $%.6f (%s chars)", u.TTSCostUSD, formatInt(u.TTSCharacters))
+		}
+		if u.MusicCostUSD > 0 {
+			text += fmt.Sprintf(" · music $%.6f (%s gens)", u.MusicCostUSD, formatInt(u.MusicGenerations))
+		}
+	}
+	text += fmt.Sprintf(" · total cost $%.6f", u.TotalCostUSD())
 	return text
 }
 

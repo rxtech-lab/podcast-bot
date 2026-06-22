@@ -24,6 +24,8 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var totalTokens: Int?
     var llmCostUSD: Double?
     var llmCostKnown: Bool?
+    var ttsCostUSD: Double?
+    var musicCostUSD: Double?
     var script: ScriptDTO?
     var markdown: String?
     var sources: [SourceDTO]?
@@ -46,6 +48,8 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case totalTokens = "total_tokens"
         case llmCostUSD = "llm_cost_usd"
         case llmCostKnown = "llm_cost_known"
+        case ttsCostUSD = "tts_cost_usd"
+        case musicCostUSD = "music_cost_usd"
         case script
         case markdown
         case sources
@@ -80,24 +84,20 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
 
     var sortedLines: [DiscussionLineDTO] { lines ?? [] }
 
-    var usageSummaryText: String? {
+    /// Structured cost/token breakdown for the "Generation summary" card.
+    var usageSummary: UsageSummary? {
         guard let total = totalTokens, total > 0 else { return nil }
-        let prompt = promptTokens ?? 0
-        let completion = completionTokens ?? 0
-        var text = "Token usage: \(Self.format(total)) total (\(Self.format(prompt)) input, \(Self.format(completion)) output)"
-        if llmCostKnown == true, let cost = llmCostUSD {
-            text += String(format: " · total cost $%.6f", cost)
-        } else {
-            text += " · total cost unavailable"
-        }
-        return text
+        return UsageSummary(
+            totalTokens: total,
+            promptTokens: promptTokens ?? 0,
+            completionTokens: completionTokens ?? 0,
+            llmCostUSD: llmCostKnown == true ? llmCostUSD : nil,
+            ttsCostUSD: ttsCostUSD ?? 0,
+            musicCostUSD: musicCostUSD ?? 0
+        )
     }
 
-    private static func format(_ value: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
-    }
+    var usageSummaryText: String? { usageSummary?.singleLineText }
 }
 
 struct DiscussionLineDTO: Codable, Hashable, Sendable {

@@ -35,6 +35,19 @@ type Env struct {
 	LLMInputCostPerMillion  float64
 	LLMOutputCostPerMillion float64
 
+	// AzureTTSCostPerMillionChars is the Azure neural TTS price in dollars per
+	// one million synthesised characters. Used to fold speech-synthesis cost
+	// into the per-run total. Defaults to $15/1M (Azure prebuilt neural,
+	// pay-as-you-go); override with AZURE_TTS_COST_PER_MILLION_CHARS (e.g. set
+	// to a commitment-tier rate, or 22 for Neural HD voices).
+	AzureTTSCostPerMillionChars float64
+
+	// LyriaCostPerGeneration is the Google Lyria 3 Pro price in dollars per
+	// successful music-generation API call (one returned clip). Defaults to
+	// $0.08/generation; override with LYRIA_COST_PER_GENERATION. Cache hits do
+	// not hit the API and are not billed.
+	LyriaCostPerGeneration float64
+
 	AzureSpeechKey    string
 	AzureSpeechRegion string
 
@@ -125,6 +138,12 @@ func LoadEnv() (*Env, error) {
 		),
 		LLMOutputCostPerMillion: parseFloatEnv(
 			"LLM_OUTPUT_COST_PER_MILLION",
+		),
+		AzureTTSCostPerMillionChars: parseFloatEnvDefault(
+			"AZURE_TTS_COST_PER_MILLION_CHARS", 15.0,
+		),
+		LyriaCostPerGeneration: parseFloatEnvDefault(
+			"LYRIA_COST_PER_GENERATION", 0.08,
 		),
 		AzureSpeechKey:    strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
 		AzureSpeechRegion: strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
@@ -219,6 +238,21 @@ func parseFloatEnv(key string) float64 {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil || f < 0 {
 		return 0
+	}
+	return f
+}
+
+// parseFloatEnvDefault is parseFloatEnv but returns def when the var is unset
+// or invalid, so a sensible non-zero default (e.g. a published price) applies
+// unless the operator explicitly overrides it. Set the var to "0" to disable.
+func parseFloatEnvDefault(key string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f < 0 {
+		return def
 	}
 	return f
 }

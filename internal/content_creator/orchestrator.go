@@ -131,6 +131,11 @@ type Orchestrator struct {
 	// pre-generated music beds but never calls imagegen for backgrounds.
 	disableImages bool
 
+	// audioOnly marks an audio-only feed: audio.mp3 is recorded straight from
+	// the LiveStream at t=0 with no stitch StartOffset trim, so the sidecar VTT
+	// must skip vttBias (which only compensates for that mp4 front-trim).
+	audioOnly bool
+
 	subtitleCues []SubtitleCue
 
 	// livePipe is the running pipeline, published while Run is in flight so
@@ -171,6 +176,7 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 	ttsRegistry := tools.New()
 	tools.RegisterBuiltins(ttsRegistry)
 	tracker := NewTracker(time.Duration(topic.TotalMinutes) * time.Minute)
+	tracker.SetMediaPricing(env.AzureTTSCostPerMillionChars, env.LyriaCostPerGeneration)
 	recordUsage := func(u llm.Usage) { tracker.AddLLMUsage(u) }
 	pricedClient := func(baseURL, key, model string) *llm.Client {
 		return llm.New(baseURL, key, model).
@@ -197,7 +203,7 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 			pricedClient(env.CompressionBaseURL, env.CompressionKey, env.CompressionModel),
 			memory.DefaultThreshold,
 		),
-		TTS:        ttsClient,
+		TTS:        newMeteredTTS(ttsClient, tracker),
 		Transcript: NewTranscriptWithStore(store),
 		Store:      store,
 		Tracker:    tracker,
@@ -443,6 +449,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		Send: o.Send, Log: o.Log,
 		Topic: o.Topic.Title, Language: o.Topic.Language,
 		ContentType:      o.Topic.Type,
+		AudioOnly:        o.audioOnly,
 		Transcript:       o.Transcript,
 		LiveStream:       o.LiveStream,
 		MusicPaths:       musicPaths,

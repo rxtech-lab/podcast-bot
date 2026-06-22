@@ -34,7 +34,11 @@ type Deps struct {
 	// Stamped onto PhaseMsg so the frontend can label phases without
 	// hardcoding the per-format mapping.
 	ContentType string
-	Transcript  *Transcript
+	// AudioOnly marks an audio-only feed whose audio.mp3 is recorded straight
+	// from the LiveStream at t=0 with no stitch StartOffset trim, so vttBias
+	// (a trim-compensation offset) must not be applied to its sidecar cues.
+	AudioOnly  bool
+	Transcript *Transcript
 	LiveStream  *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
 
 	// MusicPaths maps planner directive prefix → mp3 file path for turns
@@ -198,6 +202,13 @@ func (p *Pipeline) SubtitleCues() []SubtitleCue {
 }
 
 func (p *Pipeline) vttBias() time.Duration {
+	// Audio-only feeds record audio.mp3 straight from the LiveStream at t=0
+	// with no stitch StartOffset trim. vttBias exists only to realign the
+	// sidecar .vtt against that front-trimmed mp4, so it would push captions
+	// late (~2.5s for discussion) against the untrimmed recording. Skip it.
+	if p != nil && p.d.AudioOnly {
+		return 0
+	}
 	bias := vttBaseBias
 	if p != nil && p.d.HasSeriesPreviouslyOn {
 		bias += vttPreviouslyOnBias

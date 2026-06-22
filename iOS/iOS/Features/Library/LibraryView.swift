@@ -7,13 +7,18 @@ struct LibraryView: View {
     @State private var showingNew = false
     @State private var path: [Discussion] = []
     @State private var isLoading = false
+    @State private var hasLoadedInitialPage = false
+    @State private var isLoadingMore = false
+    @State private var canLoadMore = true
     @State private var errorMessage: String?
+
+    private let pageSize = 20
 
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
                 Theme.background.ignoresSafeArea()
-                if isLoading && discussions.isEmpty {
+                if shouldShowInitialLoader {
                     ProgressView().tint(Theme.accent)
                 } else if discussions.isEmpty {
                     emptyState
@@ -65,8 +70,23 @@ struct LibraryView: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .onAppear {
+                    if d.id == discussions.last?.id {
+                        Task { await loadMore() }
+                    }
+                }
             }
             .onDelete(perform: deleteDiscussions)
+
+            if isLoadingMore {
+                HStack {
+                    Spacer()
+                    ProgressView().tint(Theme.accent)
+                    Spacer()
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -81,11 +101,34 @@ struct LibraryView: View {
         )
     }
 
+    private var shouldShowInitialLoader: Bool {
+        discussions.isEmpty && (isLoading || !hasLoadedInitialPage)
+    }
+
     private func load() async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            hasLoadedInitialPage = true
+        }
         do {
-            discussions = try await APIClient(tokens: auth).discussions()
+            let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: 0)
+            discussions = items
+            canLoadMore = items.count == pageSize
+        } catch {
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func loadMore() async {
+        guard canLoadMore, !isLoadingMore, !isLoading else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: discussions.count)
+            let existing = Set(discussions.map(\.id))
+            discussions.append(contentsOf: items.filter { !existing.contains($0.id) })
+            canLoadMore = items.count == pageSize
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

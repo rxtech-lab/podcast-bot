@@ -211,12 +211,12 @@ func prepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 
 	status("starting music + narration audio bed generation…")
 	musicCh := make(chan string, 1)
-	go func() { musicCh <- generateMusic(ctx, log, topic, musicCacheDir) }()
+	go func() { musicCh <- generateMusic(ctx, log, topic, musicCacheDir, orch.RecordMusicGeneration) }()
 
 	if plan != nil && len(plan.Sounds) > 0 {
 		status(fmt.Sprintf("generating %d sound clip(s)…", len(plan.Sounds)))
 	}
-	if soundDirs, soundPaths := generateSounds(ctx, log, topic, plan, soundsCacheDir); len(soundDirs) > 0 {
+	if soundDirs, soundPaths := generateSounds(ctx, log, topic, plan, soundsCacheDir, orch.RecordMusicGeneration); len(soundDirs) > 0 {
 		orch.SetSeriesSoundPlan(soundDirs, soundPaths)
 		status(fmt.Sprintf("sound clips generated (%d)", len(soundPaths)))
 	}
@@ -394,12 +394,13 @@ func loadPNG(path string) (*image.RGBA, error) {
 	return out, nil
 }
 
-func generateMusic(ctx context.Context, log *slog.Logger, topic *config.DebateTopic, cacheDir string) string {
+func generateMusic(ctx context.Context, log *slog.Logger, topic *config.DebateTopic, cacheDir string, rec func()) string {
 	client, err := musicgen.New("")
 	if err != nil {
 		log.Warn("series music gen disabled", "err", err)
 		return ""
 	}
+	client = client.WithUsageRecorder(rec)
 	prompt := fmt.Sprintf(
 		"Atmospheric instrumental score for a serialized narrated podcast episode. Show: %s. Calm, contemplative, late-night documentary feel. No vocals.",
 		topic.Show)
@@ -416,7 +417,7 @@ func generateMusic(ctx context.Context, log *slog.Logger, topic *config.DebateTo
 }
 
 func generateSounds(ctx context.Context, log *slog.Logger, topic *config.DebateTopic,
-	plan *scenes.ScenePlan, cacheDir string,
+	plan *scenes.ScenePlan, cacheDir string, rec func(),
 ) ([]contentcreator.SoundCueDirection, []string) {
 	if plan == nil || len(plan.Sounds) == 0 {
 		return nil, nil
@@ -426,6 +427,7 @@ func generateSounds(ctx context.Context, log *slog.Logger, topic *config.DebateT
 		log.Warn("series sound gen disabled", "err", err)
 		return nil, nil
 	}
+	client = client.WithUsageRecorder(rec)
 	dirs := make([]contentcreator.SoundCueDirection, len(plan.Sounds))
 	paths := make([]string, len(plan.Sounds))
 	var wg sync.WaitGroup

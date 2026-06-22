@@ -331,6 +331,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// generation). The director still crossfades the pre-generated music beds.
 	if audioOnly {
 		orch.SetDisableImages(true)
+		orch.SetAudioOnly(true)
 	}
 
 	// Expose the live orchestrator so the WebSocket endpoint can inject
@@ -373,10 +374,10 @@ func run(ctx context.Context, deps Deps, jobID string,
 		t0 := time.Now()
 		if audioOnly {
 			status("preparing discussion audio (music)…")
-			discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch)
+			discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch, orch.RecordMusicGeneration)
 		} else {
 			status("preparing discussion assets (backgrounds, music)…")
-			discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch)
+			discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch, orch.RecordMusicGeneration)
 		}
 		logger.Info("discussion asset prep done",
 			"audio_only", audioOnly,
@@ -691,18 +692,26 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		"completion_tokens", usage.CompletionTokens,
 		"total_tokens", usage.TotalTokens,
 		"cost_usd", usage.CostUSD,
-		"cost_known", usage.CostKnown)
+		"cost_known", usage.CostKnown,
+		"tts_chars", usage.TTSCharacters,
+		"tts_cost_usd", usage.TTSCostUSD,
+		"music_gens", usage.MusicGenerations,
+		"music_cost_usd", usage.MusicCostUSD,
+		"total_cost_usd", usage.TotalCostUSD())
 	deps.Jobs.Update(jobID, func(j *server.Job) {
 		j.PromptTokens = usage.PromptTokens
 		j.CompletionTokens = usage.CompletionTokens
 		j.TotalTokens = usage.TotalTokens
 		j.LLMCostUSD = usage.CostUSD
 		j.LLMCostKnown = usage.CostKnown
+		j.TTSCostUSD = usage.TTSCostUSD
+		j.MusicCostUSD = usage.MusicCostUSD
 	})
 	deps.Jobs.AppendLog(jobID, "usage", text, usage)
 	if deps.Discussions != nil && deps.DiscussionID != "" {
 		_ = deps.Discussions.SetUsage(ctx, deps.DiscussionID,
-			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, usage.CostUSD, usage.CostKnown)
+			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
+			usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
 	}
 }
 
