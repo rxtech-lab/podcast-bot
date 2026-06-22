@@ -153,6 +153,9 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
 	s.mux.HandleFunc("POST /api/plan/improve", s.handlePlanImprove)
+	s.mux.HandleFunc("POST /api/uploads/presign", s.handleUploadPresign)
+	s.mux.HandleFunc("POST /api/uploads/complete", s.handleUploadComplete)
+	s.mux.HandleFunc("POST /api/uploads", s.handleUpload)
 
 	// "video" and "dashboard" both run the upload-and-render job pipeline;
 	// only the embedded SPA differs (dashboard has its own frontend). Stream
@@ -192,6 +195,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
+		s.mux.HandleFunc("POST /api/discussions/{id}/sources", s.handleDiscussionAddSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
 	}

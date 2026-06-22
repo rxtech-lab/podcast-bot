@@ -68,9 +68,48 @@ final class APIClient: Sendable {
         try await send("POST", "/api/discussions/plan", body: req)
     }
 
-    func improveDiscussion(id: String, instruction: String) async throws -> Discussion {
+    func improveDiscussion(id: String, instruction: String,
+                           attachments: [Attachment] = []) async throws -> Discussion {
         try await send("POST", "/api/discussions/\(id)/improve",
-                       body: DiscussionImproveRequest(instruction: instruction))
+                       body: DiscussionImproveRequest(instruction: instruction,
+                                                      attachments: attachments.isEmpty ? nil : attachments))
+    }
+
+    /// Re-research: adds the given links to the plan's sources and updates the
+    /// plan to incorporate them. Backs the sources sheet's "add a link" action.
+    func addDiscussionSources(id: String, urls: [String]) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/sources", body: AddSourcesRequest(urls: urls))
+    }
+
+    /// Uploads a reference file via a presigned object-storage URL, then asks
+    /// the engine to return an attachment payload. Documents come back as
+    /// markdown; images come back as direct image URLs for the model.
+    func uploadFile(data: Data, filename: String, mimeType: String) async throws -> UploadResponse {
+        let presign: UploadPresignResponse = try await send(
+            "POST",
+            "/api/uploads/presign",
+            body: UploadPresignRequest(filename: filename, mimeType: mimeType)
+        )
+
+        var uploadReq = URLRequest(url: presign.uploadURL)
+        uploadReq.httpMethod = presign.method
+        uploadReq.httpBody = data
+        uploadReq.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        for (name, value) in presign.headers {
+            uploadReq.setValue(value, forHTTPHeaderField: name)
+        }
+        let (uploadData, uploadResp) = try await session.data(for: uploadReq)
+        guard let uploadHTTP = uploadResp as? HTTPURLResponse,
+              (200..<300).contains(uploadHTTP.statusCode) else {
+            let status = (uploadResp as? HTTPURLResponse)?.statusCode ?? 0
+            throw APIError.http(status, String(decoding: uploadData, as: UTF8.self))
+        }
+
+        return try await send(
+            "POST",
+            "/api/uploads/complete",
+            body: UploadCompleteRequest(key: presign.key, filename: filename, mimeType: mimeType)
+        )
     }
 
     func generateDiscussion(id: String, language: String) async throws -> Discussion {

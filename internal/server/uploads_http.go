@@ -1,0 +1,243 @@
+package server
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/sirily11/debate-bot/internal/planner"
+)
+
+// maxUploadBytes caps an uploaded reference file. markitdown handles documents,
+// not media, so a modest ceiling is plenty and protects the server.
+const maxUploadBytes = 25 << 20 // 25 MiB
+
+// uploadPresignTTL is how long the presigned URL handed to markitdown stays
+// valid — long enough for a slow PDF/docx conversion, short-lived otherwise.
+const uploadPresignTTL = 15 * time.Minute
+
+// uploadPutTTL is the short upload window for a direct client-to-S3 PUT.
+const uploadPutTTL = 10 * time.Minute
+
+// uploadResponse is the body returned by POST /api/uploads: the original
+// filename, either parsed markdown or a direct image URL, and the content type.
+type uploadResponse struct {
+	Filename string `json:"filename"`
+	Markdown string `json:"markdown,omitempty"`
+	URL      string `json:"url,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+}
+
+type uploadPresignRequest struct {
+	Filename string `json:"filename"`
+	MIMEType string `json:"mime_type"`
+}
+
+type uploadPresignResponse struct {
+	Key       string            `json:"key"`
+	UploadURL string            `json:"upload_url"`
+	Method    string            `json:"method"`
+	Headers   map[string]string `json:"headers"`
+}
+
+type uploadCompleteRequest struct {
+	Key      string `json:"key"`
+	Filename string `json:"filename"`
+	MIMEType string `json:"mime_type"`
+}
+
+// handleUploadPresign mints a short-lived PUT URL so native clients can upload
+// directly to object storage instead of relaying bytes through the API server.
+func (s *Server) handleUploadPresign(w http.ResponseWriter, r *http.Request) {
+	if !s.d.Uploader.Enabled() {
+		http.Error(w, "uploads require S3 storage", http.StatusServiceUnavailable)
+		return
+	}
+	var req uploadPresignRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	filename := strings.TrimSpace(filepath.Base(req.Filename))
+	if filename == "" || filename == "." {
+		http.Error(w, "filename is required", http.StatusBadRequest)
+		return
+	}
+	mimeType := normalizedUploadMIME(req.MIMEType)
+	ext := strings.ToLower(filepath.Ext(filename))
+	user := s.requestUser(r)
+	key := s.d.Uploader.Key(uploadKeyName(user.ID, ext))
+	uploadURL, err := s.d.Uploader.PresignPut(r.Context(), key, mimeType, uploadPutTTL)
+	if err != nil || uploadURL == "" {
+		http.Error(w, "presign upload", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, uploadPresignResponse{
+		Key:       key,
+		UploadURL: uploadURL,
+		Method:    http.MethodPut,
+		Headers:   map[string]string{"Content-Type": mimeType},
+	})
+}
+
+// handleUploadComplete verifies the uploaded object and returns an attachment
+// payload. Images are passed through as image URLs for the model; other files
+// are converted to markdown by markitdown.
+func (s *Server) handleUploadComplete(w http.ResponseWriter, r *http.Request) {
+	if !s.d.Uploader.Enabled() {
+		http.Error(w, "uploads require S3 storage", http.StatusServiceUnavailable)
+		return
+	}
+	var req uploadCompleteRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	user := s.requestUser(r)
+	if !s.ownsUploadKey(user.ID, req.Key) {
+		http.Error(w, "invalid upload key", http.StatusBadRequest)
+		return
+	}
+	info, err := s.d.Uploader.Head(r.Context(), req.Key)
+	if err != nil {
+		http.Error(w, "inspect upload: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if info.ContentLength <= 0 {
+		http.Error(w, "uploaded file is empty", http.StatusBadRequest)
+		return
+	}
+	if info.ContentLength > maxUploadBytes {
+		http.Error(w, "file too large", http.StatusBadRequest)
+		return
+	}
+	mimeType := normalizedUploadMIME(req.MIMEType)
+	if mimeType == "application/octet-stream" && strings.TrimSpace(info.ContentType) != "" {
+		mimeType = normalizedUploadMIME(info.ContentType)
+	}
+	filename := strings.TrimSpace(filepath.Base(req.Filename))
+	if filename == "" || filename == "." {
+		filename = "upload"
+	}
+	resp, err := s.finishUploadedObject(r.Context(), req.Key, filename, mimeType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+// handleUpload accepts a multipart file, stores it in S3, hands markitdown a
+// presigned URL to fetch + parse when needed, and returns the attachment
+// payload. This remains as a compatibility path for older clients; new clients
+// should use /api/uploads/presign + /api/uploads/complete.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if !s.d.Uploader.Enabled() {
+		http.Error(w, "uploads require S3 storage", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		http.Error(w, "file too large or malformed upload", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing file field", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Stage to a temp file so the S3 uploader (which streams from a path) can
+	// send it. Preserve the extension so markitdown can detect the type.
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	tmp, err := os.CreateTemp("", "upload-*"+ext)
+	if err != nil {
+		http.Error(w, "stage upload", http.StatusInternalServerError)
+		return
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := io.Copy(tmp, file); err != nil {
+		tmp.Close()
+		http.Error(w, "save upload", http.StatusInternalServerError)
+		return
+	}
+	tmp.Close()
+
+	user := s.requestUser(r)
+	key := s.d.Uploader.Key(uploadKeyName(user.ID, ext))
+	if err := s.d.Uploader.Upload(r.Context(), tmpPath, key); err != nil {
+		http.Error(w, "store upload: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	mimeType := normalizedUploadMIME(header.Header.Get("Content-Type"))
+	resp, err := s.finishUploadedObject(r.Context(), key, header.Filename, mimeType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) finishUploadedObject(ctx context.Context, key, filename, mimeType string) (uploadResponse, error) {
+	fetchURL, err := s.d.Uploader.PresignGet(ctx, key, uploadPresignTTL)
+	if err != nil || fetchURL == "" {
+		return uploadResponse{}, errUpload("presign upload")
+	}
+	if isImageMIME(mimeType) {
+		return uploadResponse{Filename: filename, URL: fetchURL, MIMEType: mimeType}, nil
+	}
+	if s.d.Env == nil || strings.TrimSpace(s.d.Env.MarkitdownServerURL) == "" {
+		return uploadResponse{}, errUpload("file parsing service not configured")
+	}
+
+	markdown, err := planner.ConvertFile(ctx, s.d.Env, fetchURL)
+	if err != nil {
+		return uploadResponse{}, errUpload("parse file: " + err.Error())
+	}
+	return uploadResponse{Filename: filename, Markdown: markdown, URL: fetchURL, MIMEType: mimeType}, nil
+}
+
+type errUpload string
+
+func (e errUpload) Error() string { return string(e) }
+
+func uploadKeyName(userID, ext string) string {
+	return "uploads/" + safeKeySegment(userID) + "/" + newJobID() + ext
+}
+
+func (s *Server) ownsUploadKey(userID, key string) bool {
+	prefix := s.d.Uploader.Key("uploads/" + safeKeySegment(userID) + "/")
+	return strings.HasPrefix(key, prefix)
+}
+
+func normalizedUploadMIME(mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if mimeType == "" {
+		return "application/octet-stream"
+	}
+	return mimeType
+}
+
+func isImageMIME(mimeType string) bool {
+	return strings.HasPrefix(normalizedUploadMIME(mimeType), "image/")
+}
+
+// safeKeySegment makes an arbitrary id safe for use as one S3 key path segment.
+func safeKeySegment(s string) string {
+	mapped := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+	if mapped == "" {
+		return "anon"
+	}
+	return mapped
+}

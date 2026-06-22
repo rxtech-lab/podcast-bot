@@ -157,6 +157,11 @@ final class PlayerModel {
     private var remoteCommandTargets: [Any] = []
     private var usesLiveCaptionTiming = false
     private var autoplayRequested = false
+    /// Whether playback should auto-start once the item is ready. Captured at
+    /// `start()` from the entry status: a podcast that was already ready when
+    /// the user opened it stays paused; a live/generating entry autoplays even
+    /// if the job finishes (and final audio is installed) mid-setup or on retry.
+    private var autoplayOnEntry = true
     /// A seek to apply once the current item reaches `.readyToPlay`. Seeking a
     /// freshly-replaced item before it loads is dropped (or lands past the end),
     /// which is exactly what wedged the swap-to-final-audio playback.
@@ -221,6 +226,10 @@ final class PlayerModel {
 
     func start() {
         configureAudioSession()
+        // Decide autoplay from the entry status only — not from which asset
+        // `setupPlayer` ends up installing. A generating entry that flips to
+        // `.ready` mid-setup still autoplays its final audio.
+        autoplayOnEntry = !(discussion.status == .ready || isFinished)
         // Replay persisted transcript for a finished discussion.
         lines = discussion.sortedLines.map {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true)
@@ -493,7 +502,10 @@ final class PlayerModel {
             self.updateCaption(at: self.currentTime)
             self.updateNowPlayingInfo()
         }
-        beginPlayback(item: item)
+        // A podcast that was already ready on entry is prepared but left paused;
+        // live entries autoplay even if final audio got installed mid-setup.
+        // `useFinalAudio` only selects the URL/timing, never the autoplay intent.
+        beginPlayback(item: item, autoplay: autoplayOnEntry)
     }
 
     /// Start playback for a freshly-installed item, but only once it actually
@@ -504,16 +516,16 @@ final class PlayerModel {
     /// kicked. Gating on `status` plus a `timeControlStatus` confirm loop makes
     /// the first play deterministic, so the user no longer has to leave and
     /// re-open the discussion to get sound.
-    private func beginPlayback(item: AVPlayerItem) {
+    private func beginPlayback(item: AVPlayerItem, autoplay: Bool = true) {
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
-        autoplayRequested = true
+        autoplayRequested = autoplay
 
         if item.status == .readyToPlay {
-            playerLog.debug("beginPlayback: item already ready, starting")
+            playerLog.debug("beginPlayback: item already ready, autoplay=\(autoplay, privacy: .public)")
             playbackRetryCount = 0
             applyPendingResume(on: item)
-            startConfirmedPlayback()
+            if autoplayRequested { startConfirmedPlayback() }
             return
         }
         if item.status == .failed {
@@ -526,13 +538,13 @@ final class PlayerModel {
                 guard let self else { return }
                 switch obsItem.status {
                 case .readyToPlay:
-                    guard self.autoplayRequested else { return }
                     guard self.player.currentItem === obsItem else { return }
                     self.itemStatusObservation?.invalidate()
                     self.itemStatusObservation = nil
                     self.playbackRetryCount = 0
-                    playerLog.debug("beginPlayback: item became ready, starting")
+                    playerLog.debug("beginPlayback: item became ready, autoplay=\(self.autoplayRequested, privacy: .public)")
                     self.applyPendingResume(on: obsItem)
+                    guard self.autoplayRequested else { return }
                     self.startConfirmedPlayback()
                 case .failed:
                     self.handlePlaybackItemFailed(obsItem)

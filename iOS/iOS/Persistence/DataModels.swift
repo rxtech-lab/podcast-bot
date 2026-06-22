@@ -78,7 +78,12 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
 
     var sortedSources: [PlanSourceSnapshot] {
         (sources ?? script?.sources ?? []).map {
-            PlanSourceSnapshot(title: $0.title, urlString: $0.url, snippet: $0.snippet ?? "")
+            PlanSourceSnapshot(
+                title: $0.title,
+                urlString: $0.url,
+                snippet: $0.snippet ?? "",
+                markdown: $0.markdown ?? ""
+            )
         }
     }
 

@@ -30,23 +30,32 @@ struct PlanPersonSnapshot: Identifiable {
 }
 
 struct PlanSourceSnapshot: Identifiable {
-    let id = UUID()
+    var id: String { urlString.isEmpty ? title : urlString }
     let title: String
     let urlString: String
     let snippet: String
+    let markdown: String
 
-    init(title: String, urlString: String, snippet: String) {
+    init(title: String, urlString: String, snippet: String, markdown: String = "") {
         self.title = title
         self.urlString = urlString
         self.snippet = snippet
+        self.markdown = markdown
     }
 
     var url: URL? { URL(string: urlString) }
+    var displayTitle: String { title.isEmpty ? urlString : title }
+    var detailMarkdown: String {
+        let content = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !content.isEmpty { return content }
+        return snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct PlanSnapshotCard: View {
     let label: String
     let snapshot: PlanSnapshot
+    var onSourcesTapped: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -96,10 +105,16 @@ struct PlanSnapshotCard: View {
             }
 
             if !snapshot.sources.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Sources").font(.headline)
-                    ForEach(snapshot.sources) { source in
-                        sourceRow(source)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sources")
+                        .font(.headline)
+                    if let onSourcesTapped {
+                        Button(action: onSourcesTapped) {
+                            sourcesSentence
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        sourcesSentence
                     }
                 }
             }
@@ -107,31 +122,25 @@ struct PlanSnapshotCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func sourceRow(_ source: PlanSourceSnapshot) -> some View {
-        if let url = source.url {
-            Link(destination: url) {
-                sourceContent(source)
-            }
-        } else {
-            sourceContent(source)
-        }
-    }
-
-    private func sourceContent(_ source: PlanSourceSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(source.title.isEmpty ? source.urlString : source.title)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white)
-            if !source.snippet.isEmpty {
-                Text(source.snippet)
-                    .font(.caption)
+    private var sourcesSentence: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .foregroundStyle(Theme.accent)
+            Text(sourceSentenceText)
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondaryText)
+            if onSourcesTapped != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.secondaryText)
-                    .lineLimit(3)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.white.opacity(0.05), in: .rect(cornerRadius: 14))
+        .contentShape(.rect)
+    }
+
+    private var sourceSentenceText: String {
+        let count = snapshot.sources.count
+        return "Found \(count) source\(count == 1 ? "" : "s") for this plan."
     }
 }

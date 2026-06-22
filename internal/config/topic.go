@@ -148,11 +148,13 @@ type DebateTopic struct {
 }
 
 // Source is one researched reference gathered during planning: a human-facing
-// title, the canonical URL, and a short snippet describing why it's relevant.
+// title, the canonical URL, a short snippet, and the full markdown content
+// when the research provider returned it.
 type Source struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet,omitempty"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Snippet  string `json:"snippet,omitempty"`
+	Markdown string `json:"markdown,omitempty"`
 }
 
 // LoadTopic parses a debate.md file with YAML frontmatter and markdown body.

@@ -86,6 +86,21 @@ type Env struct {
 	SearchAPIKey string
 	SearchAPIURL string
 
+	// FirecrawlAPIKey (FIRECRAWL_API_KEY) authenticates against Firecrawl's
+	// REST API. When set, the planner uses Firecrawl `/v2/search` to ground a
+	// plan in live web sources and `/v2/scrape` to read links the user pastes
+	// or adds. Empty disables web research (planning still works ungrounded).
+	FirecrawlAPIKey string
+
+	// MarkitdownServerURL / MarkitdownAPIKey configure the deployed markitdown
+	// service that converts an uploaded file (fetched by URL) into markdown so
+	// the planner can read it. MarkitdownServerURL (MARKITDOWN_SERVER_URL) is
+	// the base URL with no trailing slash — the client appends `/convert`.
+	// MarkitdownAPIKey (MARKITDOWN_API_KEY) is sent as the `X-API-Key` header;
+	// when empty the header is omitted. Empty server URL disables file uploads.
+	MarkitdownServerURL string
+	MarkitdownAPIKey    string
+
 	// S3 settings for uploading finished media. When S3Bucket is empty the
 	// engine keeps serving media from local disk (no upload). S3Endpoint is
 	// for S3-compatible APIs such as R2; S3DownloadBaseURL is an optional
@@ -157,6 +172,9 @@ func LoadEnv() (*Env, error) {
 		AuthIssuer:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
 		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
 		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
+		FirecrawlAPIKey:       strings.TrimSpace(os.Getenv("FIRECRAWL_API_KEY")),
+		MarkitdownServerURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("MARKITDOWN_SERVER_URL")), "/"),
+		MarkitdownAPIKey:      strings.TrimSpace(os.Getenv("MARKITDOWN_API_KEY")),
 
 		S3Bucket:          strings.TrimSpace(os.Getenv("S3_BUCKET")),
 		S3Region:          strings.TrimSpace(os.Getenv("S3_REGION")),

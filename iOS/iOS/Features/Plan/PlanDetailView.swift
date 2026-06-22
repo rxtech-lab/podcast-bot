@@ -14,6 +14,8 @@ struct PlanDetailView: View {
     @State private var isGenerating = false
     @State private var errorMessage: String?
     @State private var editTurns: [PlanEditTurn] = []
+    @State private var attachments: [PendingAttachment] = []
+    @State private var showingSources = false
 
     init(discussion: Discussion, onGenerated: @escaping (Discussion) -> Void = { _ in }) {
         _discussion = State(initialValue: discussion)
@@ -39,6 +41,12 @@ struct PlanDetailView: View {
                 .disabled(isGenerating)
             }
         }
+        .sheet(isPresented: $showingSources) {
+            SourcesSheet(discussion: discussion) { updated in
+                discussion = updated
+                appendUpdatedPlan()
+            }
+        }
     }
 
     private var content: some View {
@@ -48,8 +56,16 @@ struct PlanDetailView: View {
                     DiscussionLanguageMenu(selection: $selectedLanguage)
                         .disabled(isGenerating)
 
+                    Button { showingSources = true } label: {
+                        SourcesStrip(count: discussion.sortedSources.count)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isGenerating)
+
                     ForEach(editTurns) { turn in
-                        PlanEditBubble(turn: turn)
+                        PlanEditBubble(turn: turn) {
+                            showingSources = true
+                        }
                             .id(turn.id)
                     }
 
@@ -96,27 +112,41 @@ struct PlanDetailView: View {
     }
 
     private var editBar: some View {
-        HStack(spacing: 10) {
-            TextField("Edit using chat", text: $instruction, axis: .vertical)
-                .lineLimit(1...3)
-                .textFieldStyle(.plain)
-            Button(action: improve) {
-                Image(systemName: isImproving ? "ellipsis" : "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(Theme.accent)
+        VStack(alignment: .leading, spacing: 8) {
+            if !attachments.isEmpty {
+                AttachmentsRow(attachments: $attachments, showsButton: false)
             }
-            .disabled(instruction.trimmingCharacters(in: .whitespaces).isEmpty || isImproving || isGenerating)
+            HStack(spacing: 10) {
+                AttachmentsRow(attachments: $attachments, compact: true, showsChips: false)
+                TextField("Edit using chat", text: $instruction, axis: .vertical)
+                    .lineLimit(1...3)
+                    .textFieldStyle(.plain)
+                Button(action: improve) {
+                    Image(systemName: isImproving ? "ellipsis" : "arrow.up.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Theme.accent)
+                }
+                .disabled(!canSend)
+            }
+            .padding(12)
+            .glassEffect(in: .capsule)
         }
-        .padding(12)
-        .glassEffect(in: .capsule)
         .padding(16)
         .disabled(isGenerating)
+    }
+
+    /// Allow sending when there's an instruction (and nothing is in flight).
+    private var canSend: Bool {
+        !instruction.trimmingCharacters(in: .whitespaces).isEmpty
+            && !isImproving && !isGenerating && !attachments.isUploading
     }
 
     private func improve() {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGenerating else { return }
+        let ready = attachments.apiAttachments
         instruction = ""
+        attachments = []
         editTurns.append(.user(text))
         editTurns.append(.loading)
         isImproving = true
@@ -124,7 +154,7 @@ struct PlanDetailView: View {
         let api = APIClient(tokens: auth)
         Task {
             do {
-                discussion = try await api.improveDiscussion(id: discussion.id, instruction: text)
+                discussion = try await api.improveDiscussion(id: discussion.id, instruction: text, attachments: ready)
                 appendUpdatedPlan()
                 isImproving = false
             } catch {
@@ -184,6 +214,7 @@ private struct PlanEditTurn: Identifiable {
 
 private struct PlanEditBubble: View {
     let turn: PlanEditTurn
+    var onSourcesTapped: () -> Void
 
     var body: some View {
         HStack(alignment: .bottom) {
@@ -212,7 +243,7 @@ private struct PlanEditBubble: View {
                 .background(Theme.accent, in: .rect(cornerRadius: 20))
         case .plan:
             if let snapshot = turn.snapshot {
-                PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot)
+                PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot, onSourcesTapped: onSourcesTapped)
                     .padding(14)
                     .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             }

@@ -21,7 +21,14 @@ func atoiDefault(s string, def int) int {
 }
 
 type discussionImproveRequest struct {
-	Instruction string `json:"instruction"`
+	Instruction string               `json:"instruction"`
+	Attachments []planner.Attachment `json:"attachments,omitempty"`
+}
+
+// discussionAddSourcesRequest carries links the user added in the sources sheet
+// so the planner can re-research them and update the plan.
+type discussionAddSourcesRequest struct {
+	URLs []string `json:"urls"`
 }
 
 type discussionGenerateRequest struct {
@@ -103,7 +110,7 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	res, err := p.Improve(r.Context(), d.Script, instruction)
+	res, err := p.Improve(r.Context(), d.Script, instruction, req.Attachments)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -116,6 +123,62 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "plan", "Updated plan")
+	writeJSON(w, updated)
+}
+
+// handleDiscussionAddSources scrapes the user-added links, merges them into the
+// plan's sources, and re-runs the planner so the background reflects the new
+// references — the "add a link, save, re-research" flow.
+func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil || d.Script == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req discussionAddSourcesRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	urls := make([]string, 0, len(req.URLs))
+	for _, u := range req.URLs {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	if len(urls) == 0 {
+		http.Error(w, "at least one url is required", http.StatusBadRequest)
+		return
+	}
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	// Carry the plan's existing sources so the merge dedupes against them.
+	prev := *d.Script
+	prev.Sources = d.Sources
+	res, err := p.AddSources(r.Context(), &prev, urls)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "plan", "Updated plan with added sources")
 	writeJSON(w, updated)
 }
 

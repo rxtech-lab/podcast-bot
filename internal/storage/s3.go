@@ -38,6 +38,13 @@ type Uploader struct {
 	presign *s3.PresignClient
 }
 
+// ObjectInfo is the small subset of object metadata callers need after a
+// browser/native client has uploaded directly with a presigned URL.
+type ObjectInfo struct {
+	ContentLength int64
+	ContentType   string
+}
+
 // New builds an Uploader from cfg. When cfg.Bucket is empty it returns a
 // disabled Uploader and no error, so callers can wire it unconditionally.
 func New(ctx context.Context, cfg Config) (*Uploader, error) {
@@ -123,6 +130,26 @@ func (u *Uploader) Upload(ctx context.Context, localPath, key string) error {
 	return nil
 }
 
+// PresignPut returns a time-limited URL that accepts a direct PUT upload for
+// key. The caller must send the same Content-Type header used for signing.
+func (u *Uploader) PresignPut(ctx context.Context, key, contentType string, ttl time.Duration) (string, error) {
+	if !u.Enabled() {
+		return "", nil
+	}
+	if strings.TrimSpace(contentType) == "" {
+		contentType = "application/octet-stream"
+	}
+	req, err := u.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &u.cfg.Bucket,
+		Key:         &key,
+		ContentType: &contentType,
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("presign put: %w", err)
+	}
+	return req.URL, nil
+}
+
 // PresignGet returns a time-limited download URL for key. Empty string when
 // the uploader is disabled.
 func (u *Uploader) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
@@ -137,6 +164,28 @@ func (u *Uploader) PresignGet(ctx context.Context, key string, ttl time.Duration
 		return "", fmt.Errorf("presign: %w", err)
 	}
 	return req.URL, nil
+}
+
+// Head returns metadata for a stored object.
+func (u *Uploader) Head(ctx context.Context, key string) (ObjectInfo, error) {
+	if !u.Enabled() || key == "" {
+		return ObjectInfo{}, nil
+	}
+	resp, err := u.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &u.cfg.Bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("head object: %w", err)
+	}
+	var out ObjectInfo
+	if resp.ContentLength != nil {
+		out.ContentLength = *resp.ContentLength
+	}
+	if resp.ContentType != nil {
+		out.ContentType = *resp.ContentType
+	}
+	return out, nil
 }
 
 // DownloadURL returns a public/custom-domain URL when configured; otherwise it

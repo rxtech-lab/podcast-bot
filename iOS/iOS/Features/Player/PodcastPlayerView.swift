@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 import RxAuthSwift
 
 /// The live podcast screen: streaming per-agent transcript bubbles, a synced
@@ -15,6 +17,10 @@ struct PodcastPlayerView: View {
     @State private var message = ""
     @State private var showingPlan = false
     @State private var showingFullPlayer = false
+    @State private var showingImporter = false
+    @State private var showingPhotos = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isUploadingAttachment = false
 
     var body: some View {
         ZStack {
@@ -136,6 +142,25 @@ struct PodcastPlayerView: View {
 
     private func inputBar(_ model: PlayerModel) -> some View {
         HStack(spacing: 10) {
+            Menu {
+                Button {
+                    showingPhotos = true
+                } label: {
+                    Label("Photo Library", systemImage: "photo.on.rectangle")
+                }
+                Button {
+                    showingImporter = true
+                } label: {
+                    Label("Files", systemImage: "folder")
+                }
+            } label: {
+                if isUploadingAttachment {
+                    ProgressView().controlSize(.small).tint(Theme.accent)
+                } else {
+                    Image(systemName: "paperclip").font(.title3).foregroundStyle(Theme.accent)
+                }
+            }
+            .disabled(isUploadingAttachment)
             TextField("Send message", text: $message, axis: .vertical)
                 .lineLimit(1...3)
                 .textFieldStyle(.plain)
@@ -149,6 +174,66 @@ struct PodcastPlayerView: View {
         }
         .padding(12)
         .glassEffect(in: .capsule)
+        .fileImporter(isPresented: $showingImporter,
+                      allowedContentTypes: attachmentContentTypes,
+                      allowsMultipleSelection: false) { result in
+            if case let .success(urls) = result, let url = urls.first {
+                shareDocument(url, model: model)
+            }
+        }
+        .photosPicker(isPresented: $showingPhotos, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, item in
+            if let item { sharePhoto(item, model: model) }
+        }
+    }
+
+    /// Uploads a document and injects its parsed text into the live discussion.
+    private func shareDocument(_ url: URL, model: PlayerModel) {
+        let access = url.startAccessingSecurityScopedResource()
+        let data = try? Data(contentsOf: url)
+        if access { url.stopAccessingSecurityScopedResource() }
+        let filename = url.lastPathComponent
+        guard let data else { return }
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        shareData(data, filename: filename, mime: mime, model: model)
+    }
+
+    /// Loads a picked photo's bytes and shares it like a document.
+    private func sharePhoto(_ item: PhotosPickerItem, model: PlayerModel) {
+        let utType = item.supportedContentTypes.first
+        let ext = utType?.preferredFilenameExtension ?? "jpg"
+        let mime = utType?.preferredMIMEType ?? "image/jpeg"
+        let filename = "Photo-\(UUID().uuidString.prefix(6)).\(ext)"
+        isUploadingAttachment = true
+        Task { @MainActor in
+            defer { selectedPhoto = nil }
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                isUploadingAttachment = false
+                return
+            }
+            shareData(data, filename: filename, mime: mime, model: model)
+        }
+    }
+
+    /// Uploads bytes and injects the returned reference into the live discussion.
+    private func shareData(_ data: Data, filename: String, mime: String, model: PlayerModel) {
+        isUploadingAttachment = true
+        let api = APIClient(tokens: auth)
+        Task { @MainActor in
+            defer { isUploadingAttachment = false }
+            do {
+                let resp = try await api.uploadFile(data: data, filename: filename, mimeType: mime)
+                if let markdown = resp.markdown, !markdown.isEmpty {
+                    let trimmed = String(markdown.prefix(6000))
+                    model.send("I'm sharing a document \"\(filename)\". Please consider it:\n\n" + trimmed)
+                } else if resp.mimeType?.hasPrefix("image/") == true {
+                    model.send("I'm sharing an image \"\(filename)\": \(resp.url)")
+                }
+            } catch {
+                // Best-effort: a failed share is silently dropped here; the
+                // user can retry. (Surfaced state would need a toast/banner.)
+            }
+        }
     }
 }
 
@@ -232,15 +317,28 @@ struct PodcastDocumentExporter: UIViewControllerRepresentable {
 
 private struct PlanSheetView: View {
     @Environment(\.dismiss) private var dismiss
-    let discussion: Discussion
+    @State private var discussion: Discussion
+    @State private var showingSources = false
+
+    init(discussion: Discussion) {
+        _discussion = State(initialValue: discussion)
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Theme.background.ignoresSafeArea()
                 ScrollView {
-                    PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion))
-                        .padding(16)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Button { showingSources = true } label: {
+                            SourcesStrip(count: discussion.sortedSources.count)
+                        }
+                        .buttonStyle(.plain)
+                        PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion)) {
+                            showingSources = true
+                        }
+                    }
+                    .padding(16)
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
@@ -254,6 +352,11 @@ private struct PlanSheetView: View {
                         Image(systemName: "xmark")
                     }
                     .accessibilityLabel("Close")
+                }
+            }
+            .sheet(isPresented: $showingSources) {
+                SourcesSheet(discussion: discussion) { updated in
+                    discussion = updated
                 }
             }
         }

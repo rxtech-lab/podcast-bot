@@ -15,6 +15,7 @@ struct SourceDTO: Codable, Hashable, Sendable {
     var title: String
     var url: String
     var snippet: String?
+    var markdown: String?
 }
 
 /// The discussion script (config.DebateTopic). Only the discussion-relevant
@@ -36,6 +37,22 @@ struct ScriptDTO: Codable, Hashable, Sendable {
     var sources: [SourceDTO]?
 }
 
+/// A user-uploaded reference file. Documents carry markdown parsed by
+/// markitdown; images carry a URL so the engine can pass them to the model.
+struct Attachment: Codable, Sendable {
+    var filename: String
+    var markdown: String?
+    var url: String?
+    var mimeType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case filename
+        case markdown
+        case url
+        case mimeType = "mime_type"
+    }
+}
+
 /// POST /api/plan request body.
 struct PlanRequest: Codable, Sendable {
     var type: String = "discussion"
@@ -43,6 +60,65 @@ struct PlanRequest: Codable, Sendable {
     var language: String = "en-US"
     var discussants: Int = 3
     var research: Bool = true
+    var attachments: [Attachment]?
+}
+
+/// POST /api/uploads response body: the original filename, either parsed
+/// markdown or a direct image URL, and the content type.
+struct UploadResponse: Codable, Sendable {
+    var filename: String
+    var markdown: String?
+    var url: String
+    var mimeType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case filename
+        case markdown
+        case url
+        case mimeType = "mime_type"
+    }
+}
+
+struct UploadPresignRequest: Codable, Sendable {
+    var filename: String
+    var mimeType: String
+
+    enum CodingKeys: String, CodingKey {
+        case filename
+        case mimeType = "mime_type"
+    }
+}
+
+struct UploadPresignResponse: Codable, Sendable {
+    var key: String
+    var uploadURL: URL
+    var method: String
+    var headers: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case uploadURL = "upload_url"
+        case method
+        case headers
+    }
+}
+
+struct UploadCompleteRequest: Codable, Sendable {
+    var key: String
+    var filename: String
+    var mimeType: String
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case filename
+        case mimeType = "mime_type"
+    }
+}
+
+/// POST /api/discussions/{id}/sources request body — links the user added in
+/// the sources sheet for the agent to research and fold into the plan.
+struct AddSourcesRequest: Codable, Sendable {
+    var urls: [String]
 }
 
 /// POST /api/plan and /api/plan/improve response body.
@@ -57,10 +133,12 @@ struct PlanResponse: Codable, Sendable {
 struct PlanImproveRequest: Codable, Sendable {
     var previousScript: ScriptDTO
     var instruction: String
+    var attachments: [Attachment]?
 }
 
 struct DiscussionImproveRequest: Codable, Sendable {
     var instruction: String
+    var attachments: [Attachment]?
 }
 
 /// videoConfig portion of POST /api/jobs/json (audio-only feed).

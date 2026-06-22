@@ -40,11 +40,11 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 			Commander:  config.AgentSpec{Name: "Director"},
 			Background: "A panel about server-side persistence.",
 			Sources: []config.Source{
-				{Title: "Reference", URL: "https://example.com/ref", Snippet: "Useful context"},
+				{Title: "Reference", URL: "https://example.com/ref", Snippet: "Useful context", Markdown: "## Useful context"},
 			},
 		},
 		Markdown:   "# AI Safety Panel",
-		Sources:    []config.Source{{Title: "Reference", URL: "https://example.com/ref"}},
+		Sources:    []config.Source{{Title: "Reference", URL: "https://example.com/ref", Markdown: "## Useful context"}},
 		Researched: true,
 	}
 
@@ -60,6 +60,9 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 	}
 	if created.Script == nil || created.Script.Commander.Name != "Director" {
 		t.Fatalf("script was not persisted with commander: %+v", created.Script)
+	}
+	if len(created.Sources) != 1 || created.Sources[0].Markdown != "## Useful context" {
+		t.Fatalf("source markdown was not persisted: %+v", created.Sources)
 	}
 
 	if hidden, err := store.Get(ctx, otherOwner, created.ID); err != nil {
