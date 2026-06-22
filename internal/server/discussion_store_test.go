@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -40,11 +41,11 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 			Commander:  config.AgentSpec{Name: "Director"},
 			Background: "A panel about server-side persistence.",
 			Sources: []config.Source{
-				{Title: "Reference", URL: "https://example.com/ref", Snippet: "Useful context"},
+				{Title: "Reference", URL: "https://example.com/ref", Snippet: "Useful context", Markdown: "## Useful context"},
 			},
 		},
 		Markdown:   "# AI Safety Panel",
-		Sources:    []config.Source{{Title: "Reference", URL: "https://example.com/ref"}},
+		Sources:    []config.Source{{Title: "Reference", URL: "https://example.com/ref", Markdown: "## Useful context"}},
 		Researched: true,
 	}
 
@@ -60,6 +61,9 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 	}
 	if created.Script == nil || created.Script.Commander.Name != "Director" {
 		t.Fatalf("script was not persisted with commander: %+v", created.Script)
+	}
+	if len(created.Sources) != 1 || created.Sources[0].Markdown != "## Useful context" {
+		t.Fatalf("source markdown was not persisted: %+v", created.Sources)
 	}
 
 	if hidden, err := store.Get(ctx, otherOwner, created.ID); err != nil {
@@ -200,5 +204,60 @@ func TestDiscussionStoreListOrderingAndPagination(t *testing.T) {
 	}
 	if page4 == nil || len(page4) != 0 {
 		t.Fatalf("page4 = %+v, want empty slice", page4)
+	}
+}
+
+func TestDiscussionStoreEditTurnPagination(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	d, err := store.Create(ctx, owner, "topic", planResponse{
+		Script: &config.DebateTopic{Title: "T", Type: config.ContentTypeDiscussion, Language: "en-US"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := store.AppendEditTurn(ctx, owner, d.ID, "user", fmt.Sprintf("edit-%d", i)); err != nil {
+			t.Fatalf("AppendEditTurn %d: %v", i, err)
+		}
+	}
+
+	page1, more, err := store.EditTurnsPage(ctx, owner, d.ID, 2, 0)
+	if err != nil {
+		t.Fatalf("EditTurnsPage page1: %v", err)
+	}
+	if !more {
+		t.Fatal("page1 more = false, want true")
+	}
+	if len(page1) != 2 || page1[0].Text != "edit-3" || page1[1].Text != "edit-4" {
+		t.Fatalf("page1 = %+v, want latest two in chronological order", page1)
+	}
+
+	page2, more, err := store.EditTurnsPage(ctx, owner, d.ID, 2, page1[0].ID)
+	if err != nil {
+		t.Fatalf("EditTurnsPage page2: %v", err)
+	}
+	if !more {
+		t.Fatal("page2 more = false, want true")
+	}
+	if len(page2) != 2 || page2[0].Text != "edit-1" || page2[1].Text != "edit-2" {
+		t.Fatalf("page2 = %+v, want previous two in chronological order", page2)
+	}
+
+	page3, more, err := store.EditTurnsPage(ctx, owner, d.ID, 2, page2[0].ID)
+	if err != nil {
+		t.Fatalf("EditTurnsPage page3: %v", err)
+	}
+	if more {
+		t.Fatal("page3 more = true, want false")
+	}
+	if len(page3) != 2 || page3[0].Role != "plan" || page3[1].Text != "edit-0" {
+		t.Fatalf("page3 = %+v, want initial plan plus oldest edit", page3)
 	}
 }

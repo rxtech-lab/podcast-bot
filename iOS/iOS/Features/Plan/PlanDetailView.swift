@@ -6,6 +6,9 @@ import SwiftUI
 struct PlanDetailView: View {
     @Environment(AuthManager.self) private var auth
     @State var discussion: Discussion
+    /// When set (a freshly-created placeholder discussion), the plan is streamed
+    /// in automatically on first appearance instead of being loaded from history.
+    let initialPlan: PlanRequest?
     var onGenerated: (Discussion) -> Void = { _ in }
 
     @State private var instruction = ""
@@ -14,18 +17,38 @@ struct PlanDetailView: View {
     @State private var isGenerating = false
     @State private var errorMessage: String?
     @State private var editTurns: [PlanEditTurn] = []
+    @State private var attachments: [PendingAttachment] = []
+    @State private var showingSources = false
+    @State private var showingGenerateConfirm = false
+    @State private var editIsAtBottom = true
+    /// Live progress line shown in the loading bubble while the plan streams in.
+    @State private var progressText: String?
+    /// Guards the one-time auto-stream of `initialPlan` so re-renders don't restart it.
+    @State private var didStartInitialPlan = false
+    @State private var didLoadInitialHistory = false
+    @State private var isLoadingInitialHistory = false
+    @State private var isLoadingOlderHistory = false
+    @State private var hasMoreEditHistory = false
+    @State private var editHistoryBeforeID: Int64?
+    @State private var progressRecoveryTask: Task<Void, Never>?
 
-    init(discussion: Discussion, onGenerated: @escaping (Discussion) -> Void = { _ in }) {
+    private let historyPageSize = 20
+    private var recoveredLoadingID: String { "recovered-progress-\(discussion.id)" }
+
+    init(discussion: Discussion, initialPlan: PlanRequest? = nil,
+         onGenerated: @escaping (Discussion) -> Void = { _ in }) {
         _discussion = State(initialValue: discussion)
         _selectedLanguage = State(initialValue: DiscussionLanguage.normalized(discussion.script?.language ?? discussion.language))
+        self.initialPlan = initialPlan
         self.onGenerated = onGenerated
     }
 
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-            VStack(spacing: 0) {
-                content
+            content
+            VStack {
+                Spacer()
                 editBar
             }
         }
@@ -33,105 +56,561 @@ struct PlanDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button(action: generate) {
-                    if isGenerating { ProgressView() } else { Text("Generate") }
+                Menu {
+                    Picker("Podcast language", selection: $selectedLanguage) {
+                        ForEach(DiscussionLanguage.supported) { language in
+                            Text(language.label).tag(language.code)
+                        }
+                    }
+                } label: {
+                    Label("Podcast language", systemImage: "globe")
                 }
                 .disabled(isGenerating)
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingGenerateConfirm = true
+                } label: {
+                    if isGenerating {
+                        ProgressView()
+                    } else {
+                        Label("Generate", systemImage: "waveform")
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .disabled(isGenerating || isImproving || isEditStreaming || discussion.script == nil)
+                .accessibilityLabel("Generate podcast")
+            }
+        }
+        .confirmationDialog(
+            "Generate this podcast?",
+            isPresented: $showingGenerateConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Generate") { generate() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This turns the current plan into an audio podcast in \(DiscussionLanguage.label(for: selectedLanguage)). It can take a few minutes and uses generation credits.")
+        }
+        .sheet(isPresented: $showingSources) {
+            SourcesSheet(
+                discussion: discussion,
+                onUpdateStarted: beginSourceUpdate,
+                onUpdateProgress: { progressText = $0.text },
+                onUpdated: { updated in
+                    discussion = updated
+                    appendUpdatedPlan()
+                },
+                onUpdateFailed: appendError
+            )
         }
     }
 
     private var content: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    DiscussionLanguageMenu(selection: $selectedLanguage)
-                        .disabled(isGenerating)
-
-                    ForEach(editTurns) { turn in
-                        PlanEditBubble(turn: turn)
-                            .id(turn.id)
-                    }
-
-                    if let errorMessage {
-                        Text(errorMessage).font(.footnote).foregroundStyle(.red)
-                    }
+        ZStack {
+            MessageList(
+                messages: editTurns,
+                isStreaming: isEditStreaming,
+                isAtBottom: $editIsAtBottom,
+                hasMorePrevious: { hasMoreEditHistory },
+                loadMorePrevious: loadOlderHistory,
+                onLoadError: { _, error in
+                    errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
+            ) { turn in
+                PlanEditBubble(turn: turn, progressText: progressText) {
+                    showingSources = true
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onAppear {
+            .contentMargins(.bottom, 96, for: .scrollContent)
+
+            if isShowingInitialHistoryLoading {
+                initialHistoryLoadingView
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: isShowingInitialHistoryLoading)
+        .onAppear {
+            if initialPlan != nil, discussion.script == nil {
+                startInitialPlan()
+            } else if discussion.progress?.active == true {
+                restoreProgressIfNeeded(from: discussion)
+            } else if discussion.editTurns != nil || discussion.script != nil {
                 seedInitialTurnIfNeeded()
-                scrollToLatest(proxy)
             }
-            .onChange(of: editTurns.count) { _, _ in
-                scrollToLatest(proxy)
-            }
+        }
+        .task(id: discussion.id) {
+            await loadInitialHistory()
+        }
+        .onDisappear {
+            stopProgressRecoveryPoll()
         }
     }
 
-    private func scrollToLatest(_ proxy: ScrollViewProxy) {
-        guard let last = editTurns.last else { return }
-        Task { @MainActor in
-            withAnimation(.snappy) {
-                proxy.scrollTo(last.id, anchor: .bottom)
-            }
-        }
+    private var isShowingInitialHistoryLoading: Bool {
+        isLoadingInitialHistory && editTurns.isEmpty
     }
 
+    private var initialHistoryLoadingView: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .tint(Theme.accent)
+            Text("Loading messages...")
+                .font(.callout)
+                .foregroundStyle(Theme.secondaryText)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(Theme.agentBubble, in: .rect(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading messages")
+    }
+
+    /// Streaming is in effect whenever a loading row is present — the user just
+    /// sent an edit, or sources are being applied. The `MessageList` pins the
+    /// latest user turn to the top while this is true and releases it (scrolling
+    /// to the bottom) when the loading row is replaced by the updated plan.
+    private var isEditStreaming: Bool {
+        editTurns.contains { $0.role == .loading }
+    }
+
+    /// Rebuild the chat from the server-persisted edit history so it survives app
+    /// restarts. Each "user" turn becomes a message bubble and each "plan" turn a
+    /// plan card from the snapshot stored at that point. Falls back to the current
+    /// plan for legacy turns saved before snapshots were stored.
     private func seedInitialTurnIfNeeded() {
         guard editTurns.isEmpty else { return }
-        editTurns = [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: discussion))]
+        editTurns = rebuiltHistory()
+    }
+
+    /// The discussion handed in from the library list doesn't carry edit history
+    /// (only GET /api/discussions/{id} loads it). Fetch the full record once and,
+    /// as long as the user hasn't started editing, rebuild the chat from it.
+    private func loadInitialHistory() async {
+        // A freshly-created discussion streams its plan via startInitialPlan(); it
+        // has no prior history to load and a late fetch could clobber the result.
+        guard initialPlan == nil else { return }
+        guard !didLoadInitialHistory else { return }
+        didLoadInitialHistory = true
+        let shouldShowLoading = editTurns.isEmpty && discussion.progress?.active != true
+        if shouldShowLoading {
+            isLoadingInitialHistory = true
+        }
+        defer {
+            if shouldShowLoading {
+                isLoadingInitialHistory = false
+            }
+        }
+        if discussion.editTurns != nil {
+            updateHistoryPaging(from: discussion)
+            if discussion.progress?.active == true {
+                restoreProgressIfNeeded(from: discussion)
+            } else if !isImproving {
+                editTurns = rebuiltHistory()
+            } else {
+                mergeHistoryRows(from: discussion)
+            }
+            return
+        }
+        let api = APIClient(tokens: auth)
+        guard let full = try? await api.discussion(id: discussion.id, editLimit: historyPageSize) else {
+            if discussion.progress?.active == true {
+                restoreProgressIfNeeded(from: discussion)
+            } else if editTurns.isEmpty {
+                seedInitialTurnIfNeeded()
+            }
+            return
+        }
+        discussion = full
+        updateHistoryPaging(from: full)
+        if full.progress?.active == true {
+            restoreProgressIfNeeded(from: full)
+            return
+        }
+        if !isImproving {
+            editTurns = rebuiltHistory()
+        } else {
+            mergeHistoryRows(from: full)
+        }
+    }
+
+    private func loadOlderHistory() async throws {
+        guard hasMoreEditHistory, !isLoadingOlderHistory, let beforeID = editHistoryBeforeID else { return }
+        isLoadingOlderHistory = true
+        defer { isLoadingOlderHistory = false }
+        let older = try await APIClient(tokens: auth).discussion(
+            id: discussion.id,
+            editLimit: historyPageSize,
+            editBefore: beforeID
+        )
+        updateHistoryPaging(from: older)
+        let olderTurns = older.editTurns ?? []
+        guard !olderTurns.isEmpty else { return }
+        let existingDTOs = discussion.editTurns ?? []
+        let existingIDs = Set(existingDTOs.compactMap(\.id))
+        discussion.editTurns = olderTurns.filter { turn in
+            guard let id = turn.id else { return true }
+            return !existingIDs.contains(id)
+        } + existingDTOs
+
+        let existingRows = Set(editTurns.map(\.id))
+        let rowsToPrepend = rows(from: olderTurns).filter { !existingRows.contains($0.id) }
+        guard !rowsToPrepend.isEmpty else { return }
+        editTurns = rowsToPrepend + editTurns
+    }
+
+    private func updateHistoryPaging(from loaded: Discussion) {
+        hasMoreEditHistory = loaded.editTurnsHasMore == true
+        editHistoryBeforeID = loaded.editTurnsBefore
+    }
+
+    private func restoreProgressIfNeeded(from loaded: Discussion) {
+        guard let progress = loaded.progress, progress.active else { return }
+        isImproving = true
+        progressText = progress.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? progress.text
+            : "Updating plan..."
+        mergeRecoveredHistory(from: loaded, progress: progress)
+        appendRecoveredLoadingRow()
+        startProgressRecoveryPoll()
+    }
+
+    private func recoveredHistory(from loaded: Discussion, progress: DiscussionProgressDTO) -> [PlanEditTurn] {
+        let historyRows = rows(from: loaded.editTurns ?? [])
+        if !historyRows.isEmpty {
+            return historyRows
+        }
+        if loaded.script != nil {
+            return [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: loaded))]
+        }
+        return [.user(recoveredContextText(for: progress, discussion: loaded), id: "recovered-context-\(loaded.id)")]
+    }
+
+    private func recoveredContextText(for progress: DiscussionProgressDTO, discussion: Discussion) -> String {
+        switch progress.operation {
+        case "sources":
+            return "Adding sources"
+        case "plan":
+            let topic = discussion.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+            return topic.isEmpty ? "Creating plan" : topic
+        default:
+            return "Updating plan"
+        }
+    }
+
+    private func startProgressRecoveryPoll(waitForActiveProgress: Bool = false) {
+        progressRecoveryTask?.cancel()
+        let discussionID = discussion.id
+        let api = APIClient(tokens: auth)
+        progressRecoveryTask = Task {
+            var observedActiveProgress = !waitForActiveProgress
+            for _ in 0 ..< 300 {
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .seconds(2))
+                guard let full = try? await api.discussion(id: discussionID, editLimit: historyPageSize) else {
+                    continue
+                }
+                discussion = full
+                updateHistoryPaging(from: full)
+                if let progress = full.progress, progress.active {
+                    observedActiveProgress = true
+                    progressText = progress.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? progress.text
+                        : progressText
+                    mergeRecoveredHistory(from: full, progress: progress)
+                    appendRecoveredLoadingRow()
+                    continue
+                }
+                if waitForActiveProgress && !observedActiveProgress {
+                    continue
+                }
+                progressText = nil
+                isImproving = false
+                editTurns = rebuiltHistory()
+                progressRecoveryTask = nil
+                return
+            }
+        }
+    }
+
+    private func stopProgressRecoveryPoll() {
+        progressRecoveryTask?.cancel()
+        progressRecoveryTask = nil
+    }
+
+    /// Builds the chat rows from the server-persisted edit history so the
+    /// conversation survives app restarts. Each "user" turn becomes a message
+    /// bubble and each "plan" turn a plan card from the snapshot stored at that
+    /// point; falls back to the current plan for legacy turns saved before
+    /// snapshots existed, and to a single "Current plan" card when there's no
+    /// history at all.
+    private func rebuiltHistory() -> [PlanEditTurn] {
+        var rows = rows(from: discussion.editTurns ?? [])
+        if rows.isEmpty {
+            rows = [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: discussion))]
+        }
+        return rows
+    }
+
+    private func rows(from history: [DiscussionEditTurnDTO]) -> [PlanEditTurn] {
+        history.compactMap { turn in
+            switch turn.role {
+            case "user":
+                let text = (turn.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.isEmpty ? nil : .user(text, id: turn.planEditTurnID)
+            case "plan":
+                let snapshot = turn.script != nil
+                    ? PlanSnapshot(turn: turn, topic: discussion.topic)
+                    : PlanSnapshot(discussion: discussion)
+                let label = (turn.text?.isEmpty == false) ? turn.text! : "Plan"
+                return .plan(label: label, snapshot: snapshot, id: turn.planEditTurnID)
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func mergeHistoryRows(from loaded: Discussion) {
+        let serverRows = rows(from: loaded.editTurns ?? [])
+        guard !serverRows.isEmpty else { return }
+        editTurns = mergedRows(serverRows: serverRows, existingRows: editTurns)
+    }
+
+    private func mergeRecoveredHistory(from loaded: Discussion, progress: DiscussionProgressDTO) {
+        let recoveredRows = recoveredHistory(from: loaded, progress: progress)
+        editTurns = mergedRows(serverRows: recoveredRows, existingRows: editTurns)
+    }
+
+    private func mergedRows(serverRows: [PlanEditTurn], existingRows: [PlanEditTurn]) -> [PlanEditTurn] {
+        guard !serverRows.isEmpty else {
+            return existingRows.filter { $0.role != .loading }
+        }
+        var merged = serverRows
+        for row in existingRows {
+            guard row.role != .loading, !row.isHistoryBacked, !row.isFallbackCurrentPlan else { continue }
+            guard row.role == .user || row.role == .error else { continue }
+            guard !merged.contains(where: { $0.representsSameVisibleTurn(as: row) }) else { continue }
+            merged.append(row)
+        }
+        return merged
+    }
+
+    private func appendRecoveredLoadingRow() {
+        editTurns.removeAll { $0.role == .loading }
+        editTurns.append(.loading(id: recoveredLoadingID))
     }
 
     private func appendUpdatedPlan() {
+        stopProgressRecoveryPoll()
+        progressText = nil
+        isImproving = false
         editTurns.removeAll { $0.role == .loading }
-        editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion)))
+        let historyRows = rows(from: discussion.editTurns ?? [])
+        if !historyRows.isEmpty {
+            editTurns = mergedRows(serverRows: historyRows, existingRows: editTurns)
+        } else {
+            editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion)))
+        }
+    }
+
+    private func beginSourceUpdate(urls: [String]) {
+        errorMessage = nil
+        isImproving = true
+        progressText = "Reading added sources..."
+        editTurns.removeAll { $0.role == .loading }
+        editTurns.append(.user(sourceUpdateText(urls: urls)))
+        editTurns.append(.loading())
+        startProgressRecoveryPoll(waitForActiveProgress: true)
     }
 
     private func appendError(_ message: String) {
+        stopProgressRecoveryPoll()
+        progressText = nil
+        isImproving = false
         editTurns.removeAll { $0.role == .loading }
         editTurns.append(.error(message))
     }
 
+    private func sourceUpdateText(urls: [String]) -> String {
+        var lines = ["Added \(urls.count) source\(urls.count == 1 ? "" : "s"):"]
+        lines.append(contentsOf: urls)
+        return lines.joined(separator: "\n")
+    }
+
     private var editBar: some View {
-        HStack(spacing: 10) {
-            TextField("Edit using chat", text: $instruction, axis: .vertical)
-                .lineLimit(1...3)
-                .textFieldStyle(.plain)
-            Button(action: improve) {
-                Image(systemName: isImproving ? "ellipsis" : "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(Theme.accent)
+        VStack(alignment: .leading, spacing: 8) {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 4)
             }
-            .disabled(instruction.trimmingCharacters(in: .whitespaces).isEmpty || isImproving || isGenerating)
+            if !attachments.isEmpty {
+                AttachmentsRow(attachments: $attachments, showsButton: false)
+            }
+            HStack(spacing: 10) {
+                AttachmentsRow(attachments: $attachments, compact: true, showsChips: false)
+                TextField("Edit using chat", text: $instruction, axis: .vertical)
+                    .lineLimit(1 ... 3)
+                    .textFieldStyle(.plain)
+                Button(action: improve) {
+                    Image(systemName: isImproving ? "ellipsis" : "arrow.up.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Theme.accent)
+                }
+                .disabled(!canSend)
+            }
+            .padding(12)
+            .glassEffect(in: .capsule)
         }
-        .padding(12)
-        .glassEffect(in: .capsule)
         .padding(16)
         .disabled(isGenerating)
+    }
+
+    /// Allow sending when there's an instruction (and nothing is in flight).
+    private var canSend: Bool {
+        !instruction.trimmingCharacters(in: .whitespaces).isEmpty
+            && !isImproving && !isEditStreaming && !isGenerating && !attachments.isUploading
+    }
+
+    /// Streams the initial plan into a freshly-created placeholder discussion,
+    /// rendering progress in the same loading bubble the edit flow uses. The
+    /// discussion row already exists server-side, so an interrupted stream leaves
+    /// a recoverable record rather than losing the work.
+    private func startInitialPlan() {
+        guard !didStartInitialPlan, let request = initialPlan else { return }
+        didStartInitialPlan = true
+        editTurns = [.loading()]
+        isImproving = true
+        errorMessage = nil
+        progressText = "Researching & planning…"
+        let api = APIClient(tokens: auth)
+        Task {
+            do {
+                for try await event in api.planDiscussionStream(id: discussion.id, request) {
+                    switch event {
+                    case let .progress(step):
+                        progressText = step.text
+                    case let .done(updated):
+                        discussion = updated
+                        appendUpdatedPlan()
+                        isImproving = false
+                    case let .failed(message):
+                        appendError(message)
+                        isImproving = false
+                    }
+                }
+                // Stream closed without a terminal event — the server may still
+                // have finished and persisted the plan, so try to recover it.
+                if isImproving {
+                    await recoverInitialPlan(api: api, fallbackError: nil)
+                }
+            } catch {
+                // A dropped/timed-out connection doesn't mean the server stopped:
+                // poll for the persisted plan before surfacing the error.
+                await recoverInitialPlan(
+                    api: api,
+                    fallbackError: (error as? APIError)?.errorDescription ?? error.localizedDescription
+                )
+            }
+        }
+    }
+
+    /// Polls the discussion for a persisted plan after the planning stream ended
+    /// without a `done` event (idle timeout, dropped connection). The server runs
+    /// planning independently of the SSE connection, so the plan usually lands
+    /// shortly after — recovering it here means the user never has to leave and
+    /// re-enter the page.
+    private func recoverInitialPlan(api: APIClient, fallbackError: String?) async {
+        progressText = "Finishing up…"
+        for _ in 0 ..< 100 {
+            if Task.isCancelled { return }
+            if let full = try? await api.discussion(id: discussion.id), full.script != nil {
+                discussion = full
+                isImproving = false
+                appendUpdatedPlan()
+                return
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+        isImproving = false
+        progressText = nil
+        editTurns.removeAll { $0.role == .loading }
+        appendError(fallbackError ?? "Planning didn’t finish. Pull to refresh or try editing the plan.")
     }
 
     private func improve() {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGenerating else { return }
+        let ready = attachments.apiAttachments
         instruction = ""
+        attachments = []
         editTurns.append(.user(text))
-        editTurns.append(.loading)
+        editTurns.append(.loading())
         isImproving = true
         errorMessage = nil
+        progressText = nil
+        // Baseline to detect server-side completion if the stream drops: the
+        // engine bumps updated_at when it persists the revised plan.
+        let baselineUpdatedAt = discussion.updatedAt
         let api = APIClient(tokens: auth)
         Task {
             do {
-                discussion = try await api.improveDiscussion(id: discussion.id, instruction: text)
-                appendUpdatedPlan()
-                isImproving = false
+                for try await event in api.improveDiscussionStream(id: discussion.id, instruction: text, attachments: ready) {
+                    switch event {
+                    case let .progress(step):
+                        progressText = step.text
+                    case let .done(updated):
+                        discussion = updated
+                        appendUpdatedPlan()
+                        isImproving = false
+                    case let .failed(message):
+                        appendError(message)
+                        isImproving = false
+                    }
+                }
+                // Stream closed without a terminal event — the server may still
+                // have persisted the revised plan, so try to recover it.
+                if isImproving {
+                    await recoverImprovedPlan(api: api, baselineUpdatedAt: baselineUpdatedAt, fallbackError: nil)
+                }
             } catch {
-                isImproving = false
-                appendError((error as? APIError)?.errorDescription ?? error.localizedDescription)
+                // A dropped/timed-out connection doesn't stop the server-side
+                // revision: poll for the persisted plan before erroring.
+                await recoverImprovedPlan(
+                    api: api,
+                    baselineUpdatedAt: baselineUpdatedAt,
+                    fallbackError: (error as? APIError)?.errorDescription ?? error.localizedDescription
+                )
             }
         }
+    }
+
+    /// Polls the discussion for the revised plan after an edit stream ended
+    /// without a `done` event. The engine persists the revision (and bumps
+    /// updated_at) independently of the SSE connection, so the new plan usually
+    /// lands shortly after — recovering it here avoids forcing a re-enter.
+    private func recoverImprovedPlan(api: APIClient, baselineUpdatedAt: String?, fallbackError: String?) async {
+        progressText = "Finishing up…"
+        for _ in 0 ..< 100 {
+            if Task.isCancelled { return }
+            if let full = try? await api.discussion(id: discussion.id),
+               full.updatedAt != nil, full.updatedAt != baselineUpdatedAt {
+                discussion = full
+                isImproving = false
+                appendUpdatedPlan()
+                return
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+        isImproving = false
+        progressText = nil
+        editTurns.removeAll { $0.role == .loading }
+        appendError(fallbackError ?? "The edit didn’t finish. Pull to refresh or try again.")
     }
 
     private func generate() {
@@ -151,7 +630,7 @@ struct PlanDetailView: View {
     }
 }
 
-private struct PlanEditTurn: Identifiable {
+private struct PlanEditTurn: Identifiable, MessageListItem {
     enum Role: Equatable {
         case user
         case plan
@@ -159,31 +638,64 @@ private struct PlanEditTurn: Identifiable {
         case error
     }
 
-    let id = UUID()
+    let id: String
     let role: Role
     let label: String?
     let text: String?
     let snapshot: PlanSnapshot?
 
-    static func user(_ text: String) -> PlanEditTurn {
-        PlanEditTurn(role: .user, label: nil, text: text, snapshot: nil)
+    var isUserMessage: Bool { role == .user }
+    /// The loading row is an accessory: it must not count as "content after" the
+    /// pinned user turn, so the turn stays pinned to the top until the real
+    /// updated plan (or an error) replaces it.
+    var isMessageListAccessory: Bool { role == .loading }
+
+    static func user(_ text: String, id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .user, label: nil, text: text, snapshot: nil)
     }
 
-    static func plan(label: String, snapshot: PlanSnapshot) -> PlanEditTurn {
-        PlanEditTurn(role: .plan, label: label, text: nil, snapshot: snapshot)
+    static func plan(label: String, snapshot: PlanSnapshot, id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .plan, label: label, text: nil, snapshot: snapshot)
     }
 
-    static var loading: PlanEditTurn {
-        PlanEditTurn(role: .loading, label: nil, text: nil, snapshot: nil)
+    static func loading(id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .loading, label: nil, text: nil, snapshot: nil)
     }
 
-    static func error(_ message: String) -> PlanEditTurn {
-        PlanEditTurn(role: .error, label: nil, text: message, snapshot: nil)
+    static func error(_ message: String, id: String = UUID().uuidString) -> PlanEditTurn {
+        PlanEditTurn(id: id, role: .error, label: nil, text: message, snapshot: nil)
+    }
+
+    var isHistoryBacked: Bool {
+        id.hasPrefix("history-")
+    }
+
+    var isFallbackCurrentPlan: Bool {
+        role == .plan && !isHistoryBacked && label == "Current plan"
+    }
+
+    func representsSameVisibleTurn(as other: PlanEditTurn) -> Bool {
+        role == other.role
+            && normalized(text) == normalized(other.text)
+            && normalized(label) == normalized(other.label)
+    }
+
+    private func normalized(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private extension DiscussionEditTurnDTO {
+    var planEditTurnID: String {
+        if let id { return "history-\(id)" }
+        return "history-\(role)-\(createdAt ?? "")-\(text ?? "")"
     }
 }
 
 private struct PlanEditBubble: View {
     let turn: PlanEditTurn
+    var progressText: String? = nil
+    var onSourcesTapped: () -> Void
 
     var body: some View {
         HStack(alignment: .bottom) {
@@ -212,14 +724,14 @@ private struct PlanEditBubble: View {
                 .background(Theme.accent, in: .rect(cornerRadius: 20))
         case .plan:
             if let snapshot = turn.snapshot {
-                PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot)
+                PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot, onSourcesTapped: onSourcesTapped)
                     .padding(14)
                     .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             }
         case .loading:
             HStack(spacing: 10) {
                 ProgressView().tint(Theme.accent)
-                Text("Updating plan...")
+                Text(progressText ?? "Updating plan...")
                     .font(.callout)
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -236,3 +748,103 @@ private struct PlanEditBubble: View {
         }
     }
 }
+
+#if DEBUG
+extension PlanSnapshot {
+    /// Memberwise initializer for previews/tests (the production type only ships
+    /// `init(discussion:)`).
+    init(title: String, topic: String, background: String,
+         people: [PlanPersonSnapshot], sources: [PlanSourceSnapshot]) {
+        self.title = title
+        self.topic = topic
+        self.background = background
+        self.people = people
+        self.sources = sources
+    }
+}
+
+/// Offline harness that exercises the pinned-turn behavior of `MessageList`
+/// using the real `PlanEditBubble` rows. Tap send and watch the user message
+/// pin to the top while a simulated "Updating plan…" reply streams in, then
+/// release to the bottom when the updated plan lands.
+private struct PlanDetailPinPreview: View {
+    private let sampleSnapshot = PlanSnapshot(
+        title: "The Future of AI in Education",
+        topic: "How will AI reshape classrooms over the next decade?",
+        background: "A round-table on personalized tutoring, automated assessment, and how the role of teachers shifts as AI becomes ubiquitous in schools. The panel weighs equity, over-reliance, and what skills still matter when answers are a prompt away.",
+        people: [
+            PlanPersonSnapshot(name: "Dr. Lena Ortiz", aspect: "Moderator", isHost: true),
+            PlanPersonSnapshot(name: "Prof. Adeyemi", aspect: "Pedagogy researcher", isHost: false),
+            PlanPersonSnapshot(name: "Maya Chen", aspect: "EdTech founder", isHost: false),
+        ],
+        sources: [
+            PlanSourceSnapshot(title: "OECD: AI and the Future of Skills", urlString: "https://example.com/oecd", snippet: "How AI shifts the skills employers demand."),
+            PlanSourceSnapshot(title: "Stanford HAI 2025 Education Brief", urlString: "https://example.com/hai", snippet: "Trends in classroom AI adoption."),
+        ]
+    )
+
+    @State private var turns: [PlanEditTurn] = []
+    @State private var instruction = "Make the intro punchier and add a skeptic to the panel."
+    @State private var isAtBottom = true
+    @State private var replyTask: Task<Void, Never>?
+
+    private var isStreaming: Bool { turns.contains { $0.role == .loading } }
+
+    var body: some View {
+        ZStack {
+            Theme.background.ignoresSafeArea()
+            VStack(spacing: 0) {
+                MessageList(messages: turns, isStreaming: isStreaming, isAtBottom: $isAtBottom) { turn in
+                    PlanEditBubble(turn: turn) {}
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                }
+                .contentMargins(.bottom, 80, for: .scrollContent)
+
+                inputBar
+            }
+        }
+        .onAppear {
+            if turns.isEmpty {
+                turns = [.plan(label: "Current plan", snapshot: sampleSnapshot)]
+            }
+        }
+    }
+
+    private var inputBar: some View {
+        HStack(spacing: 10) {
+            TextField("Edit using chat", text: $instruction, axis: .vertical)
+                .lineLimit(1 ... 3)
+                .textFieldStyle(.plain)
+            Button(action: send) {
+                Image(systemName: isStreaming ? "ellipsis" : "arrow.up.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(Theme.accent)
+            }
+            .disabled(instruction.trimmingCharacters(in: .whitespaces).isEmpty || isStreaming)
+        }
+        .padding(12)
+        .glassEffect(in: .capsule)
+        .padding(16)
+    }
+
+    private func send() {
+        let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        instruction = ""
+        turns.append(.user(text))
+        turns.append(.loading())
+        replyTask?.cancel()
+        replyTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            turns.removeAll { $0.role == .loading }
+            turns.append(.plan(label: "Updated plan", snapshot: sampleSnapshot))
+        }
+    }
+}
+
+#Preview("PlanDetailView · Pin to top") {
+    PlanDetailPinPreview()
+}
+#endif

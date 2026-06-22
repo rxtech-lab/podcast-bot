@@ -44,6 +44,8 @@ spec:
               value: "gpt-4o-mini"
             - name: OUT_DIR
               value: "/app/out"
+            - name: REDIS_URL
+              value: "redis://redis.redis.svc.cluster.local:6379"
           envFrom:
             - secretRef:
                 name: debate-bot-secrets

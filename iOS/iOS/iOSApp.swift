@@ -22,7 +22,6 @@ struct iOSApp: App {
             RootView()
                 .environment(auth)
                 .tint(Theme.accent)
-                .preferredColorScheme(.dark)
                 .scrollDismissesKeyboard(.interactively)
         }
     }

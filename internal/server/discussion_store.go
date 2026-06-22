@@ -43,9 +43,16 @@ type DiscussionLine struct {
 }
 
 type DiscussionEditTurn struct {
-	Role      string    `json:"role"`
-	Text      string    `json:"text,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID   int64  `json:"id,omitempty"`
+	Role string `json:"role"`
+	Text string `json:"text,omitempty"`
+	// Script/Sources/Markdown snapshot the plan as it stood at this turn so the
+	// client can faithfully rebuild the chat history (every plan card), not just
+	// the latest plan. Only set for "plan" turns.
+	Script    *config.DebateTopic `json:"script,omitempty"`
+	Sources   []config.Source     `json:"sources,omitempty"`
+	Markdown  string              `json:"markdown,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
 }
 
 type Discussion struct {
@@ -71,6 +78,9 @@ type Discussion struct {
 	Researched       bool                 `json:"researched"`
 	Lines            []DiscussionLine     `json:"lines,omitempty"`
 	EditTurns        []DiscussionEditTurn `json:"edit_turns,omitempty"`
+	EditTurnsHasMore bool                 `json:"edit_turns_has_more,omitempty"`
+	EditTurnsBefore  int64                `json:"edit_turns_before,omitempty"`
+	Progress         *DiscussionProgress  `json:"progress,omitempty"`
 	CreatedAt        time.Time            `json:"created_at"`
 	UpdatedAt        time.Time            `json:"updated_at"`
 }
@@ -171,6 +181,9 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			discussion_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			text TEXT NOT NULL DEFAULT '',
+			script_json TEXT NOT NULL DEFAULT '',
+			sources_json TEXT NOT NULL DEFAULT '',
+			markdown TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
@@ -193,6 +206,20 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"music_cost_usd", "music_cost_usd REAL NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	// Plan-snapshot columns on edit turns are newer than the table; backfill
+	// them on databases created before snapshots were stored.
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"script_json", "script_json TEXT NOT NULL DEFAULT ''"},
+		{"sources_json", "sources_json TEXT NOT NULL DEFAULT ''"},
+		{"markdown", "markdown TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, "native_discussion_edit_turns", col.name, col.def); err != nil {
 			return err
 		}
 	}
@@ -227,7 +254,32 @@ func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp 
 	if err != nil {
 		return nil, err
 	}
-	_ = s.AppendEditTurn(ctx, owner, id, "plan", "Initial plan")
+	_ = s.AppendPlanTurn(ctx, owner, id, "Current plan", resp)
+	return s.Get(ctx, owner, id)
+}
+
+// CreatePlaceholder inserts an empty discussion in the planning state so the
+// client gets an id immediately and can stream the plan into it. The plan body
+// (script/sources/markdown) is filled in later via UpdatePlan once the planner
+// finishes. No plan turn is appended yet — the first turn is written when the
+// stream completes.
+func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, language string) (*Discussion, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	if language == "" {
+		language = "en-US"
+	}
+	id := newJobID()
+	now := time.Now()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO native_discussions
+		(id, owner_user_id, topic, title, status, language, script_json, markdown, sources_json, researched, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, owner, topic, "", DiscussionPlanning, language, "", "", "", 0,
+		now.UnixMilli(), now.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
 	return s.Get(ctx, owner, id)
 }
 
@@ -266,6 +318,24 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 }
 
 func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussion, error) {
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return d, err
+	}
+	lines, err := s.Lines(ctx, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	d.Lines = lines
+	turns, err := s.EditTurns(ctx, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	d.EditTurns = turns
+	return d, nil
+}
+
+func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (*Discussion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
 		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 		tts_cost_usd, music_cost_usd,
@@ -278,17 +348,29 @@ func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussio
 		}
 		return nil, err
 	}
+	return &d, nil
+}
+
+func (s *DiscussionStore) GetWithEditTurnPage(ctx context.Context, owner, id string, limit int, beforeID int64) (*Discussion, error) {
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return d, err
+	}
 	lines, err := s.Lines(ctx, owner, id)
 	if err != nil {
 		return nil, err
 	}
 	d.Lines = lines
-	turns, err := s.EditTurns(ctx, owner, id)
+	turns, hasMore, err := s.EditTurnsPage(ctx, owner, id, limit, beforeID)
 	if err != nil {
 		return nil, err
 	}
 	d.EditTurns = turns
-	return &d, nil
+	d.EditTurnsHasMore = hasMore
+	if len(turns) > 0 {
+		d.EditTurnsBefore = turns[0].ID
+	}
+	return d, nil
 }
 
 func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp planResponse) (*Discussion, error) {
@@ -359,13 +441,33 @@ func (s *DiscussionStore) Delete(ctx context.Context, owner, id string) (bool, e
 	return n > 0, nil
 }
 
+// AppendEditTurn records a text-only turn (e.g. a "user" instruction).
 func (s *DiscussionStore) AppendEditTurn(ctx context.Context, owner, id, role, text string) error {
+	return s.appendTurn(ctx, owner, id, role, text, "", "", "")
+}
+
+// AppendPlanTurn records a "plan" turn together with a full snapshot of the
+// plan at that moment (script, sources, markdown) so the chat history can be
+// rebuilt card-for-card, not just collapsed to the latest plan.
+func (s *DiscussionStore) AppendPlanTurn(ctx context.Context, owner, id, label string, resp planResponse) error {
+	scriptJSON, err := marshalString(resp.Script)
+	if err != nil {
+		return err
+	}
+	sourcesJSON, err := marshalString(resp.Sources)
+	if err != nil {
+		return err
+	}
+	return s.appendTurn(ctx, owner, id, "plan", label, scriptJSON, sourcesJSON, resp.Markdown)
+}
+
+func (s *DiscussionStore) appendTurn(ctx context.Context, owner, id, role, text, scriptJSON, sourcesJSON, markdown string) error {
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO native_discussion_edit_turns
-		(discussion_id, role, text, created_at) VALUES (?, ?, ?, ?)`,
-		id, role, text, time.Now().UnixMilli())
+		(discussion_id, role, text, script_json, sources_json, markdown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, role, text, scriptJSON, sourcesJSON, markdown, time.Now().UnixMilli())
 	return err
 }
 
@@ -432,18 +534,69 @@ func (s *DiscussionStore) EditTurns(ctx context.Context, owner, id string) ([]Di
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT role, text, created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, role, text, script_json, sources_json, markdown, created_at
 		FROM native_discussion_edit_turns WHERE discussion_id = ? ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanEditTurns(rows)
+}
+
+func (s *DiscussionStore) EditTurnsPage(ctx context.Context, owner, id string, limit int, beforeID int64) ([]DiscussionEditTurn, bool, error) {
+	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
+		return nil, false, err
+	}
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	args := []any{id}
+	where := "discussion_id = ?"
+	if beforeID > 0 {
+		where += " AND id < ?"
+		args = append(args, beforeID)
+	}
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, role, text, script_json, sources_json, markdown, created_at
+		FROM native_discussion_edit_turns WHERE `+where+` ORDER BY id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	out, err := scanEditTurns(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, hasMore, nil
+}
+
+func scanEditTurns(rows *sql.Rows) ([]DiscussionEditTurn, error) {
 	out := make([]DiscussionEditTurn, 0)
 	for rows.Next() {
 		var t DiscussionEditTurn
+		var scriptJSON, sourcesJSON string
 		var created int64
-		if err := rows.Scan(&t.Role, &t.Text, &created); err != nil {
+		if err := rows.Scan(&t.ID, &t.Role, &t.Text, &scriptJSON, &sourcesJSON, &t.Markdown, &created); err != nil {
 			return nil, err
+		}
+		if strings.TrimSpace(scriptJSON) != "" {
+			var script config.DebateTopic
+			if err := json.Unmarshal([]byte(scriptJSON), &script); err == nil {
+				t.Script = &script
+			}
+		}
+		if strings.TrimSpace(sourcesJSON) != "" {
+			_ = json.Unmarshal([]byte(sourcesJSON), &t.Sources)
 		}
 		t.CreatedAt = time.UnixMilli(created)
 		out = append(out, t)

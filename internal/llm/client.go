@@ -310,6 +310,50 @@ func (c *Client) JSON(ctx context.Context, system, user string) ([]byte, error) 
 	return []byte(resp.Choices[0].Message.Content), nil
 }
 
+// InputPart is a text or image item in a multimodal user message.
+type InputPart struct {
+	Text     string
+	ImageURL string
+	Detail   string
+}
+
+// JSONParts is JSON for a user message that may include image inputs.
+func (c *Client) JSONParts(ctx context.Context, system string, parts []InputPart) ([]byte, error) {
+	if len(parts) == 1 && parts[0].ImageURL == "" {
+		return c.JSON(ctx, system, parts[0].Text)
+	}
+	userParts := openAIContentParts(parts)
+	resp, err := c.c.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: c.model,
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(system),
+			openai.UserMessage(userParts),
+		},
+		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
+		},
+	})
+	if err != nil {
+		if isResponseFormatRejection(err) {
+			resp, err = c.c.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+				Model: c.model,
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.SystemMessage(system),
+					openai.UserMessage(userParts),
+				},
+			})
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("empty completion")
+	}
+	c.recordUsage(c.usageFromCompletion(resp.Usage))
+	return []byte(resp.Choices[0].Message.Content), nil
+}
+
 func (c *Client) recordUsage(u Usage) {
 	if c == nil || c.usageRecorder == nil || u.TotalTokens == 0 {
 		return

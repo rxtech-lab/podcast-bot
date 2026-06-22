@@ -38,10 +38,12 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched})
 }
 
-// planImproveRequest carries the prior script plus the revision instruction.
+// planImproveRequest carries the prior script plus the revision instruction
+// and any uploaded reference files to ground the revision.
 type planImproveRequest struct {
-	PreviousScript *config.DebateTopic `json:"previousScript"`
-	Instruction    string              `json:"instruction"`
+	PreviousScript *config.DebateTopic  `json:"previousScript"`
+	Instruction    string               `json:"instruction"`
+	Attachments    []planner.Attachment `json:"attachments,omitempty"`
 }
 
 // handlePlanImprove revises an existing script per a free-text instruction.
@@ -55,7 +57,7 @@ func (s *Server) handlePlanImprove(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	res, err := p.Improve(r.Context(), req.PreviousScript, req.Instruction)
+	res, err := p.Improve(r.Context(), req.PreviousScript, req.Instruction, nil, req.Attachments)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

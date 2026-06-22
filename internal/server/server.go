@@ -73,6 +73,7 @@ type Deps struct {
 	Sessions    *SessionRegistry
 	Jobs        *JobRegistry
 	Discussions *DiscussionStore
+	Progress    *DiscussionProgressStore
 	Log         *slog.Logger
 	UploadRoot  string
 	SubmitJob   func(jobID string, sub JobSubmission) error
@@ -153,6 +154,9 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
 	s.mux.HandleFunc("POST /api/plan/improve", s.handlePlanImprove)
+	s.mux.HandleFunc("POST /api/uploads/presign", s.handleUploadPresign)
+	s.mux.HandleFunc("POST /api/uploads/complete", s.handleUploadComplete)
+	s.mux.HandleFunc("POST /api/uploads", s.handleUpload)
 
 	// "video" and "dashboard" both run the upload-and-render job pipeline;
 	// only the embedded SPA differs (dashboard has its own frontend). Stream
@@ -188,10 +192,17 @@ func New(d Deps) *Server {
 
 	if d.Discussions != nil {
 		s.mux.HandleFunc("GET /api/discussions", s.handleDiscussionList)
+		s.mux.HandleFunc("POST /api/discussions", s.handleDiscussionCreate)
 		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)
+		s.mux.HandleFunc("POST /api/discussions/plan/stream", s.handleDiscussionPlanStream)
+		s.mux.HandleFunc("POST /api/discussions/{id}/plan/stream", s.handleDiscussionPlanStreamForID)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
+		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
+		s.mux.HandleFunc("POST /api/discussions/{id}/sources", s.handleDiscussionAddSources)
+		s.mux.HandleFunc("POST /api/discussions/{id}/sources/stream", s.handleDiscussionAddSourcesStream)
+		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
 	}

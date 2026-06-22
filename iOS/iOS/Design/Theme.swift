@@ -1,12 +1,14 @@
 import SwiftUI
+import UIKit
 
-/// Centralized colors + Liquid Glass helpers, matching the dark mockups with a
-/// purple accent.
+/// Centralized adaptive colors + Liquid Glass helpers.
 enum Theme {
     static let accent = Color(red: 0.49, green: 0.31, blue: 0.96)   // vivid purple
-    static let background = Color.black
-    static let agentBubble = Color.white.opacity(0.07)
-    static let secondaryText = Color.white.opacity(0.6)
+    static let background = Color(uiColor: .systemBackground)
+    static let agentBubble = Color(uiColor: .secondarySystemFill)
+    static let rowBackground = Color(uiColor: .secondarySystemBackground)
+    static let divider = Color(uiColor: .separator)
+    static let secondaryText = Color.secondary
 }
 
 extension View {

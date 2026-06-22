@@ -11,6 +11,9 @@ struct LibraryView: View {
     @State private var isLoadingMore = false
     @State private var canLoadMore = true
     @State private var errorMessage: String?
+    /// Plan requests for freshly-created discussions, keyed by id, so the plan
+    /// page knows to auto-stream the plan once the user navigates to it.
+    @State private var pendingPlans: [String: PlanRequest] = [:]
 
     private let pageSize = 20
 
@@ -42,8 +45,9 @@ struct LibraryView: View {
                 destination(for: discussion)
             }
             .sheet(isPresented: $showingNew) {
-                NewDiscussionView { discussion in
+                NewDiscussionView { discussion, request in
                     showingNew = false
+                    pendingPlans[discussion.id] = request
                     upsert(discussion)
                     path.append(discussion)
                 }
@@ -185,7 +189,7 @@ struct LibraryView: View {
     private func destination(for discussion: Discussion) -> some View {
         switch discussion.status {
         case .planning, .failed:
-            PlanDetailView(discussion: discussion) { generated in
+            PlanDetailView(discussion: discussion, initialPlan: pendingPlans[discussion.id]) { generated in
                 upsert(generated)
                 if let index = path.lastIndex(where: { $0.id == generated.id }) {
                     path[index] = generated

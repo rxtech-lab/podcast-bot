@@ -6,11 +6,14 @@ import SwiftUI
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
-    var onPlanned: (Discussion) -> Void = { _ in }
+    /// Called once the placeholder discussion is created. The plan itself is then
+    /// streamed on the plan page, so the request is handed along to drive it.
+    var onPlanned: (Discussion, PlanRequest) -> Void = { _, _ in }
 
     @State private var topic = ""
     @State private var discussants = 3
     @State private var language = "en-US"
+    @State private var attachments: [PendingAttachment] = []
     @State private var isPlanning = false
     @State private var errorMessage: String?
 
@@ -36,7 +39,7 @@ struct NewDiscussionView: View {
                             Text("Plan")
                         }
                     }
-                    .disabled(topic.trimmingCharacters(in: .whitespaces).isEmpty || isPlanning)
+                    .disabled(topic.trimmingCharacters(in: .whitespaces).isEmpty || isPlanning || attachments.isUploading)
                 }
             }
         }
@@ -53,13 +56,12 @@ struct NewDiscussionView: View {
                         .textFieldStyle(.plain)
                         .padding(12)
                         .glassEffect(in: .rect(cornerRadius: 16))
+                    Text("Tip: paste a link in the topic and the agent will read it.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
                 }
 
-                Stepper("Panelists: \(discussants)", value: $discussants, in: 2...6)
-                    .padding(12)
-                    .glassEffect(in: .rect(cornerRadius: 16))
-
-                DiscussionLanguageMenu(selection: $language)
+                optionsCard
 
                 if let errorMessage {
                     Text(errorMessage).font(.footnote).foregroundStyle(.red)
@@ -68,7 +70,7 @@ struct NewDiscussionView: View {
                 if isPlanning {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text("Researching & planning…")
+                        Text("Creating discussion…")
                     }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -80,19 +82,63 @@ struct NewDiscussionView: View {
         .disabled(isPlanning)
     }
 
+    /// One liquid-glass card grouping attach files, panelists, and language.
+    private var optionsCard: some View {
+        VStack(spacing: 0) {
+            AttachmentsRow(attachments: $attachments, grouped: true)
+            rowDivider
+            panelistsRow
+            rowDivider
+            DiscussionLanguageMenu(selection: $language, grouped: true)
+        }
+        .glassEffect(in: .rect(cornerRadius: 16))
+    }
+
+    private var panelistsRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.2.fill")
+                .foregroundStyle(Theme.accent)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Panelists")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text("\(discussants) people")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer()
+            Stepper("Panelists", value: $discussants, in: 2...6)
+                .labelsHidden()
+        }
+        .padding(12)
+    }
+
+    private var rowDivider: some View {
+        Divider()
+            .overlay(Theme.divider.opacity(0.5))
+            .padding(.leading, 46)
+    }
+
+    /// Creates the placeholder discussion (fast), then hands it plus the plan
+    /// request to the caller, which navigates to the plan page where the plan is
+    /// streamed in. Creating the row first means the discussion is saved even if
+    /// the planning stream is later interrupted.
     private func plan() {
         let trimmed = topic.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         isPlanning = true
         errorMessage = nil
         let api = APIClient(tokens: auth)
+        let ready = attachments.apiAttachments
+        let request = PlanRequest(topic: trimmed, language: language, discussants: discussants,
+                                  research: true, attachments: ready.isEmpty ? nil : ready)
         Task {
             do {
-                let discussion = try await api.planDiscussion(PlanRequest(topic: trimmed, language: language,
-                                                                          discussants: discussants, research: true))
+                let created = try await api.createDiscussion(topic: trimmed, language: language)
                 isPlanning = false
                 dismiss()
-                onPlanned(discussion)
+                onPlanned(created, request)
             } catch {
                 isPlanning = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -130,6 +176,9 @@ struct DiscussionLanguage: Identifiable, Hashable {
 struct DiscussionLanguageMenu: View {
     @Binding var selection: String
     var title = "Podcast language"
+    /// Grouped renders the row without its own glass background so it can share
+    /// one card with another control (e.g. the attach-files row).
+    var grouped: Bool = false
 
     var body: some View {
         Menu {
@@ -139,14 +188,14 @@ struct DiscussionLanguageMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 12) {
+            let row = HStack(spacing: 12) {
                 Image(systemName: "globe")
                     .foregroundStyle(Theme.accent)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.headline)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text(DiscussionLanguage.label(for: selection))
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondaryText)
@@ -157,7 +206,12 @@ struct DiscussionLanguageMenu: View {
                     .foregroundStyle(Theme.secondaryText)
             }
             .padding(12)
-            .glassEffect(in: .rect(cornerRadius: 16))
+
+            if grouped {
+                row
+            } else {
+                row.glassEffect(in: .rect(cornerRadius: 16))
+            }
         }
         .tint(Theme.accent)
         .onAppear {

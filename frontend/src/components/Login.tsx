@@ -27,7 +27,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
   }
 
   return (
-    <div className="dark flex min-h-screen items-center justify-center bg-background text-foreground font-sans">
+    <div className="flex min-h-screen items-center justify-center bg-background text-foreground font-sans">
       <form
         onSubmit={submit}
         className="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-lg"

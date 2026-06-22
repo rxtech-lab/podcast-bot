@@ -1,13 +1,13 @@
+import PhotosUI
+import RxAuthSwift
 import SwiftUI
 import UIKit
-import RxAuthSwift
+import UniformTypeIdentifiers
 
 /// The live podcast screen: streaming per-agent transcript bubbles, a synced
 /// caption, a Liquid Glass music-player bar, and a message input — matching the
 /// mockups.
 struct PodcastPlayerView: View {
-    private static let transcriptBottomID = "transcript-bottom"
-
     @Environment(AuthManager.self) private var auth
     let discussion: Discussion
 
@@ -15,6 +15,17 @@ struct PodcastPlayerView: View {
     @State private var message = ""
     @State private var showingPlan = false
     @State private var showingFullPlayer = false
+    @State private var showingImporter = false
+    @State private var showingPhotos = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isUploadingAttachment = false
+    @State private var transcriptIsAtBottom = true
+    @State private var transcriptShouldScrollToBottom = false
+    @State private var transcriptScrollRequestTask: Task<Void, Never>?
+
+    /// Stable id for the optional usage-summary accessory row so it doesn't
+    /// churn its identity across renders.
+    private static let usageItemID = UUID()
 
     var body: some View {
         ZStack {
@@ -87,41 +98,68 @@ struct PodcastPlayerView: View {
     }
 
     private func transcript(_ model: PlayerModel) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    ForEach(model.lines) { line in
-                        TranscriptBubble(line: line).id(line.id)
-                    }
-                    if let summary = model.usageSummary {
-                        UsageSummaryBubble(summary: summary)
-                            .id("usage-summary")
-                    } else if !model.usageSummaryText.isEmpty {
-                        UsageSummaryBubble(fallbackText: model.usageSummaryText)
-                            .id("usage-summary")
-                    }
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.transcriptBottomID)
-                }
-                .padding(16)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .onChange(of: model.transcriptScrollToken) { _, _ in
-                scrollToBottom(proxy)
-            }
-            .onChange(of: model.usageSummaryText) { _, _ in
-                scrollToBottom(proxy)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                scrollToBottom(proxy, delay: 0.12)
+        MessageList(
+            messages: transcriptItems(for: model),
+            isStreaming: isTranscriptStreaming(model),
+            shouldScrollToBottom: transcriptShouldScrollToBottom,
+            isAtBottom: $transcriptIsAtBottom
+        ) { item in
+            transcriptRow(item)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+        }
+        // Extra breathing room below the navigation bar so the first/pinned
+        // message clears the toolbar instead of tucking under it.
+        .contentMargins(.top, 100, for: .scrollContent)
+        .scrollDismissesKeyboard(.interactively)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                requestTranscriptScrollToBottom()
             }
         }
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, delay: TimeInterval = 0) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            withAnimation { proxy.scrollTo(Self.transcriptBottomID, anchor: .bottom) }
+    @ViewBuilder
+    private func transcriptRow(_ item: TranscriptListItem) -> some View {
+        switch item {
+        case .line(let line):
+            TranscriptBubble(line: line)
+        case .usage(_, let summary, let fallback):
+            if let summary {
+                UsageSummaryBubble(summary: summary)
+            } else {
+                UsageSummaryBubble(fallbackText: fallback)
+            }
+        }
+    }
+
+    /// Transcript lines, plus the usage summary as a trailing accessory row.
+    private func transcriptItems(for model: PlayerModel) -> [TranscriptListItem] {
+        var items = model.lines.map { TranscriptListItem.line($0) }
+        if model.usageSummary != nil || !model.usageSummaryText.isEmpty {
+            items.append(.usage(id: Self.usageItemID,
+                                summary: model.usageSummary,
+                                fallback: model.usageSummaryText))
+        }
+        return items
+    }
+
+    /// Streaming is in effect while the most recent line is still being written.
+    /// The `MessageList` follows the bottom while true and, on a fresh user send,
+    /// pins that message to the top until the reply grows in.
+    private func isTranscriptStreaming(_ model: PlayerModel) -> Bool {
+        !(model.lines.last?.done ?? true)
+    }
+
+    /// Toggle `transcriptShouldScrollToBottom` off→on so `MessageList` performs a
+    /// one-shot scroll to the bottom (e.g. when the keyboard appears).
+    private func requestTranscriptScrollToBottom() {
+        transcriptScrollRequestTask?.cancel()
+        transcriptShouldScrollToBottom = false
+        transcriptScrollRequestTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(10))
+            guard !Task.isCancelled else { return }
+            transcriptShouldScrollToBottom = true
         }
     }
 
@@ -136,8 +174,27 @@ struct PodcastPlayerView: View {
 
     private func inputBar(_ model: PlayerModel) -> some View {
         HStack(spacing: 10) {
+            Menu {
+                Button {
+                    showingPhotos = true
+                } label: {
+                    Label("Photo Library", systemImage: "photo.on.rectangle")
+                }
+                Button {
+                    showingImporter = true
+                } label: {
+                    Label("Files", systemImage: "folder")
+                }
+            } label: {
+                if isUploadingAttachment {
+                    ProgressView().controlSize(.small).tint(Theme.accent)
+                } else {
+                    Image(systemName: "paperclip").font(.title3).foregroundStyle(Theme.accent)
+                }
+            }
+            .disabled(isUploadingAttachment)
             TextField("Send message", text: $message, axis: .vertical)
-                .lineLimit(1...3)
+                .lineLimit(1 ... 3)
                 .textFieldStyle(.plain)
             Button {
                 model.send(message)
@@ -149,6 +206,67 @@ struct PodcastPlayerView: View {
         }
         .padding(12)
         .glassEffect(in: .capsule)
+        .fileImporter(isPresented: $showingImporter,
+                      allowedContentTypes: attachmentContentTypes,
+                      allowsMultipleSelection: false)
+        { result in
+            if case .success(let urls) = result, let url = urls.first {
+                shareDocument(url, model: model)
+            }
+        }
+        .photosPicker(isPresented: $showingPhotos, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, item in
+            if let item { sharePhoto(item, model: model) }
+        }
+    }
+
+    /// Uploads a document and injects its parsed text into the live discussion.
+    private func shareDocument(_ url: URL, model: PlayerModel) {
+        let access = url.startAccessingSecurityScopedResource()
+        let data = try? Data(contentsOf: url)
+        if access { url.stopAccessingSecurityScopedResource() }
+        let filename = url.lastPathComponent
+        guard let data else { return }
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        shareData(data, filename: filename, mime: mime, model: model)
+    }
+
+    /// Loads a picked photo's bytes and shares it like a document.
+    private func sharePhoto(_ item: PhotosPickerItem, model: PlayerModel) {
+        let utType = item.supportedContentTypes.first
+        let ext = utType?.preferredFilenameExtension ?? "jpg"
+        let mime = utType?.preferredMIMEType ?? "image/jpeg"
+        let filename = "Photo-\(UUID().uuidString.prefix(6)).\(ext)"
+        isUploadingAttachment = true
+        Task { @MainActor in
+            defer { selectedPhoto = nil }
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                isUploadingAttachment = false
+                return
+            }
+            shareData(data, filename: filename, mime: mime, model: model)
+        }
+    }
+
+    /// Uploads bytes and injects the returned reference into the live discussion.
+    private func shareData(_ data: Data, filename: String, mime: String, model: PlayerModel) {
+        isUploadingAttachment = true
+        let api = APIClient(tokens: auth)
+        Task { @MainActor in
+            defer { isUploadingAttachment = false }
+            do {
+                let resp = try await api.uploadFile(data: data, filename: filename, mimeType: mime)
+                if let markdown = resp.markdown, !markdown.isEmpty {
+                    let trimmed = String(markdown.prefix(6000))
+                    model.send("I'm sharing a document \"\(filename)\". Please consider it:\n\n" + trimmed)
+                } else if resp.mimeType?.hasPrefix("image/") == true {
+                    model.send("I'm sharing an image \"\(filename)\": \(resp.url)")
+                }
+            } catch {
+                // Best-effort: a failed share is silently dropped here; the
+                // user can retry. (Surfaced state would need a toast/banner.)
+            }
+        }
     }
 }
 
@@ -232,15 +350,24 @@ struct PodcastDocumentExporter: UIViewControllerRepresentable {
 
 private struct PlanSheetView: View {
     @Environment(\.dismiss) private var dismiss
-    let discussion: Discussion
+    @State private var discussion: Discussion
+    @State private var showingSources = false
+
+    init(discussion: Discussion) {
+        _discussion = State(initialValue: discussion)
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Theme.background.ignoresSafeArea()
                 ScrollView {
-                    PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion))
-                        .padding(16)
+                    VStack(alignment: .leading, spacing: 14) {
+                        PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion)) {
+                            showingSources = true
+                        }
+                    }
+                    .padding(16)
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
@@ -256,34 +383,147 @@ private struct PlanSheetView: View {
                     .accessibilityLabel("Close")
                 }
             }
+            .sheet(isPresented: $showingSources) {
+                SourcesSheet(
+                    discussion: discussion,
+                    allowsAddingSources: false
+                )
+            }
         }
     }
 }
 
-/// One transcript message: agents left with a name header, the user right in an
-/// accent bubble (mockup image 4).
+/// A row in the transcript `MessageList`: either a live transcript line or the
+/// trailing usage-summary accessory.
+private enum TranscriptListItem: Identifiable, MessageListItem {
+    case line(LiveLine)
+    case usage(id: UUID, summary: UsageSummary?, fallback: String)
+
+    var id: UUID {
+        switch self {
+        case .line(let line): return line.id
+        case .usage(let id, _, _): return id
+        }
+    }
+
+    var isUserMessage: Bool {
+        if case .line(let line) = self { return line.isUser }
+        return false
+    }
+
+    /// The usage summary is an accessory — it never participates in user-message
+    /// pinning.
+    var isMessageListAccessory: Bool {
+        if case .usage = self { return true }
+        return false
+    }
+}
+
+/// Deterministic per-speaker identity: each panelist gets a stable color and an
+/// initials avatar so the transcript reads as a conversation between distinct
+/// people instead of a wall of identical grey bubbles.
+enum SpeakerPalette {
+    /// Distinct hues that all sit well on black and harmonize with the purple
+    /// accent. The first entry is the accent itself so a lone host echoes the app.
+    private static let colors: [Color] = [
+        Theme.accent,                                   // violet
+        Color(red: 0.20, green: 0.72, blue: 0.90),      // cyan
+        Color(red: 0.95, green: 0.45, blue: 0.62),      // rose
+        Color(red: 0.97, green: 0.66, blue: 0.31),      // amber
+        Color(red: 0.36, green: 0.79, blue: 0.55),      // green
+        Color(red: 0.46, green: 0.56, blue: 0.98),      // blue
+    ]
+
+    static func color(for speaker: String) -> Color {
+        guard !speaker.isEmpty else { return colors[0] }
+        // djb2 — stable across launches so a speaker keeps the same color.
+        var hash = 5381
+        for scalar in speaker.unicodeScalars {
+            hash = (hash &* 33) &+ Int(scalar.value)
+        }
+        return colors[abs(hash) % colors.count]
+    }
+
+    static func initials(for speaker: String) -> String {
+        let letters = speaker
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+        return letters.isEmpty ? "?" : letters.joined().uppercased()
+    }
+}
+
+/// A small gradient avatar with the speaker's initials in their palette color.
+private struct SpeakerAvatar: View {
+    let speaker: String
+    var size: CGFloat = 32
+
+    var body: some View {
+        let color = SpeakerPalette.color(for: speaker)
+        Circle()
+            .fill(LinearGradient(
+                colors: [color.opacity(0.95), color.opacity(0.55)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ))
+            .frame(width: size, height: size)
+            .overlay {
+                Text(SpeakerPalette.initials(for: speaker))
+                    .font(.system(size: size * 0.4, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .overlay {
+                Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+            }
+    }
+}
+
+/// One transcript message: agents left with an avatar + name header, the user
+/// right in an accent bubble (mockup image 4).
 private struct TranscriptBubble: View {
     let line: LiveLine
 
+    private var speakerColor: Color { SpeakerPalette.color(for: line.speaker) }
+
     var body: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 8) {
             if line.isUser { Spacer(minLength: 40) }
+            if !line.isUser {
+                SpeakerAvatar(speaker: line.speaker)
+            }
             VStack(alignment: line.isUser ? .trailing : .leading, spacing: 4) {
                 if !line.isUser {
                     Text(line.speaker.uppercased())
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(speakerColor)
                 }
                 bubbleText
                     .font(.body)
                     .padding(12)
-                    .background(
-                        line.isUser ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.agentBubble),
-                        in: .rect(cornerRadius: 18)
-                    )
+                    .background(bubbleStyle, in: .rect(cornerRadius: 18))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18)
+                            .strokeBorder(line.isUser ? .clear : speakerColor.opacity(0.28),
+                                          lineWidth: 0.5)
+                    }
                     .foregroundStyle(line.isUser ? .white : .primary)
             }
             if !line.isUser { Spacer(minLength: 40) }
+        }
+    }
+
+    /// User bubbles get an accent gradient for depth; agent bubbles take a soft
+    /// tint of their speaker color so each panelist's turns are recognizable.
+    private var bubbleStyle: AnyShapeStyle {
+        if line.isUser {
+            AnyShapeStyle(LinearGradient(
+                colors: [Theme.accent, Theme.accent.opacity(0.82)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ))
+        } else {
+            AnyShapeStyle(speakerColor.opacity(0.14))
         }
     }
 
@@ -393,7 +633,7 @@ private struct MusicPlayerBar: View {
             Button(action: model.togglePlay) {
                 Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                     .font(.title3)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .glassEffect(in: .circle)
             }
@@ -473,3 +713,96 @@ private struct MusicPlayerBar: View {
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
+
+#if DEBUG
+/// Offline harness that exercises the pinned-turn behavior of `MessageList`
+/// using the real `TranscriptBubble` rows. Tap send: the user message pins to
+/// the top, a simulated host reply streams in below it, and the list releases to
+/// follow the bottom once the reply finishes.
+private struct PodcastPinPreview: View {
+    @State private var lines: [LiveLine] = [
+        LiveLine(speaker: "Dr. Lena Ortiz", role: "host", text: "Welcome back. Today we're asking how AI will reshape the classroom over the next decade.", isUser: false, done: true),
+        LiveLine(speaker: "Prof. Adeyemi", role: "discussant", text: "Personalized tutoring is the headline, but the research on learning gains is still mixed.", isUser: false, done: true),
+        LiveLine(speaker: "Maya Chen", role: "discussant", text: "From the product side, adoption is exploding — the question is whether outcomes follow.", isUser: false, done: true),
+    ]
+    @State private var message = "What about students who can't afford these tools?"
+    @State private var isAtBottom = true
+    @State private var shouldScrollToBottom = false
+    @State private var replyTask: Task<Void, Never>?
+
+    private var isStreaming: Bool { !(lines.last?.done ?? true) }
+
+    private func items() -> [TranscriptListItem] { lines.map { .line($0) } }
+
+    var body: some View {
+        ZStack {
+            Theme.background.ignoresSafeArea()
+            MessageList(
+                messages: items(),
+                isStreaming: isStreaming,
+                shouldScrollToBottom: shouldScrollToBottom,
+                isAtBottom: $isAtBottom
+            ) { item in
+                if case .line(let line) = item {
+                    TranscriptBubble(line: line)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { inputBar }
+        }
+    }
+
+    private var inputBar: some View {
+        HStack(spacing: 10) {
+            TextField("Send message", text: $message, axis: .vertical)
+                .lineLimit(1 ... 3)
+                .textFieldStyle(.plain)
+            Button(action: send) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(Theme.accent)
+            }
+            .disabled(message.trimmingCharacters(in: .whitespaces).isEmpty || isStreaming)
+        }
+        .padding(12)
+        .glassEffect(in: .capsule)
+        .padding(16)
+    }
+
+    private func send() {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        message = ""
+        lines.append(LiveLine(speaker: "You", role: "user", text: text, isUser: true, done: true))
+        replyTask?.cancel()
+        replyTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            lines.append(LiveLine(speaker: "Dr. Lena Ortiz", role: "host", text: "", isUser: false, done: false))
+            let idx = lines.count - 1
+            let chunks = [
+                "That's the equity question at the heart of this. ",
+                "If the best tutors are paywalled, ",
+                "AI could widen the gap it promises to close. ",
+                "Districts will need procurement and access policies ",
+                "before the tools, not after.",
+            ]
+            var acc = ""
+            for chunk in chunks {
+                try? await Task.sleep(for: .milliseconds(380))
+                guard !Task.isCancelled else { return }
+                acc += chunk
+                lines[idx].text = acc
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            lines[idx].done = true
+        }
+    }
+}
+
+#Preview("PodcastPlayerView · Pin to top") {
+    PodcastPinPreview()
+}
+#endif

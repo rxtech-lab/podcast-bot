@@ -48,8 +48,15 @@ Put the resulting client id in `Config/Debug.xcconfig` and
 Run the engine with these env vars so the app can authenticate and research:
 - `AUTH_ISSUER=https://auth.rxlab.app` — enables per-user bearer auth (validates the
   RxAuthSwift access token against the issuer's `/api/oauth/userinfo`).
-- `SEARCH_API_KEY=...` (and optionally `SEARCH_API_URL`) — enables researched sources
-  in the planner (Tavily-compatible). Without it, plans still work but carry no sources.
+- `FIRECRAWL_API_KEY=fc-...` — enables web search in the plan agent (Firecrawl
+  `/v2/search` for the topic, `/v2/scrape` for links the user pastes or adds). Without it,
+  plans still work but carry no sources. (`SEARCH_API_KEY`/`SEARCH_API_URL` Tavily vars are
+  no longer used by the planner.)
+- `MARKITDOWN_SERVER_URL=...` and `MARKITDOWN_API_KEY=...` — the deployed markitdown service
+  that parses uploaded files (PDF/docx/…) into markdown. Required for file upload, together
+  with S3 storage (`S3_BUCKET` + credentials) since markitdown fetches each file by a
+  presigned URL. Without these, `/api/uploads` returns 503 and planning works without
+  attachments.
 
 Local dev: `go run ./cmd/debate-bot --addr :8000` (matches `Config/Debug.xcconfig`).
 

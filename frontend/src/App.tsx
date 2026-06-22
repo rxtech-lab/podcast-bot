@@ -109,7 +109,7 @@ function StreamView() {
         : undefined
 
   return (
-    <div className="dark relative flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
+    <div className="relative flex flex-col h-screen overflow-hidden bg-background text-foreground font-sans">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-80"

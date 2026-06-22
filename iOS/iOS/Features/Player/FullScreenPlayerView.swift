@@ -57,7 +57,7 @@ struct FullScreenPlayerView: View {
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .frame(width: 40, height: 40)
                     .glassEffect(in: .circle)
             }
@@ -82,7 +82,7 @@ struct FullScreenPlayerView: View {
             if model.showsPodcastActions {
                 PodcastActionsMenu(model: model)
                     .font(.title3)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .frame(width: 40, height: 40)
                     .glassEffect(in: .circle)
             } else {
@@ -102,7 +102,7 @@ struct FullScreenPlayerView: View {
             Text(model.caption.isEmpty ? "…" : model.caption)
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 8)
@@ -120,7 +120,7 @@ struct FullScreenPlayerView: View {
                 Button(action: model.togglePlay) {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .frame(width: 76, height: 76)
                         .glassEffect(in: .circle)
                 }
@@ -130,7 +130,7 @@ struct FullScreenPlayerView: View {
                 }
                 .disabled(!model.canSeek)
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
         }
     }
 }
@@ -250,7 +250,7 @@ private struct LyricLine: View {
             }
             Text(group.text)
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(isActive ? .white : Theme.secondaryText)
+                .foregroundStyle(isActive ? .primary : Theme.secondaryText)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
