@@ -14,6 +14,31 @@ struct PlanSnapshot {
         people = discussion.sortedPeople
         sources = discussion.sortedSources
     }
+
+    /// Builds a snapshot from a persisted plan edit-turn (the plan as it stood at
+    /// that point in the chat). `topic` carries over from the owning discussion,
+    /// which a per-turn snapshot doesn't store.
+    init(turn: DiscussionEditTurnDTO, topic: String) {
+        self.title = turn.script?.title ?? ""
+        self.topic = topic
+        self.background = turn.script?.background ?? ""
+        var people: [PlanPersonSnapshot] = []
+        if let host = turn.script?.host, !host.name.isEmpty {
+            people.append(PlanPersonSnapshot(name: host.name, aspect: "Moderator", isHost: true))
+        }
+        people.append(contentsOf: (turn.script?.discussants ?? []).map {
+            PlanPersonSnapshot(name: $0.name, aspect: $0.aspect ?? "", isHost: false)
+        })
+        self.people = people
+        self.sources = (turn.sources ?? turn.script?.sources ?? []).map {
+            PlanSourceSnapshot(
+                title: $0.title,
+                urlString: $0.url,
+                snippet: $0.snippet ?? "",
+                markdown: $0.markdown ?? ""
+            )
+        }
+    }
 }
 
 struct PlanPersonSnapshot: Identifiable {

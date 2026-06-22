@@ -31,6 +31,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var sources: [SourceDTO]?
     var researched: Bool?
     var lines: [DiscussionLineDTO]?
+    var editTurns: [DiscussionEditTurnDTO]?
     var createdAt: String?
     var updatedAt: String?
 
@@ -55,6 +56,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case sources
         case researched
         case lines
+        case editTurns = "edit_turns"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
@@ -103,6 +105,28 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     }
 
     var usageSummaryText: String? { usageSummary?.singleLineText }
+}
+
+/// One turn in the plan-editing chat, persisted server-side so the history
+/// survives app restarts. `role` is "user" (an instruction the user sent, or an
+/// "added sources" action) or "plan" (a plan revision). Plan turns carry a full
+/// snapshot of the plan at that moment so each card can be rebuilt.
+struct DiscussionEditTurnDTO: Codable, Hashable, Sendable {
+    var role: String
+    var text: String?
+    var script: ScriptDTO?
+    var sources: [SourceDTO]?
+    var markdown: String?
+    var createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case role
+        case text
+        case script
+        case sources
+        case markdown
+        case createdAt = "created_at"
+    }
 }
 
 struct DiscussionLineDTO: Codable, Hashable, Sendable {

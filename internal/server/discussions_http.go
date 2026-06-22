@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/planner"
 )
 
@@ -20,6 +23,14 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
+// discussionCreateRequest creates an empty placeholder discussion so the client
+// gets an id up front, then streams the plan into it via
+// /api/discussions/{id}/plan/stream.
+type discussionCreateRequest struct {
+	Topic    string `json:"topic"`
+	Language string `json:"language"`
+}
+
 type discussionImproveRequest struct {
 	Instruction string               `json:"instruction"`
 	Attachments []planner.Attachment `json:"attachments,omitempty"`
@@ -30,6 +41,16 @@ type discussionImproveRequest struct {
 type discussionAddSourcesRequest struct {
 	URLs []string `json:"urls"`
 }
+
+type discussionSourceSearchRequest struct {
+	Query string `json:"query"`
+}
+
+type discussionSourceSearchResponse struct {
+	Sources []config.Source `json:"sources"`
+}
+
+const addSourcesBackgroundTimeout = 5 * time.Minute
 
 type discussionGenerateRequest struct {
 	VideoConfig videoConfigJSON `json:"videoConfig"`
@@ -57,6 +78,29 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.applyDiscussionJobStatus(r, d)
+	writeJSON(w, d)
+}
+
+// handleDiscussionCreate inserts an empty placeholder discussion (status
+// "planning") and returns it immediately so the client can navigate to the plan
+// page and stream the plan into it via /api/discussions/{id}/plan/stream. This
+// decouples discussion creation from the multi-minute planning run: even if the
+// stream drops, the discussion is already saved and recoverable in the library.
+func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) {
+	var req discussionCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	topic := strings.TrimSpace(req.Topic)
+	if topic == "" {
+		http.Error(w, "topic is required", http.StatusBadRequest)
+		return
+	}
+	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), s.requestUser(r).ID, topic, strings.TrimSpace(req.Language))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, d)
 }
 
@@ -110,20 +154,167 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	res, err := p.Improve(r.Context(), d.Script, instruction, req.Attachments)
+	res, err := p.Improve(r.Context(), d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", instruction)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	// Append the plan snapshot before UpdatePlan reloads, so the returned
+	// discussion already carries the new plan card in its edit-turn history.
+	if err := s.d.Discussions.AppendPlanTurn(r.Context(), user.ID, id, "Updated plan", resp); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "plan", "Updated plan")
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
 	writeJSON(w, updated)
+}
+
+// handleDiscussionPlanStream is the streaming twin of handleDiscussionPlan: it
+// drafts a brand-new plan while emitting coarse progress steps over SSE, then
+// sends the persisted discussion in a final "done" event.
+func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Request) {
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	var req planner.PlanRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	sse := newSSEWriter(w)
+	_ = sse.comment("ok")
+	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
+	res, err := p.Generate(r.Context(), req)
+	if err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	d, err := s.d.Discussions.Create(r.Context(), s.requestUser(r).ID, req.Topic, resp)
+	if err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	_ = sse.send("done", d)
+}
+
+// handleDiscussionPlanStreamForID drafts the plan for an already-created
+// placeholder discussion, emitting progress over SSE and persisting the plan
+// into the existing row before sending the final "done" event. This is the
+// streaming half of the create-then-plan flow: the client first POSTs
+// /api/discussions to get an id, then streams the plan into it here.
+func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	var req planner.PlanRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Topic) == "" {
+		req.Topic = d.Topic
+	}
+	sse := newSSEWriter(w)
+	_ = sse.comment("ok")
+	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
+	res, err := p.Generate(r.Context(), req)
+	if err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
+	if err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	if updated == nil {
+		_ = sse.send("error", map[string]string{"message": "discussion not found"})
+		return
+	}
+	_ = s.d.Discussions.AppendPlanTurn(r.Context(), user.ID, id, "Current plan", resp)
+	_ = sse.send("done", updated)
+}
+
+// handleDiscussionImproveStream is the streaming twin of handleDiscussionImprove:
+// it revises the plan while emitting progress steps over SSE, then sends the
+// updated discussion in a final "done" event.
+func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil || d.Script == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req discussionImproveRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	instruction := strings.TrimSpace(req.Instruction)
+	if instruction == "" {
+		http.Error(w, "instruction is required", http.StatusBadRequest)
+		return
+	}
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	sse := newSSEWriter(w)
+	_ = sse.comment("ok")
+	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
+	res, err := p.Improve(r.Context(), d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
+	if err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", instruction)
+	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	// Append the plan snapshot before UpdatePlan reloads, so the "done" payload
+	// already carries the new plan card in its edit-turn history.
+	if err := s.d.Discussions.AppendPlanTurn(r.Context(), user.ID, id, "Updated plan", resp); err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
+	if err != nil {
+		_ = sse.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	if updated == nil {
+		_ = sse.send("error", map[string]string{"message": "discussion not found"})
+		return
+	}
+	_ = sse.send("done", updated)
 }
 
 // handleDiscussionAddSources scrapes the user-added links, merges them into the
@@ -160,26 +351,100 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	// Carry the plan's existing sources so the merge dedupes against them.
 	prev := *d.Script
-	prev.Sources = d.Sources
-	res, err := p.AddSources(r.Context(), &prev, urls)
+	prev.Sources = append([]config.Source(nil), d.Sources...)
+	urls = append([]string(nil), urls...)
+	// Record the user's action up front so the chat history reflects it even if
+	// the background re-research later fails.
+	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", addSourcesTurnText(urls))
+	go s.updateDiscussionWithAddedSources(user.ID, id, prev, urls, p)
+	writeJSON(w, d)
+}
+
+// pastUserMessages pulls the text of prior "user" edit turns (oldest first) so
+// the planner can revise a plan with the full editing conversation in view, not
+// just the latest instruction. Plan-snapshot turns are skipped.
+func pastUserMessages(turns []DiscussionEditTurn) []string {
+	var out []string
+	for _, t := range turns {
+		if t.Role != "user" {
+			continue
+		}
+		if text := strings.TrimSpace(t.Text); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+// addSourcesTurnText renders the user-visible chat bubble for an add-sources
+// action: a short header plus the links the user added.
+func addSourcesTurnText(urls []string) string {
+	var sb strings.Builder
+	sb.WriteString("Added ")
+	sb.WriteString(strconv.Itoa(len(urls)))
+	sb.WriteString(" source")
+	if len(urls) != 1 {
+		sb.WriteString("s")
+	}
+	sb.WriteString(":")
+	for _, u := range urls {
+		sb.WriteString("\n")
+		sb.WriteString(u)
+	}
+	return sb.String()
+}
+
+func (s *Server) updateDiscussionWithAddedSources(owner, id string, prev config.DebateTopic, urls []string, p *planner.Planner) {
+	ctx, cancel := context.WithTimeout(context.Background(), addSourcesBackgroundTimeout)
+	defer cancel()
+	res, err := p.AddSources(ctx, &prev, urls)
+	if err != nil {
+		s.logger().Warn("add sources background update failed", "discussion", id, "err", err)
+		return
+	}
+	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
+	updated, err := s.d.Discussions.UpdatePlan(ctx, owner, id, resp)
+	if err != nil {
+		s.logger().Warn("add sources plan update failed", "discussion", id, "err", err)
+		return
+	}
+	if updated == nil {
+		s.logger().Warn("add sources plan update target disappeared", "discussion", id)
+		return
+	}
+	if err := s.d.Discussions.AppendPlanTurn(ctx, owner, id, "Updated plan with added sources", resp); err != nil {
+		s.logger().Warn("add sources edit turn append failed", "discussion", id, "err", err)
+	}
+}
+
+// handleDiscussionSearchSources searches Firecrawl for candidate web sources
+// without mutating the discussion. The native client adds chosen results to
+// its local link list, where the user can swipe-delete before saving.
+func (s *Server) handleDiscussionSearchSources(w http.ResponseWriter, r *http.Request) {
+	if d := s.getOwnedDiscussion(w, r); d == nil {
+		return
+	}
+	var req discussionSourceSearchRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		http.Error(w, "query is required", http.StatusBadRequest)
+		return
+	}
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	sources, err := p.SearchSources(r.Context(), query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
-	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, id, resp)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if updated == nil {
-		http.NotFound(w, r)
-		return
-	}
-	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "plan", "Updated plan with added sources")
-	writeJSON(w, updated)
+	writeJSON(w, discussionSourceSearchResponse{Sources: sources})
 }
 
 func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request) {

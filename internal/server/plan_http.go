@@ -57,7 +57,7 @@ func (s *Server) handlePlanImprove(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	res, err := p.Improve(r.Context(), req.PreviousScript, req.Instruction, req.Attachments)
+	res, err := p.Improve(r.Context(), req.PreviousScript, req.Instruction, nil, req.Attachments)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

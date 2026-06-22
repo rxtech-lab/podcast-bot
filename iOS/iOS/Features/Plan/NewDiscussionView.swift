@@ -6,7 +6,9 @@ import SwiftUI
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
-    var onPlanned: (Discussion) -> Void = { _ in }
+    /// Called once the placeholder discussion is created. The plan itself is then
+    /// streamed on the plan page, so the request is handed along to drive it.
+    var onPlanned: (Discussion, PlanRequest) -> Void = { _, _ in }
 
     @State private var topic = ""
     @State private var discussants = 3
@@ -68,7 +70,7 @@ struct NewDiscussionView: View {
                 if isPlanning {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text("Researching & planning…")
+                        Text("Creating discussion…")
                     }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -118,21 +120,25 @@ struct NewDiscussionView: View {
             .padding(.leading, 46)
     }
 
+    /// Creates the placeholder discussion (fast), then hands it plus the plan
+    /// request to the caller, which navigates to the plan page where the plan is
+    /// streamed in. Creating the row first means the discussion is saved even if
+    /// the planning stream is later interrupted.
     private func plan() {
         let trimmed = topic.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         isPlanning = true
         errorMessage = nil
         let api = APIClient(tokens: auth)
+        let ready = attachments.apiAttachments
+        let request = PlanRequest(topic: trimmed, language: language, discussants: discussants,
+                                  research: true, attachments: ready.isEmpty ? nil : ready)
         Task {
             do {
-                let ready = attachments.apiAttachments
-                let discussion = try await api.planDiscussion(
-                    PlanRequest(topic: trimmed, language: language, discussants: discussants,
-                                research: true, attachments: ready.isEmpty ? nil : ready))
+                let created = try await api.createDiscussion(topic: trimmed, language: language)
                 isPlanning = false
                 dismiss()
-                onPlanned(discussion)
+                onPlanned(created, request)
             } catch {
                 isPlanning = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription

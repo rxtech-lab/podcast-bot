@@ -75,10 +75,64 @@ final class APIClient: Sendable {
                                                       attachments: attachments.isEmpty ? nil : attachments))
     }
 
-    /// Re-research: adds the given links to the plan's sources and updates the
-    /// plan to incorporate them. Backs the sources sheet's "add a link" action.
+    /// Creates an empty placeholder discussion (status "planning") and returns it
+    /// with a server id, so the client can navigate to the plan page and stream
+    /// the plan into it. Decouples creation from the multi-minute planning run.
+    func createDiscussion(topic: String, language: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions",
+                       body: DiscussionCreateRequest(topic: topic, language: language))
+    }
+
+    /// Streaming plan generation into an existing placeholder discussion: emits
+    /// progress steps, finishing with a `.done(Discussion)` event carrying the
+    /// persisted plan. The discussion is already saved server-side, so a dropped
+    /// stream leaves a recoverable record instead of losing the work.
+    func planDiscussionStream(id: String, _ req: PlanRequest) -> AsyncThrowingStream<PlanStreamEvent, Error> {
+        streamPlan(path: "/api/discussions/\(id)/plan/stream", body: req)
+    }
+
+    /// Streaming plan edit: revises the plan while emitting progress steps,
+    /// finishing with a `.done(Discussion)` event carrying the updated plan.
+    func improveDiscussionStream(id: String, instruction: String,
+                                 attachments: [Attachment] = []) -> AsyncThrowingStream<PlanStreamEvent, Error> {
+        streamPlan(
+            path: "/api/discussions/\(id)/improve/stream",
+            body: DiscussionImproveRequest(instruction: instruction,
+                                           attachments: attachments.isEmpty ? nil : attachments)
+        )
+    }
+
+    /// Re-research: starts a background server update for the given links, then
+    /// polls the discussion until the updated plan is persisted.
     func addDiscussionSources(id: String, urls: [String]) async throws -> Discussion {
-        try await send("POST", "/api/discussions/\(id)/sources", body: AddSourcesRequest(urls: urls))
+        let accepted: Discussion = try await send(
+            "POST",
+            "/api/discussions/\(id)/sources",
+            body: AddSourcesRequest(urls: urls)
+        )
+        return try await waitForDiscussionUpdate(id: id, after: accepted)
+    }
+
+    func searchDiscussionSources(id: String, query: String) async throws -> [SourceDTO] {
+        let response: SourceSearchResponse = try await send(
+            "POST",
+            "/api/discussions/\(id)/sources/search",
+            body: SourceSearchRequest(query: query)
+        )
+        return response.sources
+    }
+
+    private func waitForDiscussionUpdate(id: String, after baseline: Discussion) async throws -> Discussion {
+        let baselineUpdatedAt = baseline.updatedAt
+        let baselineSourceCount = baseline.sortedSources.count
+        for _ in 0..<150 {
+            try await Task.sleep(for: .seconds(2))
+            let current = try await discussion(id: id)
+            if current.updatedAt != baselineUpdatedAt || current.sortedSources.count != baselineSourceCount {
+                return current
+            }
+        }
+        throw APIError.invalidRequest("The plan update is still running. Refresh this discussion in a moment.")
     }
 
     /// Uploads a reference file via a presigned object-storage URL, then asks
@@ -336,6 +390,98 @@ final class APIClient: Sendable {
             delegate.continuation = continuation
             downloadSession.downloadTask(with: request).resume()
         }
+    }
+
+    /// Runs an SSE plan request and re-emits its `event:`/`data:` frames as
+    /// `PlanStreamEvent`s. Handles one 401 refresh-and-retry before the stream
+    /// body starts; cancelling the consuming task cancels the request.
+    private func streamPlan<B: Encodable>(path: String, body: B) -> AsyncThrowingStream<PlanStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let payload = try JSONEncoder().encode(body)
+                    guard let token = await tokens.token() else { throw APIError.notAuthenticated }
+                    var (bytes, http) = try await openSSE(path: path, body: payload, token: token)
+                    if http.statusCode == 401 {
+                        guard let fresh = await tokens.refreshedToken() else { throw APIError.notAuthenticated }
+                        (bytes, http) = try await openSSE(path: path, body: payload, token: fresh)
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        var message = ""
+                        for try await line in bytes.lines { message += line }
+                        throw APIError.http(http.statusCode, message)
+                    }
+
+                    var event = "message"
+                    var data = ""
+                    for try await line in bytes.lines {
+                        if line.isEmpty {
+                            Self.dispatchSSE(event: event, data: data, to: continuation)
+                            event = "message"
+                            data = ""
+                            continue
+                        }
+                        if line.hasPrefix(":") { continue } // comment / heartbeat
+                        if line.hasPrefix("event:") {
+                            event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        } else if line.hasPrefix("data:") {
+                            let chunk = String(line.dropFirst(5))
+                            let piece = chunk.hasPrefix(" ") ? String(chunk.dropFirst()) : chunk
+                            data += data.isEmpty ? piece : "\n" + piece
+                        }
+                    }
+                    Self.dispatchSSE(event: event, data: data, to: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func openSSE(path: String, body: Data, token: String) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        var req = request(method: "POST", path: path, body: body)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        // Planning can sit silently inside a long LLM call between progress
+        // events; the default 60s idle timeout would kill the stream mid-plan.
+        // Give it a generous idle budget (server heartbeats also keep it warm).
+        req.timeoutInterval = 600
+        let (bytes, resp) = try await session.bytes(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw APIError.invalidRequest("Invalid streaming response.")
+        }
+        return (bytes, http)
+    }
+
+    private static func dispatchSSE(event: String, data: String,
+                                    to continuation: AsyncThrowingStream<PlanStreamEvent, Error>.Continuation) {
+        guard !data.isEmpty else { return }
+        switch event {
+        case "progress":
+            if let ev = decodeSSE(PlanProgressEvent.self, data) { continuation.yield(.progress(ev)) }
+        case "done":
+            if let discussion = decodeSSE(Discussion.self, data) { continuation.yield(.done(discussion)) }
+        case "error":
+            continuation.yield(.failed(sseErrorMessage(data)))
+        default:
+            break
+        }
+    }
+
+    private static func decodeSSE<T: Decodable>(_ type: T.Type, _ data: String) -> T? {
+        guard let raw = data.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: raw)
+    }
+
+    private static func sseErrorMessage(_ data: String) -> String {
+        if let raw = data.data(using: .utf8),
+           let obj = try? JSONDecoder().decode([String: String].self, from: raw),
+           let message = obj["message"], !message.isEmpty {
+            return message
+        }
+        return data.isEmpty ? "The plan update failed. Please try again." : data
     }
 
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {

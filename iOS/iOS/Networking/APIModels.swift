@@ -53,6 +53,13 @@ struct Attachment: Codable, Sendable {
     }
 }
 
+/// POST /api/discussions request body: creates an empty placeholder discussion
+/// (status "planning") so the client gets an id before streaming the plan.
+struct DiscussionCreateRequest: Codable, Sendable {
+    var topic: String
+    var language: String
+}
+
 /// POST /api/plan request body.
 struct PlanRequest: Codable, Sendable {
     var type: String = "discussion"
@@ -119,6 +126,29 @@ struct UploadCompleteRequest: Codable, Sendable {
 /// the sources sheet for the agent to research and fold into the plan.
 struct AddSourcesRequest: Codable, Sendable {
     var urls: [String]
+}
+
+struct SourceSearchRequest: Codable, Sendable {
+    var query: String
+}
+
+struct SourceSearchResponse: Codable, Sendable {
+    var sources: [SourceDTO]
+}
+
+/// One coarse progress step streamed (SSE) while the planner drafts or revises a
+/// plan — e.g. "Searching the web…", "Reading example.com", "Writing the plan".
+struct PlanProgressEvent: Decodable, Sendable {
+    var phase: String
+    var text: String
+}
+
+/// Events surfaced by a streaming plan endpoint. The terminal `done` carries the
+/// persisted discussion; `error` carries a human-readable message.
+enum PlanStreamEvent: Sendable {
+    case progress(PlanProgressEvent)
+    case done(Discussion)
+    case failed(String)
 }
 
 /// POST /api/plan and /api/plan/improve response body.

@@ -191,11 +191,16 @@ func New(d Deps) *Server {
 
 	if d.Discussions != nil {
 		s.mux.HandleFunc("GET /api/discussions", s.handleDiscussionList)
+		s.mux.HandleFunc("POST /api/discussions", s.handleDiscussionCreate)
 		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)
+		s.mux.HandleFunc("POST /api/discussions/plan/stream", s.handleDiscussionPlanStream)
+		s.mux.HandleFunc("POST /api/discussions/{id}/plan/stream", s.handleDiscussionPlanStreamForID)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
+		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources", s.handleDiscussionAddSources)
+		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
 	}

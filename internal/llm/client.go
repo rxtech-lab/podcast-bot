@@ -322,22 +322,7 @@ func (c *Client) JSONParts(ctx context.Context, system string, parts []InputPart
 	if len(parts) == 1 && parts[0].ImageURL == "" {
 		return c.JSON(ctx, system, parts[0].Text)
 	}
-	userParts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(parts))
-	for _, part := range parts {
-		if part.Text != "" {
-			userParts = append(userParts, openai.TextContentPart(part.Text))
-		}
-		if part.ImageURL != "" {
-			detail := part.Detail
-			if detail == "" {
-				detail = "auto"
-			}
-			userParts = append(userParts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-				URL:    part.ImageURL,
-				Detail: detail,
-			}))
-		}
-	}
+	userParts := openAIContentParts(parts)
 	resp, err := c.c.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessageParamUnion{

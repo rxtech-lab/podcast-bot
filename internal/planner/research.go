@@ -13,17 +13,16 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 )
 
-// Firecrawl REST endpoints. Search grounds a plan in live web results; scrape
+// Firecrawl REST endpoints. Search grounds a plan in live web results; crawl
 // reads a single URL the user pasted or added. Both return clean markdown.
 const (
 	firecrawlSearchURL = "https://api.firecrawl.dev/v2/search"
-	firecrawlScrapeURL = "https://api.firecrawl.dev/v2/scrape"
+	firecrawlCrawlURL  = "https://api.firecrawl.dev/v2/crawl"
 )
 
-// maxResearchSources caps how many sources a plan carries — enough to ground
-// the draft and populate the UI ("N external links searched") without
-// overwhelming either. The product surfaces up to ten searched links.
-const maxResearchSources = 10
+// firecrawlSearchLimit bounds a single Firecrawl search request. Persisted plan
+// sources are not capped; user-added links should remain attached to the plan.
+const firecrawlSearchLimit = 10
 
 // firecrawlSearchRequest mirrors Firecrawl's POST /v2/search body. Asking for
 // the markdown scrape format gives the planner real page substance, not just a
@@ -55,21 +54,33 @@ type firecrawlDoc struct {
 	Markdown    string `json:"markdown"`
 }
 
-// firecrawlScrapeRequest mirrors POST /v2/scrape.
-type firecrawlScrapeRequest struct {
-	URL     string   `json:"url"`
-	Formats []string `json:"formats"`
+type firecrawlCrawlRequest struct {
+	URL               string                 `json:"url"`
+	Limit             int                    `json:"limit"`
+	MaxDiscoveryDepth int                    `json:"maxDiscoveryDepth"`
+	Sitemap           string                 `json:"sitemap"`
+	ScrapeOptions     firecrawlScrapeOptions `json:"scrapeOptions"`
 }
 
-type firecrawlScrapeResponse struct {
-	Success bool `json:"success"`
-	Data    struct {
-		Markdown string `json:"markdown"`
-		Metadata struct {
-			Title     string `json:"title"`
-			SourceURL string `json:"sourceURL"`
-		} `json:"metadata"`
-	} `json:"data"`
+type firecrawlCrawlStartResponse struct {
+	Success bool   `json:"success"`
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+}
+
+type firecrawlCrawlStatusResponse struct {
+	Status string              `json:"status"`
+	Data   []firecrawlCrawlDoc `json:"data"`
+}
+
+type firecrawlCrawlDoc struct {
+	Markdown string `json:"markdown"`
+	Metadata struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		SourceURL   string `json:"sourceURL"`
+		URL         string `json:"url"`
+	} `json:"metadata"`
 }
 
 // urlPattern finds bare http(s) URLs the user pasted into a topic so the
@@ -107,7 +118,7 @@ func (p *Planner) research(ctx context.Context, topic string) ([]config.Source, 
 
 	body, _ := json.Marshal(firecrawlSearchRequest{
 		Query:         topic,
-		Limit:         maxResearchSources,
+		Limit:         firecrawlSearchLimit,
 		ScrapeOptions: firecrawlScrapeOptions{Formats: []string{"markdown"}},
 	})
 	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -144,28 +155,48 @@ func (p *Planner) research(ctx context.Context, topic string) ([]config.Source, 
 	return sources, true
 }
 
-// scrapeURLs reads each URL via Firecrawl scrape and returns one source per
-// URL that succeeds. Best-effort: unreachable links are skipped. Empty when no
-// key is configured.
-func (p *Planner) scrapeURLs(ctx context.Context, urls []string) []config.Source {
+// SearchSources exposes Firecrawl search for the native source picker. It does
+// not mutate a plan; callers can present the returned URLs for review first.
+func (p *Planner) SearchSources(ctx context.Context, query string) ([]config.Source, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("search query is required")
+	}
+	sources, ok := p.research(ctx, query)
+	if !ok || len(sources) == 0 {
+		return nil, fmt.Errorf("no readable search results")
+	}
+	return sources, nil
+}
+
+// crawlURLs reads each URL via Firecrawl crawl and returns one source per URL
+// that succeeds. Best-effort: unreachable links are skipped. Empty when no key
+// is configured.
+func (p *Planner) crawlURLs(ctx context.Context, urls []string) []config.Source {
 	key := strings.TrimSpace(p.env.FirecrawlAPIKey)
 	if key == "" || len(urls) == 0 {
 		return nil
 	}
 	out := make([]config.Source, 0, len(urls))
 	for _, u := range urls {
-		if s, ok := p.scrapeURL(ctx, key, u); ok {
+		if s, ok := p.crawlURL(ctx, key, u); ok {
 			out = append(out, s)
 		}
 	}
 	return out
 }
 
-func (p *Planner) scrapeURL(ctx context.Context, key, url string) (config.Source, bool) {
-	body, _ := json.Marshal(firecrawlScrapeRequest{URL: url, Formats: []string{"markdown"}})
-	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+func (p *Planner) crawlURL(ctx context.Context, key, url string) (config.Source, bool) {
+	body, _ := json.Marshal(firecrawlCrawlRequest{
+		URL:               url,
+		Limit:             1,
+		MaxDiscoveryDepth: 0,
+		Sitemap:           "skip",
+		ScrapeOptions:     firecrawlScrapeOptions{Formats: []string{"markdown"}},
+	})
+	reqCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, firecrawlScrapeURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, firecrawlCrawlURL, bytes.NewReader(body))
 	if err != nil {
 		return config.Source{}, false
 	}
@@ -180,25 +211,78 @@ func (p *Planner) scrapeURL(ctx context.Context, key, url string) (config.Source
 	if resp.StatusCode != http.StatusOK {
 		return config.Source{}, false
 	}
-	var parsed firecrawlScrapeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	var started firecrawlCrawlStartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&started); err != nil {
 		return config.Source{}, false
 	}
-	title := strings.TrimSpace(parsed.Data.Metadata.Title)
+	if strings.TrimSpace(started.ID) == "" {
+		return config.Source{}, false
+	}
+	return p.pollCrawl(reqCtx, key, started.ID, url)
+}
+
+func (p *Planner) pollCrawl(ctx context.Context, key, id, fallbackURL string) (config.Source, bool) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		source, status, ok := p.getCrawlStatus(ctx, key, id, fallbackURL)
+		if ok {
+			return source, true
+		}
+		if status == "failed" || status == "cancelled" {
+			return config.Source{}, false
+		}
+		select {
+		case <-ctx.Done():
+			return config.Source{}, false
+		case <-ticker.C:
+		}
+	}
+}
+
+func (p *Planner) getCrawlStatus(ctx context.Context, key, id, fallbackURL string) (config.Source, string, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, firecrawlCrawlURL+"/"+id, nil)
+	if err != nil {
+		return config.Source{}, "", false
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return config.Source{}, "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return config.Source{}, "", false
+	}
+	var status firecrawlCrawlStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return config.Source{}, "", false
+	}
+	if status.Status != "completed" || len(status.Data) == 0 {
+		return config.Source{}, status.Status, false
+	}
+	return crawlDocToSource(status.Data[0], fallbackURL)
+}
+
+func crawlDocToSource(d firecrawlCrawlDoc, fallbackURL string) (config.Source, string, bool) {
+	url := strings.TrimSpace(d.Metadata.SourceURL)
+	if url == "" {
+		url = strings.TrimSpace(d.Metadata.URL)
+	}
+	if url == "" {
+		url = fallbackURL
+	}
+	markdown := strings.TrimSpace(d.Markdown)
+	snippet := markdown
+	if snippet == "" {
+		snippet = strings.TrimSpace(d.Metadata.Description)
+		markdown = snippet
+	}
+	title := strings.TrimSpace(d.Metadata.Title)
 	if title == "" {
 		title = url
 	}
-	src := strings.TrimSpace(parsed.Data.Metadata.SourceURL)
-	if src == "" {
-		src = url
-	}
-	markdown := strings.TrimSpace(parsed.Data.Markdown)
-	return config.Source{
-		Title:    title,
-		URL:      src,
-		Snippet:  truncate(markdown, 400),
-		Markdown: markdown,
-	}, true
+	return config.Source{Title: title, URL: url, Snippet: truncate(snippet, 400), Markdown: markdown}, "completed", strings.TrimSpace(url) != ""
 }
 
 // docToSource maps a Firecrawl web result into a config.Source, preferring the
@@ -222,8 +306,8 @@ func docToSource(d firecrawlDoc) (config.Source, bool) {
 	}, true
 }
 
-// mergeSources appends add to base, skipping URLs already present, and caps the
-// result at maxResearchSources so the plan and UI stay bounded.
+// mergeSources appends add to base, skipping URLs already present. Persisted
+// plan sources are intentionally uncapped so user-added links remain visible.
 func mergeSources(base, add []config.Source) []config.Source {
 	seen := make(map[string]struct{}, len(base))
 	for _, s := range base {
@@ -239,9 +323,6 @@ func mergeSources(base, add []config.Source) []config.Source {
 		}
 		seen[s.URL] = struct{}{}
 		out = append(out, s)
-	}
-	if len(out) > maxResearchSources {
-		out = out[:maxResearchSources]
 	}
 	return out
 }

@@ -26,6 +26,7 @@ type Message struct {
 	Role       string
 	Name       string // optional speaker tag, useful for multi-agent transcripts
 	Content    string
+	Parts      []InputPart // optional multimodal user content
 	ToolCalls  []ToolCall
 	ToolCallID string // set when Role == "tool"
 }
@@ -38,7 +39,11 @@ func ToOpenAIParams(history []Message) []openai.ChatCompletionMessageParamUnion 
 		case RoleSystem:
 			out = append(out, openai.SystemMessage(m.Content))
 		case RoleUser:
-			out = append(out, openai.UserMessage(m.Content))
+			if len(m.Parts) > 0 {
+				out = append(out, openai.UserMessage(openAIContentParts(m.Parts)))
+			} else {
+				out = append(out, openai.UserMessage(m.Content))
+			}
 		case RoleAssistant:
 			asst := openai.ChatCompletionAssistantMessageParam{}
 			if m.Content != "" {
@@ -71,4 +76,24 @@ func ToOpenAIParams(history []Message) []openai.ChatCompletionMessageParamUnion 
 func MarshalArgs(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func openAIContentParts(parts []InputPart) []openai.ChatCompletionContentPartUnionParam {
+	out := make([]openai.ChatCompletionContentPartUnionParam, 0, len(parts))
+	for _, part := range parts {
+		if part.Text != "" {
+			out = append(out, openai.TextContentPart(part.Text))
+		}
+		if part.ImageURL != "" {
+			detail := part.Detail
+			if detail == "" {
+				detail = "auto"
+			}
+			out = append(out, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+				URL:    part.ImageURL,
+				Detail: detail,
+			}))
+		}
+	}
+	return out
 }

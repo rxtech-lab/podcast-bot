@@ -14,9 +14,18 @@ import (
 	"github.com/sirily11/debate-bot/internal/llm"
 )
 
+// ProgressEvent is a coarse, human-readable step emitted while the planning
+// agent loop runs (searching the web, reading a URL, writing the plan). It backs
+// the streaming plan endpoints so clients can show live progress.
+type ProgressEvent struct {
+	Phase string `json:"phase"` // "search" | "read" | "sources" | "writing"
+	Text  string `json:"text"`
+}
+
 // Planner drafts and revises discussion scripts with a single LLM.
 type Planner struct {
-	env *config.Env
+	env        *config.Env
+	onProgress func(ProgressEvent)
 }
 
 // New builds a Planner from engine env. Returns an error when env is nil so
@@ -26,6 +35,20 @@ func New(env *config.Env) (*Planner, error) {
 		return nil, fmt.Errorf("planner requires engine env")
 	}
 	return &Planner{env: env}, nil
+}
+
+// WithProgress registers a callback invoked synchronously, on the calling
+// goroutine, as the planning agent loop makes progress. A Planner is created
+// per request, so this is request-scoped. Returns the receiver for chaining.
+func (p *Planner) WithProgress(fn func(ProgressEvent)) *Planner {
+	p.onProgress = fn
+	return p
+}
+
+func (p *Planner) emit(phase, text string) {
+	if p.onProgress != nil {
+		p.onProgress(ProgressEvent{Phase: phase, Text: text})
+	}
 }
 
 // Attachment is a user-uploaded reference. Documents carry markdown converted
@@ -95,18 +118,6 @@ func (p *Planner) Generate(ctx context.Context, req PlanRequest) (*Result, error
 		lang = "en-US"
 	}
 
-	// Ground the draft in real web sources. Best-effort: when Firecrawl is not
-	// configured (or it fails) sources is empty and the plan reports
-	// researched=false. Topic search is gated on req.Research; any links the
-	// user pasted into the topic are always scraped when Firecrawl is set.
-	var sources []config.Source
-	if req.Research {
-		sources, _ = p.research(ctx, req.Topic)
-	}
-	if pasted := p.scrapeURLs(ctx, extractURLs(req.Topic)); len(pasted) > 0 {
-		sources = mergeSources(sources, pasted)
-	}
-
 	user := fmt.Sprintf(`Design a panel discussion about the following topic.
 
 Topic: %s
@@ -121,56 +132,60 @@ Return STRICT JSON with this exact shape:
   "discussants": [ { "name": "display name", "aspect": "the distinct angle/perspective this person argues from" } ]
 }
 Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.%s%s`,
-		req.Topic, lang, n, n, sourcesPrompt(sources), attachmentsPrompt(req.Attachments))
+		req.Topic, lang, n, n, planningRequirementsPrompt(req.Research, extractURLs(req.Topic)), attachmentsPrompt(req.Attachments))
 
-	d, err := p.draftJSON(ctx, user, req.Attachments)
+	d, sources, err := p.draftJSON(ctx, user, req.Attachments, planningAgentOptions{
+		ResearchRequired: req.Research,
+		RequiredURLs:     extractURLs(req.Topic),
+	})
 	if err != nil {
 		return nil, err
 	}
 	return p.assemble(d, lang, req.Channel, sources)
 }
 
-// Improve revises an existing script per a free-text instruction. Attachments
-// are user-uploaded reference files to ground the revision;
-// pass nil when there are none.
-func (p *Planner) Improve(ctx context.Context, prev *config.DebateTopic, instruction string, attachments []Attachment) (*Result, error) {
+// Improve revises an existing script per a free-text instruction. pastMessages
+// are the user's prior revision requests (oldest first), passed so the planner
+// can keep the running intent of the conversation in view; pass nil when there
+// are none. Attachments are user-uploaded reference files to ground the
+// revision; pass nil when there are none.
+func (p *Planner) Improve(ctx context.Context, prev *config.DebateTopic, instruction string, pastMessages []string, attachments []Attachment) (*Result, error) {
 	if prev == nil {
 		return nil, fmt.Errorf("previousScript is required")
 	}
 	if strings.TrimSpace(instruction) == "" {
 		return nil, fmt.Errorf("instruction is required")
 	}
-	// Carry the prior sources forward, then fold in any links the user pasted
-	// into the instruction so a chat-edit can cite a freshly mentioned page.
-	sources := prev.Sources
-	if pasted := p.scrapeURLs(ctx, extractURLs(instruction)); len(pasted) > 0 {
-		sources = mergeSources(sources, pasted)
-	}
-	return p.revise(ctx, prev, instruction, sources, attachments)
+	return p.revise(ctx, prev, instruction, pastMessages, prev.Sources, extractURLs(instruction), attachments, false)
 }
 
-// AddSources scrapes the given URLs via Firecrawl, merges them into the plan's
+// AddSources crawls the given URLs via Firecrawl, merges them into the plan's
 // existing sources, and re-runs the planner so the background incorporates the
 // newly added references. This backs "add a link, save, and re-research".
 func (p *Planner) AddSources(ctx context.Context, prev *config.DebateTopic, urls []string) (*Result, error) {
 	if prev == nil {
 		return nil, fmt.Errorf("previousScript is required")
 	}
-	scraped := p.scrapeURLs(ctx, urls)
-	if len(scraped) == 0 {
+	urls = dedupeURLs(urls)
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("at least one url is required")
+	}
+	added := p.crawlURLs(ctx, urls)
+	if len(added) == 0 {
 		return nil, fmt.Errorf("none of the added links could be read")
 	}
-	sources := mergeSources(prev.Sources, scraped)
+	sources := mergeSources(prev.Sources, added)
 	instruction := "Incorporate the substance of the newly added sources into the background and, " +
 		"where relevant, the discussants' angles. Keep the existing roster and structure unless the " +
 		"new material clearly calls for an adjustment."
-	return p.revise(ctx, prev, instruction, sources, nil)
+	return p.revise(ctx, prev, instruction, nil, sources, nil, nil, false)
 }
 
 // revise runs one improvement pass against prev with the given instruction,
-// grounding sources, and attachments, then assembles the result carrying the
-// merged sources forward.
-func (p *Planner) revise(ctx context.Context, prev *config.DebateTopic, instruction string, sources []config.Source, attachments []Attachment) (*Result, error) {
+// the user's prior revision requests (pastMessages, oldest first), grounding
+// sources, and attachments, then assembles the result carrying the merged
+// sources forward.
+func (p *Planner) revise(ctx context.Context, prev *config.DebateTopic, instruction string, pastMessages []string, existingSources []config.Source, requiredURLs []string, attachments []Attachment, requireSuccessfulURLRead bool) (*Result, error) {
 	lang := prev.Language
 	if lang == "" {
 		lang = "en-US"
@@ -185,19 +200,46 @@ func (p *Planner) revise(ctx context.Context, prev *config.DebateTopic, instruct
 	user := fmt.Sprintf(`Here is the current panel-discussion draft as JSON:
 
 %s
-
+%s
 Revise it per this instruction: %s
 
 Return STRICT JSON with the SAME shape (title, background, host{name}, discussants[]{name, aspect}). Keep the language as %s. Preserve good parts; change only what the instruction asks for.%s%s`,
-		string(prevJSON), instruction, lang, sourcesPrompt(sources), attachmentsPrompt(attachments))
+		string(prevJSON), conversationPrompt(pastMessages), instruction, lang, sourcesPrompt(existingSources)+planningRequirementsPrompt(false, requiredURLs), attachmentsPrompt(attachments))
 
-	d, err := p.draftJSON(ctx, user, attachments)
+	d, sources, err := p.draftJSON(ctx, user, attachments, planningAgentOptions{
+		RequiredURLs:             requiredURLs,
+		ExistingSources:          existingSources,
+		RequireSuccessfulURLRead: requireSuccessfulURLRead,
+	})
 	if err != nil {
 		return nil, err
 	}
 	// Preserve the prior channel and carry the merged sources forward so an
 	// edit never drops the references.
 	return p.assemble(d, lang, prev.Channel, sources)
+}
+
+// conversationPrompt renders the user's prior revision requests (oldest first)
+// so the planner keeps the running intent of the editing conversation in view
+// rather than treating each instruction in isolation. Returns "" when there is
+// no prior history.
+func conversationPrompt(pastMessages []string) string {
+	var cleaned []string
+	for _, m := range pastMessages {
+		if m = strings.TrimSpace(m); m != "" {
+			cleaned = append(cleaned, m)
+		}
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\nThe user has already asked for these revisions earlier in this conversation (oldest first):\n")
+	for i, m := range cleaned {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, truncate(m, 1000))
+	}
+	sb.WriteString("Treat them as context for the latest request; don't undo changes they asked for unless the new instruction says so.\n")
+	return sb.String()
 }
 
 // attachmentsPrompt renders uploaded files as a compact block so the LLM
@@ -285,23 +327,14 @@ func discussantViews(specs []config.AgentSpec) []map[string]string {
 	return out
 }
 
-// draftJSON runs one strict-JSON completion and decodes the creative payload.
-func (p *Planner) draftJSON(ctx context.Context, user string, attachments []Attachment) (*draft, error) {
-	client := llm.New(p.env.OpenAIBaseURL, p.env.OpenAIKey, p.scriptModel())
-	const system = "You are a producer who designs balanced, well-cast panel discussions. " +
-		"You always reply with strict, valid JSON and nothing else."
-	raw, err := client.JSONParts(ctx, system, attachmentInputParts(user, attachments))
+// draftJSON runs the planning agent loop. The model can call research tools for
+// multiple rounds, but the planner accepts a result only after create_plan.
+func (p *Planner) draftJSON(ctx context.Context, user string, attachments []Attachment, opts planningAgentOptions) (*draft, []config.Source, error) {
+	d, sources, err := p.runPlanningAgent(ctx, user, attachments, opts)
 	if err != nil {
-		return nil, fmt.Errorf("planning completion: %w", err)
+		return nil, nil, err
 	}
-	var d draft
-	if err := json.Unmarshal(raw, &d); err != nil {
-		return nil, fmt.Errorf("decode planning JSON: %w (raw: %s)", err, truncate(string(raw), 240))
-	}
-	if d.Title == "" || len(d.Discussants) < 2 {
-		return nil, fmt.Errorf("planner returned an incomplete draft")
-	}
-	return &d, nil
+	return d, sources, nil
 }
 
 // assemble turns a creative draft into a full, validated DebateTopic, filling
