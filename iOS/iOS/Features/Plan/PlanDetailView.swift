@@ -169,18 +169,30 @@ struct PlanDetailView: View {
     }
 
     private var initialHistoryLoadingView: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Theme.accent.opacity(0.12))
+                    .frame(width: 52, height: 52)
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            VStack(spacing: 4) {
+                Text("Loading discussion...")
+                    .font(.headline)
+                Text("Fetching latest messages")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
             ProgressView()
                 .tint(Theme.accent)
-            Text("Loading messages...")
-                .font(.callout)
-                .foregroundStyle(Theme.secondaryText)
+                .controlSize(.small)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(Theme.agentBubble, in: .rect(cornerRadius: 18))
+        .multilineTextAlignment(.center)
+        .glassCard(cornerRadius: 20)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Loading messages")
+        .accessibilityLabel("Loading discussion")
     }
 
     /// Streaming is in effect whenever a loading row is present — the user just
@@ -286,7 +298,7 @@ struct PlanDetailView: View {
         isImproving = true
         progressText = progress.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? progress.text
-            : "Updating plan..."
+            : String(localized: "Updating plan...", comment: "Progress text while restoring an in-flight plan update")
         mergeRecoveredHistory(from: loaded, progress: progress)
         appendRecoveredLoadingRow()
         startProgressRecoveryPoll()
@@ -298,7 +310,7 @@ struct PlanDetailView: View {
             return historyRows
         }
         if loaded.script != nil {
-            return [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: loaded))]
+            return [.plan(label: PlanEditTurn.currentPlanLabel, snapshot: PlanSnapshot(discussion: loaded))]
         }
         return [.user(recoveredContextText(for: progress, discussion: loaded), id: "recovered-context-\(loaded.id)")]
     }
@@ -306,12 +318,14 @@ struct PlanDetailView: View {
     private func recoveredContextText(for progress: DiscussionProgressDTO, discussion: Discussion) -> String {
         switch progress.operation {
         case "sources":
-            return "Adding sources"
+            return String(localized: "Adding sources", comment: "Recovered context bubble while sources are being added")
         case "plan":
             let topic = discussion.topic.trimmingCharacters(in: .whitespacesAndNewlines)
-            return topic.isEmpty ? "Creating plan" : topic
+            return topic.isEmpty
+                ? String(localized: "Creating plan", comment: "Recovered context bubble while a plan is being created and topic is empty")
+                : topic
         default:
-            return "Updating plan"
+            return String(localized: "Updating plan", comment: "Recovered context bubble for a generic plan update")
         }
     }
 
@@ -364,7 +378,7 @@ struct PlanDetailView: View {
     private func rebuiltHistory() -> [PlanEditTurn] {
         var rows = rows(from: discussion.editTurns ?? [])
         if rows.isEmpty {
-            rows = [.plan(label: "Current plan", snapshot: PlanSnapshot(discussion: discussion))]
+            rows = [.plan(label: PlanEditTurn.currentPlanLabel, snapshot: PlanSnapshot(discussion: discussion))]
         }
         return rows
     }
@@ -379,7 +393,9 @@ struct PlanDetailView: View {
                 let snapshot = turn.script != nil
                     ? PlanSnapshot(turn: turn, topic: discussion.topic)
                     : PlanSnapshot(discussion: discussion)
-                let label = (turn.text?.isEmpty == false) ? turn.text! : "Plan"
+                let label = (turn.text?.isEmpty == false)
+                    ? turn.text!
+                    : String(localized: "Plan", comment: "Default label for a plan history card with no stored label")
                 return .plan(label: label, snapshot: snapshot, id: turn.planEditTurnID)
             default:
                 return nil
@@ -426,14 +442,14 @@ struct PlanDetailView: View {
         if !historyRows.isEmpty {
             editTurns = mergedRows(serverRows: historyRows, existingRows: editTurns)
         } else {
-            editTurns.append(.plan(label: "Updated plan", snapshot: PlanSnapshot(discussion: discussion)))
+            editTurns.append(.plan(label: String(localized: "Updated plan", comment: "Label for the plan card after an edit or source update completes"), snapshot: PlanSnapshot(discussion: discussion)))
         }
     }
 
     private func beginSourceUpdate(urls: [String]) {
         errorMessage = nil
         isImproving = true
-        progressText = "Reading added sources..."
+        progressText = String(localized: "Reading added sources...", comment: "Progress text while newly added sources are being read")
         editTurns.removeAll { $0.role == .loading }
         editTurns.append(.user(sourceUpdateText(urls: urls)))
         editTurns.append(.loading())
@@ -449,9 +465,11 @@ struct PlanDetailView: View {
     }
 
     private func sourceUpdateText(urls: [String]) -> String {
-        var lines = ["Added \(urls.count) source\(urls.count == 1 ? "" : "s"):"]
-        lines.append(contentsOf: urls)
-        return lines.joined(separator: "\n")
+        let count = urls.count
+        let header = count == 1
+            ? String(localized: "Added \(count) source:", comment: "User bubble header when one source is added; followed by the URL list")
+            : String(localized: "Added \(count) sources:", comment: "User bubble header when multiple sources are added; followed by the URL list")
+        return ([header] + urls).joined(separator: "\n")
     }
 
     private var editBar: some View {
@@ -487,15 +505,22 @@ struct PlanDetailView: View {
     /// Balance label for the plan options menu, e.g.
     /// "Points (Balance 1,200 Points)".
     private var pointsMenuLabel: String {
-        guard let balance = purchases.pointsBalance else { return "Points" }
-        let pointLabel = balance == 1 ? "Point" : "Points"
-        return "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))"
+        guard let balance = purchases.pointsBalance else {
+            return String(localized: "Points", comment: "Plan menu label when the points balance is unknown")
+        }
+        let pointLabel = balance == 1
+            ? String(localized: "Point", comment: "Singular unit for a points balance")
+            : String(localized: "Points", comment: "Plural unit for a points balance")
+        return String(localized: "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))",
+                      comment: "Plan menu points label; first value is the formatted balance, second is the localized unit")
     }
 
     private var planOptionsAccessibilityLabel: String {
-        var parts = ["Podcast language: \(DiscussionLanguage.label(for: selectedLanguage))."]
+        var parts = [String(localized: "Podcast language: \(DiscussionLanguage.label(for: selectedLanguage)).",
+                            comment: "Accessibility label stating the selected podcast language")]
         if purchases.isConfigured {
-            parts.insert("Remaining points: \(pointsMenuLabel).", at: 0)
+            parts.insert(String(localized: "Remaining points: \(pointsMenuLabel).",
+                                comment: "Accessibility label stating the remaining points balance"), at: 0)
         }
         return parts.joined(separator: " ")
     }
@@ -515,7 +540,8 @@ struct PlanDetailView: View {
         isImproving = false
         progressText = nil
         editTurns.removeAll { $0.role == .loading }
-        errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
+        errorMessage = String(localized: "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance)).",
+                              comment: "Shown when the user lacks enough points; values are formatted point amounts")
         Task { await purchases.refreshBalance() }
         showingPaywall = true
         return true
@@ -531,7 +557,7 @@ struct PlanDetailView: View {
         editTurns = [.loading()]
         isImproving = true
         errorMessage = nil
-        progressText = "Researching & planning…"
+        progressText = String(localized: "Researching & planning…", comment: "Progress text while the initial plan is being researched and drafted")
         let api = APIClient(tokens: auth)
         Task {
             do {
@@ -571,7 +597,7 @@ struct PlanDetailView: View {
     /// shortly after — recovering it here means the user never has to leave and
     /// re-enter the page.
     private func recoverInitialPlan(api: APIClient, fallbackError: String?) async {
-        progressText = "Finishing up…"
+        progressText = String(localized: "Finishing up…", comment: "Progress text while polling for the persisted plan after the stream ended")
         for _ in 0 ..< 100 {
             if Task.isCancelled { return }
             if let full = try? await api.discussion(id: discussion.id), full.script != nil {
@@ -585,7 +611,8 @@ struct PlanDetailView: View {
         isImproving = false
         progressText = nil
         editTurns.removeAll { $0.role == .loading }
-        appendError(fallbackError ?? "Planning didn’t finish. Pull to refresh or try editing the plan.")
+        appendError(fallbackError ?? String(localized: "Planning didn’t finish. Pull to refresh or try editing the plan.",
+                                             comment: "Fallback error when initial planning never produced a plan"))
     }
 
     private func improve() {
@@ -641,7 +668,7 @@ struct PlanDetailView: View {
     /// updated_at) independently of the SSE connection, so the new plan usually
     /// lands shortly after — recovering it here avoids forcing a re-enter.
     private func recoverImprovedPlan(api: APIClient, baselineUpdatedAt: String?, fallbackError: String?) async {
-        progressText = "Finishing up…"
+        progressText = String(localized: "Finishing up…", comment: "Progress text while polling for the persisted plan after the stream ended")
         for _ in 0 ..< 100 {
             if Task.isCancelled { return }
             if let full = try? await api.discussion(id: discussion.id),
@@ -656,7 +683,8 @@ struct PlanDetailView: View {
         isImproving = false
         progressText = nil
         editTurns.removeAll { $0.role == .loading }
-        appendError(fallbackError ?? "The edit didn’t finish. Pull to refresh or try again.")
+        appendError(fallbackError ?? String(localized: "The edit didn’t finish. Pull to refresh or try again.",
+                                             comment: "Fallback error when a plan edit never produced a revised plan"))
     }
 
     private func generate() {
@@ -671,7 +699,8 @@ struct PlanDetailView: View {
             } catch let APIError.insufficientPoints(required, balance) {
                 // Not enough points to cover a full podcast — open the paywall.
                 isGenerating = false
-                errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
+                errorMessage = String(localized: "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance)).",
+                              comment: "Shown when the user lacks enough points; values are formatted point amounts")
                 await purchases.refreshBalance()
                 showingPaywall = true
             } catch {
@@ -722,8 +751,14 @@ private struct PlanEditTurn: Identifiable, MessageListItem {
         id.hasPrefix("history-")
     }
 
+    /// Displayed label for the fallback "current plan" card. Used both as the
+    /// shown text and as the sentinel `isFallbackCurrentPlan` compares against,
+    /// so localizing it keeps the comparison correct in every locale.
+    static let currentPlanLabel = String(localized: "Current plan",
+                                         comment: "Label for the plan card shown when there is no edit history")
+
     var isFallbackCurrentPlan: Bool {
-        role == .plan && !isHistoryBacked && label == "Current plan"
+        role == .plan && !isHistoryBacked && label == PlanEditTurn.currentPlanLabel
     }
 
     func representsSameVisibleTurn(as other: PlanEditTurn) -> Bool {

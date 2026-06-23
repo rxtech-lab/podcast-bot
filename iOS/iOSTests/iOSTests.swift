@@ -75,6 +75,33 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Content-Type"), "application/json")
     }
 
+    func testDiscussionsSearchAddsQueryParameter() async throws {
+        var capturedRequest: URLRequest?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data("[]".utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        _ = try await api.discussions(limit: 10, offset: 20, query: "  vibe coding  ")
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "GET")
+        XCTAssertEqual(capturedRequest?.url?.path, "/api/discussions")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["limit"], "10")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["offset"], "20")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["q"], "vibe coding")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+    }
+
     func testTranscriptChunksAppendUntilDoneMarker() {
         var lines: [LiveLine] = []
 
@@ -369,5 +396,13 @@ private extension URLRequest {
             data.append(buffer, count: count)
         }
         return data
+    }
+}
+
+private extension URL {
+    var queryItems: [String: String] {
+        URLComponents(url: self, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .reduce(into: [:]) { result, item in result[item.name] = item.value ?? "" } ?? [:]
     }
 }

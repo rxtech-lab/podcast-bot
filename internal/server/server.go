@@ -482,7 +482,7 @@ type eventEnvelope struct {
 	payload any
 }
 
-func envelope(v any) (eventEnvelope, bool) {
+func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 	switch m := v.(type) {
 	case contentcreator.AgentActivityMsg:
 		return eventEnvelope{"agent_activity", map[string]any{
@@ -505,14 +505,15 @@ func envelope(v any) (eventEnvelope, bool) {
 			"remaining_ms": m.Remaining.Milliseconds(),
 		}}, true
 	case contentcreator.PhaseMsg:
-		// label is the human-readable text the orchestrator stamped at
-		// emit time, content-type aware ("問答" for puzzle Q&A vs
-		// "自由辯論" for debate free-speech). Frontend should display
-		// label as-is rather than mapping `phase` itself.
+		// The label is re-derived per-connection in the caller's negotiated
+		// language rather than using the Traditional-default m.Label stamped
+		// at emit time — PhaseMsg is broadcast to every subscriber, so the
+		// translation must happen here where the request's Accept-Language is
+		// known. Frontend still displays `label` as-is.
 		return eventEnvelope{"phase", map[string]any{
 			"channel_id": m.ChannelID,
 			"phase":      m.Phase.String(),
-			"label":      m.Label,
+			"label":      contentcreator.PhaseLabelLang(m.Type, m.Phase, lang),
 			"type":       m.Type,
 		}}, true
 	case contentcreator.StatusMsg:
@@ -557,6 +558,7 @@ func envelope(v any) (eventEnvelope, bool) {
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	channelFilter := r.URL.Query().Get("channel")
+	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
 	sse := newSSEWriter(w)
 	ch, cancel := s.d.Bus.Subscribe(128)
 	defer cancel()
@@ -589,7 +591,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
-			env, fine := envelope(v)
+			env, fine := envelope(v, lang)
 			if !fine {
 				continue
 			}

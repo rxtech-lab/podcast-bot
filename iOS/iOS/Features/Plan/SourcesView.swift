@@ -67,7 +67,7 @@ struct SourcesSheet: View {
                         sourceRow(source)
                     }
                 } header: {
-                    Text("\(sources.count) source\(sources.count == 1 ? "" : "s")")
+                    Text(sourcesCountText)
                         .font(.caption.weight(.bold))
                         .foregroundStyle(Theme.accent)
                 }
@@ -79,11 +79,20 @@ struct SourcesSheet: View {
         .interactiveDismissDisabled()
     }
 
+    private var sourcesCountText: String {
+        let count = sources.count
+        return count == 1
+            ? String(localized: "\(count) source", comment: "Sources section header, singular")
+            : String(localized: "\(count) sources", comment: "Sources section header, plural")
+    }
+
     private var emptySourcesText: String {
         if allowsAddingSources {
-            return "No sources yet. Add a source from the toolbar and the agent will research it and update the plan."
+            return String(localized: "No sources yet. Add a source from the toolbar and the agent will research it and update the plan.",
+                          comment: "Empty state when sources can be added")
         }
-        return "No sources were saved for this plan."
+        return String(localized: "No sources were saved for this plan.",
+                      comment: "Empty state when sources are read-only")
     }
 
     @ViewBuilder
@@ -163,7 +172,8 @@ private struct AddSourcesView: View {
         guard case let APIError.insufficientPoints(required, balance) = error else { return false }
         isSaving = false
         isSearching = false
-        errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
+        errorMessage = String(localized: "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance)).",
+                              comment: "Shown when the user lacks enough points to add sources; values are formatted point amounts")
         Task { await purchases.refreshBalance() }
         showingPaywall = true
         return true
@@ -347,7 +357,8 @@ private struct AddSourcesView: View {
                 }
                 if !didFinish {
                     isSaving = false
-                    onFailed("The plan update stopped before it finished. Please try again.")
+                    onFailed(String(localized: "The plan update stopped before it finished. Please try again.",
+                                    comment: "Shown when the add-sources stream ended without a terminal event"))
                 }
             } catch {
                 if handleInsufficientPoints(error) { return }

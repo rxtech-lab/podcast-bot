@@ -207,6 +207,88 @@ func TestDiscussionStoreListOrderingAndPagination(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreSearch(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	otherOwner := "oauth:user-2"
+
+	// title comes from Script.Title, markdown from planResponse.Markdown, and the
+	// topic is the second Create argument — each row isolates one searchable field.
+	mk := func(o, topic, title, markdown string) *Discussion {
+		d, err := store.Create(ctx, o, topic, planResponse{
+			Script:   &config.DebateTopic{Title: title, Type: config.ContentTypeDiscussion, Language: "en-US"},
+			Markdown: markdown,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		return d
+	}
+
+	byTopic := mk(owner, "Quantum computing breakthroughs", "Panel A", "body a")
+	byTitle := mk(owner, "topic b", "Climate Policy Debate", "body b")
+	byMarkdown := mk(owner, "topic c", "Panel C", "A deep dive into renewable energy.")
+	mk(owner, "unrelated", "Panel D", "nothing here")
+	// Another user owns a row that would match — it must never surface.
+	mk(otherOwner, "Quantum leaps", "Quantum Panel", "quantum body")
+
+	ids := func(ds []Discussion) map[string]bool {
+		out := map[string]bool{}
+		for _, d := range ds {
+			out[d.ID] = true
+		}
+		return out
+	}
+
+	// Matches on topic.
+	res, err := store.Search(ctx, owner, "quantum", 0, 0)
+	if err != nil {
+		t.Fatalf("Search topic: %v", err)
+	}
+	if got := ids(res); len(got) != 1 || !got[byTopic.ID] {
+		t.Fatalf("topic search = %+v, want only %s (owner-scoped)", res, byTopic.ID)
+	}
+
+	// Matches on title.
+	if res, err = store.Search(ctx, owner, "climate", 0, 0); err != nil {
+		t.Fatalf("Search title: %v", err)
+	}
+	if got := ids(res); len(got) != 1 || !got[byTitle.ID] {
+		t.Fatalf("title search = %+v, want only %s", res, byTitle.ID)
+	}
+
+	// Matches on markdown body.
+	if res, err = store.Search(ctx, owner, "renewable", 0, 0); err != nil {
+		t.Fatalf("Search markdown: %v", err)
+	}
+	if got := ids(res); len(got) != 1 || !got[byMarkdown.ID] {
+		t.Fatalf("markdown search = %+v, want only %s", res, byMarkdown.ID)
+	}
+
+	// No matches yields an empty (non-nil) slice.
+	if res, err = store.Search(ctx, owner, "nonexistent-xyz", 0, 0); err != nil {
+		t.Fatalf("Search miss: %v", err)
+	}
+	if res == nil || len(res) != 0 {
+		t.Fatalf("miss search = %+v, want empty slice", res)
+	}
+
+	// LIKE wildcards in the query are matched literally, not as wildcards: "%"
+	// must not match the rows that contain no literal percent sign.
+	if res, err = store.Search(ctx, owner, "%", 0, 0); err != nil {
+		t.Fatalf("Search wildcard: %v", err)
+	}
+	if len(res) != 0 {
+		t.Fatalf("literal %% search = %+v, want no matches (wildcards escaped)", res)
+	}
+}
+
 func TestDiscussionStoreEditTurnPagination(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")

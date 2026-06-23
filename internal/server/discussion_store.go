@@ -324,6 +324,53 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 	return out, rows.Err()
 }
 
+// Search returns the owner's discussions whose topic, title, or markdown body
+// contains the query (case-insensitive substring), newest first. It mirrors
+// List's column set, scanning, and limit/offset clamping; an empty query is the
+// caller's responsibility (handlers fall back to List in that case).
+func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit, offset int) ([]Discussion, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	pattern := "%" + escapeLike(query) + "%"
+	rows, err := s.db.QueryContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
+		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
+		tts_cost_usd, music_cost_usd, points_charged,
+		script_json, markdown, sources_json, researched, created_at, updated_at
+		FROM native_discussions
+		WHERE owner_user_id = ? AND (
+			topic LIKE ? ESCAPE '\' OR
+			title LIKE ? ESCAPE '\' OR
+			markdown LIKE ? ESCAPE '\')
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, pattern, pattern, pattern, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// escapeLike escapes the SQL LIKE wildcards (% and _) and the escape character
+// itself (\) so user-supplied search text is matched literally.
+func escapeLike(s string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(s)
+}
+
 func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussion, error) {
 	d, err := s.getDiscussion(ctx, owner, id)
 	if err != nil || d == nil {

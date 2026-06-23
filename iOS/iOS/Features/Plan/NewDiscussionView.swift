@@ -160,14 +160,14 @@ struct DiscussionLanguage: Identifiable, Hashable {
     var id: String { code }
 
     static let supported: [DiscussionLanguage] = [
-        DiscussionLanguage(code: "en-US", label: "English"),
-        DiscussionLanguage(code: "zh-CN", label: "Chinese (Simplified)"),
-        DiscussionLanguage(code: "zh-TW", label: "Chinese (Traditional)"),
-        DiscussionLanguage(code: "ja-JP", label: "Japanese"),
-        DiscussionLanguage(code: "ko-KR", label: "Korean"),
-        DiscussionLanguage(code: "es-ES", label: "Spanish"),
-        DiscussionLanguage(code: "fr-FR", label: "French"),
-        DiscussionLanguage(code: "de-DE", label: "German")
+        DiscussionLanguage(code: "en-US", label: String(localized: "English", comment: "Podcast language option")),
+        DiscussionLanguage(code: "zh-CN", label: String(localized: "Chinese (Simplified)", comment: "Podcast language option")),
+        DiscussionLanguage(code: "zh-TW", label: String(localized: "Chinese (Traditional)", comment: "Podcast language option")),
+        DiscussionLanguage(code: "ja-JP", label: String(localized: "Japanese", comment: "Podcast language option")),
+        DiscussionLanguage(code: "ko-KR", label: String(localized: "Korean", comment: "Podcast language option")),
+        DiscussionLanguage(code: "es-ES", label: String(localized: "Spanish", comment: "Podcast language option")),
+        DiscussionLanguage(code: "fr-FR", label: String(localized: "French", comment: "Podcast language option")),
+        DiscussionLanguage(code: "de-DE", label: String(localized: "German", comment: "Podcast language option"))
     ]
 
     static func normalized(_ code: String) -> String {
@@ -181,7 +181,7 @@ struct DiscussionLanguage: Identifiable, Hashable {
 
 struct DiscussionLanguageMenu: View {
     @Binding var selection: String
-    var title = "Podcast language"
+    var title = String(localized: "Podcast language", comment: "Label for the podcast language picker")
     /// Grouped renders the row without its own glass background so it can share
     /// one card with another control (e.g. the attach-files row).
     var grouped: Bool = false

@@ -351,14 +351,16 @@ final class PlayerModel {
     func forceStop() {
         guard canForceStop, let jobID = discussion.jobID else { return }
         isForceStopping = true
-        statusText = "Stopping and finalising upload..."
+        statusText = String(localized: "Stopping and finalising upload...",
+                            comment: "Status while a generating podcast is being force-stopped")
         updateNowPlayingInfo()
         Task {
             do {
                 try await api.forceStopJob(id: jobID)
             } catch {
                 isForceStopping = false
-                statusText = "Stop failed: \(error.localizedDescription)"
+                statusText = String(localized: "Stop failed: \(error.localizedDescription)",
+                                    comment: "Status when force-stopping a podcast failed; includes the error detail")
                 updateNowPlayingInfo()
             }
         }
@@ -489,7 +491,8 @@ final class PlayerModel {
                 if await api.hlsPlaylistReady(jobID: jobID) { break }
                 if isFinished || discussion.status == .ready { break }
                 if statusText.isEmpty {
-                    statusText = "Preparing live audio..."
+                    statusText = String(localized: "Preparing live audio...",
+                                        comment: "Status while waiting for the live audio stream to become ready")
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -500,9 +503,11 @@ final class PlayerModel {
         usesLiveCaptionTiming = !useFinalAudio
         let url = useFinalAudio ? api.finalAudioURL(jobID: jobID) : api.hlsURL(jobID: jobID)
         var options: [String: Any] = [:]
+        var headers = ["Accept-Language": AcceptLanguage.headerValue]
         if let token = await api.currentToken() {
-            options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
+            headers["Authorization"] = "Bearer \(token)"
         }
+        options["AVURLAssetHTTPHeaderFieldsKey"] = headers
         // If the job finished during the awaits above, `switchToFinalAudioIfNeeded`
         // may have already installed the final item — don't overwrite it with a
         // now-dead HLS stream.
@@ -598,7 +603,8 @@ final class PlayerModel {
         guard autoplayRequested, let jobID = playbackJobID else { return }
         guard playbackRetryTask == nil else { return }
         guard playbackRetryCount < 8 else {
-            statusText = "Audio stream is still warming up. Try again in a moment."
+            statusText = String(localized: "Audio stream is still warming up. Try again in a moment.",
+                                comment: "Status after playback retries are exhausted")
             updateNowPlayingInfo()
             return
         }
@@ -1085,9 +1091,11 @@ final class PlayerModel {
         await loadFinalCaptions(jobID: jobID)
 
         var options: [String: Any] = [:]
+        var headers = ["Accept-Language": AcceptLanguage.headerValue]
         if let token = await api.currentToken() {
-            options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": "Bearer \(token)"]
+            headers["Authorization"] = "Bearer \(token)"
         }
+        options["AVURLAssetHTTPHeaderFieldsKey"] = headers
         let asset = AVURLAsset(url: api.finalAudioURL(jobID: jobID), options: options)
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 0
@@ -1131,7 +1139,8 @@ final class PlayerModel {
     func markGenerationFailed(_ error: String?) {
         isForceStopping = false
         isFinished = true
-        statusText = error ?? "Generation failed"
+        statusText = error ?? String(localized: "Generation failed",
+                                     comment: "Fallback status when podcast generation failed without a server message")
         discussion.status = .failed
         socket?.close()
         forceHideTranscriptLoading()
@@ -1163,7 +1172,7 @@ final class PlayerModel {
     private var nowPlayingTitle: String {
         if !discussion.displayTitle.isEmpty { return discussion.displayTitle }
         if !discussion.topic.isEmpty { return discussion.topic }
-        return "Podcast"
+        return String(localized: "Podcast", comment: "Fallback now-playing title when the discussion has no title or topic")
     }
 
     private var nowPlayingSubtitle: String {

@@ -17,6 +17,10 @@ struct LibraryView: View {
     @State private var isLoadingMore = false
     @State private var canLoadMore = true
     @State private var errorMessage: String?
+    @State private var searchText = ""
+    @State private var loadedSearchQuery = ""
+    @State private var isSearchLoading = false
+    @State private var searchTask: Task<Void, Never>?
     /// Plan requests for freshly-created discussions, keyed by id, so the plan
     /// page knows to auto-stream the plan once the user navigates to it.
     @State private var pendingPlans: [String: PlanRequest] = [:]
@@ -53,6 +57,13 @@ struct LibraryView: View {
         }
         .task { await load() }
         .task { await purchases.refreshBalance() }
+        .onChange(of: searchText) { _, newValue in
+            scheduleSearch(for: newValue)
+        }
+        .onDisappear {
+            searchTask?.cancel()
+            isSearchLoading = false
+        }
     }
 
     /// iPhone / compact: single-column stack-based navigation.
@@ -61,6 +72,9 @@ struct LibraryView: View {
             libraryContainer
                 .navigationTitle("Discussions")
                 .toolbar { libraryToolbar }
+                .searchable(text: $searchText,
+                            placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: "Search discussions")
                 .navigationDestination(for: Discussion.self) { discussion in
                     destination(for: discussion)
                 }
@@ -73,6 +87,9 @@ struct LibraryView: View {
             libraryContainer
                 .navigationTitle("Discussions")
                 .toolbar { libraryToolbar }
+                .searchable(text: $searchText,
+                            placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: "Search discussions")
         } detail: {
             NavigationStack {
                 if let selection {
@@ -87,20 +104,34 @@ struct LibraryView: View {
     }
 
     private var libraryContainer: some View {
-        ZStack {
-            Theme.background.ignoresSafeArea()
-            if shouldShowInitialLoader {
-                ProgressView().tint(Theme.accent)
-            } else if discussions.isEmpty {
-                emptyState
-            } else {
-                list
+        libraryContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.background.ignoresSafeArea())
+            .overlay(alignment: .center) {
+                if isSearchLoading && hasLoadedInitialPage {
+                    searchLoadingOverlay
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: isSearchLoading)
+    }
+
+    @ViewBuilder
+    private var libraryContent: some View {
+        if shouldShowInitialLoader {
+            initialLibraryLoadingView
+        } else if discussions.isEmpty && !loadedSearchQuery.isEmpty {
+            searchEmptyState
+        } else if discussions.isEmpty {
+            emptyState
+        } else {
+            list
         }
     }
 
     @ToolbarContentBuilder
     private var libraryToolbar: some ToolbarContent {
+        DefaultToolbarItem(kind: .search, placement: .bottomBar)
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingNew = true } label: { Image(systemName: "plus") }
         }
@@ -111,7 +142,12 @@ struct LibraryView: View {
                     Button("Manage Subscription") { showingCustomerCenter = true }
                     Divider()
                 }
-                Button("Refresh") { Task { await load(); await purchases.refreshBalance() } }
+                Button("Refresh") {
+                    Task {
+                        await load(searchQuery: searchText)
+                        await purchases.refreshBalance()
+                    }
+                }
                 Button("Sign Out", role: .destructive) { Task { await auth.signOut() } }
             } label: { Image(systemName: "person.crop.circle") }
         }
@@ -119,9 +155,14 @@ struct LibraryView: View {
 
     /// Balance label for the user menu, e.g. "Points (Balance 1,200 Points)".
     private var pointsMenuLabel: String {
-        guard let balance = purchases.pointsBalance else { return "Points" }
-        let greaterThanOne = balance > 1
-        return "Points (\(UsageSummary.formatInt(balance)) Point\(greaterThanOne ? "s" : ""))"
+        guard let balance = purchases.pointsBalance else {
+            return String(localized: "Points", comment: "User menu label when the points balance is unknown")
+        }
+        let unit = balance == 1
+            ? String(localized: "Point", comment: "Singular unit for a points balance")
+            : String(localized: "Points", comment: "Plural unit for a points balance")
+        return String(localized: "Points (\(UsageSummary.formatInt(balance)) \(unit))",
+                      comment: "User menu points label; first value is the formatted balance, second is the localized unit")
     }
 
     private var placeholder: some View {
@@ -183,15 +224,51 @@ struct LibraryView: View {
         discussions.isEmpty && (isLoading || !hasLoadedInitialPage)
     }
 
-    private func load() async {
+    private var initialLibraryLoadingView: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Theme.accent.opacity(0.12))
+                    .frame(width: 52, height: 52)
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            VStack(spacing: 4) {
+                Text("Loading discussions...")
+                    .font(.headline)
+                Text("Syncing your library")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            ProgressView()
+                .tint(Theme.accent)
+                .controlSize(.small)
+        }
+        .multilineTextAlignment(.center)
+        .glassCard(cornerRadius: 20)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading discussions")
+    }
+
+    private func load(searchQuery: String? = nil, showsSearchOverlay: Bool = false) async {
+        let query = normalizedSearchQuery(searchQuery ?? searchText)
+        if showsSearchOverlay {
+            isSearchLoading = true
+        }
         isLoading = true
         defer {
             isLoading = false
+            if showsSearchOverlay && normalizedSearchQuery(searchText) == query {
+                isSearchLoading = false
+            }
             hasLoadedInitialPage = true
         }
         do {
-            let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: 0)
+            let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: 0, query: query)
+            guard normalizedSearchQuery(searchText) == query else { return }
             let selectedID = selection?.id
+            loadedSearchQuery = query
             discussions = items
             // Reconcile the iPad detail selection with the refreshed list so the
             // selected row stays highlighted and the detail reflects the newest copy.
@@ -209,10 +286,17 @@ struct LibraryView: View {
 
     private func loadMore() async {
         guard canLoadMore, !isLoadingMore, !isLoading else { return }
+        let query = loadedSearchQuery
+        let offset = discussions.count
         isLoadingMore = true
         defer { isLoadingMore = false }
         do {
-            let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: discussions.count)
+            let items = try await APIClient(tokens: auth).discussions(
+                limit: pageSize,
+                offset: offset,
+                query: query
+            )
+            guard normalizedSearchQuery(searchText) == query, loadedSearchQuery == query else { return }
             let existing = Set(discussions.map(\.id))
             discussions.append(contentsOf: items.filter { !existing.contains($0.id) })
             canLoadMore = items.count == pageSize
@@ -234,7 +318,7 @@ struct LibraryView: View {
                     try await api.deleteDiscussion(id: target.id)
                 } catch {
                     reportLoadError(error)
-                    await load()
+                    await load(searchQuery: loadedSearchQuery)
                     return
                 }
             }
@@ -249,6 +333,33 @@ struct LibraryView: View {
     private func upsert(_ discussion: Discussion) {
         discussions.removeAll { $0.id == discussion.id }
         discussions.insert(discussion, at: 0)
+    }
+
+    private func scheduleSearch(for text: String) {
+        let query = normalizedSearchQuery(text)
+        searchTask?.cancel()
+        guard !query.isEmpty else {
+            isSearchLoading = false
+            guard !loadedSearchQuery.isEmpty else { return }
+            searchTask = Task {
+                await load(searchQuery: "")
+            }
+            return
+        }
+        guard query != loadedSearchQuery else {
+            isSearchLoading = false
+            return
+        }
+        isSearchLoading = true
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            await load(searchQuery: text, showsSearchOverlay: true)
+        }
+    }
+
+    private func normalizedSearchQuery(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var emptyState: some View {
@@ -272,6 +383,29 @@ struct LibraryView: View {
             .tint(Theme.accent)
         }
         .padding(40)
+    }
+
+    private var searchEmptyState: some View {
+        ContentUnavailableView(
+            "No Results",
+            systemImage: "magnifyingglass",
+            description: Text("No discussions match your search.")
+        )
+    }
+
+    private var searchLoadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.001)
+                .ignoresSafeArea()
+
+            HStack(spacing: 12) {
+                ProgressView()
+                    .tint(Theme.accent)
+                Text("Searching...")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .glassCard(cornerRadius: 18)
+        }
     }
 
     /// Carry the active detail across a size-class change so resizing into
@@ -360,10 +494,15 @@ private struct DiscussionRow: View {
 
     private var statusLabel: String {
         switch discussion.status {
-        case .planning: return "Plan - \(discussion.sortedPeople.count) people"
-        case .generating: return "Generating..."
-        case .ready: return "Ready to play"
-        case .failed: return "Failed"
+        case .planning:
+            return String(localized: "Plan - \(discussion.sortedPeople.count) people",
+                          comment: "Discussion row status: planning, with the panelist count")
+        case .generating:
+            return String(localized: "Generating...", comment: "Discussion row status: podcast is generating")
+        case .ready:
+            return String(localized: "Ready to play", comment: "Discussion row status: podcast is ready")
+        case .failed:
+            return String(localized: "Failed", comment: "Discussion row status: generation failed")
         }
     }
 }

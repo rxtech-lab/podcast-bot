@@ -2,69 +2,18 @@ package contentcreator
 
 import (
 	"image"
-	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
-	"github.com/sirily11/debate-bot/internal/config"
 )
 
-// PhaseLabel returns the human-readable phase name for the given content
-// type. Single source of truth for both the video renderer's on-frame
-// chip and the SSE PhaseMsg.Label field, so frontends never need to map
-// phase IDs to text themselves.
+// PhaseLabel returns the human-readable phase name (Traditional Chinese) for
+// the given content type. Single source of truth for the video renderer's
+// on-frame chip and the default PhaseMsg.Label stamp. The language-aware
+// variant PhaseLabelLang (i18n.go) backs the per-connection SSE/WS labels;
+// this wrapper preserves the original Traditional-only callers unchanged.
 func PhaseLabel(contentType string, p agent.Phase) string {
-	switch contentType {
-	case config.ContentTypeSituationPuzzle:
-		switch p {
-		case agent.PhaseSetup, agent.PhaseOpening:
-			return "出題"
-		case agent.PhaseFreeSpeech:
-			return "問答"
-		case agent.PhaseVerdict:
-			return "揭曉"
-		case agent.PhaseEnded, agent.PhaseConclusion:
-			return "總結"
-		}
-	case config.ContentTypeDiscussion:
-		switch p {
-		case agent.PhaseSetup, agent.PhaseOpening:
-			return "開場"
-		case agent.PhaseFreeSpeech:
-			return "討論"
-		case agent.PhaseClosing, agent.PhaseConclusion, agent.PhaseEnded:
-			return "總結"
-		}
-	case config.ContentTypeSeries:
-		// Series episodes: a single narrator runs through (optional
-		// recap →) main narration → end. The planner emits PhaseOpening
-		// for the recap and PhaseFreeSpeech for the body, so map both
-		// to TV-episode-style labels rather than the debate defaults
-		// ("自由辯論" doesn't make sense on a narrated drama).
-		switch p {
-		case agent.PhaseSetup, agent.PhaseOpening:
-			return "上集回顧"
-		case agent.PhaseFreeSpeech:
-			return "本集"
-		case agent.PhaseEnded, agent.PhaseConclusion:
-			return "完"
-		}
-	default:
-		// Debate (and unknown types — match the existing on-frame chip).
-		switch p {
-		case agent.PhaseOpening:
-			return "立論"
-		case agent.PhaseFreeSpeech:
-			return "自由辯論"
-		case agent.PhaseClosing:
-			return "結辯"
-		case agent.PhaseVerdict:
-			return "判決"
-		case agent.PhaseConclusion:
-			return "總結"
-		}
-	}
-	return strings.ToUpper(p.String())
+	return PhaseLabelLang(contentType, p, LangHant)
 }
 
 // Tea-style messages the orchestrator pushes to the TUI via Send.

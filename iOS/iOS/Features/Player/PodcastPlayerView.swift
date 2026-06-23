@@ -129,9 +129,14 @@ struct PodcastPlayerView: View {
 
     /// Balance label for the podcast options menu, matching the discussion page.
     private var pointsMenuLabel: String {
-        guard let balance = purchases.pointsBalance else { return "Points" }
-        let pointLabel = balance == 1 ? "Point" : "Points"
-        return "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))"
+        guard let balance = purchases.pointsBalance else {
+            return String(localized: "Points", comment: "Podcast menu label when the points balance is unknown")
+        }
+        let pointLabel = balance == 1
+            ? String(localized: "Point", comment: "Singular unit for a points balance")
+            : String(localized: "Points", comment: "Plural unit for a points balance")
+        return String(localized: "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))",
+                      comment: "Podcast menu points label; first value is the formatted balance, second is the localized unit")
     }
 
     private func transcript(_ model: PlayerModel) -> some View {
