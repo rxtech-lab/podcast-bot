@@ -27,6 +27,7 @@ import (
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/discussion"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/series"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/storage"
@@ -329,6 +330,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 		return
 	}
 	defer orch.Shutdown()
+	orch.Tracker.SetUsageSnapshotCallback(func(usage llm.UsageSummary) {
+		persistUsageSnapshot(context.Background(), deps, jobID, usage)
+	})
 
 	// Audio-only feeds have no stage to paint, so suppress all on-the-fly
 	// image generation inside Run (today: the discussion director's background
@@ -706,10 +710,9 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		return
 	}
 	usage := orch.UsageSummary()
-	if usage.TotalTokens == 0 && usage.CostUSD <= 0 && usage.TTSCharacters == 0 && usage.TTSCostUSD <= 0 && usage.MusicGenerations == 0 && usage.MusicCostUSD <= 0 {
+	if !hasUsage(usage) {
 		return
 	}
-	text := contentcreator.FormatUsageSummary(usage)
 	log.Info("llm usage summary",
 		"prompt_tokens", usage.PromptTokens,
 		"completion_tokens", usage.CompletionTokens,
@@ -721,21 +724,27 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		"music_gens", usage.MusicGenerations,
 		"music_cost_usd", usage.MusicCostUSD,
 		"total_cost_usd", usage.TotalCostUSD())
-	deps.Jobs.Update(jobID, func(j *server.Job) {
-		j.PromptTokens = usage.PromptTokens
-		j.CompletionTokens = usage.CompletionTokens
-		j.TotalTokens = usage.TotalTokens
-		j.LLMCostUSD = usage.CostUSD
-		j.LLMCostKnown = usage.CostKnown
-		j.TTSCostUSD = usage.TTSCostUSD
-		j.MusicCostUSD = usage.MusicCostUSD
-	})
-	deps.Jobs.AppendLog(jobID, "usage", text, usage)
+	persistUsageSnapshot(ctx, deps, jobID, usage)
+}
+
+func persistUsageSnapshot(ctx context.Context, deps Deps, jobID string, usage llm.UsageSummary) {
+	if !hasUsage(usage) {
+		return
+	}
+	deps.Jobs.UpdateUsage(jobID,
+		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
+		usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
 	if deps.Discussions != nil && deps.DiscussionID != "" {
 		_ = deps.Discussions.SetUsage(ctx, deps.DiscussionID,
 			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
 			usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
 	}
+}
+
+func hasUsage(usage llm.UsageSummary) bool {
+	return usage.TotalTokens > 0 || usage.CostUSD > 0 ||
+		usage.TTSCharacters > 0 || usage.TTSCostUSD > 0 ||
+		usage.MusicGenerations > 0 || usage.MusicCostUSD > 0
 }
 
 // chargeGenerationPoints reconciles the points reservation made when the user

@@ -91,8 +91,9 @@ struct DownloadedPodcastFile: Identifiable, Equatable {
 @MainActor
 @Observable
 final class PlayerModel {
-    // Caption timing is encoded in the backend VTT; the client should not add
-    // a second manual lead. A positive value here would surface captions early.
+    // The backend now emits zero-bias VTT for audio-only feeds (cues align with
+    // the untrimmed recording), so no manual lead is needed. A non-zero value
+    // here would make live captions appear early.
     nonisolated static let liveCaptionLeadSeconds = 0.0
     nonisolated private static let lyricGroupMinRunes = 28
     nonisolated private static let lyricGroupMaxRunes = 96
@@ -115,8 +116,6 @@ final class PlayerModel {
     var captionSpeaker: String = ""
     var phaseLabel: String = ""
     var statusText: String = ""
-    var usageSummaryText: String = ""
-    var usageSummary: UsageSummary?
     var isForceStopping = false
     var isFinished = false
     var downloadURL: URL?
@@ -267,8 +266,6 @@ final class PlayerModel {
             showTranscriptLoadingIfNeeded()
         }
         if let s = discussion.downloadURLString { downloadURL = URL(string: s) }
-        usageSummaryText = discussion.usageSummaryText ?? ""
-        usageSummary = discussion.usageSummary
         guard let jobID = discussion.jobID else { return }
 
         configureRemoteCommands()
@@ -1026,16 +1023,11 @@ final class PlayerModel {
         while !Task.isCancelled && !isFinished {
             if let job = try? await api.jobStatus(id: jobID) {
                 phaseLabel = job.phase_label ?? phaseLabel
-                applyUsageSummary(job)
                 updateJobProgress(elapsedMS: job.elapsed_ms, remainingMS: job.remaining_ms)
                 if job.isDone {
                     isForceStopping = false
                     isFinished = true
-                    discussion.status = .ready
-                    if let url = job.download_url {
-                        downloadURL = URL(string: url)
-                        discussion.downloadURLString = url
-                    }
+                    await refreshDiscussionAfterJobDone(job: job)
                     // The live event socket is done; stop it so it can't keep
                     // reconnecting now that the job has finished.
                     socket?.close()
@@ -1048,6 +1040,38 @@ final class PlayerModel {
             }
             try? await Task.sleep(for: .seconds(2))
         }
+    }
+
+    private func refreshDiscussionAfterJobDone(job: JobStatusDTO) async {
+        if let fresh = try? await api.discussion(id: discussion.id) {
+            discussion = Self.mergingLocalDiscussionState(current: discussion, fresh: fresh)
+        } else {
+            // Avoid showing a stale planning-only points badge when the terminal
+            // discussion refresh failed. A later screen reload will fetch the
+            // authoritative settled value.
+            discussion.pointsCharged = nil
+            discussion.status = .ready
+        }
+        if let url = job.download_url {
+            downloadURL = URL(string: url)
+            discussion.downloadURLString = url
+        } else if let url = discussion.downloadURLString {
+            downloadURL = URL(string: url)
+        }
+        discussion.status = .ready
+        updateNowPlayingInfo()
+    }
+
+    nonisolated static func mergingLocalDiscussionState(current: Discussion, fresh: Discussion) -> Discussion {
+        var merged = fresh
+        let localLines = current.lines ?? []
+        guard !localLines.isEmpty else { return merged }
+        var lines = merged.lines ?? []
+        for line in localLines where !lines.contains(line) {
+            lines.append(line)
+        }
+        merged.lines = lines
+        return merged
     }
 
     private func switchToFinalAudioIfNeeded(jobID: String) async {
@@ -1102,15 +1126,6 @@ final class PlayerModel {
             remainingTime = Double(remainingMS) / 1000
         }
         updateNowPlayingInfo()
-    }
-
-    private func applyUsageSummary(_ job: JobStatusDTO) {
-        // Detailed token/cost usage is intentionally NOT surfaced to users: it is
-        // hidden server-side and must never appear in the status / Now Playing UI.
-        // Per-podcast cost is shown only as points (discussion.pointsCharged),
-        // which arrives via the sanitized discussion responses. This is a no-op
-        // kept so the call site stays explicit.
-        _ = job
     }
 
     func markGenerationFailed(_ error: String?) {

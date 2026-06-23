@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,120 @@ func TestJobRegistryRecreatesMissingTables(t *testing.T) {
 	}
 	if got.Status != JobPending {
 		t.Fatalf("status = %q, want pending", got.Status)
+	}
+}
+
+func TestJobRegistryUsageUpdateSurvivesConcurrentProgressUpdate(t *testing.T) {
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	jobs.Add("job-a")
+
+	enteredUpdate := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	progressDone := make(chan struct{})
+	go func() {
+		jobs.Update("job-a", func(j *Job) {
+			close(enteredUpdate)
+			<-releaseUpdate
+			j.Phase = "speaking"
+			j.ElapsedMS = 1234
+		})
+		close(progressDone)
+	}()
+
+	select {
+	case <-enteredUpdate:
+	case <-time.After(time.Second):
+		t.Fatal("progress update did not enter mutation callback")
+	}
+
+	usageDone := make(chan struct{})
+	go func() {
+		jobs.UpdateUsage("job-a", 1000, 250, 1250, 0.00375, true, 0.0012, 0.16)
+		close(usageDone)
+	}()
+
+	select {
+	case <-usageDone:
+		t.Fatal("usage update completed while whole-row progress update was still open")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseUpdate)
+	select {
+	case <-progressDone:
+	case <-time.After(time.Second):
+		t.Fatal("progress update did not finish")
+	}
+	select {
+	case <-usageDone:
+	case <-time.After(time.Second):
+		t.Fatal("usage update did not finish")
+	}
+
+	got := jobs.Get("job-a")
+	if got == nil {
+		t.Fatal("Get(job-a) = nil")
+	}
+	if got.Phase != "speaking" || got.ElapsedMS != 1234 {
+		t.Fatalf("progress fields = phase %q elapsed %d", got.Phase, got.ElapsedMS)
+	}
+	if got.PromptTokens != 1000 || got.CompletionTokens != 250 || got.TotalTokens != 1250 ||
+		got.LLMCostUSD != 0.00375 || !got.LLMCostKnown ||
+		got.TTSCostUSD != 0.0012 || got.MusicCostUSD != 0.16 {
+		t.Fatalf("usage fields were lost: %+v", got)
+	}
+}
+
+func TestJobListSanitizesUsageWhenPointsEnabled(t *testing.T) {
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	discussions, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer discussions.Close()
+	points, err := NewPointsStore(discussions)
+	if err != nil {
+		t.Fatalf("NewPointsStore: %v", err)
+	}
+
+	jobs.Add("job-a")
+	jobs.UpdateUsage("job-a", 1000, 250, 1250, 0.00375, true, 0.0012, 0.16)
+
+	srv := New(Deps{
+		Mode:   ModeDashboard,
+		Jobs:   jobs,
+		Points: points,
+		Env:    &config.Env{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.String()
+	for _, field := range []string{"prompt_tokens", "completion_tokens", "total_tokens", "llm_cost_usd", "tts_cost_usd", "music_cost_usd"} {
+		if strings.Contains(raw, field) {
+			t.Fatalf("job list leaked %s in body: %s", field, raw)
+		}
+	}
+	var items []Job
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode jobs: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	if items[0].PromptTokens != 0 || items[0].CompletionTokens != 0 || items[0].TotalTokens != 0 ||
+		items[0].LLMCostUSD != 0 || items[0].LLMCostKnown ||
+		items[0].TTSCostUSD != 0 || items[0].MusicCostUSD != 0 {
+		t.Fatalf("sanitized usage fields = %+v", items[0])
 	}
 }
 
@@ -334,6 +449,80 @@ func TestApplyDiscussionJobStatusMarksMissingGeneratingJobFailed(t *testing.T) {
 	}
 	if persisted.Status != DiscussionFailed {
 		t.Fatalf("persisted status = %q, want failed", persisted.Status)
+	}
+}
+
+func TestApplyDiscussionJobStatusChargesFromStoredDiscussionUsage(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	points, err := NewPointsStore(store)
+	if err != nil {
+		t.Fatalf("NewPointsStore: %v", err)
+	}
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+
+	owner := "oauth:user-1"
+	if _, err := points.Credit(ctx, owner, 1000, "purchase:TEST", "evt-usage-repair"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script:   &config.DebateTopic{Title: "AI Safety", Type: config.ContentTypeDiscussion, Language: "en-US"},
+		Markdown: "# AI Safety",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ok, _, err := points.Reserve(ctx, owner, created.ID, 200, pointsReasonGeneration); err != nil || !ok {
+		t.Fatalf("Reserve ok=%v err=%v", ok, err)
+	}
+	generating, err := store.SetJob(ctx, owner, created.ID, "job-a")
+	if err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.SetUsage(ctx, created.ID, 1000, 250, 1250, 0.032, true, 0.10, 0); err != nil {
+		t.Fatalf("SetUsage: %v", err)
+	}
+	// Refresh the discussion snapshot so applyDiscussionJobStatus sees the
+	// stored usage. The job itself intentionally has no usage fields, matching a
+	// recovered/done job that only knows about final artifacts.
+	generating, err = store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	jobs.Add("job-a")
+	jobs.Update("job-a", func(j *Job) {
+		j.Status = JobDone
+		j.HasAudio = true
+	})
+
+	s := &Server{d: Deps{
+		Env:         &config.Env{PointsPerUSDCost: 1000, PointsMinPerPodcast: 1},
+		Jobs:        jobs,
+		Discussions: store,
+		Points:      points,
+		UploadRoot:  filepath.Join(t.TempDir(), "uploads"),
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/api/discussions", nil)
+	s.applyDiscussionJobStatus(req, generating)
+	if generating.Status != DiscussionReady {
+		t.Fatalf("status = %q, want ready", generating.Status)
+	}
+	if generating.PointsCharged != 132 {
+		t.Fatalf("points_charged = %d, want 132", generating.PointsCharged)
+	}
+	persisted, err := store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get persisted: %v", err)
+	}
+	if persisted.PointsCharged != 132 {
+		t.Fatalf("persisted points_charged = %d, want 132", persisted.PointsCharged)
 	}
 }
 

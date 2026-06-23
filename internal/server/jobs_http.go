@@ -201,8 +201,12 @@ func (s *Server) handleJobList(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "video mode not configured", http.StatusInternalServerError)
 		return
 	}
+	items := s.d.Jobs.List()
+	for i := range items {
+		s.sanitizeJobUsage(&items[i])
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.d.Jobs.List())
+	_ = json.NewEncoder(w).Encode(items)
 }
 
 // handleJobGet returns a single job snapshot. 404 when the id is

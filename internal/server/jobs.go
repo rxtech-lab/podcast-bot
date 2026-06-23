@@ -97,8 +97,8 @@ type Job struct {
 	LLMCostUSD       float64 `json:"llm_cost_usd,omitempty"`
 	LLMCostKnown     bool    `json:"llm_cost_known,omitempty"`
 	// TTSCostUSD and MusicCostUSD are the non-LLM API costs (Azure speech
-	// synthesis and Lyria music generation). They are added to LLMCostUSD to
-	// form the run's grand total cost shown to the user.
+	// synthesis and Lyria music generation). They are stored for internal
+	// accounting; client responses hide detailed cost fields when points are on.
 	TTSCostUSD   float64  `json:"tts_cost_usd,omitempty"`
 	MusicCostUSD float64  `json:"music_cost_usd,omitempty"`
 	Logs         []JobLog `json:"logs,omitempty"`
@@ -137,6 +137,7 @@ type JobRegistry struct {
 	db       *gorm.DB
 	logLimit int
 	mu       sync.Mutex
+	updateMu sync.Mutex
 
 	// podName, when set, is stamped onto every job this registry creates so a
 	// horizontally-scaled deployment can route in-flight requests back to the
@@ -397,6 +398,9 @@ func (r *JobRegistry) Get(id string) *Job {
 // Update applies fn to a snapshot and writes it back. No-op when the id is
 // unknown.
 func (r *JobRegistry) Update(id string, fn func(j *Job)) {
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
+
 	var rec videoJobRecord
 	query := func() error {
 		return r.db.First(&rec, "id = ?", id).Error
@@ -418,6 +422,30 @@ func (r *JobRegistry) Update(id string, fn func(j *Job)) {
 		_ = r.retryRecoverable(err, func() error {
 			return r.db.Save(&rec).Error
 		})
+	}
+}
+
+// UpdateUsage writes only provider-usage columns. It shares Update's row-update
+// mutex so a stale whole-row progress save cannot erase freshly persisted usage.
+func (r *JobRegistry) UpdateUsage(id string, prompt, completion, total int64, llmCost float64, costKnown bool, ttsCost, musicCost float64) {
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
+
+	updates := map[string]any{
+		"prompt_tokens":     prompt,
+		"completion_tokens": completion,
+		"total_tokens":      total,
+		"llm_cost_usd":      llmCost,
+		"llm_cost_known":    costKnown,
+		"tts_cost_usd":      ttsCost,
+		"music_cost_usd":    musicCost,
+		"updated_at":        time.Now(),
+	}
+	op := func() error {
+		return r.db.Model(&videoJobRecord{}).Where("id = ?", id).Updates(updates).Error
+	}
+	if err := op(); err != nil {
+		_ = r.retryRecoverable(err, op)
 	}
 }
 

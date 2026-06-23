@@ -142,6 +142,23 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(ready.pointsText, "21 points")
     }
 
+    func testFinishedDiscussionRefreshUsesAuthoritativePoints() throws {
+        var current = try decodeDiscussion(status: "generating", pointsCharged: 15)
+        current.lines = [
+            DiscussionLineDTO(speaker: "Host", role: "host", side: nil,
+                              text: "Local final line", startMS: nil, isUser: false)
+        ]
+        var fresh = try decodeDiscussion(status: "ready", pointsCharged: 132)
+        fresh.lines = []
+
+        let merged = PlayerModel.mergingLocalDiscussionState(current: current, fresh: fresh)
+
+        XCTAssertEqual(merged.status, .ready)
+        XCTAssertEqual(merged.pointsCharged, 132)
+        XCTAssertEqual(merged.pointsText, "132 points")
+        XCTAssertEqual(merged.lines?.map(\.text), ["Local final line"])
+    }
+
     func testSpeakerInitialsIgnoreParenthesizedRomanization() {
         XCTAssertEqual(SpeakerPalette.initials(for: "陆严 (LU YAN)"), "陆")
         XCTAssertEqual(SpeakerPalette.initials(for: "陆严（LU YAN）"), "陆")

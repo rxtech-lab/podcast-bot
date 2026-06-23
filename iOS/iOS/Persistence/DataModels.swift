@@ -102,21 +102,6 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
 
     var sortedLines: [DiscussionLineDTO] { lines ?? [] }
 
-    /// Structured cost/token breakdown for the "Generation summary" card.
-    var usageSummary: UsageSummary? {
-        guard let total = totalTokens, total > 0 else { return nil }
-        return UsageSummary(
-            totalTokens: total,
-            promptTokens: promptTokens ?? 0,
-            completionTokens: completionTokens ?? 0,
-            llmCostUSD: llmCostKnown == true ? llmCostUSD : nil,
-            ttsCostUSD: ttsCostUSD ?? 0,
-            musicCostUSD: musicCostUSD ?? 0
-        )
-    }
-
-    var usageSummaryText: String? { usageSummary?.singleLineText }
-
     /// User-facing points label for a finished/known podcast, e.g. "812 points".
     /// nil until generation has finished and any points have been charged.
     var pointsText: String? {

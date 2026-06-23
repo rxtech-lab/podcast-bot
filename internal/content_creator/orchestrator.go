@@ -132,8 +132,8 @@ type Orchestrator struct {
 	disableImages bool
 
 	// audioOnly marks an audio-only feed: audio.mp3 is recorded straight from
-	// the LiveStream at t=0 with no stitch StartOffset trim. The pipeline uses
-	// this to choose the audio-only VTT bias policy.
+	// the LiveStream at t=0 with no stitch StartOffset trim, so the sidecar VTT
+	// must skip vttBias (which only compensates for that mp4 front-trim).
 	audioOnly bool
 
 	subtitleCues []SubtitleCue

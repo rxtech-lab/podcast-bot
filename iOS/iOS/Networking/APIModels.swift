@@ -239,27 +239,6 @@ struct JobStatusDTO: Codable, Sendable {
     var isDone: Bool { status == "done" }
     var isError: Bool { status == "error" }
 
-    /// Structured cost/token breakdown for the "Generation summary" card.
-    var usageSummary: UsageSummary? {
-        guard let total = total_tokens, total > 0 else { return nil }
-        return UsageSummary(
-            totalTokens: total,
-            promptTokens: prompt_tokens ?? 0,
-            completionTokens: completion_tokens ?? 0,
-            llmCostUSD: llm_cost_known == true ? llm_cost_usd : nil,
-            ttsCostUSD: tts_cost_usd ?? 0,
-            musicCostUSD: music_cost_usd ?? 0
-        )
-    }
-
-    /// Single-line fallback (now-playing / status text). Prefers a server "usage" log line.
-    var usageSummaryText: String? {
-        if let log = logs?.last(where: { $0.kind == "usage" }),
-           !log.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return log.text
-        }
-        return usageSummary?.singleLineText
-    }
 }
 
 /// Response of GET /api/points/balance.
@@ -313,49 +292,12 @@ struct InsufficientPointsResponse: Decodable, Sendable {
     }
 }
 
-/// Itemized token + cost breakdown rendered by the "Generation summary" card.
-/// Costs are sub-cent, so values are formatted with enough precision to stay non-zero.
-struct UsageSummary: Equatable, Sendable {
-    var totalTokens: Int
-    var promptTokens: Int
-    var completionTokens: Int
-    /// `nil` when the LLM price for the model is unknown (cost can't be totalled).
-    var llmCostUSD: Double?
-    var ttsCostUSD: Double
-    var musicCostUSD: Double
-
-    var costKnown: Bool { llmCostUSD != nil }
-
-    /// LLM + Azure TTS + Lyria music. `nil` when the LLM price is unknown.
-    var totalCostUSD: Double? {
-        guard let llm = llmCostUSD else { return nil }
-        return llm + ttsCostUSD + musicCostUSD
-    }
-
-    /// Collapsed one-line form for now-playing info and status text.
-    var singleLineText: String {
-        var text = "Token usage: \(Self.formatInt(totalTokens)) total "
-            + "(\(Self.formatInt(promptTokens)) input, \(Self.formatInt(completionTokens)) output)"
-        if let total = totalCostUSD {
-            text += " · total cost \(Self.formatUSD(total))"
-        } else {
-            text += " · total cost unavailable"
-        }
-        return text
-    }
-
+/// Shared numeric formatting for points labels.
+enum UsageSummary {
     static func formatInt(_ value: Int) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
-    }
-
-    /// Sub-cent costs need more than 2 decimals; pad small values so they don't read as "$0.00".
-    static func formatUSD(_ value: Double) -> String {
-        if value > 0, value < 0.01 {
-            return String(format: "$%.6f", value)
-        }
-        return String(format: "$%.4f", value)
     }
 }
 

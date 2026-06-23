@@ -854,21 +854,14 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 			_ = s.d.Discussions.SetUsage(r.Context(), d.ID,
 				j.PromptTokens, j.CompletionTokens, j.TotalTokens, j.LLMCostUSD, j.LLMCostKnown,
 				j.TTSCostUSD, j.MusicCostUSD)
-			// Reconcile the generation reservation against actual usage. This is a
-			// lazy fallback (the job-completion path also reconciles); both call
-			// the idempotent SettleGeneration so the charge applies exactly once.
-			if s.pointsEnabled() {
-				cost := j.LLMCostUSD + j.TTSCostUSD + j.MusicCostUSD
-				detail := PointsUsageDetail{
-					PromptTokens:     j.PromptTokens,
-					CompletionTokens: j.CompletionTokens,
-					TotalTokens:      j.TotalTokens,
-					LLMCostUSD:       j.LLMCostUSD,
-					LLMCostKnown:     j.LLMCostKnown,
-					TTSCostUSD:       j.TTSCostUSD,
-					MusicCostUSD:     j.MusicCostUSD,
-					CostUSD:          cost,
-				}
+		}
+		// Reconcile the generation reservation against actual usage. This is a
+		// lazy fallback (the job-completion path also reconciles); both call the
+		// idempotent SettleGeneration so the charge applies exactly once. Use the
+		// discussion's persisted usage when a recovered/done job has lost its
+		// usage fields.
+		if s.pointsEnabled() {
+			if detail, ok := generationUsageDetail(j, d); ok {
 				if err := s.d.Points.ChargeGeneration(r.Context(), s.d.Env, d.ID, detail); err != nil {
 					s.logger().Warn("generation settle failed", "discussion", d.ID, "err", err)
 				}
@@ -883,6 +876,38 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 	}
 }
 
+func generationUsageDetail(j *Job, d *Discussion) (PointsUsageDetail, bool) {
+	if jobHasBillableUsage(j) {
+		return PointsUsageDetail{
+			PromptTokens:     j.PromptTokens,
+			CompletionTokens: j.CompletionTokens,
+			TotalTokens:      j.TotalTokens,
+			LLMCostUSD:       j.LLMCostUSD,
+			LLMCostKnown:     j.LLMCostKnown,
+			TTSCostUSD:       j.TTSCostUSD,
+			MusicCostUSD:     j.MusicCostUSD,
+			CostUSD:          j.LLMCostUSD + j.TTSCostUSD + j.MusicCostUSD,
+		}, true
+	}
+	if !discussionHasBillableUsage(d) {
+		return PointsUsageDetail{}, false
+	}
+	return PointsUsageDetail{
+		PromptTokens:     d.PromptTokens,
+		CompletionTokens: d.CompletionTokens,
+		TotalTokens:      d.TotalTokens,
+		LLMCostUSD:       d.LLMCostUSD,
+		LLMCostKnown:     d.LLMCostKnown,
+		TTSCostUSD:       d.TTSCostUSD,
+		MusicCostUSD:     d.MusicCostUSD,
+		CostUSD:          d.LLMCostUSD + d.TTSCostUSD + d.MusicCostUSD,
+	}, true
+}
+
 func jobHasBillableUsage(j *Job) bool {
 	return j != nil && (j.TotalTokens > 0 || j.LLMCostUSD > 0 || j.TTSCostUSD > 0 || j.MusicCostUSD > 0)
+}
+
+func discussionHasBillableUsage(d *Discussion) bool {
+	return d != nil && (d.TotalTokens > 0 || d.LLMCostUSD > 0 || d.TTSCostUSD > 0 || d.MusicCostUSD > 0)
 }

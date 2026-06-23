@@ -26,7 +26,7 @@ struct PodcastPlayerView: View {
     @State private var transcriptShouldScrollToBottom = false
     @State private var transcriptScrollRequestTask: Task<Void, Never>?
 
-    /// Stable id for the optional usage-summary accessory row so it doesn't
+    /// Stable id for the optional points-summary accessory row so it doesn't
     /// churn its identity across renders.
     private static let usageItemID = UUID()
 
@@ -163,7 +163,7 @@ struct PodcastPlayerView: View {
         }
     }
 
-    /// Transcript lines, plus the usage summary as a trailing accessory row.
+    /// Transcript lines, plus the points summary as a trailing accessory row.
     ///
     /// The listener's own messages are intentionally hidden: a sent message is
     /// only used to steer the panel, and the backend echoes it straight back
@@ -488,7 +488,7 @@ private struct PlanSheetView: View {
 }
 
 /// A row in the transcript `MessageList`: either a live transcript line or the
-/// trailing usage-summary accessory.
+/// trailing points-summary accessory.
 private enum TranscriptListItem: Identifiable, MessageListItem {
     case line(LiveLine)
     case usage(id: UUID, points: String)
@@ -505,7 +505,7 @@ private enum TranscriptListItem: Identifiable, MessageListItem {
         return false
     }
 
-    /// The usage summary is an accessory — it never participates in user-message
+    /// The points summary is an accessory — it never participates in user-message
     /// pinning.
     var isMessageListAccessory: Bool {
         if case .usage = self { return true }

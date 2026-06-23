@@ -134,8 +134,12 @@ For iOS local development, copy `iOS/Config/Secrets.xcconfig.example` to
 `iOS/Config/Secrets.xcconfig` and set:
 
 ```xcconfig
-REVENUECAT_API_KEY = your-revenuecat-public-sdk-key
+REVENUECAT_API_KEY = your-revenuecat-development-public-sdk-key
+REVENUECAT_API_KEY_PROD = your-revenuecat-production-public-sdk-key
 ```
+
+Debug uses `REVENUECAT_API_KEY`. Release maps the app's `RevenueCatAPIKey`
+Info.plist value to `REVENUECAT_API_KEY_PROD`.
 
 To test points locally, RevenueCat must be able to reach your server. Either expose
 the local engine with a tunnel and use that public URL as the RevenueCat webhook

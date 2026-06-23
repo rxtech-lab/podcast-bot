@@ -73,9 +73,9 @@ func (o *Orchestrator) SetDisableImages(v bool) {
 }
 
 // SetAudioOnly marks the run as an audio-only feed. The recorded audio.mp3 is
-// captured straight from the LiveStream at t=0 with no stitch StartOffset trim;
-// the pipeline uses this to apply the audio-only VTT bias policy. Call before
-// Run.
+// captured straight from the LiveStream at t=0 with no stitch StartOffset trim,
+// so the sidecar VTT must skip vttBias (which only realigns cues against the
+// trimmed mp4). Call before Run.
 func (o *Orchestrator) SetAudioOnly(v bool) {
 	o.audioOnly = v
 }

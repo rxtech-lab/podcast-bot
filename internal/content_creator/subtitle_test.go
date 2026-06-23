@@ -47,20 +47,19 @@ func TestPipeline_VTTBiasAddsDiscussionDelay(t *testing.T) {
 	}
 }
 
-func TestPipeline_VTTBiasKeepsDiscussionDelayForAudioOnly(t *testing.T) {
-	// Audio-only discussion podcasts are streamed through a live HLS rendition.
-	// Their heard audio trails the raw LiveStream cue anchor by the same 2.5s
-	// measured for discussion video sidecars, so keep the discussion delay.
+func TestPipeline_VTTBiasZeroForAudioOnly(t *testing.T) {
+	// Audio-only feeds record audio.mp3 straight from the LiveStream at t=0
+	// with no stitch StartOffset trim, so vttBias (which only realigns cues
+	// against the trimmed mp4) must be zero — otherwise captions land ~2.5s
+	// late against the untrimmed recording.
 	discussion := NewPipeline(Deps{
 		ContentType: config.ContentTypeDiscussion,
 		AudioOnly:   true,
 	}).vttBias()
-	if got, want := discussion, 1*time.Second+1500*time.Millisecond; got != want {
+	if got, want := discussion, time.Duration(0); got != want {
 		t.Fatalf("audio-only discussion vtt bias = %v, want %v", got, want)
 	}
 
-	// Other audio-only formats still have no stitch StartOffset trim, so they
-	// keep the zero-bias path until they show their own playback-specific drift.
 	debate := NewPipeline(Deps{
 		ContentType: config.ContentTypeDebate,
 		AudioOnly:   true,
