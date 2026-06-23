@@ -54,6 +54,51 @@ struct DiscussionCover: Codable, Hashable, Sendable {
     }
 }
 
+struct CreatorProfile: Identifiable, Codable, Hashable, Sendable {
+    var id: String
+    var displayName: String
+    var username: String?
+    var avatarURL: String?
+    var followerCount: Int?
+    var isFollowed: Bool?
+    var isSelf: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case username
+        case avatarURL = "avatar_url"
+        case followerCount = "follower_count"
+        case isFollowed = "is_followed"
+        case isSelf = "is_self"
+    }
+
+    var title: String {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? String(localized: "Creator", comment: "Fallback creator name") : name
+    }
+
+    var subtitle: String {
+        if let username, !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "@\(username)"
+        }
+        return followerText
+    }
+
+    var followerText: String {
+        let count = followerCount ?? 0
+        return count == 1
+            ? String(localized: "1 follower", comment: "Singular creator follower count")
+            : String(localized: "\(count) followers", comment: "Plural creator follower count")
+    }
+}
+
+struct MarketProfile: Codable, Hashable, Sendable {
+    var profile: CreatorProfile
+    var stations: [Discussion]
+    var following: [CreatorProfile]
+}
+
 /// A planned + generated audio discussion. Durable storage now lives on the
 /// engine side; the app keeps only this in-memory snapshot from the API.
 struct Discussion: Identifiable, Codable, Hashable, Sendable {
@@ -78,6 +123,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var pointsCharged: Int?
     var visibility: DiscussionVisibility?
     var cover: DiscussionCover?
+    var creator: CreatorProfile?
     var likeCount: Int?
     var isLiked: Bool?
     var isOwner: Bool?
@@ -113,6 +159,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case pointsCharged = "points_charged"
         case visibility
         case cover
+        case creator
         case likeCount = "like_count"
         case isLiked = "is_liked"
         case isOwner = "is_owner"

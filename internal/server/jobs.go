@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -286,6 +287,17 @@ func (r *JobRegistry) ensureSchema() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.db.AutoMigrate(&videoJobRecord{}, &videoJobLogRecord{})
+}
+
+func (r *JobRegistry) Ping(ctx context.Context) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	sqlDB, err := r.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.PingContext(ctx)
 }
 
 func (r *JobRegistry) retryMissingTable(err error, op func() error) error {

@@ -23,6 +23,7 @@ struct PodcastPlayerView: View {
     @State private var showingPointsHistory = false
     @State private var showingPublishSheet = false
     @State private var showingCoverEditor = false
+    @State private var showingCreatorProfile = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAttachment = false
     @State private var isCreatingFromPlan = false
@@ -81,6 +82,13 @@ struct PodcastPlayerView: View {
                 ))
             }
         }
+        .sheet(isPresented: $showingCreatorProfile) {
+            if let creator = currentCreator {
+                CreatorProfileView(creatorID: creator.id,
+                                   initialProfile: creator,
+                                   onCreateFromPlan: onCreatedFromPlan)
+            }
+        }
         .sheet(isPresented: Binding(
             get: { model?.showsDownloadDialog == true },
             set: { isPresented in
@@ -128,6 +136,16 @@ struct PodcastPlayerView: View {
 
     @ToolbarContentBuilder
     private var podcastToolbar: some ToolbarContent {
+        if currentCreator != nil {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingCreatorProfile = true
+                } label: {
+                    Image(systemName: "person.crop.circle")
+                }
+                .accessibilityLabel("View creator")
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 showingPlan = true
@@ -161,6 +179,10 @@ struct PodcastPlayerView: View {
                 }
             }
         }
+    }
+
+    private var currentCreator: CreatorProfile? {
+        model?.discussion.creator ?? discussion.creator
     }
 
     private var showsActionsMenu: Bool {

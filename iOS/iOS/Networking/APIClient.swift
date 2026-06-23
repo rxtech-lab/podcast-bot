@@ -303,6 +303,34 @@ final class APIClient: Sendable {
         return try decode(data)
     }
 
+    func marketProfile() async throws -> MarketProfile {
+        try await get("/api/market/profile")
+    }
+
+    func creatorProfile(id: String) async throws -> CreatorProfile {
+        try await get("/api/market/creators/\(pathComponent(id))")
+    }
+
+    func creatorStations(id: String, limit: Int = 20, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
+        try await marketList(path: "/api/market/creators/\(pathComponent(id))/stations", limit: limit, offset: offset, query: query)
+    }
+
+    func followedCreators(limit: Int = 20, offset: Int = 0) async throws -> [CreatorProfile] {
+        try await get("/api/market/creators/following", query: [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ])
+    }
+
+    func followCreator(id: String) async throws -> CreatorProfile {
+        try await send("POST", "/api/market/creators/\(pathComponent(id))/follow", body: EmptyRequest())
+    }
+
+    func unfollowCreator(id: String) async throws -> CreatorProfile {
+        let (data, _) = try await perform(request(method: "DELETE", path: "/api/market/creators/\(pathComponent(id))/follow"))
+        return try decode(data)
+    }
+
     // MARK: - Points
 
     /// The signed-in user's current points balance.
@@ -671,6 +699,12 @@ final class APIClient: Sendable {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         return req
+    }
+
+    private func pathComponent(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#[]@!$&'()*+,;=")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     /// Performs a request with bearer auth and one refresh-and-retry on 401.
