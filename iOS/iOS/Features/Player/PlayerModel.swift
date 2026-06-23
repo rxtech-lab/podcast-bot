@@ -181,12 +181,25 @@ final class PlayerModel {
     /// at least one cue. While streaming we only surface the current caption.
     var supportsLyrics: Bool { !usesLiveCaptionTiming && !cues.isEmpty }
 
+    // Memoized lyric groups. Grouping is O(cues × lines) — every cue scans the
+    // transcript for its speaker — so recomputing it on each access made the
+    // full-screen lyrics list lag with a large script (the list body and the
+    // 4 Hz `activeLyricGroupID` update both read it). Lyrics mode only runs on
+    // final, stable captions, so we rebuild only when the cue/line counts move.
+    @ObservationIgnored private var lyricGroupsCache: [LyricCueGroup] = []
+    @ObservationIgnored private var lyricGroupsCacheKey = (-1, -1)
+
     /// Final, seekable caption list grouped for the lyrics view. Live captions
     /// still read the raw cue list so streaming timing stays one cue at a time.
     var lyricCueGroups: [LyricCueGroup] {
-        Self.groupLyricCues(cues) { [lines] cue in
-            Self.captionSpeaker(for: cue.text, in: lines) ?? ""
+        let key = (cues.count, lines.count)
+        if key != lyricGroupsCacheKey {
+            lyricGroupsCache = Self.groupLyricCues(cues) { [lines] cue in
+                Self.captionSpeaker(for: cue.text, in: lines) ?? ""
+            }
+            lyricGroupsCacheKey = key
         }
+        return lyricGroupsCache
     }
 
     /// Index of the cue at the current playback time, used to highlight and
@@ -197,13 +210,26 @@ final class PlayerModel {
             ?? cues.lastIndex(where: { $0.start <= t })
     }
 
-    var activeLyricGroupID: Int? {
+    /// Id of the lyric group at the current playback time. Stored (not computed)
+    /// and republished only when it actually changes, via `updateActiveLyricGroup`
+    /// — so the lyrics list re-renders on a boundary crossing (a few times a
+    /// minute) rather than on every 4 Hz time tick, which is what made scrolling
+    /// a large script feel laggy.
+    private(set) var activeLyricGroupID: Int?
+
+    /// Recomputes the active lyric group at `time` and publishes it only when it
+    /// changes. Cheap: `lyricCueGroups` is memoized, so this is an O(groups) scan.
+    private func updateActiveLyricGroup(at time: Double) {
+        guard supportsLyrics else {
+            if activeLyricGroupID != nil { activeLyricGroupID = nil }
+            return
+        }
         let groups = lyricCueGroups
-        let t = captionLookupTime(playbackTime: currentTime)
+        let t = captionLookupTime(playbackTime: time)
         let index = groups.firstIndex(where: { t >= $0.start && t <= $0.end })
             ?? groups.lastIndex(where: { $0.start <= t })
-        guard let index else { return nil }
-        return groups[index].id
+        let id = index.map { groups[$0].id }
+        if id != activeLyricGroupID { activeLyricGroupID = id }
     }
 
     /// Speaker label for a cue, reusing the transcript-matching heuristic.
@@ -651,6 +677,7 @@ final class PlayerModel {
             caption = ""
             captionSpeaker = ""
         }
+        updateActiveLyricGroup(at: time)
         updateNowPlayingInfo()
     }
 
@@ -720,6 +747,16 @@ final class PlayerModel {
         return group.runeCount < lyricGroupMinRunes || nextRunes < lyricGroupMinRunes
     }
 
+    /// Roles the human listener speaks under. The backend echoes these straight
+    /// back over the socket (`PushUserMessage`) and also re-lists them in
+    /// transcript snapshots, so we classify them as user-authored everywhere —
+    /// the single source of truth for "this is the listener's own message", which
+    /// the UI hides. Matches the snapshot path's `role == "user" || "viewer"`.
+    nonisolated static func isUserRole(_ role: String) -> Bool {
+        let r = role.lowercased()
+        return r == "user" || r == "viewer"
+    }
+
     nonisolated static func captionSpeaker(for caption: String, in lines: [LiveLine]) -> String? {
         let needle = normalizedCaptionMatchText(caption)
         guard !needle.isEmpty else { return nil }
@@ -743,16 +780,34 @@ final class PlayerModel {
         self.socket = socket
         for await env in socket.events() {
             handle(env)
-            if Task.isCancelled { break }
+            // Stop once the job reaches a terminal state — otherwise the socket
+            // layer keeps reconnecting to a closed/idle completed-job socket and
+            // re-triggering transcript refreshes until the user leaves the screen.
+            if Task.isCancelled || isFinished || discussion.status != .generating { break }
         }
+        socket.close()
+        if self.socket === socket { self.socket = nil }
     }
 
     private func handle(_ env: JobEventEnvelope) {
+        // The socket layer injects this after a drop+reconnect (e.g. the app was
+        // backgrounded). It carries no data — its only job is to make us re-fetch
+        // the transcript and recover any lines we missed while disconnected.
+        if env.event == JobSocket.reconnectEvent {
+            refreshTranscriptAfterReconnect()
+            return
+        }
         guard let data = env.data else { return }
         switch env.event {
         case "transcript":
             guard let speaker = data.speaker, let text = data.text else { return }
             let role = data.role ?? ""
+            // The backend echoes the listener's own messages back here. We already
+            // recorded that line optimistically in `send(_:)`, and the UI hides
+            // user-authored lines — so drop the echo rather than re-adding it as a
+            // non-user line (`applyTranscriptEvent` always sets isUser:false), which
+            // would both render and double-persist into `discussion.lines`.
+            if Self.isUserRole(role) { return }
             if let completed = LiveLine.applyTranscriptEvent(to: &lines,
                                                              speaker: speaker,
                                                              role: role,
@@ -826,6 +881,31 @@ final class PlayerModel {
             }
             try? await Task.sleep(for: .seconds(2))
         }
+    }
+
+    /// Re-fetch the merged job transcript once and reconcile it. The live socket
+    /// only delivers events that occur while it's connected, so anything that
+    /// streamed during a drop (app backgrounded, network blip, pod hand-off) is
+    /// missing until we pull the authoritative snapshot back in. `mergeTranscript`
+    /// dedups, so re-running is safe and only fills gaps.
+    private func refreshTranscriptSnapshot(jobID: String) async {
+        if let snapshot = try? await api.jobTranscript(id: jobID) {
+            mergeTranscriptSnapshot(snapshot)
+        }
+    }
+
+    /// Kicks a one-shot transcript backfill after the socket reconnected.
+    private func refreshTranscriptAfterReconnect() {
+        guard let jobID = discussion.jobID else { return }
+        tasks.append(Task { await self.refreshTranscriptSnapshot(jobID: jobID) })
+    }
+
+    /// Foreground hook: when the app returns to the foreground while the job is
+    /// still generating, reconcile the transcript immediately instead of waiting
+    /// for the socket to notice it dropped. Safe to call repeatedly.
+    func foregroundRefresh() {
+        guard discussion.status == .generating else { return }
+        refreshTranscriptAfterReconnect()
     }
 
     private func mergeTranscriptSnapshot(_ snapshot: [TranscriptDTO]) {
@@ -935,6 +1015,9 @@ final class PlayerModel {
     private func loadFinalCaptions(jobID: String) async {
         if let vtt = try? await api.liveSubtitles(id: jobID) {
             cues = Self.parseVTT(vtt)
+            // Seed the active lyric group so the list scrolls to the right place
+            // on first appearance, before the periodic time observer fires.
+            updateActiveLyricGroup(at: currentTime)
         }
     }
 
@@ -954,6 +1037,9 @@ final class PlayerModel {
                         downloadURL = URL(string: url)
                         discussion.downloadURLString = url
                     }
+                    // The live event socket is done; stop it so it can't keep
+                    // reconnecting now that the job has finished.
+                    socket?.close()
                     await switchToFinalAudioIfNeeded(jobID: jobID)
                     return
                 } else if job.isError {
@@ -1020,17 +1106,12 @@ final class PlayerModel {
     }
 
     private func applyUsageSummary(_ job: JobStatusDTO) {
-        guard let text = job.usageSummaryText, !text.isEmpty else { return }
-        usageSummaryText = text
-        usageSummary = job.usageSummary
-        discussion.promptTokens = job.prompt_tokens
-        discussion.completionTokens = job.completion_tokens
-        discussion.totalTokens = job.total_tokens
-        discussion.llmCostUSD = job.llm_cost_usd
-        discussion.llmCostKnown = job.llm_cost_known
-        discussion.ttsCostUSD = job.tts_cost_usd
-        discussion.musicCostUSD = job.music_cost_usd
-        statusText = text
+        // Detailed token/cost usage is intentionally NOT surfaced to users: it is
+        // hidden server-side and must never appear in the status / Now Playing UI.
+        // Per-podcast cost is shown only as points (discussion.pointsCharged),
+        // which arrives via the sanitized discussion responses. This is a no-op
+        // kept so the call site stays explicit.
+        _ = job
     }
 
     func markGenerationFailed(_ error: String?) {
@@ -1038,6 +1119,7 @@ final class PlayerModel {
         isFinished = true
         statusText = error ?? "Generation failed"
         discussion.status = .failed
+        socket?.close()
         forceHideTranscriptLoading()
     }
 

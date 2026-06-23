@@ -40,4 +40,11 @@ enum AppConfig {
 
     /// True when a client id has been configured (sign-in is possible).
     static var hasOAuth: Bool { !authClientID.isEmpty }
+
+    /// RevenueCat public SDK API key (sourced from Secrets.xcconfig). Empty when
+    /// unset, which leaves the purchases layer disabled rather than crashing.
+    static let revenueCatAPIKey: String = value("RevenueCatAPIKey") ?? ""
+
+    /// True when a RevenueCat key is configured (purchases can be initialised).
+    static var hasRevenueCat: Bool { !revenueCatAPIKey.isEmpty }
 }

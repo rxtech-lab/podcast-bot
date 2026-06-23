@@ -77,6 +77,11 @@ type Job struct {
 	// Kept separate from S3Key so the /video and /audio endpoints never serve
 	// each other's artefact.
 	AudioS3Key string `json:"-"`
+	// SubtitlesS3Key is the object key of the uploaded subtitles.vtt sidecar.
+	// Like AudioS3Key, it makes captions durable across pod recycles: without
+	// it the sidecar lives only on the owner pod's local disk, so a finished
+	// podcast loses its synced captions once that pod is gone.
+	SubtitlesS3Key string `json:"-"`
 	// DownloadURL is a presigned S3 link populated on the job-detail response
 	// when the finished artefact (mp4 or, for audio-only jobs, mp3) lives in
 	// object storage; empty when served from disk.
@@ -170,6 +175,7 @@ type videoJobRecord struct {
 	AudioOnly        bool
 	S3Key            string
 	AudioS3Key       string
+	SubtitlesS3Key   string
 	ElapsedMS        int64
 	RemainingMS      int64
 	Phase            string
@@ -503,6 +509,7 @@ func jobFromRecord(rec videoJobRecord) Job {
 		AudioOnly:        rec.AudioOnly,
 		S3Key:            rec.S3Key,
 		AudioS3Key:       rec.AudioS3Key,
+		SubtitlesS3Key:   rec.SubtitlesS3Key,
 		ElapsedMS:        rec.ElapsedMS,
 		RemainingMS:      rec.RemainingMS,
 		Phase:            rec.Phase,
@@ -537,6 +544,7 @@ func recordFromJob(j Job) videoJobRecord {
 		AudioOnly:        j.AudioOnly,
 		S3Key:            j.S3Key,
 		AudioS3Key:       j.AudioS3Key,
+		SubtitlesS3Key:   j.SubtitlesS3Key,
 		ElapsedMS:        j.ElapsedMS,
 		RemainingMS:      j.RemainingMS,
 		Phase:            j.Phase,

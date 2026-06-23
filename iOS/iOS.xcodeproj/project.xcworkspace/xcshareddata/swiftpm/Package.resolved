@@ -1,5 +1,5 @@
 {
-  "originHash" : "0ff11f6442bdc794bc470cbd4e5e7f662a5f3abbd1acdeeb03e695c29db30d36",
+  "originHash" : "354de0c3415df7f69a5b8eb85ed139cc5385ace1c769abb056b7b4ab6d966514",
   "pins" : [
     {
       "identity" : "equatable",
@@ -24,6 +24,15 @@
       "location" : "https://github.com/maitbayev/iosMath",
       "state" : {
         "revision" : "066ba2f8353782a644889efe9ceb884ea844180b"
+      }
+    },
+    {
+      "identity" : "purchases-ios-spm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/RevenueCat/purchases-ios-spm.git",
+      "state" : {
+        "revision" : "6935da62be3f33f06ed16e9e49431fe9e10e1426",
+        "version" : "5.79.0"
       }
     },
     {

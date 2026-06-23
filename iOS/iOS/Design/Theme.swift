@@ -13,10 +13,12 @@ enum Theme {
 
 extension View {
     /// A Liquid Glass card: padded content over a glass-rendered rounded rect.
-    func glassCard(cornerRadius: CGFloat = 22) -> some View {
-        self
+    /// Pass `tint` to softly color the glass (e.g. to mark a selected row).
+    func glassCard(cornerRadius: CGFloat = 22, tint: Color? = nil) -> some View {
+        let glass: Glass = tint.map { .regular.tint($0) } ?? .regular
+        return self
             .padding(16)
-            .glassEffect(in: .rect(cornerRadius: cornerRadius))
+            .glassEffect(glass, in: .rect(cornerRadius: cornerRadius))
     }
 
     /// A Liquid Glass capsule chip.

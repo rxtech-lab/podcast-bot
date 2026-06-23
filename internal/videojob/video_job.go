@@ -49,6 +49,10 @@ type Deps struct {
 	Bus          *eventbus.Bus
 	Jobs         *server.JobRegistry
 	Discussions  *server.DiscussionStore
+	// Points, when set, reconciles the generation reservation against actual
+	// usage at job completion so a finished podcast is charged immediately (not
+	// lazily on a later discussion fetch). nil disables points charging.
+	Points       *server.PointsStore
 	Queue        Queue
 	Log          *slog.Logger
 	DiscussionID string
@@ -393,6 +397,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 		return
 	}
 	persistUsageSummary(ctx, deps, jobID, logger, orch)
+	chargeGenerationPoints(ctx, deps, logger, orch)
 	persistDiscussionTranscript(ctx, deps, logger, orch)
 	status(fmt.Sprintf("orchestrator done (%s)",
 		time.Since(tRun).Round(time.Second)))
@@ -462,6 +467,23 @@ func run(ctx context.Context, deps Deps, jobID string,
 			}
 		}
 
+		// Persist the subtitles sidecar to shared storage too, so the synced
+		// captions survive this pod being recycled — the audio already does via
+		// S3, but the VTT otherwise lives only on this pod's local disk. Keep the
+		// local copy as a fallback and never fail the job over captions.
+		var subtitlesS3Key string
+		if deps.Uploader.Enabled() {
+			subPath := filepath.Join(jobOutDir, "subtitles.vtt")
+			if info, statErr := os.Stat(subPath); statErr == nil && info.Size() > 0 {
+				key := deps.Uploader.Key(jobID + ".vtt")
+				if err := deps.Uploader.Upload(ctx, subPath, key); err != nil {
+					logger.Warn("s3 subtitles upload failed", "key", key, "err", err)
+				} else {
+					subtitlesS3Key = key
+				}
+			}
+		}
+
 		status("done")
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.Status = server.JobDone
@@ -469,6 +491,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			j.HasAudio = true
 			j.AudioOnly = true
 			j.AudioS3Key = s3Key
+			j.SubtitlesS3Key = subtitlesS3Key
 			j.DownloadURL = downloadURL
 		})
 		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
@@ -712,6 +735,32 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		_ = deps.Discussions.SetUsage(ctx, deps.DiscussionID,
 			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
 			usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
+	}
+}
+
+// chargeGenerationPoints reconciles the points reservation made when the user
+// started this discussion's generation against the run's actual cost, charging
+// immediately on completion. Idempotent (SettleGeneration); a later discussion
+// fetch reconciles the same way if this is skipped. Runs for both the video and
+// audio-only finalization paths, and regardless of token count, so a generation
+// reservation is always released.
+func chargeGenerationPoints(ctx context.Context, deps Deps, log *slog.Logger, orch *contentcreator.Orchestrator) {
+	if deps.Points == nil || deps.DiscussionID == "" || orch == nil {
+		return
+	}
+	usage := orch.UsageSummary()
+	detail := server.PointsUsageDetail{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		LLMCostUSD:       usage.CostUSD,
+		LLMCostKnown:     usage.CostKnown,
+		TTSCostUSD:       usage.TTSCostUSD,
+		MusicCostUSD:     usage.MusicCostUSD,
+		CostUSD:          usage.TotalCostUSD(),
+	}
+	if err := deps.Points.ChargeGeneration(ctx, deps.Env, deps.DiscussionID, detail); err != nil {
+		log.Warn("generation settle failed", "discussion_id", deps.DiscussionID, "err", err)
 	}
 }
 

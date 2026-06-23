@@ -3,9 +3,15 @@ import SwiftUI
 /// Home: the user's server-owned discussions, newest first.
 struct LibraryView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(PurchaseManager.self) private var purchases
+    @Environment(\.horizontalSizeClass) private var hSize
     @State private var discussions: [Discussion] = []
     @State private var showingNew = false
+    @State private var showingCustomerCenter = false
+    @State private var showingPointsHistory = false
     @State private var path: [Discussion] = []
+    /// Detail selection for the iPad split-view layout.
+    @State private var selection: Discussion?
     @State private var isLoading = false
     @State private var hasLoadedInitialPage = false
     @State private var isLoadingMore = false
@@ -17,48 +23,115 @@ struct LibraryView: View {
 
     private let pageSize = 20
 
+    private var isRegular: Bool { hSize == .regular }
+
     var body: some View {
+        Group {
+            if isRegular { splitView } else { stackView }
+        }
+        .onChange(of: hSize) { _, newValue in
+            syncNavigation(toRegular: newValue == .regular)
+        }
+        .sheet(isPresented: $showingNew) {
+            NewDiscussionView { discussion, request in
+                showingNew = false
+                pendingPlans[discussion.id] = request
+                upsert(discussion)
+                navigate(to: discussion)
+            }
+        }
+        .alert("Could not load discussions", isPresented: errorBinding) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .sheet(isPresented: $showingCustomerCenter) {
+            CustomerCenterScreen()
+        }
+        .sheet(isPresented: $showingPointsHistory) {
+            PointsHistoryView()
+        }
+        .task { await load() }
+        .task { await purchases.refreshBalance() }
+    }
+
+    /// iPhone / compact: single-column stack-based navigation.
+    private var stackView: some View {
         NavigationStack(path: $path) {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                if shouldShowInitialLoader {
-                    ProgressView().tint(Theme.accent)
-                } else if discussions.isEmpty {
-                    emptyState
+            libraryContainer
+                .navigationTitle("Discussions")
+                .toolbar { libraryToolbar }
+                .navigationDestination(for: Discussion.self) { discussion in
+                    destination(for: discussion)
+                }
+        }
+    }
+
+    /// iPad / regular: sidebar list + detail column.
+    private var splitView: some View {
+        NavigationSplitView {
+            libraryContainer
+                .navigationTitle("Discussions")
+                .toolbar { libraryToolbar }
+        } detail: {
+            NavigationStack {
+                if let selection {
+                    destination(for: selection)
+                        .id(selection.id)
                 } else {
-                    list
+                    placeholder
                 }
             }
-            .navigationTitle("Discussions")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingNew = true } label: { Image(systemName: "plus") }
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    private var libraryContainer: some View {
+        ZStack {
+            Theme.background.ignoresSafeArea()
+            if shouldShowInitialLoader {
+                ProgressView().tint(Theme.accent)
+            } else if discussions.isEmpty {
+                emptyState
+            } else {
+                list
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var libraryToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showingNew = true } label: { Image(systemName: "plus") }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Menu {
+                if purchases.isConfigured {
+                    Button(pointsMenuLabel) { showingPointsHistory = true }
+                    Button("Manage Subscription") { showingCustomerCenter = true }
+                    Divider()
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button("Refresh") { Task { await load() } }
-                        Button("Sign Out", role: .destructive) { Task { await auth.signOut() } }
-                    } label: { Image(systemName: "person.crop.circle") }
-                }
-            }
-            .navigationDestination(for: Discussion.self) { discussion in
-                destination(for: discussion)
-            }
-            .sheet(isPresented: $showingNew) {
-                NewDiscussionView { discussion, request in
-                    showingNew = false
-                    pendingPlans[discussion.id] = request
-                    upsert(discussion)
-                    path.append(discussion)
-                }
-            }
-            .alert("Could not load discussions", isPresented: errorBinding) {
-                Button("OK", role: .cancel) { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "")
-            }
-            .task { await load() }
-            .refreshable { await load() }
+                Button("Refresh") { Task { await load(); await purchases.refreshBalance() } }
+                Button("Sign Out", role: .destructive) { Task { await auth.signOut() } }
+            } label: { Image(systemName: "person.crop.circle") }
+        }
+    }
+
+    /// Balance label for the user menu, e.g. "Points (Balance 1,200 Points)".
+    private var pointsMenuLabel: String {
+        guard let balance = purchases.pointsBalance else { return "Points" }
+        let greaterThanOne = balance > 1
+        return "Points (\(UsageSummary.formatInt(balance)) Point\(greaterThanOne ? "s" : ""))"
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            Theme.background.ignoresSafeArea()
+            ContentUnavailableView(
+                "Select a discussion",
+                systemImage: "waveform.circle",
+                description: Text("Pick a discussion from the list, or create a new one.")
+            )
         }
     }
 
@@ -66,9 +139,9 @@ struct LibraryView: View {
         List {
             ForEach(discussions) { d in
                 Button {
-                    path.append(d)
+                    navigate(to: d)
                 } label: {
-                    DiscussionRow(discussion: d)
+                    DiscussionRow(discussion: d, isSelected: isRegular && selection?.id == d.id)
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(Color.clear)
@@ -95,6 +168,7 @@ struct LibraryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
+        .refreshable { await load() }
         .background(Color.clear)
     }
 
@@ -117,7 +191,16 @@ struct LibraryView: View {
         }
         do {
             let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: 0)
+            let selectedID = selection?.id
             discussions = items
+            // Reconcile the iPad detail selection with the refreshed list so the
+            // selected row stays highlighted and the detail reflects the newest copy.
+            // Only update when the refreshed page still contains it — a selection
+            // from a later page must not be dropped by a first-page refresh.
+            // (Explicit deletion is what clears selection.)
+            if let selectedID, let refreshed = items.first(where: { $0.id == selectedID }) {
+                selection = refreshed
+            }
             canLoadMore = items.count == pageSize
         } catch {
             reportLoadError(error)
@@ -143,6 +226,7 @@ struct LibraryView: View {
         let targetIDs = Set(targets.map(\.id))
         discussions.removeAll { targetIDs.contains($0.id) }
         path.removeAll { targetIDs.contains($0.id) }
+        if let sel = selection, targetIDs.contains(sel.id) { selection = nil }
         Task {
             let api = APIClient(tokens: auth)
             for target in targets {
@@ -190,17 +274,49 @@ struct LibraryView: View {
         .padding(40)
     }
 
+    /// Carry the active detail across a size-class change so resizing into
+    /// Slide Over / Stage Manager (or back) keeps the open discussion instead
+    /// of snapping to the list or the placeholder.
+    private func syncNavigation(toRegular: Bool) {
+        if toRegular {
+            // Stack -> split: surface the top of the pushed stack as the selection.
+            selection = path.last
+            path = []
+        } else {
+            // Split -> stack: rebuild the stack from the current selection.
+            path = selection.map { [$0] } ?? []
+        }
+    }
+
+    /// Open a discussion's detail: drives `selection` on iPad, pushes onto
+    /// `path` on iPhone.
+    private func navigate(to discussion: Discussion) {
+        if isRegular {
+            selection = discussion
+        } else {
+            path.append(discussion)
+        }
+    }
+
+    /// Swap the currently-shown discussion for its updated value so a planned
+    /// discussion transitions in place to a player, in whichever model is active.
+    private func replaceCurrent(with generated: Discussion) {
+        if isRegular {
+            selection = generated
+        } else if let index = path.lastIndex(where: { $0.id == generated.id }) {
+            path[index] = generated
+        } else {
+            path.append(generated)
+        }
+    }
+
     @ViewBuilder
     private func destination(for discussion: Discussion) -> some View {
         switch discussion.status {
         case .planning, .failed:
             PlanDetailView(discussion: discussion, initialPlan: pendingPlans[discussion.id]) { generated in
                 upsert(generated)
-                if let index = path.lastIndex(where: { $0.id == generated.id }) {
-                    path[index] = generated
-                } else {
-                    path.append(generated)
-                }
+                replaceCurrent(with: generated)
             }
         case .generating, .ready:
             PodcastPlayerView(discussion: discussion)
@@ -210,6 +326,7 @@ struct LibraryView: View {
 
 private struct DiscussionRow: View {
     let discussion: Discussion
+    var isSelected: Bool = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -229,7 +346,7 @@ private struct DiscussionRow: View {
             Image(systemName: "chevron.right").foregroundStyle(Theme.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
+        .glassCard(tint: isSelected ? Theme.accent.opacity(0.55) : nil)
     }
 
     private var icon: String {

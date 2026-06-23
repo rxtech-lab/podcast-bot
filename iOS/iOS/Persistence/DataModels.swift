@@ -26,6 +26,10 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var llmCostKnown: Bool?
     var ttsCostUSD: Double?
     var musicCostUSD: Double?
+    /// Total points charged across this podcast's lifecycle (planning +
+    /// generation). The only usage figure shown to users; the token/cost fields
+    /// above are zeroed by the server once the points economy is enabled.
+    var pointsCharged: Int?
     var script: ScriptDTO?
     var markdown: String?
     var sources: [SourceDTO]?
@@ -54,6 +58,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case llmCostKnown = "llm_cost_known"
         case ttsCostUSD = "tts_cost_usd"
         case musicCostUSD = "music_cost_usd"
+        case pointsCharged = "points_charged"
         case script
         case markdown
         case sources
@@ -111,6 +116,14 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     }
 
     var usageSummaryText: String? { usageSummary?.singleLineText }
+
+    /// User-facing points label for a finished/known podcast, e.g. "812 points".
+    /// nil until any points have been charged.
+    var pointsText: String? {
+        guard let pts = pointsCharged, pts > 0 else { return nil }
+        let formatted = UsageSummary.formatInt(pts)
+        return "\(formatted) point\(pts == 1 ? "" : "s")"
+    }
 }
 
 struct DiscussionProgressDTO: Codable, Hashable, Sendable {

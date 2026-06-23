@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		DF0DA35D2FE8459500A02339 /* SwiftStreamingMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */; };
+		DF6AD85C2FE9E5530045484F /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85B2FE9E5530045484F /* ReceiptParser */; };
+		DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85D2FE9E5530045484F /* RevenueCat */; };
+		DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85F2FE9E5530045484F /* RevenueCatUI */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -65,6 +68,9 @@
 			files = (
 				DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */,
 				DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */,
+				DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */,
+				DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */,
+				DF6AD85C2FE9E5530045484F /* ReceiptParser in Frameworks */,
 				DF0DA35D2FE8459500A02339 /* SwiftStreamingMarkdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -142,6 +148,9 @@
 				DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */,
 				DFF5269D2FE8529A007BEF2A /* RxAuthSwift */,
 				DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */,
+				DF6AD85B2FE9E5530045484F /* ReceiptParser */,
+				DF6AD85D2FE9E5530045484F /* RevenueCat */,
+				DF6AD85F2FE9E5530045484F /* RevenueCatUI */,
 			);
 			productName = iOS;
 			productReference = DF0DA32F2FE8445500A02339 /* iOS.app */;
@@ -228,6 +237,7 @@
 			packageReferences = (
 				DF0DA35B2FE8459500A02339 /* XCRemoteSwiftPackageReference "SwiftStreamingMarkdown" */,
 				DFF5269C2FE8529A007BEF2A /* XCRemoteSwiftPackageReference "RxAuthSwift" */,
+				DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF0DA3302FE8445500A02339 /* Products */;
@@ -669,6 +679,14 @@
 				kind = branch;
 			};
 		};
+		DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.79.0;
+			};
+		};
 		DFF5269C2FE8529A007BEF2A /* XCRemoteSwiftPackageReference "RxAuthSwift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/rxtech-lab/RxAuthSwift";
@@ -684,6 +702,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DF0DA35B2FE8459500A02339 /* XCRemoteSwiftPackageReference "SwiftStreamingMarkdown" */;
 			productName = SwiftStreamingMarkdown;
+		};
+		DF6AD85B2FE9E5530045484F /* ReceiptParser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = ReceiptParser;
+		};
+		DF6AD85D2FE9E5530045484F /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+		DF6AD85F2FE9E5530045484F /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCatUI;
 		};
 		DFF5269D2FE8529A007BEF2A /* RxAuthSwift */ = {
 			isa = XCSwiftPackageProductDependency;

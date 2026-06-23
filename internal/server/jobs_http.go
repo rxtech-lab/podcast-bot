@@ -225,6 +225,7 @@ func (s *Server) handleJobGet(w http.ResponseWriter, r *http.Request) {
 	if url := s.jobDownloadURL(r.Context(), j); url != "" {
 		j.DownloadURL = url
 	}
+	s.sanitizeJobUsage(j)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(j)
 }
@@ -479,6 +480,14 @@ func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitles not ready", http.StatusTooEarly)
 		return
 	}
+	if j.SubtitlesS3Key != "" && s.d.Uploader.Enabled() {
+		if url, err := s.d.Uploader.DownloadURL(r.Context(), j.SubtitlesS3Key, time.Hour); err == nil {
+			http.Redirect(w, r, url, http.StatusFound)
+			return
+		} else {
+			s.logger().Warn("subtitles s3 download url failed", "job", id, "key", j.SubtitlesS3Key, "err", err)
+		}
+	}
 	jobDir := s.jobArtifactDir(id)
 	if jobDir == "" {
 		http.NotFound(w, r)
@@ -510,8 +519,17 @@ func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) 
 		_, _ = io.WriteString(w, contentcreator.FormatSubtitleCues(orch.LiveSubtitleCues()))
 		return
 	}
-	// No running orchestrator: serve the final sidecar if present, else an
-	// empty (header-only) WebVTT so the client always gets a valid document.
+	// No running orchestrator. Prefer the shared-storage copy (durable across
+	// pod recycles); fall back to the owner-local sidecar; else an empty
+	// (header-only) WebVTT so the client always gets a valid document.
+	if j := s.d.Jobs.Get(id); j != nil && j.SubtitlesS3Key != "" && s.d.Uploader.Enabled() {
+		if url, err := s.d.Uploader.DownloadURL(r.Context(), j.SubtitlesS3Key, time.Hour); err == nil {
+			http.Redirect(w, r, url, http.StatusFound)
+			return
+		} else {
+			s.logger().Warn("subtitles s3 download url failed", "job", id, "key", j.SubtitlesS3Key, "err", err)
+		}
+	}
 	if jobDir := s.jobArtifactDir(id); jobDir != "" {
 		subPath := filepath.Join(jobDir, "subtitles.vtt")
 		if _, err := os.Stat(subPath); err == nil {

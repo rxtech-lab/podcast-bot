@@ -5,6 +5,7 @@ import SwiftUI
 /// /api/plan/improve; and generates the audio podcast.
 struct PlanDetailView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(PurchaseManager.self) private var purchases
     @State var discussion: Discussion
     /// When set (a freshly-created placeholder discussion), the plan is streamed
     /// in automatically on first appearance instead of being loaded from history.
@@ -20,6 +21,8 @@ struct PlanDetailView: View {
     @State private var attachments: [PendingAttachment] = []
     @State private var showingSources = false
     @State private var showingGenerateConfirm = false
+    @State private var showingPaywall = false
+    @State private var showingPointsHistory = false
     @State private var editIsAtBottom = true
     /// Live progress line shown in the loading bubble while the plan streams in.
     @State private var progressText: String?
@@ -54,7 +57,20 @@ struct PlanDetailView: View {
         }
         .navigationTitle(discussion.title.isEmpty ? "Plan" : discussion.title)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingPaywall) { PaywallScreen() }
+        .sheet(isPresented: $showingPointsHistory) { PointsHistoryView() }
+        .task { await purchases.refreshBalance() }
         .toolbar {
+            if purchases.isConfigured {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingPointsHistory = true } label: {
+                        Label(pointsBalanceLabel, systemImage: "sparkles")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .accessibilityLabel("Remaining points: \(pointsBalanceLabel). Tap to view usage history.")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Picker("Podcast language", selection: $selectedLanguage) {
@@ -471,10 +487,32 @@ struct PlanDetailView: View {
         .disabled(isGenerating)
     }
 
+    /// Compact remaining-points label for the toolbar chip (falls back to
+    /// "Points" until the balance has loaded).
+    private var pointsBalanceLabel: String {
+        guard let balance = purchases.pointsBalance else { return "Points" }
+        return UsageSummary.formatInt(balance)
+    }
+
     /// Allow sending when there's an instruction (and nothing is in flight).
     private var canSend: Bool {
         !instruction.trimmingCharacters(in: .whitespaces).isEmpty
             && !isImproving && !isEditStreaming && !isGenerating && !attachments.isUploading
+    }
+
+    /// If `error` is a points shortfall (HTTP 402 from a planning/generation
+    /// gate), clear the in-flight state, refresh the balance, and open the
+    /// paywall. Returns true when handled so the caller skips its recovery loop
+    /// (a 402 means the server never started the work — there's nothing to poll).
+    private func handleInsufficientPoints(_ error: Error) -> Bool {
+        guard case let APIError.insufficientPoints(required, balance) = error else { return false }
+        isImproving = false
+        progressText = nil
+        editTurns.removeAll { $0.role == .loading }
+        errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
+        Task { await purchases.refreshBalance() }
+        showingPaywall = true
+        return true
     }
 
     /// Streams the initial plan into a freshly-created placeholder discussion,
@@ -510,6 +548,7 @@ struct PlanDetailView: View {
                     await recoverInitialPlan(api: api, fallbackError: nil)
                 }
             } catch {
+                if handleInsufficientPoints(error) { return }
                 // A dropped/timed-out connection doesn't mean the server stopped:
                 // poll for the persisted plan before surfacing the error.
                 await recoverInitialPlan(
@@ -579,6 +618,7 @@ struct PlanDetailView: View {
                     await recoverImprovedPlan(api: api, baselineUpdatedAt: baselineUpdatedAt, fallbackError: nil)
                 }
             } catch {
+                if handleInsufficientPoints(error) { return }
                 // A dropped/timed-out connection doesn't stop the server-side
                 // revision: poll for the persisted plan before erroring.
                 await recoverImprovedPlan(
@@ -622,6 +662,12 @@ struct PlanDetailView: View {
                 discussion = try await api.generateDiscussion(id: discussion.id, language: selectedLanguage)
                 isGenerating = false
                 onGenerated(discussion)
+            } catch let APIError.insufficientPoints(required, balance) {
+                // Not enough points to cover a full podcast — open the paywall.
+                isGenerating = false
+                errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
+                await purchases.refreshBalance()
+                showingPaywall = true
             } catch {
                 isGenerating = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription

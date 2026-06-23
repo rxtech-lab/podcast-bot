@@ -72,6 +72,7 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	for i := range items {
 		s.applyDiscussionJobStatus(r, &items[i])
 		s.applyDiscussionProgress(r.Context(), &items[i])
+		s.sanitizeDiscussionUsage(&items[i])
 	}
 	writeJSON(w, items)
 }
@@ -92,6 +93,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 		}
 		s.applyDiscussionJobStatus(r, d)
 		s.applyDiscussionProgress(r.Context(), d)
+		s.sanitizeDiscussionUsage(d)
 		writeJSON(w, d)
 		return
 	}
@@ -101,6 +103,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
 
@@ -128,6 +131,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleDiscussionPlan(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
 	p, err := planner.New(s.d.Env)
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
@@ -137,17 +141,33 @@ func (s *Server) handleDiscussionPlan(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	// Reserve before the chargeable planner call; refund if it fails.
+	reserved, ok := s.reservePlanning(w, r, user.ID, "")
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	res, err := p.Generate(r.Context(), req)
 	if err != nil {
+		s.refundPlanning(r.Context(), user.ID, "", reserved)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
-	d, err := s.d.Discussions.Create(r.Context(), s.requestUser(r).ID, req.Topic, resp)
+	d, err := s.d.Discussions.Create(r.Context(), user.ID, req.Topic, resp)
 	if err != nil {
+		s.refundPlanning(r.Context(), user.ID, "", reserved)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Reconcile to actual usage against the now-created discussion so the points
+	// are never orphaned from the podcast total.
+	s.settlePlanning(r.Context(), user.ID, d.ID, reserved, meter)
+	if total, err := s.pointsCharged(r.Context(), d.ID); err == nil {
+		d.PointsCharged = total
+	}
+	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
 
@@ -177,11 +197,19 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	res, err := p.Improve(r.Context(), d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
 	if err != nil {
+		s.refundPlanning(r.Context(), user.ID, id, reserved)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.settlePlanning(r.Context(), user.ID, id, reserved, meter)
 	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", instruction)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	// Append the plan snapshot before UpdatePlan reloads, so the returned
@@ -199,6 +227,7 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	s.sanitizeDiscussionUsage(updated)
 	writeJSON(w, updated)
 }
 
@@ -206,6 +235,7 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 // drafts a brand-new plan while emitting coarse progress steps over SSE, then
 // sends the persisted discussion in a final "done" event.
 func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
 	p, err := planner.New(s.d.Env)
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
@@ -215,20 +245,34 @@ func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Reque
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	// Reserve before SSE starts so a 402 is delivered as an HTTP status.
+	reserved, ok := s.reservePlanning(w, r, user.ID, "")
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	sse := newSSEWriter(w)
 	_ = sse.comment("ok")
 	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
 	res, err := p.Generate(r.Context(), req)
 	if err != nil {
+		s.refundPlanning(r.Context(), user.ID, "", reserved)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
-	d, err := s.d.Discussions.Create(r.Context(), s.requestUser(r).ID, req.Topic, resp)
+	d, err := s.d.Discussions.Create(r.Context(), user.ID, req.Topic, resp)
 	if err != nil {
+		s.refundPlanning(r.Context(), user.ID, "", reserved)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
+	s.settlePlanning(r.Context(), user.ID, d.ID, reserved, meter)
+	if total, err := s.pointsCharged(r.Context(), d.ID); err == nil {
+		d.PointsCharged = total
+	}
+	s.sanitizeDiscussionUsage(d)
 	_ = sse.send("done", d)
 }
 
@@ -261,6 +305,12 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	if strings.TrimSpace(req.Topic) == "" {
 		req.Topic = d.Topic
 	}
+	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
 	defer cancel()
 	sse := newSSEWriter(w)
@@ -272,6 +322,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	})
 	res, err := p.Generate(workCtx, req)
 	if err != nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
@@ -279,17 +330,24 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	updated, err := s.d.Discussions.UpdatePlan(workCtx, user.ID, id, resp)
 	if err != nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	if updated == nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
 	_ = s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Current plan", resp)
+	s.settlePlanning(workCtx, user.ID, id, reserved, meter)
+	if total, err := s.pointsCharged(workCtx, id); err == nil {
+		updated.PointsCharged = total
+	}
 	s.clearDiscussionProgress(workCtx, id)
+	s.sanitizeDiscussionUsage(updated)
 	_ = sse.send("done", updated)
 }
 
@@ -322,6 +380,12 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
 	defer cancel()
 	sse := newSSEWriter(w)
@@ -332,16 +396,21 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		_ = sse.send("progress", ev)
 	})
 	if err := s.d.Discussions.AppendEditTurn(workCtx, user.ID, id, "user", instruction); err != nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	res, err := p.Improve(workCtx, d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
 	if err != nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
+	// Plan work succeeded — reconcile the reservation to actual usage now, before
+	// the persistence steps, so the charge is recorded even if a later write fails.
+	s.settlePlanning(workCtx, user.ID, id, reserved, meter)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	// Append the plan snapshot before UpdatePlan reloads, so the "done" payload
 	// already carries the new plan card in its edit-turn history.
@@ -361,7 +430,11 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
+	if total, err := s.pointsCharged(workCtx, id); err == nil {
+		updated.PointsCharged = total
+	}
 	s.clearDiscussionProgress(workCtx, id)
+	s.sanitizeDiscussionUsage(updated)
 	_ = sse.send("done", updated)
 }
 
@@ -394,13 +467,23 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	// Reserve BEFORE launching the background re-research, since the handler
+	// returns immediately and can't reject afterwards. The goroutine settles to
+	// actual usage on success, or refunds on failure.
+	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	prev := *d.Script
 	prev.Sources = append([]config.Source(nil), d.Sources...)
 	urls = append([]string(nil), urls...)
 	// Record the user's action up front so the chat history reflects it even if
 	// the background re-research later fails.
 	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", addSourcesTurnText(urls))
-	go s.updateDiscussionWithAddedSources(user.ID, id, prev, urls, p)
+	go s.updateDiscussionWithAddedSources(user.ID, id, prev, urls, p, meter, reserved)
+	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
 
@@ -434,6 +517,12 @@ func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	if !ok {
+		return
+	}
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
 	prev := *d.Script
 	prev.Sources = append([]config.Source(nil), d.Sources...)
 
@@ -448,16 +537,19 @@ func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http
 	})
 
 	if err := s.d.Discussions.AppendEditTurn(workCtx, user.ID, id, "user", addSourcesTurnText(urls)); err != nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	res, err := p.AddSources(workCtx, &prev, urls)
 	if err != nil {
+		s.refundPlanning(workCtx, user.ID, id, reserved)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
+	s.settlePlanning(workCtx, user.ID, id, reserved, meter)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	if err := s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Updated plan with added sources", resp); err != nil {
 		s.clearDiscussionProgress(workCtx, id)
@@ -475,7 +567,11 @@ func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
+	if total, err := s.pointsCharged(workCtx, id); err == nil {
+		updated.PointsCharged = total
+	}
 	s.clearDiscussionProgress(workCtx, id)
+	s.sanitizeDiscussionUsage(updated)
 	_ = sse.send("done", updated)
 }
 
@@ -548,14 +644,18 @@ func addSourcesTurnText(urls []string) string {
 	return sb.String()
 }
 
-func (s *Server) updateDiscussionWithAddedSources(owner, id string, prev config.DebateTopic, urls []string, p *planner.Planner) {
+func (s *Server) updateDiscussionWithAddedSources(owner, id string, prev config.DebateTopic, urls []string, p *planner.Planner, meter *usageAccumulator, reserved int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), addSourcesBackgroundTimeout)
 	defer cancel()
 	res, err := p.AddSources(ctx, &prev, urls)
 	if err != nil {
+		// Release the held reservation since no chargeable work landed.
+		s.refundPlanning(ctx, owner, id, reserved)
 		s.logger().Warn("add sources background update failed", "discussion", id, "err", err)
 		return
 	}
+	// Reconcile the reservation to actual usage now that the async run succeeded.
+	s.settlePlanning(ctx, owner, id, reserved, meter)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	updated, err := s.d.Discussions.UpdatePlan(ctx, owner, id, resp)
 	if err != nil {
@@ -574,10 +674,17 @@ func (s *Server) updateDiscussionWithAddedSources(owner, id string, prev config.
 // handleDiscussionSearchSources searches Firecrawl for candidate web sources
 // without mutating the discussion. The native client adds chosen results to
 // its local link list, where the user can swipe-delete before saving.
+//
+// This hits the paid Firecrawl search API, so it is metered like planning: a
+// flat search fee is reserved before the call (402 when the balance is short)
+// and charged on success / refunded on failure. Firecrawl cost isn't itemised,
+// so the reserved fee is charged in full as the flat actual.
 func (s *Server) handleDiscussionSearchSources(w http.ResponseWriter, r *http.Request) {
-	if d := s.getOwnedDiscussion(w, r); d == nil {
+	d := s.getOwnedDiscussion(w, r)
+	if d == nil {
 		return
 	}
+	user := s.requestUser(r)
 	var req discussionSourceSearchRequest
 	if !decodeJSONBody(w, r, &req) {
 		return
@@ -592,11 +699,17 @@ func (s *Server) handleDiscussionSearchSources(w http.ResponseWriter, r *http.Re
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	reserved, ok := s.reservePlanning(w, r, user.ID, d.ID)
+	if !ok {
+		return
+	}
 	sources, err := p.SearchSources(r.Context(), query)
 	if err != nil {
+		s.refundPlanning(r.Context(), user.ID, d.ID, reserved)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.settleFlatPlanning(r.Context(), user.ID, d.ID, reserved)
 	writeJSON(w, discussionSourceSearchResponse{Sources: sources})
 }
 
@@ -644,16 +757,27 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 		}
 		d = updated
 	}
+	// Atomically reserve enough points to cover a full podcast of this duration
+	// BEFORE submitting the job, so a run never starts uncharged and two
+	// concurrent requests can't overdraw. Reconciled to actual usage at job
+	// completion; refunded here if the job fails to start.
+	reserved, ok := s.reserveGeneration(w, r, user.ID, id, d.Script)
+	if !ok {
+		return
+	}
 	jobID, err := s.submitJSONScript(d.Script, req.VideoConfig, id)
 	if err != nil {
+		s.refundGeneration(r.Context(), user.ID, id, reserved)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	updated, err := s.d.Discussions.SetJob(r.Context(), user.ID, id, jobID)
 	if err != nil {
+		s.refundGeneration(r.Context(), user.ID, id, reserved)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.sanitizeDiscussionUsage(updated)
 	writeJSON(w, updated)
 }
 
@@ -730,6 +854,28 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 			_ = s.d.Discussions.SetUsage(r.Context(), d.ID,
 				j.PromptTokens, j.CompletionTokens, j.TotalTokens, j.LLMCostUSD, j.LLMCostKnown,
 				j.TTSCostUSD, j.MusicCostUSD)
+			// Reconcile the generation reservation against actual usage. This is a
+			// lazy fallback (the job-completion path also reconciles); both call
+			// the idempotent SettleGeneration so the charge applies exactly once.
+			if s.pointsEnabled() {
+				cost := j.LLMCostUSD + j.TTSCostUSD + j.MusicCostUSD
+				detail := PointsUsageDetail{
+					PromptTokens:     j.PromptTokens,
+					CompletionTokens: j.CompletionTokens,
+					TotalTokens:      j.TotalTokens,
+					LLMCostUSD:       j.LLMCostUSD,
+					LLMCostKnown:     j.LLMCostKnown,
+					TTSCostUSD:       j.TTSCostUSD,
+					MusicCostUSD:     j.MusicCostUSD,
+					CostUSD:          cost,
+				}
+				if err := s.d.Points.ChargeGeneration(r.Context(), s.d.Env, d.ID, detail); err != nil {
+					s.logger().Warn("generation settle failed", "discussion", d.ID, "err", err)
+				}
+				if total, err := s.d.Points.DiscussionPoints(r.Context(), d.ID); err == nil {
+					d.PointsCharged = total
+				}
+			}
 		}
 	case j.Status == JobError:
 		d.Status = DiscussionFailed

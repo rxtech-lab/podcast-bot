@@ -262,6 +262,50 @@ struct JobStatusDTO: Codable, Sendable {
     }
 }
 
+/// Response of GET /api/points/balance.
+struct PointsBalanceResponse: Decodable, Sendable {
+    var balance: Int
+}
+
+/// One ledger entry in the points-usage history (signed change + running balance).
+struct PointsLedgerEntry: Decodable, Identifiable, Sendable {
+    var id: Int64
+    var delta: Int
+    var reason: String
+    var balanceAfter: Int
+    /// Unix milliseconds.
+    var createdAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case delta
+        case reason
+        case balanceAfter = "balance_after"
+        case createdAt = "created_at"
+    }
+
+    var date: Date { Date(timeIntervalSince1970: Double(createdAt) / 1000) }
+}
+
+/// Response of GET /api/points/history.
+struct PointsHistoryResponse: Decodable, Sendable {
+    var balance: Int
+    var entries: [PointsLedgerEntry]
+}
+
+/// Body of a 402 response when the user lacks the points to start an action.
+struct InsufficientPointsResponse: Decodable, Sendable {
+    var error: String
+    var requiredPoints: Int
+    var balance: Int
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case requiredPoints = "required_points"
+        case balance
+    }
+}
+
 /// Itemized token + cost breakdown rendered by the "Generation summary" card.
 /// Costs are sub-cent, so values are formatted with enough precision to stay non-zero.
 struct UsageSummary: Equatable, Sendable {
