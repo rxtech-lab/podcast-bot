@@ -167,6 +167,12 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 		username = "viewer"
 	}
 	user := s.requestUser(r)
+	if s.d.Discussions != nil {
+		if err := s.d.Discussions.AuthorizeJobParticipation(r.Context(), user.ID, req.DiscussionID, id); err != nil {
+			writeDiscussionAccessError(w, err)
+			return
+		}
+	}
 	if retryAfter, ok := s.allowJobMessage(id, user, username); !ok {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSeconds(retryAfter)))
 		http.Error(w, "message rate limit: wait before sending another message", http.StatusTooManyRequests)
@@ -174,12 +180,15 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	orch.PushUserMessage(req.Text, username)
 	if s.d.Discussions != nil && strings.TrimSpace(req.DiscussionID) != "" {
-		_ = s.d.Discussions.AppendLine(r.Context(), user.ID, req.DiscussionID, DiscussionLine{
+		if err := s.d.Discussions.AppendLineVisible(r.Context(), user.ID, req.DiscussionID, DiscussionLine{
 			Speaker: username,
 			Role:    "user",
 			Text:    req.Text,
 			IsUser:  true,
-		})
+		}); err != nil {
+			writeDiscussionAccessError(w, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -242,6 +251,12 @@ func (s *Server) handleJobStop(w http.ResponseWriter, r *http.Request) {
 	if orch == nil {
 		http.Error(w, "no active job", http.StatusServiceUnavailable)
 		return
+	}
+	if s.d.Discussions != nil {
+		if err := s.d.Discussions.AuthorizeJobOwner(r.Context(), s.requestUser(r).ID, id); err != nil {
+			writeDiscussionAccessError(w, err)
+			return
+		}
 	}
 	s.d.Jobs.AppendLog(id, "status", "force stop requested - finalising generated audio...", nil)
 	orch.ForceStop()

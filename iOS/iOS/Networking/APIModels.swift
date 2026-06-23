@@ -58,6 +58,18 @@ struct Attachment: Codable, Sendable {
 struct DiscussionCreateRequest: Codable, Sendable {
     var topic: String
     var language: String
+    /// When true, the server kicks off background AI cover-art generation for the
+    /// new discussion; the cover is filled in asynchronously and picked up the
+    /// next time the discussion is fetched (e.g. when the player opens).
+    var generateCover: Bool = false
+    var coverPrompt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case topic
+        case language
+        case generateCover = "generate_cover"
+        case coverPrompt = "cover_prompt"
+    }
 }
 
 /// POST /api/plan request body.
@@ -74,12 +86,14 @@ struct PlanRequest: Codable, Sendable {
 /// markdown or a direct image URL, and the content type.
 struct UploadResponse: Codable, Sendable {
     var filename: String
+    var key: String?
     var markdown: String?
     var url: String
     var mimeType: String?
 
     enum CodingKeys: String, CodingKey {
         case filename
+        case key
         case markdown
         case url
         case mimeType = "mime_type"
@@ -126,6 +140,25 @@ struct UploadCompleteRequest: Codable, Sendable {
 /// the sources sheet for the agent to research and fold into the plan.
 struct AddSourcesRequest: Codable, Sendable {
     var urls: [String]
+}
+
+struct DiscussionVisibilityRequest: Codable, Sendable {
+    var visibility: DiscussionVisibility
+    var cover: DiscussionCover?
+}
+
+struct CoverGenerateRequest: Codable, Sendable {
+    var prompt: String
+}
+
+struct CoverGenerateResponse: Codable, Sendable {
+    var cover: DiscussionCover
+}
+
+/// PATCH /api/discussions/{id}/cover request body: persists a cover on a
+/// discussion without changing its visibility.
+struct CoverUpdateRequest: Codable, Sendable {
+    var cover: DiscussionCover
 }
 
 struct SourceSearchRequest: Codable, Sendable {

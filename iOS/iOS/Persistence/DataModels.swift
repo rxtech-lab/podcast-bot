@@ -8,6 +8,52 @@ enum DiscussionStatus: String, Codable, Sendable {
     case failed
 }
 
+enum DiscussionVisibility: String, Codable, Sendable {
+    case `private`
+    case `public`
+}
+
+struct DiscussionCover: Codable, Hashable, Sendable {
+    var type: String?
+    var imageURL: String?
+    var imageKey: String?
+    var gradientStart: String?
+    var gradientEnd: String?
+    var prompt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case imageURL = "image_url"
+        case imageKey = "image_key"
+        case gradientStart = "gradient_start"
+        case gradientEnd = "gradient_end"
+        case prompt
+    }
+
+    var hasImage: Bool {
+        let url = imageURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let key = imageKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !url.isEmpty || !key.isEmpty
+    }
+
+    var hasGradient: Bool {
+        let start = gradientStart?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let end = gradientEnd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !start.isEmpty && !end.isEmpty
+    }
+
+    var isPublishable: Bool {
+        switch type {
+        case "image", "ai":
+            return hasImage
+        case "gradient":
+            return hasGradient
+        default:
+            return false
+        }
+    }
+}
+
 /// A planned + generated audio discussion. Durable storage now lives on the
 /// engine side; the app keeps only this in-memory snapshot from the API.
 struct Discussion: Identifiable, Codable, Hashable, Sendable {
@@ -30,6 +76,12 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     /// generation). The only usage figure shown to users; the token/cost fields
     /// above are zeroed by the server once the points economy is enabled.
     var pointsCharged: Int?
+    var visibility: DiscussionVisibility?
+    var cover: DiscussionCover?
+    var likeCount: Int?
+    var isLiked: Bool?
+    var isOwner: Bool?
+    var publishedAt: String?
     var script: ScriptDTO?
     var markdown: String?
     var sources: [SourceDTO]?
@@ -59,6 +111,12 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case ttsCostUSD = "tts_cost_usd"
         case musicCostUSD = "music_cost_usd"
         case pointsCharged = "points_charged"
+        case visibility
+        case cover
+        case likeCount = "like_count"
+        case isLiked = "is_liked"
+        case isOwner = "is_owner"
+        case publishedAt = "published_at"
         case script
         case markdown
         case sources
@@ -77,6 +135,8 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         if let scriptTitle = script?.title, !scriptTitle.isEmpty { return scriptTitle }
         return topic
     }
+
+    var isPublic: Bool { visibility == .public }
 
     var sortedPeople: [PlanPersonSnapshot] {
         var people: [PlanPersonSnapshot] = []

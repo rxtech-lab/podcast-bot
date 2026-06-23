@@ -27,10 +27,37 @@ const (
 	DiscussionFailed     DiscussionStatus = "failed"
 )
 
+type DiscussionVisibility string
+
+const (
+	DiscussionPrivate DiscussionVisibility = "private"
+	DiscussionPublic  DiscussionVisibility = "public"
+)
+
+type DiscussionCover struct {
+	Type          string `json:"type,omitempty"`
+	ImageURL      string `json:"image_url,omitempty"`
+	ImageKey      string `json:"image_key,omitempty"`
+	GradientStart string `json:"gradient_start,omitempty"`
+	GradientEnd   string `json:"gradient_end,omitempty"`
+	Prompt        string `json:"prompt,omitempty"`
+}
+
 // Pagination bounds for listing discussions.
 const (
 	defaultDiscussionPageSize = 20
 	maxDiscussionPageSize     = 100
+)
+
+const discussionSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
+	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
+	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
+	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, script_json, markdown, sources_json, researched,
+	created_at, updated_at`
+
+var (
+	errDiscussionNotVisible = errors.New("discussion is not visible")
+	errDiscussionForbidden  = errors.New("discussion access forbidden")
 )
 
 type DiscussionLine struct {
@@ -56,27 +83,33 @@ type DiscussionEditTurn struct {
 }
 
 type Discussion struct {
-	ID               string               `json:"id"`
-	OwnerUserID      string               `json:"-"`
-	Topic            string               `json:"topic"`
-	Title            string               `json:"title"`
-	Status           DiscussionStatus     `json:"status"`
-	Language         string               `json:"language"`
-	JobID            string               `json:"job_id,omitempty"`
-	DownloadURL      string               `json:"download_url,omitempty"`
-	DurationSeconds  float64              `json:"duration_seconds,omitempty"`
-	PromptTokens     int64                `json:"prompt_tokens,omitempty"`
-	CompletionTokens int64                `json:"completion_tokens,omitempty"`
-	TotalTokens      int64                `json:"total_tokens,omitempty"`
-	LLMCostUSD       float64              `json:"llm_cost_usd,omitempty"`
-	LLMCostKnown     bool                 `json:"llm_cost_known,omitempty"`
-	TTSCostUSD       float64              `json:"tts_cost_usd,omitempty"`
-	MusicCostUSD     float64              `json:"music_cost_usd,omitempty"`
+	ID               string           `json:"id"`
+	OwnerUserID      string           `json:"-"`
+	Topic            string           `json:"topic"`
+	Title            string           `json:"title"`
+	Status           DiscussionStatus `json:"status"`
+	Language         string           `json:"language"`
+	JobID            string           `json:"job_id,omitempty"`
+	DownloadURL      string           `json:"download_url,omitempty"`
+	DurationSeconds  float64          `json:"duration_seconds,omitempty"`
+	PromptTokens     int64            `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64            `json:"completion_tokens,omitempty"`
+	TotalTokens      int64            `json:"total_tokens,omitempty"`
+	LLMCostUSD       float64          `json:"llm_cost_usd,omitempty"`
+	LLMCostKnown     bool             `json:"llm_cost_known,omitempty"`
+	TTSCostUSD       float64          `json:"tts_cost_usd,omitempty"`
+	MusicCostUSD     float64          `json:"music_cost_usd,omitempty"`
 	// PointsCharged is the running total of points charged across this
 	// discussion's whole lifecycle (planning + generation). It is the only
 	// usage figure shown to end users; the token/cost fields above are hidden
 	// from clients (zeroed) once the points economy is enabled.
 	PointsCharged    int64                `json:"points_charged"`
+	Visibility       DiscussionVisibility `json:"visibility"`
+	Cover            DiscussionCover      `json:"cover,omitempty"`
+	LikeCount        int64                `json:"like_count"`
+	IsLiked          bool                 `json:"is_liked"`
+	IsOwner          bool                 `json:"is_owner"`
+	PublishedAt      *time.Time           `json:"published_at,omitempty"`
 	Script           *config.DebateTopic  `json:"script,omitempty"`
 	Markdown         string               `json:"markdown,omitempty"`
 	Sources          []config.Source      `json:"sources,omitempty"`
@@ -192,6 +225,17 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			created_at INTEGER NOT NULL,
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_likes (
+			user_id TEXT NOT NULL,
+			discussion_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY(user_id, discussion_id),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_likes_user_created_idx
+			ON native_discussion_likes(user_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_likes_discussion_idx
+			ON native_discussion_likes(discussion_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -211,10 +255,22 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"music_cost_usd", "music_cost_usd REAL NOT NULL DEFAULT 0"},
 		{"points_charged", "points_charged INTEGER NOT NULL DEFAULT 0"},
 		{"points_reserved", "points_reserved INTEGER NOT NULL DEFAULT 0"},
+		{"visibility", "visibility TEXT NOT NULL DEFAULT 'private'"},
+		{"published_at", "published_at INTEGER NOT NULL DEFAULT 0"},
+		{"cover_type", "cover_type TEXT NOT NULL DEFAULT ''"},
+		{"cover_image_url", "cover_image_url TEXT NOT NULL DEFAULT ''"},
+		{"cover_image_key", "cover_image_key TEXT NOT NULL DEFAULT ''"},
+		{"cover_gradient_start", "cover_gradient_start TEXT NOT NULL DEFAULT ''"},
+		{"cover_gradient_end", "cover_gradient_end TEXT NOT NULL DEFAULT ''"},
+		{"cover_prompt", "cover_prompt TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS native_discussions_market_idx
+		ON native_discussions(visibility, published_at DESC, created_at DESC, id DESC)`); err != nil {
+		return err
 	}
 	// Plan-snapshot columns on edit turns are newer than the table; backfill
 	// them on databases created before snapshots were stored.
@@ -265,6 +321,31 @@ func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp 
 	return s.Get(ctx, owner, id)
 }
 
+// CreateFromVisiblePlan copies the current plan from a discussion the requester
+// can see into a new private planning discussion owned by owner.
+func (s *DiscussionStore) CreateFromVisiblePlan(ctx context.Context, owner, sourceID string) (*Discussion, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil, errors.New("plan id is required")
+	}
+	source, err := s.GetVisible(ctx, owner, sourceID)
+	if err != nil || source == nil {
+		return source, err
+	}
+	if source.Script == nil {
+		return nil, errors.New("source plan is not available")
+	}
+	return s.Create(ctx, owner, source.Topic, planResponse{
+		Script:     source.Script,
+		Markdown:   source.Markdown,
+		Sources:    source.Sources,
+		Researched: source.Researched,
+	})
+}
+
 // CreatePlaceholder inserts an empty discussion in the planning state so the
 // client gets an id immediately and can stream the plan into it. The plan body
 // (script/sources/markdown) is filled in later via UpdatePlan once the planner
@@ -294,6 +375,15 @@ func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, l
 // limit/offset paginate the result; a non-positive limit falls back to the
 // default page size and offsets below zero are clamped to zero.
 func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset int) ([]Discussion, error) {
+	return s.list(ctx, owner, "", limit, offset)
+}
+
+// ListByVisibility returns an owner's public or private discussions, newest first.
+func (s *DiscussionStore) ListByVisibility(ctx context.Context, owner string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
+	return s.list(ctx, owner, visibility, limit, offset)
+}
+
+func (s *DiscussionStore) list(ctx context.Context, owner string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -303,12 +393,16 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
-		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-		tts_cost_usd, music_cost_usd, points_charged,
-		script_json, markdown, sources_json, researched, created_at, updated_at
-		FROM native_discussions WHERE owner_user_id = ?
-		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, limit, offset)
+	where := "owner_user_id = ?"
+	args := []any{owner}
+	if visibility != "" {
+		where += " AND visibility = ?"
+		args = append(args, string(visibility))
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
+		FROM native_discussions WHERE `+where+`
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +413,7 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 		if err != nil {
 			return nil, err
 		}
+		markDiscussionViewer(&d, owner)
 		out = append(out, d)
 	}
 	return out, rows.Err()
@@ -329,6 +424,15 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 // List's column set, scanning, and limit/offset clamping; an empty query is the
 // caller's responsibility (handlers fall back to List in that case).
 func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit, offset int) ([]Discussion, error) {
+	return s.search(ctx, owner, query, "", limit, offset)
+}
+
+// SearchByVisibility returns matching owner discussions filtered to public or private visibility.
+func (s *DiscussionStore) SearchByVisibility(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
+	return s.search(ctx, owner, query, visibility, limit, offset)
+}
+
+func (s *DiscussionStore) search(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -339,16 +443,20 @@ func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit
 		offset = 0
 	}
 	pattern := "%" + escapeLike(query) + "%"
-	rows, err := s.db.QueryContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
-		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-		tts_cost_usd, music_cost_usd, points_charged,
-		script_json, markdown, sources_json, researched, created_at, updated_at
+	where := "owner_user_id = ?"
+	args := []any{owner}
+	if visibility != "" {
+		where += " AND visibility = ?"
+		args = append(args, string(visibility))
+	}
+	args = append(args, pattern, pattern, pattern, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
 		FROM native_discussions
-		WHERE owner_user_id = ? AND (
+		WHERE `+where+` AND (
 			topic LIKE ? ESCAPE '\' OR
 			title LIKE ? ESCAPE '\' OR
 			markdown LIKE ? ESCAPE '\')
-		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, pattern, pattern, pattern, limit, offset)
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -359,9 +467,189 @@ func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit
 		if err != nil {
 			return nil, err
 		}
+		markDiscussionViewer(&d, owner)
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (s *DiscussionStore) ListPublic(ctx context.Context, viewer, query string, limit, offset int) ([]Discussion, error) {
+	return s.listMarket(ctx, viewer, query, limit, offset, false)
+}
+
+func (s *DiscussionStore) ListLiked(ctx context.Context, viewer, query string, limit, offset int) ([]Discussion, error) {
+	return s.listMarket(ctx, viewer, query, limit, offset, true)
+}
+
+func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, limit, offset int, likedOnly bool) ([]Discussion, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query = strings.TrimSpace(query)
+	args := []any{viewer, viewer}
+	from := ` FROM native_discussions d`
+	where := ` WHERE d.visibility = ? AND d.status IN (?, ?)`
+	if likedOnly {
+		from += ` JOIN native_discussion_likes mine ON mine.discussion_id = d.id AND mine.user_id = ?`
+		args = append(args, viewer)
+	}
+	args = append(args, string(DiscussionPublic), string(DiscussionGenerating), string(DiscussionReady))
+	if query != "" {
+		pattern := "%" + escapeLike(query) + "%"
+		where += ` AND (d.topic LIKE ? ESCAPE '\' OR d.title LIKE ? ESCAPE '\' OR d.markdown LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern)
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionSelectColumns("d")+`,
+		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
+		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
+		d.owner_user_id = ? AS is_owner`+from+where+`
+		ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussionWithMarket(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, viewer)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*Discussion, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+prefixedDiscussionSelectColumns("d")+`,
+		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
+		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
+		d.owner_user_id = ? AS is_owner
+		FROM native_discussions d
+		WHERE d.id = ? AND (d.owner_user_id = ? OR d.visibility = ?)`,
+		viewer, viewer, id, viewer, string(DiscussionPublic))
+	d, err := scanDiscussionWithMarket(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	markDiscussionViewer(&d, viewer)
+	lines, err := s.lines(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	d.Lines = lines
+	if d.IsOwner {
+		turns, err := s.EditTurns(ctx, viewer, id)
+		if err != nil {
+			return nil, err
+		}
+		d.EditTurns = turns
+	}
+	return &d, nil
+}
+
+func (s *DiscussionStore) Like(ctx context.Context, viewer, id string) (*Discussion, error) {
+	if ok, err := s.isPublic(ctx, id); err != nil || !ok {
+		return nil, err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_likes
+		(user_id, discussion_id, created_at) VALUES (?, ?, ?)`, viewer, id, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	return s.GetVisible(ctx, viewer, id)
+}
+
+func (s *DiscussionStore) Unlike(ctx context.Context, viewer, id string) (*Discussion, error) {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM native_discussion_likes WHERE user_id = ? AND discussion_id = ?`, viewer, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetVisible(ctx, viewer, id)
+}
+
+func (s *DiscussionStore) SetVisibility(ctx context.Context, owner, id string, visibility DiscussionVisibility, cover DiscussionCover) (*Discussion, error) {
+	if visibility == DiscussionPublic && !cover.Valid() {
+		return nil, errors.New("cover is required to publish")
+	}
+	now := time.Now().UnixMilli()
+	publishedAt := int64(0)
+	if visibility == DiscussionPublic {
+		publishedAt = now
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+		visibility = ?, published_at = ?, cover_type = ?, cover_image_url = ?, cover_image_key = ?,
+		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`,
+		string(visibility), publishedAt, strings.TrimSpace(cover.Type), storedCoverImageURL(cover), strings.TrimSpace(cover.ImageKey),
+		strings.TrimSpace(cover.GradientStart), strings.TrimSpace(cover.GradientEnd), strings.TrimSpace(cover.Prompt),
+		now, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
+// SetCover updates only the cover columns for an owned discussion, leaving
+// visibility untouched. This lets any discussion carry cover art — not just
+// published ones — set from the new-discussion sheet or the player's cover
+// editor. Passing an empty cover clears the existing art.
+func (s *DiscussionStore) SetCover(ctx context.Context, owner, id string, cover DiscussionCover) (*Discussion, error) {
+	now := time.Now().UnixMilli()
+	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+		cover_type = ?, cover_image_url = ?, cover_image_key = ?,
+		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`,
+		strings.TrimSpace(cover.Type), storedCoverImageURL(cover), strings.TrimSpace(cover.ImageKey),
+		strings.TrimSpace(cover.GradientStart), strings.TrimSpace(cover.GradientEnd), strings.TrimSpace(cover.Prompt),
+		now, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
+func storedCoverImageURL(cover DiscussionCover) string {
+	if strings.TrimSpace(cover.ImageKey) != "" {
+		return ""
+	}
+	return strings.TrimSpace(cover.ImageURL)
+}
+
+func (c DiscussionCover) Valid() bool {
+	switch strings.TrimSpace(c.Type) {
+	case "image", "ai":
+		return strings.TrimSpace(c.ImageURL) != "" || strings.TrimSpace(c.ImageKey) != ""
+	case "gradient":
+		return strings.TrimSpace(c.GradientStart) != "" && strings.TrimSpace(c.GradientEnd) != ""
+	default:
+		return false
+	}
+}
+
+func (s *DiscussionStore) isPublic(ctx context.Context, id string) (bool, error) {
+	var visibility string
+	err := s.db.QueryRowContext(ctx, `SELECT visibility FROM native_discussions WHERE id = ?`, id).Scan(&visibility)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return visibility == string(DiscussionPublic), err
 }
 
 // escapeLike escapes the SQL LIKE wildcards (% and _) and the escape character
@@ -390,10 +678,7 @@ func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussio
 }
 
 func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (*Discussion, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
-		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-		tts_cost_usd, music_cost_usd, points_charged,
-		script_json, markdown, sources_json, researched, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT `+discussionSelectColumns+`
 		FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
 	d, err := scanDiscussion(row)
 	if err != nil {
@@ -402,6 +687,7 @@ func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (
 		}
 		return nil, err
 	}
+	markDiscussionViewer(&d, owner)
 	return &d, nil
 }
 
@@ -530,6 +816,70 @@ func (s *DiscussionStore) AppendLine(ctx context.Context, owner, id string, line
 		return err
 	}
 	return s.appendLine(ctx, id, line)
+}
+
+func (s *DiscussionStore) AppendLineVisible(ctx context.Context, viewer, id string, line DiscussionLine) error {
+	if err := s.AuthorizeDiscussionParticipation(ctx, viewer, id); err != nil {
+		return err
+	}
+	return s.appendLine(ctx, id, line)
+}
+
+func (s *DiscussionStore) AuthorizeDiscussionParticipation(ctx context.Context, viewer, id string) error {
+	return s.authorizeParticipation(ctx, viewer, id, "")
+}
+
+func (s *DiscussionStore) AuthorizeJobParticipation(ctx context.Context, viewer, id, jobID string) error {
+	if strings.TrimSpace(jobID) == "" {
+		return errDiscussionNotVisible
+	}
+	return s.authorizeParticipation(ctx, viewer, id, jobID)
+}
+
+func (s *DiscussionStore) AuthorizeJobOwner(ctx context.Context, viewer, jobID string) error {
+	if strings.TrimSpace(jobID) == "" {
+		return errDiscussionNotVisible
+	}
+	var owner string
+	err := s.db.QueryRowContext(ctx, `SELECT owner_user_id FROM native_discussions WHERE job_id = ?`, jobID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errDiscussionNotVisible
+	}
+	if err != nil {
+		return err
+	}
+	if owner != viewer {
+		return errDiscussionForbidden
+	}
+	return nil
+}
+
+func (s *DiscussionStore) authorizeParticipation(ctx context.Context, viewer, id, jobID string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errDiscussionNotVisible
+	}
+	args := []any{id}
+	where := `id = ?`
+	if strings.TrimSpace(jobID) != "" {
+		where += ` AND job_id = ?`
+		args = append(args, jobID)
+	}
+	var owner, visibility, status string
+	err := s.db.QueryRowContext(ctx, `SELECT owner_user_id, visibility, status FROM native_discussions WHERE `+where, args...).Scan(&owner, &visibility, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errDiscussionNotVisible
+	}
+	if err != nil {
+		return err
+	}
+	if owner == viewer {
+		return nil
+	}
+	if visibility == string(DiscussionPublic) && status == string(DiscussionGenerating) {
+		return nil
+	}
+	return errDiscussionForbidden
 }
 
 func (s *DiscussionStore) ReplaceTranscript(ctx context.Context, id string, lines []agent.TranscriptLine) error {
@@ -705,37 +1055,83 @@ type discussionScanner interface {
 	Scan(dest ...any) error
 }
 
+func prefixedDiscussionSelectColumns(prefix string) string {
+	cols := strings.Split(discussionSelectColumns, ",")
+	for i, col := range cols {
+		cols[i] = prefix + "." + strings.TrimSpace(col)
+	}
+	return strings.Join(cols, ", ")
+}
+
 func scanDiscussion(row discussionScanner) (Discussion, error) {
 	var d Discussion
 	var scriptJSON, sourcesJSON string
 	var researched int
-	var created, updated int64
+	var created, updated, published int64
 	var costKnown int
 	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
 		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
-		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
 		&created, &updated)
 	if err != nil {
 		return d, err
 	}
+	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
+	return d, nil
+}
+
+func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
+	var d Discussion
+	var scriptJSON, sourcesJSON string
+	var researched int
+	var created, updated, published int64
+	var costKnown, liked, owner int
+	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
+		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
+		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
+		&created, &updated, &d.LikeCount, &liked, &owner)
+	if err != nil {
+		return d, err
+	}
+	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
+	d.IsLiked = liked != 0
+	d.IsOwner = owner != 0
+	return d, nil
+}
+
+func finalizeScannedDiscussion(d *Discussion, scriptJSON, sourcesJSON string, researched, costKnown int, published, created, updated int64) {
 	if strings.TrimSpace(scriptJSON) != "" {
 		var script config.DebateTopic
 		if err := json.Unmarshal([]byte(scriptJSON), &script); err != nil {
-			return d, err
+			return
 		}
 		d.Script = &script
 	}
 	if strings.TrimSpace(sourcesJSON) != "" {
-		if err := json.Unmarshal([]byte(sourcesJSON), &d.Sources); err != nil {
-			return d, err
-		}
+		_ = json.Unmarshal([]byte(sourcesJSON), &d.Sources)
+	}
+	if d.Visibility == "" {
+		d.Visibility = DiscussionPrivate
 	}
 	d.LLMCostKnown = costKnown != 0
 	d.Researched = researched != 0
 	d.CreatedAt = time.UnixMilli(created)
 	d.UpdatedAt = time.UnixMilli(updated)
-	return d, nil
+	if published > 0 {
+		t := time.UnixMilli(published)
+		d.PublishedAt = &t
+	}
+}
+
+func markDiscussionViewer(d *Discussion, viewer string) {
+	if d == nil {
+		return
+	}
+	d.IsOwner = d.OwnerUserID == viewer
 }
 
 func (s *DiscussionStore) ensureColumn(ctx context.Context, table, column, definition string) error {

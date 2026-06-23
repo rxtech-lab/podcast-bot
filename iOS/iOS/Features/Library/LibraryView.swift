@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var showingCustomerCenter = false
     @State private var showingPointsHistory = false
     @State private var showingWhatsNew = false
+    @State private var showingMarketplace = false
     @State private var path: [Discussion] = []
     /// Detail selection for the iPad split-view layout.
     @State private var selection: Discussion?
@@ -20,6 +21,8 @@ struct LibraryView: View {
     @State private var errorMessage: String?
     @State private var searchText = ""
     @State private var loadedSearchQuery = ""
+    @State private var visibilityFilter: LibraryVisibilityFilter = .all
+    @State private var loadedVisibilityFilter: LibraryVisibilityFilter = .all
     @State private var isSearchLoading = false
     @State private var searchTask: Task<Void, Never>?
     /// Plan requests for freshly-created discussions, keyed by id, so the plan
@@ -63,10 +66,23 @@ struct LibraryView: View {
                 showingWhatsNew = false
             }
         }
+        .fullScreenCover(isPresented: $showingMarketplace) {
+            MarketplaceView { discussion in
+                showingMarketplace = false
+                upsert(discussion)
+                navigate(to: discussion)
+            }
+        }
         .task { await load() }
         .task { await purchases.refreshBalance() }
         .onChange(of: searchText) { _, newValue in
             scheduleSearch(for: newValue)
+        }
+        .onChange(of: visibilityFilter) { _, newValue in
+            searchTask?.cancel()
+            Task {
+                await load(visibility: newValue, showsSearchOverlay: hasLoadedInitialPage)
+            }
         }
         .onDisappear {
             searchTask?.cancel()
@@ -130,6 +146,8 @@ struct LibraryView: View {
             initialLibraryLoadingView
         } else if discussions.isEmpty && !loadedSearchQuery.isEmpty {
             searchEmptyState
+        } else if discussions.isEmpty && loadedVisibilityFilter != .all {
+            visibilityEmptyState
         } else if discussions.isEmpty {
             emptyState
         } else {
@@ -140,6 +158,24 @@ struct LibraryView: View {
     @ToolbarContentBuilder
     private var libraryToolbar: some ToolbarContent {
         DefaultToolbarItem(kind: .search, placement: .bottomBar)
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                ForEach(LibraryVisibilityFilter.allCases) { filter in
+                    Button {
+                        visibilityFilter = filter
+                    } label: {
+                        Label(filter.title, systemImage: visibilityFilter == filter ? "checkmark" : filter.icon)
+                    }
+                }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+            .accessibilityLabel("Filter \(AppStringLiteral.stationsNameRaw)")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showingMarketplace = true } label: { Image(systemName: "square.grid.2x2.fill") }
+                .accessibilityLabel("Open market")
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingNew = true } label: { Image(systemName: "plus") }
         }
@@ -153,7 +189,7 @@ struct LibraryView: View {
                 Button("What's New") { showingWhatsNew = true }
                 Button("Refresh") {
                     Task {
-                        await load(searchQuery: searchText)
+                        await load(searchQuery: searchText, visibility: visibilityFilter)
                         await purchases.refreshBalance()
                     }
                 }
@@ -261,24 +297,33 @@ struct LibraryView: View {
         .accessibilityLabel("Loading \(AppStringLiteral.stationsNameRaw)")
     }
 
-    private func load(searchQuery: String? = nil, showsSearchOverlay: Bool = false) async {
+    private func load(searchQuery: String? = nil,
+                      visibility: LibraryVisibilityFilter? = nil,
+                      showsSearchOverlay: Bool = false) async {
         let query = normalizedSearchQuery(searchQuery ?? searchText)
+        let filter = visibility ?? visibilityFilter
         if showsSearchOverlay {
             isSearchLoading = true
         }
         isLoading = true
         defer {
             isLoading = false
-            if showsSearchOverlay && normalizedSearchQuery(searchText) == query {
+            if showsSearchOverlay && normalizedSearchQuery(searchText) == query && visibilityFilter == filter {
                 isSearchLoading = false
             }
             hasLoadedInitialPage = true
         }
         do {
-            let items = try await APIClient(tokens: auth).discussions(limit: pageSize, offset: 0, query: query)
-            guard normalizedSearchQuery(searchText) == query else { return }
+            let items = try await APIClient(tokens: auth).discussions(
+                limit: pageSize,
+                offset: 0,
+                query: query,
+                visibility: filter.apiVisibility
+            )
+            guard normalizedSearchQuery(searchText) == query, visibilityFilter == filter else { return }
             let selectedID = selection?.id
             loadedSearchQuery = query
+            loadedVisibilityFilter = filter
             discussions = items
             // Reconcile the iPad detail selection with the refreshed list so the
             // selected row stays highlighted and the detail reflects the newest copy.
@@ -297,6 +342,7 @@ struct LibraryView: View {
     private func loadMore() async {
         guard canLoadMore, !isLoadingMore, !isLoading else { return }
         let query = loadedSearchQuery
+        let filter = loadedVisibilityFilter
         let offset = discussions.count
         isLoadingMore = true
         defer { isLoadingMore = false }
@@ -304,9 +350,13 @@ struct LibraryView: View {
             let items = try await APIClient(tokens: auth).discussions(
                 limit: pageSize,
                 offset: offset,
-                query: query
+                query: query,
+                visibility: filter.apiVisibility
             )
-            guard normalizedSearchQuery(searchText) == query, loadedSearchQuery == query else { return }
+            guard normalizedSearchQuery(searchText) == query,
+                  loadedSearchQuery == query,
+                  visibilityFilter == filter,
+                  loadedVisibilityFilter == filter else { return }
             let existing = Set(discussions.map(\.id))
             discussions.append(contentsOf: items.filter { !existing.contains($0.id) })
             canLoadMore = items.count == pageSize
@@ -328,7 +378,7 @@ struct LibraryView: View {
                     try await api.deleteDiscussion(id: target.id)
                 } catch {
                     reportLoadError(error)
-                    await load(searchQuery: loadedSearchQuery)
+                    await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter)
                     return
                 }
             }
@@ -352,7 +402,7 @@ struct LibraryView: View {
             isSearchLoading = false
             guard !loadedSearchQuery.isEmpty else { return }
             searchTask = Task {
-                await load(searchQuery: "")
+                await load(searchQuery: "", visibility: visibilityFilter)
             }
             return
         }
@@ -364,7 +414,7 @@ struct LibraryView: View {
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            await load(searchQuery: text, showsSearchOverlay: true)
+            await load(searchQuery: text, visibility: visibilityFilter, showsSearchOverlay: true)
         }
     }
 
@@ -400,6 +450,14 @@ struct LibraryView: View {
             "No Results",
             systemImage: "magnifyingglass",
             description: Text("No \(AppStringLiteral.stationsNameRaw) match your search.")
+        )
+    }
+
+    private var visibilityEmptyState: some View {
+        ContentUnavailableView(
+            loadedVisibilityFilter.emptyTitle,
+            systemImage: loadedVisibilityFilter.icon,
+            description: Text(loadedVisibilityFilter.emptyMessage)
         )
     }
 
@@ -468,29 +526,130 @@ struct LibraryView: View {
     }
 }
 
+private enum LibraryVisibilityFilter: String, CaseIterable, Identifiable {
+    case all
+    case `public`
+    case `private`
+
+    var id: String { rawValue }
+
+    var apiVisibility: DiscussionVisibility? {
+        switch self {
+        case .all: return nil
+        case .public: return .public
+        case .private: return .private
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .all:
+            return String(localized: "All", comment: "Library visibility filter: all stations")
+        case .public:
+            return String(localized: "Public", comment: "Library visibility filter: public stations")
+        case .private:
+            return String(localized: "Private", comment: "Library visibility filter: private stations")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .all: return "tray.full"
+        case .public: return "globe"
+        case .private: return "lock.fill"
+        }
+    }
+
+    var emptyTitle: String {
+        switch self {
+        case .all:
+            return String(localized: "No \(AppStringLiteral.stationsNameRaw) yet")
+        case .public:
+            return String(localized: "No Public \(AppStringLiteral.stationsNameRaw)")
+        case .private:
+            return String(localized: "No Private \(AppStringLiteral.stationsNameRaw)")
+        }
+    }
+
+    var emptyMessage: String {
+        switch self {
+        case .all:
+            return String(localized: "Plan an AI \(AppStringLiteral.stationNameRaw) and generate the audio.")
+        case .public:
+            return String(localized: "Published \(AppStringLiteral.stationsNameRaw) will appear here.")
+        case .private:
+            return String(localized: "Private \(AppStringLiteral.stationsNameRaw) stay visible only to you.")
+        }
+    }
+}
+
 private struct DiscussionRow: View {
     let discussion: Discussion
     var isSelected: Bool = false
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(Theme.accent)
+            leading
                 .frame(width: 40)
             VStack(alignment: .leading, spacing: 4) {
                 Text(discussion.displayTitle)
                     .font(.headline)
                     .lineLimit(2)
-                Text(statusLabel)
-                    .font(.caption)
-                    .foregroundStyle(Theme.secondaryText)
+                HStack(spacing: 8) {
+                    Text(statusLabel)
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                    VisibilityBadge(isPublic: discussion.isPublic)
+                }
             }
             Spacer()
             Image(systemName: "chevron.right").foregroundStyle(Theme.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(tint: isSelected ? Theme.accent.opacity(0.55) : nil)
+    }
+
+    /// Cover thumbnail when the discussion has cover art, otherwise the
+    /// status icon. Keeps the row compact while surfacing covers in the library.
+    @ViewBuilder
+    private var leading: some View {
+        if let cover = discussion.cover, cover.hasImage || cover.hasGradient {
+            coverThumbnail(cover)
+                .frame(width: 40, height: 40)
+                .clipShape(.rect(cornerRadius: 8))
+        } else {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(Theme.accent)
+        }
+    }
+
+    @ViewBuilder
+    private func coverThumbnail(_ cover: DiscussionCover) -> some View {
+        if let urlString = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !urlString.isEmpty, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    coverGradient(cover)
+                }
+            }
+        } else {
+            coverGradient(cover)
+        }
+    }
+
+    private func coverGradient(_ cover: DiscussionCover) -> some View {
+        LinearGradient(
+            colors: [
+                Color(hex: cover.gradientStart ?? "#8E5CF7"),
+                Color(hex: cover.gradientEnd ?? "#00A3FF"),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     private var icon: String {
@@ -514,5 +673,17 @@ private struct DiscussionRow: View {
         case .failed:
             return String(localized: "Failed", comment: "Discussion row status: generation failed")
         }
+    }
+}
+
+private struct VisibilityBadge: View {
+    let isPublic: Bool
+
+    var body: some View {
+        Label(isPublic ? "Public" : "Private", systemImage: isPublic ? "globe" : "lock.fill")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(isPublic ? Theme.accent : Theme.secondaryText)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
     }
 }

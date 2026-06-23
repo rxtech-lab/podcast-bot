@@ -7,6 +7,7 @@ import Foundation
 final class JobSocket: @unchecked Sendable {
     private let api: APIClient
     private let jobID: String
+    private let discussionID: String
     private var task: URLSessionWebSocketTask?
     /// Set by `close()` to permanently stop the reconnect loop. Without it,
     /// cancelling the underlying `task` only ends the current connection and the
@@ -21,9 +22,10 @@ final class JobSocket: @unchecked Sendable {
     /// down. It is not a server event, so it carries no `data`.
     static let reconnectEvent = "__reconnected__"
 
-    init(api: APIClient, jobID: String) {
+    init(api: APIClient, jobID: String, discussionID: String) {
         self.api = api
         self.jobID = jobID
+        self.discussionID = discussionID
     }
 
     /// Opens the socket and yields decoded events, transparently reconnecting if
@@ -92,8 +94,20 @@ final class JobSocket: @unchecked Sendable {
 
     /// Pushes a participant message into the running discussion.
     func send(text: String, username: String) async {
-        struct Inbound: Encodable { let type = "message"; let text: String; let username: String }
-        guard let data = try? JSONEncoder().encode(Inbound(text: text, username: username)),
+        struct Inbound: Encodable {
+            let type = "message"
+            let text: String
+            let username: String
+            let discussionID: String
+
+            enum CodingKeys: String, CodingKey {
+                case type
+                case text
+                case username
+                case discussionID = "discussion_id"
+            }
+        }
+        guard let data = try? JSONEncoder().encode(Inbound(text: text, username: username, discussionID: discussionID)),
               let json = String(data: data, encoding: .utf8) else { return }
         try? await task?.send(.string(json))
     }

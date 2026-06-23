@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import AVFoundation
 import MediaPlayer
+import SwiftUI
 import os
 
 private let playerLog = Logger(subsystem: "com.debatebot.ios", category: "PlayerModel")
@@ -106,6 +107,11 @@ final class PlayerModel {
     private let api: APIClient
     private let username: String
 
+    /// Two prominent colors derived from the cover (gradient hexes, or extracted
+    /// from the cover image) used to tint the full-screen player background.
+    var coverColors: [Color] = []
+    private var coverColorsSourceKey: String?
+
     let player = AVPlayer()
     var isPlaying = false
     var currentTime: Double = 0
@@ -130,10 +136,10 @@ final class PlayerModel {
         TranscriptScrollToken.make(for: lines)
     }
     var canForceStop: Bool {
-        discussion.status == .generating && !isFinished && !isForceStopping && discussion.jobID != nil
+        discussion.isOwner == true && discussion.status == .generating && !isFinished && !isForceStopping && discussion.jobID != nil
     }
     var showsForceStopAction: Bool {
-        discussion.status == .generating && !isFinished && discussion.jobID != nil
+        discussion.isOwner == true && discussion.status == .generating && !isFinished && discussion.jobID != nil
     }
     var isReadyForDownload: Bool {
         discussion.status == .ready || (isFinished && downloadURL != nil)
@@ -266,6 +272,9 @@ final class PlayerModel {
             showTranscriptLoadingIfNeeded()
         }
         if let s = discussion.downloadURLString { downloadURL = URL(string: s) }
+        // Pick up cover art that may have been generated in the background after
+        // the library handed us this discussion (e.g. the new-discussion toggle).
+        tasks.append(Task { await self.refreshCover() })
         guard let jobID = discussion.jobID else { return }
 
         configureRemoteCommands()
@@ -793,7 +802,7 @@ final class PlayerModel {
     // MARK: - Live transcript (WebSocket)
 
     private func listenEvents(jobID: String) async {
-        let socket = JobSocket(api: api, jobID: jobID)
+        let socket = JobSocket(api: api, jobID: jobID, discussionID: discussion.id)
         self.socket = socket
         for await env in socket.events() {
             handle(env)
@@ -1081,6 +1090,41 @@ final class PlayerModel {
         }
         discussion.status = .ready
         updateNowPlayingInfo()
+    }
+
+    /// Fetches the latest discussion solely to pick up cover art generated in
+    /// the background, without disturbing live transcript/playback state.
+    private func refreshCover() async {
+        guard let fresh = try? await api.discussion(id: discussion.id) else { return }
+        if let cover = fresh.cover, cover.hasImage || cover.hasGradient {
+            discussion.cover = cover
+        }
+        await loadCoverColors()
+    }
+
+    /// Resolves the two background colors for the current cover: gradient covers
+    /// use their stored hexes directly; image covers are downloaded and sampled.
+    /// Keyed so it skips redundant work when the cover hasn't changed.
+    func loadCoverColors() async {
+        guard let cover = discussion.cover else { return }
+        let key = cover.imageURL ?? "\(cover.gradientStart ?? "")-\(cover.gradientEnd ?? "")"
+        guard !key.isEmpty, key != coverColorsSourceKey else { return }
+
+        if cover.hasGradient, let start = cover.gradientStart, let end = cover.gradientEnd {
+            coverColorsSourceKey = key
+            coverColors = [Color(hex: start), Color(hex: end)]
+            return
+        }
+        guard cover.hasImage,
+              let urlString = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let url = URL(string: urlString),
+              let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+        let colors = await Task.detached(priority: .utility) {
+            CoverPalette.dominantColors(from: data, count: 2)
+        }.value
+        guard colors.count >= 2 else { return }
+        coverColorsSourceKey = key
+        coverColors = colors
     }
 
     nonisolated static func mergingLocalDiscussionState(current: Discussion, fresh: Discussion) -> Discussion {

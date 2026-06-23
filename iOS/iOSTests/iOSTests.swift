@@ -75,6 +75,30 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Content-Type"), "application/json")
     }
 
+    @MainActor
+    func testForceStopActionRequiresDiscussionOwner() throws {
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: URLSession(configuration: .ephemeral))
+        var discussion = try decodeDiscussion(status: "generating", pointsCharged: 0)
+        discussion.jobID = "job-1"
+        discussion.isOwner = false
+        let listenerModel = PlayerModel(discussion: discussion, api: api, username: "viewer")
+        let listenerCanForceStop = listenerModel.canForceStop
+        let listenerShowsForceStopAction = listenerModel.showsForceStopAction
+
+        XCTAssertFalse(listenerCanForceStop)
+        XCTAssertFalse(listenerShowsForceStopAction)
+
+        discussion.isOwner = true
+        let ownerModel = PlayerModel(discussion: discussion, api: api, username: "owner")
+        let ownerCanForceStop = ownerModel.canForceStop
+        let ownerShowsForceStopAction = ownerModel.showsForceStopAction
+
+        XCTAssertTrue(ownerCanForceStop)
+        XCTAssertTrue(ownerShowsForceStopAction)
+    }
+
     func testDiscussionsSearchAddsQueryParameter() async throws {
         var capturedRequest: URLRequest?
         URLProtocolStub.handler = { request in
@@ -92,14 +116,89 @@ final class iOSTests: XCTestCase {
                             tokens: StaticTokenProvider(token: "token-1"),
                             session: session)
 
-        _ = try await api.discussions(limit: 10, offset: 20, query: "  vibe coding  ")
+        _ = try await api.discussions(limit: 10,
+                                      offset: 20,
+                                      query: "  vibe coding  ",
+                                      visibility: .public)
 
         XCTAssertEqual(capturedRequest?.httpMethod, "GET")
         XCTAssertEqual(capturedRequest?.url?.path, "/api/discussions")
         XCTAssertEqual(capturedRequest?.url?.queryItems["limit"], "10")
         XCTAssertEqual(capturedRequest?.url?.queryItems["offset"], "20")
         XCTAssertEqual(capturedRequest?.url?.queryItems["q"], "vibe coding")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["visibility"], "public")
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+    }
+
+    func testMarketStationsSearchAddsQueryParameter() async throws {
+        var capturedRequest: URLRequest?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data("[]".utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        _ = try await api.marketStations(limit: 12, offset: 24, query: "  space music  ")
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "GET")
+        XCTAssertEqual(capturedRequest?.url?.path, "/api/market/stations")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["limit"], "12")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["offset"], "24")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["q"], "space music")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+    }
+
+    func testPublishVisibilityPatchEncodesCover() async throws {
+        var capturedRequest: URLRequest?
+        var capturedBody: Data?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            capturedBody = request.httpBodyStreamData ?? request.httpBody
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data("""
+            {"id":"discussion-1","topic":"Topic","title":"Title","status":"ready","language":"en","visibility":"public"}
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        _ = try await api.updateDiscussionVisibility(
+            id: "discussion-1",
+            visibility: .public,
+            cover: DiscussionCover(type: "gradient",
+                                   imageURL: nil,
+                                   imageKey: nil,
+                                   gradientStart: "#111111",
+                                   gradientEnd: "#777777",
+                                   prompt: nil)
+        )
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "PATCH")
+        XCTAssertEqual(capturedRequest?.url?.path, "/api/discussions/discussion-1/visibility")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["visibility"] as? String, "public")
+        let cover = try XCTUnwrap(json["cover"] as? [String: Any])
+        XCTAssertEqual(cover["type"] as? String, "gradient")
+        XCTAssertEqual(cover["gradient_start"] as? String, "#111111")
+        XCTAssertEqual(cover["gradient_end"] as? String, "#777777")
     }
 
     func testTranscriptChunksAppendUntilDoneMarker() {

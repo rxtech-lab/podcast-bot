@@ -21,9 +21,10 @@ type wsFrame struct {
 // wsInbound is a message a participating viewer sends up the socket to join
 // the discussion. type:"message" is the only inbound kind today.
 type wsInbound struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Username string `json:"username"`
+	Type         string `json:"type"`
+	Text         string `json:"text"`
+	Username     string `json:"username"`
+	DiscussionID string `json:"discussion_id"`
 }
 
 // handleJobWS upgrades to a WebSocket that streams a single job's events
@@ -76,6 +77,11 @@ func (s *Server) handleJobWS(w http.ResponseWriter, r *http.Request) {
 				username := in.Username
 				if username == "" {
 					username = "viewer"
+				}
+				if s.d.Discussions != nil {
+					if err := s.d.Discussions.AuthorizeJobParticipation(ctx, user.ID, in.DiscussionID, jobID); err != nil {
+						continue
+					}
 				}
 				if _, ok := s.allowJobMessage(jobID, user, username); !ok {
 					continue

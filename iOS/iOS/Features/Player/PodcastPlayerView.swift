@@ -12,6 +12,7 @@ struct PodcastPlayerView: View {
     @Environment(PurchaseManager.self) private var purchases
     @Environment(\.scenePhase) private var scenePhase
     let discussion: Discussion
+    var onCreatedFromPlan: ((Discussion) -> Void)?
 
     @State private var model: PlayerModel?
     @State private var message = ""
@@ -20,8 +21,12 @@ struct PodcastPlayerView: View {
     @State private var showingImporter = false
     @State private var showingPhotos = false
     @State private var showingPointsHistory = false
+    @State private var showingPublishSheet = false
+    @State private var showingCoverEditor = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAttachment = false
+    @State private var isCreatingFromPlan = false
+    @State private var createFromPlanError: String?
     @State private var transcriptIsAtBottom = true
     @State private var transcriptShouldScrollToBottom = false
     @State private var transcriptScrollRequestTask: Task<Void, Never>?
@@ -48,39 +53,33 @@ struct PodcastPlayerView: View {
         }
         .navigationTitle(discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : discussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingPlan = true
-                } label: {
-                    Image(systemName: "doc.text")
-                }
-                .accessibilityLabel("Plan")
-            }
-            if purchases.isConfigured || model?.showsPodcastActions == true {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if let model {
-                        PodcastActionsMenu(
-                            model: model,
-                            showsPoints: purchases.isConfigured,
-                            pointsMenuLabel: pointsMenuLabel,
-                            onShowPoints: { showingPointsHistory = true }
-                        )
-                    } else {
-                        PodcastLoadingMenu(
-                            showsPoints: purchases.isConfigured,
-                            pointsMenuLabel: pointsMenuLabel,
-                            onShowPoints: { showingPointsHistory = true }
-                        )
-                    }
-                }
-            }
+        .toolbar { podcastToolbar }
+        .alert("Could not create \(AppStringLiteral.stationNameRaw)", isPresented: createFromPlanErrorBinding) {
+            Button("OK", role: .cancel) { createFromPlanError = nil }
+        } message: {
+            Text(createFromPlanError ?? "")
         }
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: discussion)
         }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
+        }
+        .sheet(isPresented: $showingPublishSheet) {
+            if let model {
+                PublishStationSheet(discussion: Binding(
+                    get: { model.discussion },
+                    set: { model.discussion = $0 }
+                ))
+            }
+        }
+        .sheet(isPresented: $showingCoverEditor) {
+            if let model {
+                CoverEditorSheet(discussion: Binding(
+                    get: { model.discussion },
+                    set: { model.discussion = $0 }
+                ))
+            }
         }
         .sheet(isPresented: Binding(
             get: { model?.showsDownloadDialog == true },
@@ -125,6 +124,59 @@ struct PodcastPlayerView: View {
             // immediately to recover anything that streamed in the background.
             if phase == .active { model?.foregroundRefresh() }
         }
+    }
+
+    @ToolbarContentBuilder
+    private var podcastToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showingPlan = true
+            } label: {
+                Image(systemName: "doc.text")
+            }
+            .accessibilityLabel("Plan")
+        }
+        if showsActionsMenu {
+            ToolbarItem(placement: .topBarTrailing) {
+                if let model {
+                    PodcastActionsMenu(
+                        model: model,
+                        showsPoints: purchases.isConfigured,
+                        pointsMenuLabel: pointsMenuLabel,
+                        onShowPoints: { showingPointsHistory = true },
+                        onPublish: { showingPublishSheet = true },
+                        onEditCover: { showingCoverEditor = true },
+                        onMakePrivate: { makePrivate(model) },
+                        isCreatingFromPlan: isCreatingFromPlan,
+                        onCreateFromPlan: createFromPlanAction
+                    )
+                } else {
+                    PodcastLoadingMenu(
+                        showsPoints: purchases.isConfigured,
+                        pointsMenuLabel: pointsMenuLabel,
+                        onShowPoints: { showingPointsHistory = true },
+                        isCreatingFromPlan: isCreatingFromPlan,
+                        onCreateFromPlan: createFromPlanAction
+                    )
+                }
+            }
+        }
+    }
+
+    private var showsActionsMenu: Bool {
+        purchases.isConfigured || model?.showsPodcastActions == true || onCreatedFromPlan != nil
+    }
+
+    private var createFromPlanAction: (() -> Void)? {
+        guard onCreatedFromPlan != nil else { return nil }
+        return { createFromPlan() }
+    }
+
+    private var createFromPlanErrorBinding: Binding<Bool> {
+        Binding(
+            get: { createFromPlanError != nil },
+            set: { if !$0 { createFromPlanError = nil } }
+        )
     }
 
     /// Balance label for the podcast options menu, matching the discussion page.
@@ -313,6 +365,35 @@ struct PodcastPlayerView: View {
             }
         }
     }
+
+    private func makePrivate(_ model: PlayerModel) {
+        Task { @MainActor in
+            do {
+                model.discussion = try await APIClient(tokens: auth).updateDiscussionVisibility(
+                    id: model.discussion.id,
+                    visibility: .private
+                )
+            } catch {
+                // The existing player surface does not have a toast lane; leave
+                // the station public and let the user retry from the menu.
+            }
+        }
+    }
+
+    private func createFromPlan() {
+        guard !isCreatingFromPlan else { return }
+        isCreatingFromPlan = true
+        Task { @MainActor in
+            defer { isCreatingFromPlan = false }
+            do {
+                let created = try await APIClient(tokens: auth).createDiscussionFromPlan(id: discussion.id)
+                onCreatedFromPlan?(created)
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                createFromPlanError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
 }
 
 private struct PodcastTranscriptLoadingView: View {
@@ -340,6 +421,11 @@ struct PodcastActionsMenu: View {
     let showsPoints: Bool
     let pointsMenuLabel: String
     let onShowPoints: () -> Void
+    let onPublish: () -> Void
+    let onEditCover: () -> Void
+    let onMakePrivate: () -> Void
+    let isCreatingFromPlan: Bool
+    let onCreateFromPlan: (() -> Void)?
 
     var body: some View {
         Menu {
@@ -350,8 +436,29 @@ struct PodcastActionsMenu: View {
                     Label(pointsMenuLabel, systemImage: "sparkles")
                 }
             }
-            if showsPoints && model.showsPodcastActions {
+            if showsPoints && (model.showsPodcastActions || onCreateFromPlan != nil) {
                 Divider()
+            }
+            if let onCreateFromPlan {
+                Button(action: onCreateFromPlan) {
+                    Label(isCreatingFromPlan ? "Creating" : "Create from Plan",
+                          systemImage: isCreatingFromPlan ? "hourglass" : "plus.circle")
+                }
+                .disabled(isCreatingFromPlan)
+            }
+            if model.discussion.isOwner != false {
+                Button(action: onEditCover) {
+                    Label("Edit Cover", systemImage: "photo.badge.plus")
+                }
+                if model.discussion.isPublic {
+                    Button(role: .destructive, action: onMakePrivate) {
+                        Label("Make Private", systemImage: "lock")
+                    }
+                } else {
+                    Button(action: onPublish) {
+                        Label("Publish to Market", systemImage: "globe")
+                    }
+                }
             }
             if model.canDownloadPodcast {
                 Button {
@@ -381,6 +488,8 @@ struct PodcastLoadingMenu: View {
     let showsPoints: Bool
     let pointsMenuLabel: String
     let onShowPoints: () -> Void
+    let isCreatingFromPlan: Bool
+    let onCreateFromPlan: (() -> Void)?
 
     var body: some View {
         Menu {
@@ -390,6 +499,16 @@ struct PodcastLoadingMenu: View {
                 } label: {
                     Label(pointsMenuLabel, systemImage: "sparkles")
                 }
+            }
+            if showsPoints && onCreateFromPlan != nil {
+                Divider()
+            }
+            if let onCreateFromPlan {
+                Button(action: onCreateFromPlan) {
+                    Label(isCreatingFromPlan ? "Creating" : "Create from Plan",
+                          systemImage: isCreatingFromPlan ? "hourglass" : "plus.circle")
+                }
+                .disabled(isCreatingFromPlan)
             }
         } label: {
             Image(systemName: "ellipsis.circle")

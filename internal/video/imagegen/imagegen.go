@@ -16,32 +16,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	xdraw "golang.org/x/image/draw"
 )
 
-// Client posts to the AI Gateway image endpoint and returns decoded image
-// bytes. Construct via New; the zero value is not usable.
+// Client posts to image-generation endpoints and returns decoded image bytes.
+// Construct via New; the zero value is not usable.
 type Client struct {
 	httpClient *http.Client
 	apiKey     string
+	geminiKey  string
 }
 
 // New builds a Client. apiKey may be empty — in that case New reads from
-// AI_GATEWAY_API_KEY then OPENAI_API_KEY (the same env vars the rest of the
-// bot already uses for the gateway). Returns an error if no key is found.
+// AI_GATEWAY_API_KEY then OPENAI_API_KEY for gateway-routed image models, and
+// GEMINI_API_KEY for Google's native Nano Banana models. Returns an error if
+// no usable key is found.
 func New(apiKey string) (*Client, error) {
 	if apiKey == "" {
 		apiKey = firstNonEmpty(
-			os.Getenv("AI_GATEWAY_API_KEY"),
-			os.Getenv("OPENAI_API_KEY"),
+			envOrDotEnv("AI_GATEWAY_API_KEY"),
+			envOrDotEnv("OPENAI_API_KEY"),
 		)
 	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("imagegen: no API key (set AI_GATEWAY_API_KEY or OPENAI_API_KEY)")
+	geminiKey := envOrDotEnv("GEMINI_API_KEY")
+	if apiKey == "" && geminiKey == "" {
+		return nil, fmt.Errorf("imagegen: no API key (set AI_GATEWAY_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)")
 	}
 	return &Client{
 		httpClient: &http.Client{Timeout: 5 * time.Minute},
 		apiKey:     apiKey,
+		geminiKey:  geminiKey,
 	}, nil
 }
 
@@ -58,10 +63,9 @@ type Request struct {
 // (PNG/JPEG depending on what the model returns; both are decodable by
 // image.Decode below).
 //
-// Routing: Google's gemini-*-image models are surfaced by the gateway
-// through chat completions with modalities=["image"], not the
-// /v1/images/generations endpoint. Generate auto-detects those models and
-// dispatches the correct request shape.
+// Routing: Google's gemini-*-image models are sent through Google's native
+// Interactions API when GEMINI_API_KEY is available. Older gateway-compatible
+// models continue to use the OpenAI-compatible /v1/images/generations path.
 //
 // Transient failures (DNS/connection errors, 429, 5xx) are retried with
 // exponential backoff up to maxRetryAttempts; permanent errors
@@ -70,7 +74,10 @@ type Request struct {
 func (c *Client) Generate(ctx context.Context, req Request) ([]byte, error) {
 	doOnce := func() ([]byte, error) {
 		if isGeminiImageModel(req.Model) {
-			return c.generateChatImage(ctx, req)
+			if c.geminiKey == "" {
+				return nil, fmt.Errorf("imagegen: Gemini image model requires GEMINI_API_KEY")
+			}
+			return c.generateGeminiInteractionImage(ctx, req)
 		}
 		return c.generateImage(ctx, req)
 	}
@@ -139,6 +146,9 @@ func isTransientStatus(code int) bool {
 }
 
 func (c *Client) generateImage(ctx context.Context, req Request) ([]byte, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("imagegen: no gateway API key (set AI_GATEWAY_API_KEY or OPENAI_API_KEY)")
+	}
 	body := map[string]any{
 		"model":           req.Model,
 		"prompt":          req.Prompt,
@@ -194,30 +204,30 @@ func (c *Client) generateImage(ctx context.Context, req Request) ([]byte, error)
 	return base64.StdEncoding.DecodeString(parsed.Data[0].B64)
 }
 
-// generateChatImage hits /v1/chat/completions with modalities=["image"]
-// — the route Gemini's flash-image models use through the AI Gateway.
-// The image returns inside choices[0].message.images[0].image_url.url as
-// a data: URL.
-func (c *Client) generateChatImage(ctx context.Context, req Request) ([]byte, error) {
+// generateGeminiInteractionImage uses Google's native Interactions API for
+// Nano Banana models. The current Gemini docs return the last generated image
+// at output_image.data, while interleaved results can also appear under
+// steps[].content[].
+func (c *Client) generateGeminiInteractionImage(ctx context.Context, req Request) ([]byte, error) {
 	body := map[string]any{
-		"model": req.Model,
-		"messages": []any{
+		"model": geminiModelName(req.Model),
+		"input": []any{
 			map[string]any{
-				"role":    "user",
-				"content": req.Prompt,
+				"type": "text",
+				"text": req.Prompt,
 			},
 		},
-		"modalities": []string{"image"},
+		"response_format": geminiResponseFormat(req),
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, GatewayChatURL, bytes.NewReader(buf))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, GeminiInteractionsURL, bytes.NewReader(buf))
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("x-goog-api-key", c.geminiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -228,56 +238,125 @@ func (c *Client) generateChatImage(ctx context.Context, req Request) ([]byte, er
 
 	rawResp, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode/100 != 2 {
-		statusErr := fmt.Errorf("gateway chat %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
+		statusErr := fmt.Errorf("gemini interactions %d: %s", resp.StatusCode, truncate(string(rawResp), 400))
 		if isTransientStatus(resp.StatusCode) {
 			return nil, retryable(statusErr)
 		}
 		return nil, statusErr
 	}
-
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Images []struct {
-					Type     string `json:"type"`
-					ImageURL struct {
-						URL string `json:"url"`
-					} `json:"image_url"`
-				} `json:"images"`
-			} `json:"message"`
-		} `json:"choices"`
+	b64 := geminiImageData(rawResp)
+	if b64 == "" {
+		return nil, fmt.Errorf("no image data in Gemini interactions response (body: %s)", truncate(string(rawResp), 400))
 	}
-	if err := json.Unmarshal(rawResp, &parsed); err != nil {
-		return nil, fmt.Errorf("parse chat response: %w (body: %s)", err, truncate(string(rawResp), 400))
-	}
-	if len(parsed.Choices) == 0 || len(parsed.Choices[0].Message.Images) == 0 {
-		return nil, fmt.Errorf("no image data in chat response (body: %s)", truncate(string(rawResp), 400))
-	}
-	url := parsed.Choices[0].Message.Images[0].ImageURL.URL
-	return decodeDataURL(url)
+	return base64.StdEncoding.DecodeString(b64)
 }
 
-// decodeDataURL parses a data:image/...;base64,... URL and returns the
-// decoded bytes. Anything else is rejected.
-func decodeDataURL(s string) ([]byte, error) {
-	const prefix = "data:"
-	if !strings.HasPrefix(s, prefix) {
-		return nil, fmt.Errorf("not a data URL")
+func geminiModelName(model string) string {
+	return strings.TrimPrefix(model, "google/")
+}
+
+func geminiResponseFormat(req Request) map[string]any {
+	format := map[string]any{
+		"type":      "image",
+		"mime_type": "image/jpeg",
 	}
-	comma := strings.Index(s, ",")
-	if comma < 0 {
-		return nil, fmt.Errorf("malformed data URL: missing comma")
+	if ratio := aspectRatioFromSize(req.Size); ratio != "" {
+		format["aspect_ratio"] = ratio
 	}
-	meta := s[len(prefix):comma]
-	if !strings.Contains(meta, "base64") {
-		return nil, fmt.Errorf("data URL not base64-encoded")
+	if tier := geminiImageSizeTier(req.Size); tier != "" {
+		format["image_size"] = tier
 	}
-	return base64.StdEncoding.DecodeString(s[comma+1:])
+	return format
+}
+
+func geminiImageData(raw []byte) string {
+	var parsed struct {
+		OutputImage struct {
+			Data string `json:"data"`
+		} `json:"output_image"`
+		Steps []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Data string `json:"data"`
+			} `json:"content"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	if parsed.OutputImage.Data != "" {
+		return parsed.OutputImage.Data
+	}
+	for _, step := range parsed.Steps {
+		if step.Type != "" && step.Type != "model_output" {
+			continue
+		}
+		for _, block := range step.Content {
+			if block.Type == "image" && block.Data != "" {
+				return block.Data
+			}
+		}
+	}
+	return ""
+}
+
+func aspectRatioFromSize(size string) string {
+	w, h, ok := parsePixelSize(size)
+	if !ok || w <= 0 || h <= 0 {
+		return ""
+	}
+	g := gcd(w, h)
+	return fmt.Sprintf("%d:%d", w/g, h/g)
+}
+
+func geminiImageSizeTier(size string) string {
+	w, h, ok := parsePixelSize(size)
+	if !ok {
+		return ""
+	}
+	longest := max(w, h)
+	switch {
+	case longest <= 512:
+		return "512"
+	case longest <= 1024:
+		return "1K"
+	case longest <= 2048:
+		return "2K"
+	case longest <= 4096:
+		return "4K"
+	default:
+		return ""
+	}
+}
+
+func parsePixelSize(size string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(size), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	var w, h int
+	if _, err := fmt.Sscanf(parts[0], "%d", &w); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(parts[1], "%d", &h); err != nil {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a < 0 {
+		return -a
+	}
+	return a
 }
 
 // isGeminiImageModel reports whether the model slug routes through
-// /v1/chat/completions with image modalities instead of the dedicated
-// images endpoint.
+// Google's native Interactions API when GEMINI_API_KEY is available.
 func isGeminiImageModel(model string) bool {
 	if !strings.HasPrefix(model, "google/gemini-") {
 		return false
@@ -310,6 +389,17 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func envOrDotEnv(key string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	values, err := godotenv.Read()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values[key])
 }
 
 func truncate(s string, n int) string {

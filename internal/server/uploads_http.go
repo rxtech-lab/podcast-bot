@@ -27,6 +27,7 @@ const uploadPutTTL = 10 * time.Minute
 // filename, either parsed markdown or a direct image URL, and the content type.
 type uploadResponse struct {
 	Filename string `json:"filename"`
+	Key      string `json:"key,omitempty"`
 	Markdown string `json:"markdown,omitempty"`
 	URL      string `json:"url,omitempty"`
 	MIMEType string `json:"mime_type,omitempty"`
@@ -188,7 +189,7 @@ func (s *Server) finishUploadedObject(ctx context.Context, key, filename, mimeTy
 		return uploadResponse{}, errUpload("presign upload")
 	}
 	if isImageMIME(mimeType) {
-		return uploadResponse{Filename: filename, URL: fetchURL, MIMEType: mimeType}, nil
+		return uploadResponse{Filename: filename, Key: key, URL: fetchURL, MIMEType: mimeType}, nil
 	}
 	if s.d.Env == nil || strings.TrimSpace(s.d.Env.MarkitdownServerURL) == "" {
 		return uploadResponse{}, errUpload("file parsing service not configured")
@@ -198,7 +199,7 @@ func (s *Server) finishUploadedObject(ctx context.Context, key, filename, mimeTy
 	if err != nil {
 		return uploadResponse{}, errUpload("parse file: " + err.Error())
 	}
-	return uploadResponse{Filename: filename, Markdown: markdown, URL: fetchURL, MIMEType: mimeType}, nil
+	return uploadResponse{Filename: filename, Key: key, Markdown: markdown, URL: fetchURL, MIMEType: mimeType}, nil
 }
 
 type errUpload string
