@@ -4,6 +4,9 @@
 // Include secrets if available (gitignored).
 #include? "Secrets.xcconfig"
 
+// RevenueCat public SDK API key for production builds.
+REVENUECAT_API_KEY = $(REVENUECAT_API_KEY_PROD)
+
 // Backend engine base URL (no trailing slash). AppConfig appends paths.
 AppAPIBaseURL = https:/$()/server.podcast.rxlab.app
 

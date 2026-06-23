@@ -10,6 +10,10 @@ enum APIError: Error, LocalizedError {
     case notAuthenticated
     case invalidRequest(String)
     case http(Int, String)
+    /// HTTP 402: the user doesn't hold enough points to start this action. Carries
+    /// the points required and the user's current balance so the UI can open the
+    /// paywall with context.
+    case insufficientPoints(required: Int, balance: Int)
     case decoding(String)
 
     var errorDescription: String? {
@@ -17,9 +21,20 @@ enum APIError: Error, LocalizedError {
         case .notAuthenticated: return "You're signed out. Please sign in again."
         case let .invalidRequest(msg): return msg
         case let .http(code, msg): return "Request failed (\(code)): \(msg)"
+        case let .insufficientPoints(required, balance):
+            return "You need \(required) points but have \(balance). Top up to continue."
         case let .decoding(msg): return "Couldn't read the server response: \(msg)"
         }
     }
+}
+
+/// Maps a non-2xx response into a typed APIError, decoding the points-shortfall
+/// body into `.insufficientPoints` so callers can present the paywall.
+func mapHTTPError(_ status: Int, _ data: Data) -> APIError {
+    if status == 402, let shortfall = try? JSONDecoder().decode(InsufficientPointsResponse.self, from: data) {
+        return .insufficientPoints(required: shortfall.requiredPoints, balance: shortfall.balance)
+    }
+    return .http(status, String(decoding: data, as: UTF8.self))
 }
 
 /// Talks to the debate-bot engine. Attaches the rxlab bearer token and, on a
@@ -191,6 +206,23 @@ final class APIClient: Sendable {
     func appendDiscussionLine(id: String, line: DiscussionLineRequest) async throws {
         let payload = try JSONEncoder().encode(line)
         _ = try await perform(request(method: "POST", path: "/api/discussions/\(id)/lines", body: payload))
+    }
+
+    // MARK: - Points
+
+    /// The signed-in user's current points balance.
+    func pointsBalance() async throws -> Int {
+        let resp: PointsBalanceResponse = try await get("/api/points/balance")
+        return resp.balance
+    }
+
+    /// The user's points balance plus recent ledger entries (newest first) for
+    /// the points-usage history view.
+    func pointsHistory(limit: Int = 50, offset: Int = 0) async throws -> PointsHistoryResponse {
+        try await get("/api/points/history", query: [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ])
     }
 
     // MARK: - Jobs
@@ -433,7 +465,7 @@ final class APIClient: Sendable {
                     guard (200..<300).contains(http.statusCode) else {
                         var message = ""
                         for try await line in bytes.lines { message += line }
-                        throw APIError.http(http.statusCode, message)
+                        throw mapHTTPError(http.statusCode, Data(message.utf8))
                     }
 
                     var event = "message"
@@ -556,7 +588,7 @@ final class APIClient: Sendable {
             http = resp as! HTTPURLResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw APIError.http(http.statusCode, String(decoding: data, as: UTF8.self))
+            throw mapHTTPError(http.statusCode, data)
         }
         return (data, http)
     }

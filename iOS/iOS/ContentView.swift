@@ -11,6 +11,7 @@ import RxAuthSwiftUI
 
 struct RootView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(PurchaseManager.self) private var purchases
 
     var body: some View {
         Group {
@@ -23,8 +24,17 @@ struct RootView: View {
                 .task { await auth.restore() }
             case .unauthenticated:
                 SignInScreen()
+                    .task { await purchases.signOut() }
             case .authenticated:
                 LibraryView()
+                    // Attribute RevenueCat purchases to this user (re-runs if the
+                    // signed-in subject changes) so the webhook credits the right
+                    // account.
+                    .task(id: auth.currentUser?.id) {
+                        if let subject = auth.currentUser?.id {
+                            await purchases.identify(userID: subject)
+                        }
+                    }
             }
         }
     }

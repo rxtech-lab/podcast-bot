@@ -24,6 +24,8 @@ type Tracker struct {
 	musicGens              int64
 	ttsCostPerMillionChars float64
 	lyriaCostPerGen        float64
+
+	usageSnapshot func(llm.UsageSummary)
 }
 
 // NewTracker starts the clock.
@@ -50,6 +52,18 @@ func (t *Tracker) SetMediaPricing(ttsPerMillionChars, lyriaPerGen float64) {
 	t.lyriaCostPerGen = lyriaPerGen
 }
 
+// SetUsageSnapshotCallback registers a callback invoked after chargeable LLM,
+// TTS, or music usage is recorded. The callback receives the current aggregate
+// snapshot and is called outside the tracker lock so it can safely persist to DB.
+func (t *Tracker) SetUsageSnapshotCallback(fn func(llm.UsageSummary)) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.usageSnapshot = fn
+	t.mu.Unlock()
+}
+
 // AddTTSCharacters adds n characters to the TTS usage counter (one synthesis
 // call's worth of text). No-op for n <= 0 so a failed/empty call costs nothing.
 func (t *Tracker) AddTTSCharacters(n int64) {
@@ -59,6 +73,7 @@ func (t *Tracker) AddTTSCharacters(n int64) {
 	t.mu.Lock()
 	t.ttsChars += n
 	t.mu.Unlock()
+	t.emitUsageSnapshot()
 }
 
 // AddMusicGeneration records one billed Lyria music-generation API call. Cache
@@ -70,6 +85,7 @@ func (t *Tracker) AddMusicGeneration() {
 	t.mu.Lock()
 	t.musicGens++
 	t.mu.Unlock()
+	t.emitUsageSnapshot()
 }
 
 // Elapsed returns wall-clock time since the tracker started.
@@ -118,7 +134,6 @@ func (t *Tracker) AddLLMUsage(u llm.Usage) {
 		return
 	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	model := u.Model
 	if model == "" {
 		model = "unknown"
@@ -133,6 +148,21 @@ func (t *Tracker) AddLLMUsage(u llm.Usage) {
 		current.CostKnown = true
 	}
 	t.usageByModel[model] = current
+	t.mu.Unlock()
+	t.emitUsageSnapshot()
+}
+
+func (t *Tracker) emitUsageSnapshot() {
+	if t == nil {
+		return
+	}
+	t.mu.RLock()
+	fn := t.usageSnapshot
+	t.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	fn(t.LLMSummary())
 }
 
 // LLMSummary returns aggregate LLM token and cost usage for the run.

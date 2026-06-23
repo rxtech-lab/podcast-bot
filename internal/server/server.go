@@ -73,7 +73,11 @@ type Deps struct {
 	Sessions    *SessionRegistry
 	Jobs        *JobRegistry
 	Discussions *DiscussionStore
-	Progress    *DiscussionProgressStore
+	// Points backs the points economy (per-user balance, ledger, charges). nil
+	// disables points gating/charging/hiding entirely — the server behaves as
+	// before. Wired from the same database as Discussions.
+	Points   *PointsStore
+	Progress *DiscussionProgressStore
 	Log         *slog.Logger
 	UploadRoot  string
 	SubmitJob   func(jobID string, sub JobSubmission) error
@@ -217,7 +221,14 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
+		s.mux.HandleFunc("GET /api/points/balance", s.handlePointsBalance)
+		s.mux.HandleFunc("GET /api/points/history", s.handlePointsHistory)
 	}
+
+	// The RevenueCat webhook authenticates with its own shared secret (it can't
+	// carry an OAuth bearer), so it is mounted unconditionally and bypasses the
+	// auth middleware allowlist; the handler verifies the secret itself.
+	s.mux.HandleFunc("POST /api/revenuecat/webhook", s.handleRevenueCatWebhook)
 
 	// The embedded TV SPA is served in stream + video modes. In dashboard
 	// mode the Next.js app is the frontend, so "/" returns a tiny health

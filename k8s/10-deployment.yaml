@@ -21,7 +21,7 @@ metadata:
     app: debate-bot
 spec:
   serviceName: debate-bot-headless   # must match the headless Service name
-  replicas: 3
+  replicas: 2
   podManagementPolicy: Parallel      # boot pods concurrently, not one-by-one
   updateStrategy:
     type: RollingUpdate

@@ -11,8 +11,8 @@ struct NewDiscussionView: View {
     var onPlanned: (Discussion, PlanRequest) -> Void = { _, _ in }
 
     @State private var topic = ""
-    @State private var discussants = 3
-    @State private var language = "en-US"
+    @AppStorage("newDiscussion.discussants") private var discussants = 3
+    @AppStorage("newDiscussion.language") private var language = "en-US"
     @State private var attachments: [PendingAttachment] = []
     @State private var isPlanning = false
     @State private var errorMessage: String?
@@ -44,6 +44,7 @@ struct NewDiscussionView: View {
             }
         }
         .interactiveDismissDisabled(true)
+        .onAppear(perform: normalizeStoredSettings)
     }
 
     private var form: some View {
@@ -118,6 +119,11 @@ struct NewDiscussionView: View {
         Divider()
             .overlay(Theme.divider.opacity(0.5))
             .padding(.leading, 46)
+    }
+
+    private func normalizeStoredSettings() {
+        discussants = min(max(discussants, 2), 6)
+        language = DiscussionLanguage.normalized(language)
     }
 
     /// Creates the placeholder discussion (fast), then hands it plus the plan

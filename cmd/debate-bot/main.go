@@ -819,6 +819,12 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		cancel()
 		return nil, 1
 	}
+	points, err := server.NewPointsStore(discussions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "points db:", err)
+		cancel()
+		return nil, 1
+	}
 	queue, err := goqueue.NewQueue(maxConcurrency)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "job queue:", err)
@@ -866,6 +872,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		Bus:            bus,
 		Jobs:           jobs,
 		Discussions:    discussions,
+		Points:         points,
 		Progress:       server.NewDiscussionProgressStore(env.RedisURL, log),
 		Log:            log,
 		UploadRoot:     uploadRoot,
@@ -896,6 +903,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 				Bus:         bus,
 				Jobs:        jobs,
 				Discussions: discussions,
+				Points:      points,
 				Queue:       queue,
 				Log:         log,
 				Uploader:    uploader,

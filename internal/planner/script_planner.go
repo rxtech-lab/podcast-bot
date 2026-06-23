@@ -24,8 +24,9 @@ type ProgressEvent struct {
 
 // Planner drafts and revises discussion scripts with a single LLM.
 type Planner struct {
-	env        *config.Env
-	onProgress func(ProgressEvent)
+	env           *config.Env
+	onProgress    func(ProgressEvent)
+	usageRecorder func(llm.Usage)
 }
 
 // New builds a Planner from engine env. Returns an error when env is nil so
@@ -42,6 +43,15 @@ func New(env *config.Env) (*Planner, error) {
 // per request, so this is request-scoped. Returns the receiver for chaining.
 func (p *Planner) WithProgress(fn func(ProgressEvent)) *Planner {
 	p.onProgress = fn
+	return p
+}
+
+// WithUsageRecorder registers a callback invoked for every LLM call the planner
+// makes, so the caller can meter and bill the planning phase. A Planner is
+// created per request, so this is request-scoped. Returns the receiver for
+// chaining. The recorder must be safe for concurrent use.
+func (p *Planner) WithUsageRecorder(fn func(llm.Usage)) *Planner {
+	p.usageRecorder = fn
 	return p
 }
 

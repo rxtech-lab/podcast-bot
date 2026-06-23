@@ -80,7 +80,12 @@ struct FullScreenPlayerView: View {
             Spacer()
 
             if model.showsPodcastActions {
-                PodcastActionsMenu(model: model)
+                PodcastActionsMenu(
+                    model: model,
+                    showsPoints: false,
+                    pointsMenuLabel: "Points",
+                    onShowPoints: {}
+                )
                     .font(.title3)
                     .foregroundStyle(.primary)
                     .frame(width: 40, height: 40)

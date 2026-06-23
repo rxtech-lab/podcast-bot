@@ -33,6 +33,14 @@ type planningToolSession struct {
 
 func (p *Planner) runPlanningAgent(ctx context.Context, user string, attachments []Attachment, opts planningAgentOptions) (*draft, []config.Source, error) {
 	client := llm.New(p.env.OpenAIBaseURL, p.env.OpenAIKey, p.scriptModel())
+	// Meter planning LLM usage when a recorder is registered, applying the same
+	// pricing fallback the content creator uses so cost is filled in even when
+	// the provider omits it from the usage payload.
+	if p.usageRecorder != nil {
+		client = client.
+			WithUsageRecorder(p.usageRecorder).
+			WithPricing(p.env.LLMInputCostPerMillion, p.env.LLMOutputCostPerMillion)
+	}
 	session := &planningToolSession{
 		planner:                  p,
 		researchRequired:         opts.ResearchRequired,

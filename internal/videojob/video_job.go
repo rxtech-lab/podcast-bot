@@ -27,6 +27,7 @@ import (
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/discussion"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/series"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/storage"
@@ -44,11 +45,15 @@ type Queue interface {
 // to each per-job orchestrator; today most uploads run with empty mcp
 // configs but the seam is here for future tools.
 type Deps struct {
-	Env          *config.Env
-	MCPCfg       *config.MCPConfig
-	Bus          *eventbus.Bus
-	Jobs         *server.JobRegistry
-	Discussions  *server.DiscussionStore
+	Env         *config.Env
+	MCPCfg      *config.MCPConfig
+	Bus         *eventbus.Bus
+	Jobs        *server.JobRegistry
+	Discussions *server.DiscussionStore
+	// Points, when set, reconciles the generation reservation against actual
+	// usage at job completion so a finished podcast is charged immediately (not
+	// lazily on a later discussion fetch). nil disables points charging.
+	Points       *server.PointsStore
 	Queue        Queue
 	Log          *slog.Logger
 	DiscussionID string
@@ -325,6 +330,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 		return
 	}
 	defer orch.Shutdown()
+	orch.Tracker.SetUsageSnapshotCallback(func(usage llm.UsageSummary) {
+		persistUsageSnapshot(context.Background(), deps, jobID, usage)
+	})
 
 	// Audio-only feeds have no stage to paint, so suppress all on-the-fly
 	// image generation inside Run (today: the discussion director's background
@@ -393,6 +401,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 		return
 	}
 	persistUsageSummary(ctx, deps, jobID, logger, orch)
+	chargeGenerationPoints(ctx, deps, logger, orch)
 	persistDiscussionTranscript(ctx, deps, logger, orch)
 	status(fmt.Sprintf("orchestrator done (%s)",
 		time.Since(tRun).Round(time.Second)))
@@ -462,6 +471,23 @@ func run(ctx context.Context, deps Deps, jobID string,
 			}
 		}
 
+		// Persist the subtitles sidecar to shared storage too, so the synced
+		// captions survive this pod being recycled — the audio already does via
+		// S3, but the VTT otherwise lives only on this pod's local disk. Keep the
+		// local copy as a fallback and never fail the job over captions.
+		var subtitlesS3Key string
+		if deps.Uploader.Enabled() {
+			subPath := filepath.Join(jobOutDir, "subtitles.vtt")
+			if info, statErr := os.Stat(subPath); statErr == nil && info.Size() > 0 {
+				key := deps.Uploader.Key(jobID + ".vtt")
+				if err := deps.Uploader.Upload(ctx, subPath, key); err != nil {
+					logger.Warn("s3 subtitles upload failed", "key", key, "err", err)
+				} else {
+					subtitlesS3Key = key
+				}
+			}
+		}
+
 		status("done")
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.Status = server.JobDone
@@ -469,6 +495,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			j.HasAudio = true
 			j.AudioOnly = true
 			j.AudioS3Key = s3Key
+			j.SubtitlesS3Key = subtitlesS3Key
 			j.DownloadURL = downloadURL
 		})
 		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
@@ -683,10 +710,9 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		return
 	}
 	usage := orch.UsageSummary()
-	if usage.TotalTokens == 0 {
+	if !hasUsage(usage) {
 		return
 	}
-	text := contentcreator.FormatUsageSummary(usage)
 	log.Info("llm usage summary",
 		"prompt_tokens", usage.PromptTokens,
 		"completion_tokens", usage.CompletionTokens,
@@ -698,20 +724,52 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		"music_gens", usage.MusicGenerations,
 		"music_cost_usd", usage.MusicCostUSD,
 		"total_cost_usd", usage.TotalCostUSD())
-	deps.Jobs.Update(jobID, func(j *server.Job) {
-		j.PromptTokens = usage.PromptTokens
-		j.CompletionTokens = usage.CompletionTokens
-		j.TotalTokens = usage.TotalTokens
-		j.LLMCostUSD = usage.CostUSD
-		j.LLMCostKnown = usage.CostKnown
-		j.TTSCostUSD = usage.TTSCostUSD
-		j.MusicCostUSD = usage.MusicCostUSD
-	})
-	deps.Jobs.AppendLog(jobID, "usage", text, usage)
+	persistUsageSnapshot(ctx, deps, jobID, usage)
+}
+
+func persistUsageSnapshot(ctx context.Context, deps Deps, jobID string, usage llm.UsageSummary) {
+	if !hasUsage(usage) {
+		return
+	}
+	deps.Jobs.UpdateUsage(jobID,
+		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
+		usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
 	if deps.Discussions != nil && deps.DiscussionID != "" {
 		_ = deps.Discussions.SetUsage(ctx, deps.DiscussionID,
 			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
 			usage.CostUSD, usage.CostKnown, usage.TTSCostUSD, usage.MusicCostUSD)
+	}
+}
+
+func hasUsage(usage llm.UsageSummary) bool {
+	return usage.TotalTokens > 0 || usage.CostUSD > 0 ||
+		usage.TTSCharacters > 0 || usage.TTSCostUSD > 0 ||
+		usage.MusicGenerations > 0 || usage.MusicCostUSD > 0
+}
+
+// chargeGenerationPoints reconciles the points reservation made when the user
+// started this discussion's generation against the run's actual cost, charging
+// immediately on completion. Idempotent (SettleGeneration); a later discussion
+// fetch reconciles the same way if this is skipped. Runs for both the video and
+// audio-only finalization paths, and regardless of token count, so a generation
+// reservation is always released.
+func chargeGenerationPoints(ctx context.Context, deps Deps, log *slog.Logger, orch *contentcreator.Orchestrator) {
+	if deps.Points == nil || deps.DiscussionID == "" || orch == nil {
+		return
+	}
+	usage := orch.UsageSummary()
+	detail := server.PointsUsageDetail{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		LLMCostUSD:       usage.CostUSD,
+		LLMCostKnown:     usage.CostKnown,
+		TTSCostUSD:       usage.TTSCostUSD,
+		MusicCostUSD:     usage.MusicCostUSD,
+		CostUSD:          usage.TotalCostUSD(),
+	}
+	if err := deps.Points.ChargeGeneration(ctx, deps.Env, deps.DiscussionID, detail); err != nil {
+		log.Warn("generation settle failed", "discussion_id", deps.DiscussionID, "err", err)
 	}
 }
 

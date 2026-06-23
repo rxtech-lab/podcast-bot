@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 /// mockups.
 struct PodcastPlayerView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(PurchaseManager.self) private var purchases
+    @Environment(\.scenePhase) private var scenePhase
     let discussion: Discussion
 
     @State private var model: PlayerModel?
@@ -17,13 +19,14 @@ struct PodcastPlayerView: View {
     @State private var showingFullPlayer = false
     @State private var showingImporter = false
     @State private var showingPhotos = false
+    @State private var showingPointsHistory = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAttachment = false
     @State private var transcriptIsAtBottom = true
     @State private var transcriptShouldScrollToBottom = false
     @State private var transcriptScrollRequestTask: Task<Void, Never>?
 
-    /// Stable id for the optional usage-summary accessory row so it doesn't
+    /// Stable id for the optional points-summary accessory row so it doesn't
     /// churn its identity across renders.
     private static let usageItemID = UUID()
 
@@ -54,14 +57,30 @@ struct PodcastPlayerView: View {
                 }
                 .accessibilityLabel("Plan")
             }
-            if let model, model.showsPodcastActions {
+            if purchases.isConfigured || model?.showsPodcastActions == true {
                 ToolbarItem(placement: .topBarTrailing) {
-                    PodcastActionsMenu(model: model)
+                    if let model {
+                        PodcastActionsMenu(
+                            model: model,
+                            showsPoints: purchases.isConfigured,
+                            pointsMenuLabel: pointsMenuLabel,
+                            onShowPoints: { showingPointsHistory = true }
+                        )
+                    } else {
+                        PodcastLoadingMenu(
+                            showsPoints: purchases.isConfigured,
+                            pointsMenuLabel: pointsMenuLabel,
+                            onShowPoints: { showingPointsHistory = true }
+                        )
+                    }
                 }
             }
         }
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: discussion)
+        }
+        .sheet(isPresented: $showingPointsHistory) {
+            PointsHistoryView()
         }
         .sheet(isPresented: Binding(
             get: { model?.showsDownloadDialog == true },
@@ -92,6 +111,7 @@ struct PodcastPlayerView: View {
                 m.start()
                 model = m
             }
+            await purchases.refreshBalance()
         }
         .onDisappear {
             // Presenting the full-screen cover disappears this view; don't tear
@@ -99,6 +119,19 @@ struct PodcastPlayerView: View {
             guard !showingFullPlayer else { return }
             model?.stop()
         }
+        .onChange(of: scenePhase) { _, phase in
+            // Returning to the foreground while the job is live: the socket may
+            // have been torn down while suspended, so reconcile the transcript
+            // immediately to recover anything that streamed in the background.
+            if phase == .active { model?.foregroundRefresh() }
+        }
+    }
+
+    /// Balance label for the podcast options menu, matching the discussion page.
+    private var pointsMenuLabel: String {
+        guard let balance = purchases.pointsBalance else { return "Points" }
+        let pointLabel = balance == 1 ? "Point" : "Points"
+        return "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))"
     }
 
     private func transcript(_ model: PlayerModel) -> some View {
@@ -125,22 +158,28 @@ struct PodcastPlayerView: View {
         switch item {
         case .line(let line):
             TranscriptBubble(line: line)
-        case .usage(_, let summary, let fallback):
-            if let summary {
-                UsageSummaryBubble(summary: summary)
-            } else {
-                UsageSummaryBubble(fallbackText: fallback)
-            }
+        case .usage(_, let points):
+            PointsSummaryBubble(points: points)
         }
     }
 
-    /// Transcript lines, plus the usage summary as a trailing accessory row.
+    /// Transcript lines, plus the points summary as a trailing accessory row.
+    ///
+    /// The listener's own messages are intentionally hidden: a sent message is
+    /// only used to steer the panel, and the backend echoes it straight back
+    /// over the socket as a `role: "user"` transcript event. Surfacing it would
+    /// duplicate the listener's text in what is otherwise a podcast transcript,
+    /// so we drop any user-authored line here (the message is still sent and
+    /// persisted — just not rendered).
     private func transcriptItems(for model: PlayerModel) -> [TranscriptListItem] {
-        var items = model.lines.map { TranscriptListItem.line($0) }
-        if model.usageSummary != nil || !model.usageSummaryText.isEmpty {
-            items.append(.usage(id: Self.usageItemID,
-                                summary: model.usageSummary,
-                                fallback: model.usageSummaryText))
+        var items = model.lines
+            .filter { !$0.isUser && !PlayerModel.isUserRole($0.role) }
+            .map { TranscriptListItem.line($0) }
+        // Show only the points this podcast consumed (planning + generation),
+        // never the underlying token/cost detail. Points are known once the
+        // discussion is charged (after generation completes).
+        if let points = model.discussion.pointsText {
+            items.append(.usage(id: Self.usageItemID, points: points))
         }
         return items
     }
@@ -293,9 +332,22 @@ private struct PodcastTranscriptLoadingView: View {
 
 struct PodcastActionsMenu: View {
     @Bindable var model: PlayerModel
+    let showsPoints: Bool
+    let pointsMenuLabel: String
+    let onShowPoints: () -> Void
 
     var body: some View {
         Menu {
+            if showsPoints {
+                Button {
+                    onShowPoints()
+                } label: {
+                    Label(pointsMenuLabel, systemImage: "sparkles")
+                }
+            }
+            if showsPoints && model.showsPodcastActions {
+                Divider()
+            }
             if model.canDownloadPodcast {
                 Button {
                     model.downloadPodcast()
@@ -312,6 +364,27 @@ struct PodcastActionsMenu: View {
                           systemImage: model.isForceStopping ? "hourglass" : "stop.fill")
                 }
                 .disabled(!model.canForceStop)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .accessibilityLabel("Podcast actions")
+    }
+}
+
+struct PodcastLoadingMenu: View {
+    let showsPoints: Bool
+    let pointsMenuLabel: String
+    let onShowPoints: () -> Void
+
+    var body: some View {
+        Menu {
+            if showsPoints {
+                Button {
+                    onShowPoints()
+                } label: {
+                    Label(pointsMenuLabel, systemImage: "sparkles")
+                }
             }
         } label: {
             Image(systemName: "ellipsis.circle")
@@ -415,15 +488,15 @@ private struct PlanSheetView: View {
 }
 
 /// A row in the transcript `MessageList`: either a live transcript line or the
-/// trailing usage-summary accessory.
+/// trailing points-summary accessory.
 private enum TranscriptListItem: Identifiable, MessageListItem {
     case line(LiveLine)
-    case usage(id: UUID, summary: UsageSummary?, fallback: String)
+    case usage(id: UUID, points: String)
 
     var id: UUID {
         switch self {
         case .line(let line): return line.id
-        case .usage(let id, _, _): return id
+        case .usage(let id, _): return id
         }
     }
 
@@ -432,7 +505,7 @@ private enum TranscriptListItem: Identifiable, MessageListItem {
         return false
     }
 
-    /// The usage summary is an accessory — it never participates in user-message
+    /// The points summary is an accessory — it never participates in user-message
     /// pinning.
     var isMessageListAccessory: Bool {
         if case .usage = self { return true }
@@ -447,12 +520,12 @@ enum SpeakerPalette {
     /// Distinct hues that all sit well on black and harmonize with the purple
     /// accent. The first entry is the accent itself so a lone host echoes the app.
     private static let colors: [Color] = [
-        Theme.accent,                                   // violet
-        Color(red: 0.20, green: 0.72, blue: 0.90),      // cyan
-        Color(red: 0.95, green: 0.45, blue: 0.62),      // rose
-        Color(red: 0.97, green: 0.66, blue: 0.31),      // amber
-        Color(red: 0.36, green: 0.79, blue: 0.55),      // green
-        Color(red: 0.46, green: 0.56, blue: 0.98),      // blue
+        Theme.accent, // violet
+        Color(red: 0.20, green: 0.72, blue: 0.90), // cyan
+        Color(red: 0.95, green: 0.45, blue: 0.62), // rose
+        Color(red: 0.97, green: 0.66, blue: 0.31), // amber
+        Color(red: 0.36, green: 0.79, blue: 0.55), // green
+        Color(red: 0.46, green: 0.56, blue: 0.98), // blue
     ]
 
     static func color(for speaker: String) -> Color {
@@ -466,12 +539,34 @@ enum SpeakerPalette {
     }
 
     static func initials(for speaker: String) -> String {
-        let letters = speaker
+        let letters = initialsSource(for: speaker)
             .split(separator: " ")
             .prefix(2)
             .compactMap(\.first)
             .map(String.init)
         return letters.isEmpty ? "?" : letters.joined().uppercased()
+    }
+
+    private static func initialsSource(for speaker: String) -> String {
+        var result = ""
+        var parenthesisDepth = 0
+        for character in speaker {
+            switch character {
+            case "(", "（":
+                parenthesisDepth += 1
+            case ")", "）":
+                if parenthesisDepth > 0 {
+                    parenthesisDepth -= 1
+                } else {
+                    result.append(character)
+                }
+            default:
+                if parenthesisDepth == 0 {
+                    result.append(character)
+                }
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -558,88 +653,26 @@ private struct TranscriptBubble: View {
     }
 }
 
-private struct UsageSummaryBubble: View {
-    private let summary: UsageSummary?
-    private let fallbackText: String?
-
-    init(summary: UsageSummary) {
-        self.summary = summary
-        self.fallbackText = nil
-    }
-
-    init(fallbackText: String) {
-        self.summary = nil
-        self.fallbackText = fallbackText
-    }
+/// Trailing accessory row showing only the points this podcast consumed. The
+/// detailed token/cost breakdown is intentionally hidden from users; the server
+/// sends only the points total.
+private struct PointsSummaryBubble: View {
+    let points: String
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Generation summary", systemImage: "wand.and.stars")
+            VStack(alignment: .leading, spacing: 6) {
+                Label("This podcast", systemImage: "sparkles")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Theme.accent)
-                if let summary {
-                    breakdown(summary)
-                } else if let fallbackText {
-                    Text(fallbackText)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.primary)
-                }
+                Text("Used \(points)")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
             }
             .padding(14)
             .background(Theme.agentBubble, in: .rect(cornerRadius: 14))
             Spacer(minLength: 40)
-        }
-    }
-
-    @ViewBuilder
-    private func breakdown(_ s: UsageSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Tokens
-            VStack(alignment: .leading, spacing: 4) {
-                row("Tokens", value: UsageSummary.formatInt(s.totalTokens), emphasized: true)
-                row("Input", value: UsageSummary.formatInt(s.promptTokens), indented: true)
-                row("Output", value: UsageSummary.formatInt(s.completionTokens), indented: true)
-            }
-
-            Divider().overlay(Theme.secondaryText.opacity(0.3))
-
-            // Cost
-            if s.costKnown {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let llm = s.llmCostUSD {
-                        row("Language model", value: UsageSummary.formatUSD(llm))
-                    }
-                    if s.ttsCostUSD > 0 {
-                        row("Speech (TTS)", value: UsageSummary.formatUSD(s.ttsCostUSD))
-                    }
-                    if s.musicCostUSD > 0 {
-                        row("Music", value: UsageSummary.formatUSD(s.musicCostUSD))
-                    }
-                }
-                if let total = s.totalCostUSD {
-                    Divider().overlay(Theme.secondaryText.opacity(0.3))
-                    row("Total cost", value: UsageSummary.formatUSD(total), emphasized: true)
-                }
-            } else {
-                Text("Total cost unavailable")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Theme.secondaryText)
-            }
-        }
-    }
-
-    private func row(_ label: String, value: String, emphasized: Bool = false, indented: Bool = false) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(indented ? .caption.weight(.medium) : .callout.weight(emphasized ? .semibold : .regular))
-                .foregroundStyle(indented ? Theme.secondaryText : .primary)
-                .padding(.leading, indented ? 12 : 0)
-            Spacer(minLength: 16)
-            Text(value)
-                .font(.callout.weight(emphasized ? .bold : .medium))
-                .foregroundStyle(emphasized ? Theme.accent : .primary)
-                .monospacedDigit()
         }
     }
 }

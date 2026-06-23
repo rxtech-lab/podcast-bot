@@ -72,6 +72,11 @@ type Discussion struct {
 	LLMCostKnown     bool                 `json:"llm_cost_known,omitempty"`
 	TTSCostUSD       float64              `json:"tts_cost_usd,omitempty"`
 	MusicCostUSD     float64              `json:"music_cost_usd,omitempty"`
+	// PointsCharged is the running total of points charged across this
+	// discussion's whole lifecycle (planning + generation). It is the only
+	// usage figure shown to end users; the token/cost fields above are hidden
+	// from clients (zeroed) once the points economy is enabled.
+	PointsCharged    int64                `json:"points_charged"`
 	Script           *config.DebateTopic  `json:"script,omitempty"`
 	Markdown         string               `json:"markdown,omitempty"`
 	Sources          []config.Source      `json:"sources,omitempty"`
@@ -204,6 +209,8 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"llm_cost_known", "llm_cost_known INTEGER NOT NULL DEFAULT 0"},
 		{"tts_cost_usd", "tts_cost_usd REAL NOT NULL DEFAULT 0"},
 		{"music_cost_usd", "music_cost_usd REAL NOT NULL DEFAULT 0"},
+		{"points_charged", "points_charged INTEGER NOT NULL DEFAULT 0"},
+		{"points_reserved", "points_reserved INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
@@ -298,7 +305,7 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
 		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-		tts_cost_usd, music_cost_usd,
+		tts_cost_usd, music_cost_usd, points_charged,
 		script_json, markdown, sources_json, researched, created_at, updated_at
 		FROM native_discussions WHERE owner_user_id = ?
 		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, limit, offset)
@@ -338,7 +345,7 @@ func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussio
 func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (*Discussion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, owner_user_id, topic, title, status, language, job_id,
 		download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-		tts_cost_usd, music_cost_usd,
+		tts_cost_usd, music_cost_usd, points_charged,
 		script_json, markdown, sources_json, researched, created_at, updated_at
 		FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
 	d, err := scanDiscussion(row)
@@ -659,7 +666,7 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 	var costKnown int
 	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
 		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
-		&d.TTSCostUSD, &d.MusicCostUSD,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
 		&created, &updated)
 	if err != nil {

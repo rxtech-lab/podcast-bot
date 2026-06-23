@@ -141,6 +141,7 @@ private struct DraftWebLink: Identifiable, Equatable {
 
 private struct AddSourcesView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(PurchaseManager.self) private var purchases
 
     let discussionID: String
     var onSaveStarted: ([String]) -> Void
@@ -154,6 +155,19 @@ private struct AddSourcesView: View {
     @State private var isSearching = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var showingPaywall = false
+
+    /// If the error is a points shortfall, open the paywall and stop. Returns
+    /// true when handled so the caller skips its normal failure path.
+    private func handleInsufficientPoints(_ error: Error) -> Bool {
+        guard case let APIError.insufficientPoints(required, balance) = error else { return false }
+        isSaving = false
+        isSearching = false
+        errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
+        Task { await purchases.refreshBalance() }
+        showingPaywall = true
+        return true
+    }
 
     var body: some View {
         ZStack {
@@ -162,6 +176,7 @@ private struct AddSourcesView: View {
                 linksList
             }
         }
+        .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .navigationTitle("Add Sources")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(isSaving || isSearching)
@@ -298,6 +313,7 @@ private struct AddSourcesView: View {
                 appendLinks(mapped, selected: false)
                 isSearching = false
             } catch {
+                if handleInsufficientPoints(error) { return }
                 isSearching = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
@@ -334,6 +350,7 @@ private struct AddSourcesView: View {
                     onFailed("The plan update stopped before it finished. Please try again.")
                 }
             } catch {
+                if handleInsufficientPoints(error) { return }
                 let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
                 isSaving = false
                 errorMessage = message

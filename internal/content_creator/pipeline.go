@@ -39,7 +39,7 @@ type Deps struct {
 	// (a trim-compensation offset) must not be applied to its sidecar cues.
 	AudioOnly  bool
 	Transcript *Transcript
-	LiveStream  *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
+	LiveStream *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
 
 	// MusicPaths maps planner directive prefix → mp3 file path for turns
 	// that should play with a Lyria-generated background bed mixed under

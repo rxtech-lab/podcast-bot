@@ -48,6 +48,48 @@ type Env struct {
 	// not hit the API and are not billed.
 	LyriaCostPerGeneration float64
 
+	// ---- Points economy ----
+	//
+	// PointsPerUSDCost converts a podcast's real provider cost (USD) into the
+	// points charged to the user: points = ceil(costUSD * PointsPerUSDCost). The
+	// markup over the raw cost is the company margin — it must exceed the sale
+	// rate (1000 pts = $1.50 → ~666.7 pts/$) to clear Apple's 30% cut and profit.
+	// Default 1340 ≈ a 2× markup. Override with POINTS_PER_USD_COST.
+	PointsPerUSDCost float64
+
+	// PointsEstCostPerMinuteUSD estimates a podcast's cost from its target
+	// minutes for the pre-generation balance gate, so a run can never deplete
+	// mid-generation. Default $0.02/min ≈ the observed $0.60 per 30-min podcast.
+	// Override with POINTS_EST_COST_PER_MINUTE_USD.
+	PointsEstCostPerMinuteUSD float64
+
+	// PointsPlanGateUSD is the minimum balance (USD-equivalent) a user must hold
+	// before a planning / improve / add-sources round may run, so planning is
+	// never free. Default $0.05. Override with POINTS_PLAN_GATE_USD.
+	PointsPlanGateUSD float64
+
+	// PointsMinPerPodcast is the floor charged for a generation when its real
+	// cost can't be determined, so a podcast is never free. Default 1.
+	// Override with POINTS_MIN_PER_PODCAST.
+	PointsMinPerPodcast int64
+
+	// PointsSignupGrant is an optional free starter balance credited the first
+	// time a user's balance is read. Default 0 (disabled). Override with
+	// POINTS_SIGNUP_GRANT.
+	PointsSignupGrant int64
+
+	// PointsProductGrants maps a RevenueCat product id to the points granted
+	// when that product is purchased or renewed. Seeded with defaults
+	// (consumable=1000, monthly=6667 ≈ $10/mo, yearly=0) and overridable via
+	// POINTS_PRODUCT_GRANTS ("id:points,id:points") and the per-product env vars
+	// POINTS_GRANT_CONSUMABLE / _MONTHLY / _YEARLY.
+	PointsProductGrants map[string]int64
+
+	// RevenueCatWebhookAuth is the shared secret expected in the Authorization
+	// header of POST /api/revenuecat/webhook. Empty disables the webhook.
+	// Set via REVENUECAT_WEBHOOK_AUTH.
+	RevenueCatWebhookAuth string
+
 	AzureSpeechKey    string
 	AzureSpeechRegion string
 
@@ -178,6 +220,12 @@ func LoadEnv() (*Env, error) {
 		LyriaCostPerGeneration: parseFloatEnvDefault(
 			"LYRIA_COST_PER_GENERATION", 0.08,
 		),
+		PointsPerUSDCost:          parseFloatEnvDefault("POINTS_PER_USD_COST", 1340),
+		PointsEstCostPerMinuteUSD: parseFloatEnvDefault("POINTS_EST_COST_PER_MINUTE_USD", 0.02),
+		PointsPlanGateUSD:         parseFloatEnvDefault("POINTS_PLAN_GATE_USD", 0.05),
+		PointsMinPerPodcast:       parseIntEnvDefault("POINTS_MIN_PER_PODCAST", 1),
+		PointsSignupGrant:         parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
+		RevenueCatWebhookAuth:     strings.TrimSpace(os.Getenv("REVENUECAT_WEBHOOK_AUTH")),
 		AzureSpeechKey:    strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
 		AzureSpeechRegion: strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
 		ElevenLabsAPIKey:  strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
@@ -222,6 +270,7 @@ func LoadEnv() (*Env, error) {
 	if e.OutDir == "" {
 		e.OutDir = "./out"
 	}
+	e.PointsProductGrants = parseProductGrants()
 	if e.PersistentRoot == "" {
 		// Default the cross-session archive root to the user's OUT_DIR so
 		// out-of-the-box runs put `tv-series/...` next to `session-<stamp>/...`.
@@ -305,6 +354,57 @@ func parseFloatEnvDefault(key string, def float64) float64 {
 		return def
 	}
 	return f
+}
+
+// parseIntEnvDefault parses an integer env var, returning def when unset or
+// invalid. Negative values are rejected (fall back to def) since every points
+// quantity is non-negative.
+func parseIntEnvDefault(key string, def int64) int64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// parseProductGrants builds the RevenueCat product-id → points-grant map. It
+// starts from the published defaults, then layers POINTS_PRODUCT_GRANTS
+// ("id:points,id:points") and the per-product overrides on top so operators can
+// tune grants without code changes.
+func parseProductGrants() map[string]int64 {
+	grants := map[string]int64{
+		"consumable": 1000,
+		"monthly":    6667, // ≈ $10/mo at the 1000 pts = $1.50 sale rate
+		"yearly":     0,    // set once the yearly price is finalised
+	}
+	for _, pair := range splitCSV(os.Getenv("POINTS_PRODUCT_GRANTS")) {
+		id, val, ok := strings.Cut(pair, ":")
+		if !ok {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
+		if id == "" || err != nil || n < 0 {
+			continue
+		}
+		grants[id] = n
+	}
+	for id, key := range map[string]string{
+		"consumable": "POINTS_GRANT_CONSUMABLE",
+		"monthly":    "POINTS_GRANT_MONTHLY",
+		"yearly":     "POINTS_GRANT_YEARLY",
+	} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				grants[id] = n
+			}
+		}
+	}
+	return grants
 }
 
 // ErrEnvNotLoaded is returned when an Env was expected but not initialised.

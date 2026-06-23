@@ -43,18 +43,20 @@ func jobRouteTarget(r *http.Request) (id, sub string, ok bool) {
 // available on the owner pod's local filesystem, so requests for it must keep
 // being proxied to the owner even after the job is marked done.
 //
-// Today the runner only uploads the final mp3/mp4 to object storage; subtitles,
-// the series archive, the transcript db, and HLS segments stay on owner-local
-// disk. mp3/mp4 themselves are owner-local too when their S3 upload was disabled
-// or failed (S3Key/AudioS3Key empty), in which case we must still proxy.
+// Today the runner uploads the final mp3/mp4 and the subtitles.vtt sidecar to
+// object storage; the series archive, the transcript db, and HLS segments stay
+// on owner-local disk. The mp3/mp4/vtt are owner-local too when their S3 upload
+// was disabled or failed (S3Key/AudioS3Key/SubtitlesS3Key empty), in which case
+// we must still proxy.
 func ownerLocalWhenDone(sub string, j *Job) bool {
 	switch {
 	case sub == "video":
 		return j.S3Key == "" // shared mp4 in S3 -> any pod can serve it
 	case sub == "audio":
 		return j.AudioS3Key == "" // shared mp3 in S3 -> any pod can serve it
-	case sub == "subtitles" || strings.HasPrefix(sub, "subtitles/"),
-		sub == "archive",
+	case sub == "subtitles" || strings.HasPrefix(sub, "subtitles/"):
+		return j.SubtitlesS3Key == "" // shared VTT in S3 -> any pod can serve it
+	case sub == "archive",
 		sub == "transcript",
 		strings.HasPrefix(sub, "hls/"):
 		return true

@@ -38,6 +38,8 @@
 	<string>$(AppAuthRedirectURI)</string>
 	<key>AppAuthScopes</key>
 	<string>$(AppAuthScopes)</string>
+	<key>RevenueCatAPIKey</key>
+	<string>$(REVENUECAT_API_KEY)</string>
 
 	<!-- OAuth redirect custom URL scheme (debatepod://oauth-callback). -->
 	<key>CFBundleURLTypes</key>
