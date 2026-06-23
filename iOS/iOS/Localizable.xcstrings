@@ -2012,7 +2012,7 @@
       }
     },
     "Plan" : {
-      "comment" : "Default label for a plan history card with no stored label",
+      "comment" : "Default label for a plan history card with no stored label\nDiscussion row status: planning without loaded plan details",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

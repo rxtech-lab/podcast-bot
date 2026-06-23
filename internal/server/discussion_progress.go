@@ -84,6 +84,55 @@ func (s *DiscussionProgressStore) Get(ctx context.Context, id string) *Discussio
 	return &p
 }
 
+func (s *DiscussionProgressStore) GetMany(ctx context.Context, ids []string) map[string]*DiscussionProgress {
+	out := make(map[string]*DiscussionProgress)
+	if s == nil || s.client == nil || len(ids) == 0 {
+		return out
+	}
+	keys := make([]string, 0, len(ids))
+	orderedIDs := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		orderedIDs = append(orderedIDs, id)
+		keys = append(keys, discussionProgressKey(id))
+	}
+	if len(keys) == 0 {
+		return out
+	}
+	values, err := s.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("fetch discussion progress batch", "err", err)
+		}
+		return out
+	}
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		var raw []byte
+		switch v := value.(type) {
+		case string:
+			raw = []byte(v)
+		case []byte:
+			raw = v
+		default:
+			continue
+		}
+		var p DiscussionProgress
+		if err := json.Unmarshal(raw, &p); err != nil {
+			continue
+		}
+		out[orderedIDs[i]] = &p
+	}
+	return out
+}
+
 func (s *DiscussionProgressStore) Clear(ctx context.Context, id string) {
 	if s == nil || s.client == nil || strings.TrimSpace(id) == "" {
 		return

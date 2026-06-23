@@ -71,6 +71,12 @@ const discussionSelectColumns = `id, owner_user_id, topic, title, status, langua
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, script_json, markdown, sources_json, researched,
 	created_at, updated_at`
 
+const discussionListSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
+	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
+	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
+	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, '' AS script_json, '' AS markdown, '[]' AS sources_json, researched,
+	created_at, updated_at`
+
 var (
 	errDiscussionNotVisible = errors.New("discussion is not visible")
 	errDiscussionForbidden  = errors.New("discussion access forbidden")
@@ -441,9 +447,9 @@ func (s *DiscussionStore) list(ctx context.Context, owner string, visibility Dis
 		args = append(args, string(visibility))
 	}
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
-		FROM native_discussions WHERE `+where+`
-		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionListSelectColumns+`
+			FROM native_discussions WHERE `+where+`
+			ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -491,9 +497,9 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 		args = append(args, string(visibility))
 	}
 	args = append(args, pattern, pattern, pattern, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
-		FROM native_discussions
-		WHERE `+where+` AND (
+	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionListSelectColumns+`
+			FROM native_discussions
+			WHERE `+where+` AND (
 			topic LIKE ? ESCAPE '\' OR
 			title LIKE ? ESCAPE '\' OR
 			markdown LIKE ? ESCAPE '\')
@@ -541,7 +547,7 @@ func (s *DiscussionStore) ListByCreator(ctx context.Context, viewer, creatorID, 
 		args = append(args, pattern, pattern, pattern)
 	}
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionSelectColumns("d")+`,
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d")+`,
 		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
 		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
 		d.owner_user_id = ? AS is_owner
@@ -591,7 +597,7 @@ func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, 
 		args = append(args, pattern, pattern, pattern)
 	}
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionSelectColumns("d")+`,
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d")+`,
 		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
 		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
 		d.owner_user_id = ? AS is_owner`+from+where+`
@@ -822,24 +828,82 @@ func (s *DiscussionStore) AttachCreatorProfiles(ctx context.Context, viewer stri
 	if len(items) == 0 {
 		return nil
 	}
-	cache := map[string]*CreatorProfile{}
+	creatorIDs := make([]string, 0, len(items))
 	for i := range items {
 		creatorID := strings.TrimSpace(items[i].OwnerUserID)
 		if creatorID == "" {
 			continue
 		}
-		profile, ok := cache[creatorID]
-		if !ok {
-			var err error
-			profile, err = s.CreatorProfile(ctx, viewer, creatorID)
+		creatorIDs = append(creatorIDs, creatorID)
+	}
+	profiles, err := s.CreatorProfiles(ctx, viewer, creatorIDs)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		items[i].Creator = profiles[strings.TrimSpace(items[i].OwnerUserID)]
+	}
+	return nil
+}
+
+func (s *DiscussionStore) CreatorProfiles(ctx context.Context, viewer string, creatorIDs []string) (map[string]*CreatorProfile, error) {
+	profiles := map[string]*CreatorProfile{}
+	ids := make([]string, 0, len(creatorIDs))
+	seen := make(map[string]bool, len(creatorIDs))
+	for _, id := range creatorIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return profiles, nil
+	}
+	values := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+4)
+	for i, id := range ids {
+		values[i] = "(?)"
+		args = append(args, id)
+	}
+	args = append(args, viewer, viewer, viewer, string(DiscussionPublic))
+	err := retryTransientDBConnection(ctx, func() error {
+		rows, err := s.db.QueryContext(ctx, `WITH ids(user_id) AS (VALUES `+strings.Join(values, ",")+`)
+			SELECT
+			ids.user_id,
+			COALESCE(p.display_name, '') AS display_name,
+			COALESCE(p.username, '') AS username,
+			COALESCE(p.avatar_url, '') AS avatar_url,
+			(SELECT COUNT(1) FROM creator_follows f WHERE f.creator_user_id = ids.user_id) AS follower_count,
+			EXISTS(SELECT 1 FROM creator_follows f WHERE f.creator_user_id = ids.user_id AND f.follower_user_id = ?) AS is_followed,
+			ids.user_id = ? AS is_self,
+			EXISTS(SELECT 1 FROM native_discussions d WHERE d.owner_user_id = ids.user_id AND (d.owner_user_id = ? OR d.visibility = ?)) AS has_visible_discussion
+			FROM ids
+			LEFT JOIN creator_profiles p ON p.user_id = ids.user_id`, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		nextProfiles := map[string]*CreatorProfile{}
+		for rows.Next() {
+			profile, visible, err := scanCreatorProfile(rows)
 			if err != nil {
 				return err
 			}
-			cache[creatorID] = profile
+			if !visible && !profile.IsSelf {
+				continue
+			}
+			p := profile
+			nextProfiles[p.ID] = &p
 		}
-		items[i].Creator = profile
-	}
-	return nil
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		profiles = nextProfiles
+		return nil
+	})
+	return profiles, err
 }
 
 func (s *DiscussionStore) SetVisibility(ctx context.Context, owner, id string, visibility DiscussionVisibility, cover DiscussionCover) (*Discussion, error) {
@@ -1320,9 +1384,22 @@ type discussionScanner interface {
 }
 
 func prefixedDiscussionSelectColumns(prefix string) string {
-	cols := strings.Split(discussionSelectColumns, ",")
+	return prefixedDiscussionColumns(prefix, discussionSelectColumns)
+}
+
+func prefixedDiscussionListSelectColumns(prefix string) string {
+	return prefixedDiscussionColumns(prefix, discussionListSelectColumns)
+}
+
+func prefixedDiscussionColumns(prefix, columns string) string {
+	cols := strings.Split(columns, ",")
 	for i, col := range cols {
-		cols[i] = prefix + "." + strings.TrimSpace(col)
+		col = strings.TrimSpace(col)
+		if strings.HasPrefix(col, "'' AS ") || strings.HasPrefix(col, "'[]' AS ") {
+			cols[i] = col
+		} else {
+			cols[i] = prefix + "." + col
+		}
 	}
 	return strings.Join(cols, ", ")
 }
