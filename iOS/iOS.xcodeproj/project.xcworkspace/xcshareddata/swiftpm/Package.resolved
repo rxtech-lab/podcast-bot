@@ -1,5 +1,5 @@
 {
-  "originHash" : "354de0c3415df7f69a5b8eb85ed139cc5385ace1c769abb056b7b4ab6d966514",
+  "originHash" : "400b46c77574c0b1b09dab19c9034b5ac75f2c71cf7a18208b82076d682aa40d",
   "pins" : [
     {
       "identity" : "equatable",
@@ -41,7 +41,7 @@
       "location" : "https://github.com/rxtech-lab/RxAuthSwift",
       "state" : {
         "branch" : "main",
-        "revision" : "f1bc8a1004c58f7eae628eaf8ae705e4f8c21c51"
+        "revision" : "af111a0fa7bdce6f9b53f4525df73a98d94e764e"
       }
     },
     {
