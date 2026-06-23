@@ -95,10 +95,10 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range items {
 		s.applyDiscussionJobStatus(r, &items[i])
-		s.applyDiscussionProgress(r.Context(), &items[i])
 		s.refreshDiscussionCoverURL(r.Context(), &items[i])
 		s.sanitizeDiscussionUsage(&items[i])
 	}
+	s.applyDiscussionProgresses(r.Context(), items)
 	writeJSON(w, items)
 }
 
@@ -703,6 +703,20 @@ func (s *Server) applyDiscussionProgress(ctx context.Context, d *Discussion) {
 		return
 	}
 	d.Progress = s.d.Progress.Get(ctx, d.ID)
+}
+
+func (s *Server) applyDiscussionProgresses(ctx context.Context, items []Discussion) {
+	if len(items) == 0 || s.d.Progress == nil {
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].ID)
+	}
+	progress := s.d.Progress.GetMany(ctx, ids)
+	for i := range items {
+		items[i].Progress = progress[items[i].ID]
+	}
 }
 
 func (s *Server) recordDiscussionProgress(ctx context.Context, id, operation string, ev planner.ProgressEvent) {

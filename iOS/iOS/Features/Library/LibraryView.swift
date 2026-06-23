@@ -664,8 +664,12 @@ private struct DiscussionRow: View {
     private var statusLabel: String {
         switch discussion.status {
         case .planning:
-            return String(localized: "Plan - \(discussion.sortedPeople.count) people",
-                          comment: "Discussion row status: planning, with the panelist count")
+            let peopleCount = discussion.sortedPeople.count
+            if peopleCount > 0 {
+                return String(localized: "Plan - \(peopleCount) people",
+                              comment: "Discussion row status: planning, with the panelist count")
+            }
+            return String(localized: "Plan", comment: "Discussion row status: planning without loaded plan details")
         case .generating:
             return String(localized: "Generating...", comment: "Discussion row status: podcast is generating")
         case .ready:

@@ -325,13 +325,25 @@ func (s *Server) prepareMarketDiscussions(r *http.Request, items []Discussion) {
 	viewer := s.requestUser(r).ID
 	for i := range items {
 		s.applyDiscussionJobStatus(r, &items[i])
-		s.applyDiscussionProgress(r.Context(), &items[i])
 		s.refreshDiscussionCoverURL(r.Context(), &items[i])
 		s.sanitizeDiscussionUsage(&items[i])
+	}
+	s.applyDiscussionProgresses(r.Context(), items)
+	if !needsCreatorProfileAttach(items) {
+		return
 	}
 	if err := s.d.Discussions.AttachCreatorProfiles(r.Context(), viewer, items); err != nil {
 		s.logger().Warn("creator profile attach failed", "err", err)
 	}
+}
+
+func needsCreatorProfileAttach(items []Discussion) bool {
+	for i := range items {
+		if strings.TrimSpace(items[i].OwnerUserID) != "" && items[i].Creator == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) rememberCreatorProfile(ctx context.Context, user requestUser) {

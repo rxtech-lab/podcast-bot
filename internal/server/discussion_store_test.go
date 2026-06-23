@@ -122,6 +122,9 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 	if ready.Status != DiscussionReady || ready.DownloadURL == "" {
 		t.Fatalf("ready mismatch: %+v", ready)
 	}
+	if ready.Markdown != "# AI Safety Panel" || len(ready.Sources) != 1 {
+		t.Fatalf("ready full content missing: %+v", ready)
+	}
 	if ready.PromptTokens != 1000 || ready.CompletionTokens != 250 || ready.TotalTokens != 1250 ||
 		ready.LLMCostUSD != 0.00375 || !ready.LLMCostKnown ||
 		ready.TTSCostUSD != 0.0012 || ready.MusicCostUSD != 0.16 {
@@ -134,6 +137,12 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].ID != created.ID {
 		t.Fatalf("List returned %+v, want created discussion", list)
+	}
+	if list[0].Title != "AI Safety Panel" {
+		t.Fatalf("List should retain title for row rendering: %+v", list[0])
+	}
+	if list[0].Script != nil || list[0].Markdown != "" || len(list[0].Sources) != 0 {
+		t.Fatalf("List should omit heavy script/markdown/sources payloads: script=%+v markdown=%q sources=%+v", list[0].Script, list[0].Markdown, list[0].Sources)
 	}
 
 	deleted, err := store.Delete(ctx, owner, created.ID)
@@ -353,6 +362,7 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 			Language: "en-US",
 		},
 		Markdown: "Orbital economics and reusable launch systems.",
+		Sources:  []config.Source{{Title: "Orbital Source", URL: "https://example.com/orbit", Markdown: "Large source body"}},
 	}
 	created, err := store.Create(ctx, owner, "space economy", resp)
 	if err != nil {
@@ -381,6 +391,19 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	if len(public) != 1 || public[0].ID != created.ID || public[0].IsLiked || public[0].IsOwner {
 		t.Fatalf("ListPublic = %+v, want one unliked non-owner item", public)
 	}
+	assertMarketListPayloadIsLightweight(t, public[0])
+	if public[0].Creator == nil {
+		t.Fatalf("ListPublic missing creator profile: %+v", public[0])
+	}
+
+	visible, err := store.GetVisible(ctx, viewer, created.ID)
+	if err != nil {
+		t.Fatalf("GetVisible: %v", err)
+	}
+	if visible == nil || visible.Script == nil || visible.Script.Title != "Space Markets" ||
+		visible.Markdown != resp.Markdown || len(visible.Sources) != 1 {
+		t.Fatalf("GetVisible full content = %+v", visible)
+	}
 
 	liked, err := store.Like(ctx, viewer, created.ID)
 	if err != nil {
@@ -396,6 +419,7 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	if len(likedPage) != 1 || likedPage[0].ID != created.ID || !likedPage[0].IsLiked {
 		t.Fatalf("ListLiked = %+v, want liked discussion", likedPage)
 	}
+	assertMarketListPayloadIsLightweight(t, likedPage[0])
 	otherLikedPage, err := store.ListLiked(ctx, otherViewer, "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListLiked other: %v", err)
@@ -410,6 +434,13 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	}
 	if unliked == nil || unliked.IsLiked || unliked.LikeCount != 0 {
 		t.Fatalf("Unlike returned %+v", unliked)
+	}
+}
+
+func assertMarketListPayloadIsLightweight(t *testing.T, d Discussion) {
+	t.Helper()
+	if d.Script != nil || d.Markdown != "" || len(d.Sources) != 0 {
+		t.Fatalf("market list row should omit heavy script/markdown/sources payloads: script=%+v markdown=%q sources=%+v", d.Script, d.Markdown, d.Sources)
 	}
 }
 
@@ -474,6 +505,7 @@ func TestDiscussionStoreCreatorProfilesAndFollows(t *testing.T) {
 	if len(stations) != 1 || stations[0].Creator == nil || stations[0].Creator.DisplayName != "Creator One" {
 		t.Fatalf("creator stations = %+v", stations)
 	}
+	assertMarketListPayloadIsLightweight(t, stations[0])
 
 	unfollowed, err := store.UnfollowCreator(ctx, viewer, owner)
 	if err != nil {
@@ -481,6 +513,61 @@ func TestDiscussionStoreCreatorProfilesAndFollows(t *testing.T) {
 	}
 	if unfollowed == nil || unfollowed.IsFollowed || unfollowed.FollowerCount != 0 {
 		t.Fatalf("unfollowed profile = %+v", unfollowed)
+	}
+}
+
+func TestDiscussionStoreAttachCreatorProfilesBatchesMultipleCreators(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	viewer := "oauth:viewer"
+	owners := []string{"oauth:owner-a", "oauth:owner-b"}
+	for i, owner := range owners {
+		if err := store.UpsertCreatorProfile(ctx, CreatorProfile{
+			ID:          owner,
+			DisplayName: fmt.Sprintf("Creator %d", i+1),
+		}); err != nil {
+			t.Fatalf("UpsertCreatorProfile %s: %v", owner, err)
+		}
+		d, err := store.Create(ctx, owner, fmt.Sprintf("topic %d", i+1), planResponse{
+			Script: &config.DebateTopic{Title: fmt.Sprintf("Station %d", i+1), Type: config.ContentTypeDiscussion, Language: "en-US"},
+		})
+		if err != nil {
+			t.Fatalf("Create %s: %v", owner, err)
+		}
+		if _, err := store.SetJob(ctx, owner, d.ID, fmt.Sprintf("job-%d", i+1)); err != nil {
+			t.Fatalf("SetJob %s: %v", owner, err)
+		}
+		if _, err := store.SetVisibility(ctx, owner, d.ID, DiscussionPublic, DiscussionCover{Type: "gradient", GradientStart: "#111111", GradientEnd: "#777777"}); err != nil {
+			t.Fatalf("SetVisibility %s: %v", owner, err)
+		}
+	}
+	if followed, err := store.FollowCreator(ctx, viewer, owners[0]); err != nil {
+		t.Fatalf("FollowCreator: %v", err)
+	} else if followed == nil {
+		t.Fatalf("FollowCreator returned nil")
+	}
+
+	stations, err := store.ListPublic(ctx, viewer, "", 20, 0)
+	if err != nil {
+		t.Fatalf("ListPublic: %v", err)
+	}
+	if len(stations) != 2 {
+		t.Fatalf("ListPublic returned %d stations, want 2: %+v", len(stations), stations)
+	}
+	profiles := map[string]*CreatorProfile{}
+	for _, station := range stations {
+		profiles[station.OwnerUserID] = station.Creator
+	}
+	if profiles[owners[0]] == nil || profiles[owners[0]].DisplayName != "Creator 1" || !profiles[owners[0]].IsFollowed || profiles[owners[0]].FollowerCount != 1 {
+		t.Fatalf("owner-a profile = %+v", profiles[owners[0]])
+	}
+	if profiles[owners[1]] == nil || profiles[owners[1]].DisplayName != "Creator 2" || profiles[owners[1]].IsFollowed || profiles[owners[1]].FollowerCount != 0 {
+		t.Fatalf("owner-b profile = %+v", profiles[owners[1]])
 	}
 }
 
