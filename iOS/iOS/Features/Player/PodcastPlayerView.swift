@@ -621,6 +621,7 @@ private struct PlanSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var discussion: Discussion
     @State private var showingSources = false
+    @State private var showingSpeakerModels = false
     @State private var isLoadingFullPlan = false
     @State private var loadError: String?
 
@@ -634,9 +635,12 @@ private struct PlanSheetView: View {
                 Theme.background.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion)) {
-                            showingSources = true
-                        }
+                        PlanSnapshotCard(
+                            label: "Plan",
+                            snapshot: PlanSnapshot(discussion: discussion),
+                            onSourcesTapped: { showingSources = true },
+                            onEditModels: { showingSpeakerModels = true }
+                        )
                         if isLoadingFullPlan && discussion.script == nil {
                             ProgressView()
                                 .tint(Theme.accent)
@@ -672,6 +676,9 @@ private struct PlanSheetView: View {
                     discussion: discussion,
                     allowsAddingSources: false
                 )
+            }
+            .sheet(isPresented: $showingSpeakerModels) {
+                SpeakerModelsSheet(discussion: $discussion, allowsEditing: false)
             }
         }
     }

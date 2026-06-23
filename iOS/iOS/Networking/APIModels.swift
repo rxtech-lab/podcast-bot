@@ -18,6 +18,43 @@ struct SourceDTO: Codable, Hashable, Sendable {
     var markdown: String?
 }
 
+/// One selectable LLM from GET /api/models (config.ModelInfo). The roster is
+/// fetched live from the gateway and cached server-side; `label` defaults to the
+/// raw id when the gateway gives no friendlier name.
+struct ModelInfoDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var label: String
+    var provider: String?
+
+    var displayLabel: String { label.isEmpty ? id : label }
+}
+
+/// Body of GET /api/models.
+struct ModelsResponseDTO: Codable, Sendable {
+    var models: [ModelInfoDTO]?
+}
+
+/// One content type selectable in the new-discussion sheet. The backend
+/// currently returns only `discussion`, but the response is an array so the UI
+/// does not need to change when more plan types become available.
+struct DiscussionTypeDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var label: String
+
+    var displayLabel: String { label.isEmpty ? id : label }
+}
+
+/// Body of GET /api/discussion-types.
+struct DiscussionTypesResponseDTO: Codable, Sendable {
+    var types: [DiscussionTypeDTO]?
+}
+
+/// Body of PATCH /api/discussions/{id}/speaker-model.
+struct SpeakerModelRequest: Codable, Sendable {
+    var speaker: String
+    var model: String
+}
+
 /// The discussion script (config.DebateTopic). Only the discussion-relevant
 /// fields are modeled; the engine fills defaults for anything omitted.
 struct ScriptDTO: Codable, Hashable, Sendable {
@@ -57,6 +94,7 @@ struct Attachment: Codable, Sendable {
 /// (status "planning") so the client gets an id before streaming the plan.
 struct DiscussionCreateRequest: Codable, Sendable {
     var topic: String
+    var type: String = "discussion"
     var language: String
     /// When true, the server kicks off background AI cover-art generation for the
     /// new discussion; the cover is filled in asynchronously and picked up the
@@ -66,6 +104,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case topic
+        case type
         case language
         case generateCover = "generate_cover"
         case coverPrompt = "cover_prompt"

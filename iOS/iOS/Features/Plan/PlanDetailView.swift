@@ -20,6 +20,7 @@ struct PlanDetailView: View {
     @State private var editTurns: [PlanEditTurn] = []
     @State private var attachments: [PendingAttachment] = []
     @State private var showingSources = false
+    @State private var showingSpeakerModels = false
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
     @State private var showingPointsHistory = false
@@ -61,6 +62,7 @@ struct PlanDetailView: View {
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingPointsHistory) { PointsHistoryView() }
         .sheet(isPresented: $showingPublishSheet) { PublishStationSheet(discussion: $discussion) }
+        .sheet(isPresented: $showingSpeakerModels) { SpeakerModelsSheet(discussion: $discussion) }
         .task { await purchases.refreshBalance() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -147,7 +149,8 @@ struct PlanDetailView: View {
                     errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
                 }
             ) { turn in
-                PlanEditBubble(turn: turn, progressText: progressText) {
+                PlanEditBubble(turn: turn, progressText: progressText,
+                               onEditModels: { showingSpeakerModels = true }) {
                     showingSources = true
                 }
                 .padding(.horizontal, 16)
@@ -164,10 +167,10 @@ struct PlanDetailView: View {
         }
         .animation(.easeInOut(duration: 0.18), value: isShowingInitialHistoryLoading)
         .onAppear {
-            if initialPlan != nil, discussion.script == nil {
-                startInitialPlan()
-            } else if discussion.progress?.active == true {
+            if discussion.progress?.active == true {
                 restoreProgressIfNeeded(from: discussion)
+            } else if initialPlan != nil, discussion.script == nil {
+                startInitialPlan()
             } else if discussion.editTurns != nil || discussion.script != nil {
                 seedInitialTurnIfNeeded()
             }
@@ -616,11 +619,18 @@ struct PlanDetailView: View {
         progressText = String(localized: "Finishing up…", comment: "Progress text while polling for the persisted plan after the stream ended")
         for _ in 0 ..< 100 {
             if Task.isCancelled { return }
-            if let full = try? await api.discussion(id: discussion.id), full.script != nil {
+            if let full = try? await api.discussion(id: discussion.id) {
                 discussion = full
-                isImproving = false
-                appendUpdatedPlan()
-                return
+                if let progress = full.progress, progress.active {
+                    progressText = progress.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? progress.text
+                        : progressText
+                }
+                if full.script != nil {
+                    isImproving = false
+                    appendUpdatedPlan()
+                    return
+                }
             }
             try? await Task.sleep(for: .seconds(3))
         }
@@ -811,6 +821,7 @@ private extension DiscussionEditTurnDTO {
 private struct PlanEditBubble: View {
     let turn: PlanEditTurn
     var progressText: String? = nil
+    var onEditModels: () -> Void = {}
     var onSourcesTapped: () -> Void
 
     var body: some View {
@@ -840,7 +851,8 @@ private struct PlanEditBubble: View {
                 .background(Theme.accent, in: .rect(cornerRadius: 20))
         case .plan:
             if let snapshot = turn.snapshot {
-                PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot, onSourcesTapped: onSourcesTapped)
+                PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot,
+                                 onSourcesTapped: onSourcesTapped, onEditModels: onEditModels)
                     .padding(14)
                     .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             }

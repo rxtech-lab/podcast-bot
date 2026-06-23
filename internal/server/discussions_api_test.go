@@ -92,6 +92,49 @@ func TestDiscussionHistoryAPIWorksForPendingAndCompletedPlan(t *testing.T) {
 	}
 }
 
+func TestDiscussionPlanStreamDuplicateRequestWaitsForActivePlan(t *testing.T) {
+	env := newDiscussionAPITestEnv(t)
+	created := apiCreateDiscussion(t, env.ts.URL, "Duplicate plan request")
+
+	releasePlan := make(chan struct{})
+	env.openai.Enqueue(mockOpenAIResponse{Title: "Single Plan", Release: releasePlan})
+
+	firstResp, firstReader := apiOpenPlanStream(t, env.ts.URL, created.ID, "Duplicate plan request")
+	defer firstResp.Body.Close()
+	drainSSEComment(t, firstReader)
+	ev, data, err := readSSEEvent(firstReader)
+	if err != nil {
+		t.Fatalf("read first progress: %v", err)
+	}
+	if ev != "progress" {
+		t.Fatalf("first event = %q data=%s, want progress", ev, data)
+	}
+
+	secondResp, secondReader := apiOpenPlanStream(t, env.ts.URL, created.ID, "Duplicate plan request")
+	defer secondResp.Body.Close()
+	drainSSEComment(t, secondReader)
+	ev, data, err = readSSEEvent(secondReader)
+	if err != nil {
+		t.Fatalf("read duplicate progress: %v", err)
+	}
+	if ev != "progress" {
+		t.Fatalf("duplicate first event = %q data=%s, want progress", ev, data)
+	}
+
+	close(releasePlan)
+	firstDone := readDiscussionStreamDone(t, firstReader, nil)
+	secondDone := readDiscussionStreamDone(t, secondReader, nil)
+	if firstDone.Script == nil || firstDone.Script.Title != "Single Plan" {
+		t.Fatalf("first done script = %+v, want Single Plan", firstDone.Script)
+	}
+	if secondDone.Script == nil || secondDone.Script.Title != "Single Plan" {
+		t.Fatalf("second done script = %+v, want Single Plan", secondDone.Script)
+	}
+	if calls := env.openai.Calls(); calls != 1 {
+		t.Fatalf("OpenAI calls = %d, want 1", calls)
+	}
+}
+
 func TestDiscussionCreateFromPlanAPICopiesVisiblePlan(t *testing.T) {
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
 	if err != nil {
@@ -171,7 +214,7 @@ func TestDiscussionImproveStreamPersistsUserTurnBeforePlanFinishes(t *testing.T)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	req = req.WithContext(ctx)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -272,6 +315,14 @@ func apiGetDiscussion(t *testing.T, baseURL, id string, editLimit int) Discussio
 
 func apiStreamPlanToDone(t *testing.T, baseURL, id, topic string) Discussion {
 	t.Helper()
+	resp, br := apiOpenPlanStream(t, baseURL, id, topic)
+	defer resp.Body.Close()
+	drainSSEComment(t, br)
+	return readDiscussionStreamDone(t, br, nil)
+}
+
+func apiOpenPlanStream(t *testing.T, baseURL, id, topic string) (*http.Response, *bufio.Reader) {
+	t.Helper()
 	body := strings.NewReader(fmt.Sprintf(
 		`{"type":"discussion","topic":%q,"language":"en-US","discussants":2,"research":false}`,
 		topic,
@@ -281,21 +332,16 @@ func apiStreamPlanToDone(t *testing.T, baseURL, id, topic string) Discussion {
 		t.Fatalf("new plan stream request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req = req.WithContext(ctx)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("plan stream: %v", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		t.Fatalf("plan stream status = %d body=%s", resp.StatusCode, raw)
 	}
-	br := bufio.NewReader(resp.Body)
-	drainSSEComment(t, br)
-	return readDiscussionStreamDone(t, br, nil)
+	return resp, bufio.NewReader(resp.Body)
 }
 
 func readDiscussionStreamDone(t *testing.T, br *bufio.Reader, progressTexts *[]string) Discussion {
@@ -377,6 +423,7 @@ type mockOpenAIStreamServer struct {
 	server *httptest.Server
 	mu     sync.Mutex
 	queue  []mockOpenAIResponse
+	calls  int
 }
 
 func newMockOpenAIStreamServer(t *testing.T) *mockOpenAIStreamServer {
@@ -398,6 +445,12 @@ func (m *mockOpenAIStreamServer) Enqueue(resp mockOpenAIResponse) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.queue = append(m.queue, resp)
+}
+
+func (m *mockOpenAIStreamServer) Calls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
 }
 
 func (m *mockOpenAIStreamServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -461,6 +514,7 @@ func (m *mockOpenAIStreamServer) pop() (mockOpenAIResponse, bool) {
 	if len(m.queue) == 0 {
 		return mockOpenAIResponse{}, false
 	}
+	m.calls++
 	resp := m.queue[0]
 	m.queue = m.queue[1:]
 	return resp, true
