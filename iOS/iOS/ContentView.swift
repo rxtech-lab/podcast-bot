@@ -5,9 +5,9 @@
 //  Root view: gates on rxlab auth, then shows the discussion library.
 //
 
-import SwiftUI
 import RxAuthSwift
 import RxAuthSwiftUI
+import SwiftUI
 
 struct RootView: View {
     @Environment(AuthManager.self) private var auth
@@ -136,6 +136,7 @@ private struct SignInScreen: View {
                     subtitle: "Sign in with rxlab to plan and generate AI \(AppStringLiteral.appTitleRaw).",
                     accentColor: Theme.accent
                 ),
+                style: .native,
                 onAuthSuccess: {},
                 onAuthFailed: { _ in }
             )

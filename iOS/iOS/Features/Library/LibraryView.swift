@@ -48,7 +48,7 @@ struct LibraryView: View {
                 navigate(to: discussion)
             }
         }
-        .alert("Could not load \(AppStringLiteral.stationTitle)", isPresented: errorBinding) {
+        .alert("Could not load \(AppStringLiteral.stationsNameRaw)", isPresented: errorBinding) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")

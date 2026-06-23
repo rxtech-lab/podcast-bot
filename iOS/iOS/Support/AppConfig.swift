@@ -41,7 +41,7 @@ enum AppConfig {
 
     /// Space-separated OAuth scopes.
     static let authScopes: [String] = {
-        let raw = value("AppAuthScopes") ?? "openid profile email"
+        let raw = value("AppAuthScopes") ?? "openid"
         return raw.split(separator: " ").map(String.init)
     }()
 
