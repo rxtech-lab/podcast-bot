@@ -907,7 +907,8 @@ func (s *Server) handleDiscussionAppendLine(w http.ResponseWriter, r *http.Reque
 	if !decodeJSONBody(w, r, &line) {
 		return
 	}
-	if err := s.d.Discussions.AppendLineVisible(r.Context(), s.requestUser(r).ID, r.PathValue("id"), line); err != nil {
+	token := strings.TrimSpace(r.Header.Get("X-Share-Token"))
+	if err := s.d.Discussions.AppendLineVisibleWithToken(r.Context(), s.requestUser(r).ID, r.PathValue("id"), token, line); err != nil {
 		writeDiscussionAccessError(w, err)
 		return
 	}
@@ -952,7 +953,11 @@ func (s *Server) getOwnedDiscussion(w http.ResponseWriter, r *http.Request) *Dis
 }
 
 func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
-	if d == nil || d.JobID == "" || s.d.Jobs == nil {
+	if d == nil {
+		return
+	}
+	defer d.refreshComputedFields()
+	if d.JobID == "" || s.d.Jobs == nil {
 		return
 	}
 	j := s.d.Jobs.Get(d.JobID)

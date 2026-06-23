@@ -7,7 +7,12 @@
 		<key>iOS.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>0</integer>
+			<integer>1</integer>
+		</dict>
+		<key>iosClip.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>4</integer>
 		</dict>
 	</dict>
 	<key>SuppressBuildableAutocreation</key>
@@ -23,6 +28,21 @@
 			<true/>
 		</dict>
 		<key>DF0DA3472FE8445600A02339</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>DF6ADD9D2FEAF2CB0045484F</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>DF6ADDAD2FEAF2CC0045484F</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>DF6ADDB72FEAF2CC0045484F</key>
 		<dict>
 			<key>primary</key>
 			<true/>

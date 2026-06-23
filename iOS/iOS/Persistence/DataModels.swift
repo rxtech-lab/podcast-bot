@@ -121,6 +121,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     /// generation). The only usage figure shown to users; the token/cost fields
     /// above are zeroed by the server once the points economy is enabled.
     var pointsCharged: Int?
+    var showUsageSummary: Bool?
     var visibility: DiscussionVisibility?
     var cover: DiscussionCover?
     var creator: CreatorProfile?
@@ -137,6 +138,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var editTurnsHasMore: Bool?
     var editTurnsBefore: Int64?
     var progress: DiscussionProgressDTO?
+    var allowSendingMessage: Bool?
     var createdAt: String?
     var updatedAt: String?
 
@@ -157,6 +159,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case ttsCostUSD = "tts_cost_usd"
         case musicCostUSD = "music_cost_usd"
         case pointsCharged = "points_charged"
+        case showUsageSummary
         case visibility
         case cover
         case creator
@@ -173,6 +176,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case editTurnsHasMore = "edit_turns_has_more"
         case editTurnsBefore = "edit_turns_before"
         case progress
+        case allowSendingMessage
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
@@ -184,6 +188,10 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     }
 
     var isPublic: Bool { visibility == .public }
+
+    var canSendMessages: Bool {
+        status == .generating && (allowSendingMessage ?? true)
+    }
 
     var sortedPeople: [PlanPersonSnapshot] {
         var people: [PlanPersonSnapshot] = []
@@ -212,6 +220,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     /// User-facing points label for a finished/known podcast, e.g. "812 points".
     /// nil until generation has finished and any points have been charged.
     var pointsText: String? {
+        guard showUsageSummary == true else { return nil }
         guard status == .ready else { return nil }
         guard let pts = pointsCharged, pts > 0 else { return nil }
         let formatted = UsageSummary.formatInt(pts)

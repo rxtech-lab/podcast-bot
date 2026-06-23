@@ -326,12 +326,36 @@ final class iOSTests: XCTestCase {
         XCTAssertTrue(PlayerModel.containsPodcastTranscript(podcastLines))
     }
 
+    func testPodcastTranscriptVisibilityKeepsLocalUserMessageButHidesRoleOnlyEcho() {
+        let localUserMessage = LiveLine(speaker: "Qiwei",
+                                       role: "user",
+                                       text: "What about the budget?",
+                                       isUser: true,
+                                       done: true)
+        let roleOnlyEcho = LiveLine(speaker: "Qiwei",
+                                    role: "user",
+                                    text: "What about the budget?",
+                                    isUser: false,
+                                    done: true)
+        let panelLine = LiveLine(speaker: "Host",
+                                 role: "host",
+                                 text: "Let's take that question.",
+                                 isUser: false,
+                                 done: true)
+
+        XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(localUserMessage))
+        XCTAssertFalse(PlayerModel.isVisibleTranscriptLine(roleOnlyEcho))
+        XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(panelLine))
+    }
+
     func testDiscussionPointsTextWaitsForReadyStatus() throws {
         let generating = try decodeDiscussion(status: "generating", pointsCharged: 21)
         let ready = try decodeDiscussion(status: "ready", pointsCharged: 21)
+        let hidden = try decodeDiscussion(status: "ready", pointsCharged: 21, showUsageSummary: false)
 
         XCTAssertNil(generating.pointsText)
         XCTAssertEqual(ready.pointsText, "21 points")
+        XCTAssertNil(hidden.pointsText)
     }
 
     func testFinishedDiscussionRefreshUsesAuthoritativePoints() throws {
@@ -489,7 +513,7 @@ final class iOSTests: XCTestCase {
     }
 }
 
-private func decodeDiscussion(status: String, pointsCharged: Int) throws -> Discussion {
+private func decodeDiscussion(status: String, pointsCharged: Int, showUsageSummary: Bool = true) throws -> Discussion {
     let json = """
     {
       "id": "discussion-1",
@@ -497,7 +521,8 @@ private func decodeDiscussion(status: String, pointsCharged: Int) throws -> Disc
       "title": "Title",
       "status": "\(status)",
       "language": "en",
-      "points_charged": \(pointsCharged)
+      "points_charged": \(pointsCharged),
+      "showUsageSummary": \(showUsageSummary)
     }
     """
     return try JSONDecoder().decode(Discussion.self, from: Data(json.utf8))

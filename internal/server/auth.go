@@ -56,6 +56,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/login" || r.URL.Path == "/api/config" ||
 			r.URL.Path == "/api/revenuecat/webhook" ||
+			isPublicShareResolve(r) ||
 			!strings.HasPrefix(r.URL.Path, "/api/") {
 			// The RevenueCat webhook carries no user/service credential; it is
 			// authenticated by the shared secret the handler verifies itself.
@@ -70,6 +71,15 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isPublicShareResolve(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(path, "/")
+	return len(parts) == 3 && parts[0] == "api" && parts[1] == "share" && parts[2] != ""
 }
 
 type authDecision struct {

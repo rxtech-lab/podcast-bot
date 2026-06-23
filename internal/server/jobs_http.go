@@ -136,6 +136,9 @@ type jobMessageReq struct {
 	Text         string `json:"text"`
 	Username     string `json:"username"`
 	DiscussionID string `json:"discussion_id"`
+	// ShareToken, when set, authorizes a signed-in participant who joined via a
+	// share link to comment on a private discussion's live job.
+	ShareToken string `json:"share_token"`
 }
 
 // handleJobMessage injects a viewer message into a running video job's
@@ -168,7 +171,13 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	user := s.requestUser(r)
 	if s.d.Discussions != nil {
-		if err := s.d.Discussions.AuthorizeJobParticipation(r.Context(), user.ID, req.DiscussionID, id); err != nil {
+		token := strings.TrimSpace(req.ShareToken)
+		if token != "" && strings.TrimSpace(req.DiscussionID) != "" {
+			if err := s.d.Discussions.AuthorizeShareParticipation(r.Context(), user.ID, req.DiscussionID, token); err != nil {
+				writeDiscussionAccessError(w, err)
+				return
+			}
+		} else if err := s.d.Discussions.AuthorizeJobParticipation(r.Context(), user.ID, req.DiscussionID, id); err != nil {
 			writeDiscussionAccessError(w, err)
 			return
 		}
@@ -180,7 +189,7 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	orch.PushUserMessage(req.Text, username)
 	if s.d.Discussions != nil && strings.TrimSpace(req.DiscussionID) != "" {
-		if err := s.d.Discussions.AppendLineVisible(r.Context(), user.ID, req.DiscussionID, DiscussionLine{
+		if err := s.d.Discussions.AppendLineVisibleWithToken(r.Context(), user.ID, req.DiscussionID, strings.TrimSpace(req.ShareToken), DiscussionLine{
 			Speaker: username,
 			Role:    "user",
 			Text:    req.Text,

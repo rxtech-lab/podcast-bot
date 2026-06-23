@@ -206,10 +206,16 @@ func (s *Server) sanitizeJobUsage(j *Job) {
 	}
 }
 
-// sanitizeDiscussionUsage hides the detailed token/cost breakdown from clients,
-// leaving only PointsCharged. No-op when points is disabled.
+// sanitizeDiscussionUsage hides the detailed token/cost breakdown from clients.
+// PointsCharged is visible only to the creator via ShowUsageSummary.
 func (s *Server) sanitizeDiscussionUsage(d *Discussion) {
-	if d == nil || !s.pointsEnabled() {
+	if d == nil {
+		return
+	}
+	if !d.ShowUsageSummary {
+		d.PointsCharged = 0
+	}
+	if !s.pointsEnabled() {
 		return
 	}
 	d.PromptTokens, d.CompletionTokens, d.TotalTokens = 0, 0, 0

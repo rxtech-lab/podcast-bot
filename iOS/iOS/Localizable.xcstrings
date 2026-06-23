@@ -139,8 +139,32 @@
         }
       }
     },
+    "1 day" : {
+      "comment" : "Share-link duration option"
+    },
     "1 follower" : {
       "comment" : "Singular creator follower count"
+    },
+    "1 hour" : {
+      "comment" : "Share-link duration option"
+    },
+    "2 days" : {
+      "comment" : "Share-link duration option"
+    },
+    "2 hours" : {
+      "comment" : "Share-link duration option"
+    },
+    "3 days" : {
+      "comment" : "Share-link duration option"
+    },
+    "6 hours" : {
+      "comment" : "Share-link duration option"
+    },
+    "12 hours" : {
+      "comment" : "Share-link duration option"
+    },
+    "Active links" : {
+
     },
     "Activity" : {
       "localizations" : {
@@ -282,6 +306,9 @@
     },
     "All" : {
       "comment" : "Library visibility filter: all stations"
+    },
+    "Anyone with the link can join and comment until it expires (max 3 days). You can revoke a link any time." : {
+
     },
     "Attach files" : {
       "localizations" : {
@@ -543,6 +570,9 @@
         }
       }
     },
+    "Couldn't open link" : {
+
+    },
     "Couldn't read file" : {
       "comment" : "Attachment error when a picked file's bytes can't be read",
       "localizations" : {
@@ -612,6 +642,9 @@
         }
       }
     },
+    "Couldn't share" : {
+
+    },
     "Cover" : {
 
     },
@@ -619,6 +652,9 @@
 
     },
     "Create from Plan" : {
+
+    },
+    "Create share link" : {
 
     },
     "Creating" : {
@@ -749,6 +785,9 @@
           }
         }
       }
+    },
+    "Done" : {
+
     },
     "Download %@" : {
 
@@ -938,6 +977,9 @@
           }
         }
       }
+    },
+    "Expires %@" : {
+
     },
     "Failed" : {
       "comment" : "Discussion row status: generation failed",
@@ -1452,6 +1494,9 @@
     "Liked" : {
 
     },
+    "Link expires after" : {
+
+    },
     "Listen live" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1674,6 +1719,9 @@
     "New %@" : {
 
     },
+    "New link" : {
+
+    },
     "New Podcast" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1723,6 +1771,9 @@
 
     },
     "No %@ yet" : {
+
+    },
+    "No active links" : {
 
     },
     "No Followed Creators" : {
@@ -2745,6 +2796,9 @@
         }
       }
     },
+    "Revoke" : {
+
+    },
     "Save" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2915,6 +2969,12 @@
           }
         }
       }
+    },
+    "Share" : {
+
+    },
+    "Share Link" : {
+
     },
     "Show cover" : {
 
@@ -3235,6 +3295,9 @@
     "This creator profile is not available." : {
 
     },
+    "This discussion is full. Ask the host to remove someone or try again later." : {
+      "comment" : "Error shown when a discussion has reached its participant limit"
+    },
     "This podcast" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3257,6 +3320,9 @@
           }
         }
       }
+    },
+    "This share link has expired or was revoked." : {
+      "comment" : "Shown when opening an expired/revoked share link"
     },
     "This turns the current plan into an audio %@ in %@. It can take a few minutes and uses generation credits." : {
       "localizations" : {

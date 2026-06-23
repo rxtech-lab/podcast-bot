@@ -14,6 +14,9 @@ enum APIError: Error, LocalizedError {
     /// the points required and the user's current balance so the UI can open the
     /// paywall with context.
     case insufficientPoints(required: Int, balance: Int)
+    /// HTTP 409 on join: the discussion already has the maximum number of
+    /// participants, so this user can't join.
+    case participantCapReached
     case decoding(String)
 
     var errorDescription: String? {
@@ -28,6 +31,9 @@ enum APIError: Error, LocalizedError {
         case let .insufficientPoints(required, balance):
             return String(localized: "You need \(required) points but have \(balance). Top up to continue.",
                           comment: "Error shown when the user lacks enough points to start an action")
+        case .participantCapReached:
+            return String(localized: "This discussion is full. Ask the host to remove someone or try again later.",
+                          comment: "Error shown when a discussion has reached its participant limit")
         case let .decoding(msg):
             return String(localized: "Couldn't read the server response: \(msg)",
                           comment: "Error shown when the server response could not be decoded")
@@ -275,9 +281,66 @@ final class APIClient: Sendable {
         return response.cover
     }
 
-    func appendDiscussionLine(id: String, line: DiscussionLineRequest) async throws {
+    func appendDiscussionLine(id: String, line: DiscussionLineRequest, shareToken: String? = nil) async throws {
         let payload = try JSONEncoder().encode(line)
-        _ = try await perform(request(method: "POST", path: "/api/discussions/\(id)/lines", body: payload))
+        var req = request(method: "POST", path: "/api/discussions/\(id)/lines", body: payload)
+        if let shareToken, !shareToken.isEmpty {
+            req.setValue(shareToken, forHTTPHeaderField: "X-Share-Token")
+        }
+        _ = try await perform(req)
+    }
+
+    // MARK: - Sharing
+
+    /// Mints an expiring private share link for an owned discussion.
+    func createShare(discussionID: String, ttlSeconds: Int) async throws -> DiscussionShareLink {
+        let dto: ShareLinkDTO = try await send(
+            "POST",
+            "/api/discussions/\(discussionID)/shares",
+            body: ShareCreateRequest(ttlSeconds: ttlSeconds)
+        )
+        guard let link = DiscussionShareLink(dto: dto) else {
+            throw APIError.decoding("invalid share link url")
+        }
+        return link
+    }
+
+    /// Lists the active (non-expired, non-revoked) share links for a discussion.
+    func listShares(discussionID: String) async throws -> [DiscussionShareLink] {
+        let dtos: [ShareLinkDTO] = try await get("/api/discussions/\(discussionID)/shares")
+        return dtos.compactMap(DiscussionShareLink.init(dto:))
+    }
+
+    /// Revokes a share token so its link stops working immediately.
+    func revokeShare(discussionID: String, token: String) async throws {
+        _ = try await perform(request(method: "DELETE",
+                                      path: "/api/discussions/\(discussionID)/shares/\(pathComponent(token))"))
+    }
+
+    /// Records the caller as a participant, enforcing the per-discussion cap.
+    /// Pass the share token when joining a private discussion via a link.
+    /// Maps HTTP 409 to `APIError.participantCapReached`.
+    func joinDiscussion(id: String, token: String?) async throws {
+        do {
+            try await sendNoContent("POST", "/api/discussions/\(id)/join",
+                                    body: DiscussionJoinRequest(token: token))
+        } catch APIError.http(409, _) {
+            throw APIError.participantCapReached
+        }
+    }
+
+    /// Resolves a private share token, joins (enforcing the cap), and returns the
+    /// discussion with its transcript so the client can open the player. Maps
+    /// HTTP 409 to `.participantCapReached` and 410 to a clear "link expired".
+    func joinViaShare(token: String) async throws -> Discussion {
+        do {
+            return try await send("POST", "/api/share/\(pathComponent(token))/join", body: EmptyRequest())
+        } catch APIError.http(409, _) {
+            throw APIError.participantCapReached
+        } catch APIError.http(410, _) {
+            throw APIError.invalidRequest(String(localized: "This share link has expired or was revoked.",
+                                                 comment: "Shown when opening an expired/revoked share link"))
+        }
     }
 
     // MARK: - Marketplace
@@ -358,8 +421,8 @@ final class APIClient: Sendable {
         try await get("/api/jobs/\(id)")
     }
 
-    func sendJobMessage(id: String, text: String, username: String, discussionID: String) async throws {
-        let req = JobMessageRequest(text: text, username: username, discussionID: discussionID)
+    func sendJobMessage(id: String, text: String, username: String, discussionID: String, shareToken: String? = nil) async throws {
+        let req = JobMessageRequest(text: text, username: username, discussionID: discussionID, shareToken: shareToken)
         try await sendNoContent("POST", "/api/jobs/\(id)/messages", body: req)
     }
 

@@ -104,8 +104,13 @@ final class PlayerModel {
     nonisolated static let minimumTranscriptLoadingSeconds = 1.0
 
     var discussion: Discussion
-    private let api: APIClient
+    /// Exposed (read-only use) so views like the share sheet can reuse the same
+    /// authenticated client instead of constructing another.
+    let api: APIClient
     private let username: String
+    /// Set when this discussion was opened via a private share link; authorizes
+    /// a non-owner participant's comments on the backend.
+    private let shareToken: String?
 
     /// Two prominent colors derived from the cover (gradient hexes, or extracted
     /// from the cover image) used to tint the full-screen player background.
@@ -146,6 +151,9 @@ final class PlayerModel {
     }
     var canDownloadPodcast: Bool {
         isReadyForDownload && (downloadURL != nil || discussion.jobID != nil)
+    }
+    var canSendMessages: Bool {
+        !isFinished && discussion.canSendMessages
     }
     var showsPodcastActions: Bool {
         showsForceStopAction || canDownloadPodcast
@@ -252,10 +260,11 @@ final class PlayerModel {
         return Self.captionSpeaker(for: group.text, in: lines) ?? ""
     }
 
-    init(discussion: Discussion, api: APIClient, username: String) {
+    init(discussion: Discussion, api: APIClient, username: String, shareToken: String? = nil) {
         self.discussion = discussion
         self.api = api
         self.username = username
+        self.shareToken = shareToken
     }
 
     func start() {
@@ -331,7 +340,7 @@ final class PlayerModel {
 
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard canSendMessages, !trimmed.isEmpty else { return }
         let line = LiveLine(speaker: username, role: "user", text: trimmed, isUser: true, done: true)
         lines.append(line)
         let jobID = discussion.jobID
@@ -342,19 +351,28 @@ final class PlayerModel {
                 try await api.sendJobMessage(id: jobID,
                                             text: trimmed,
                                             username: username,
-                                            discussionID: discussion.id)
+                                            discussionID: discussion.id,
+                                            shareToken: shareToken)
             } catch APIError.http(429, _) {
                 removeRejectedUserLine(line)
+            } catch APIError.http(403, _) {
+                removeRejectedUserLine(line)
             } catch {
-                try? await api.appendDiscussionLine(
-                    id: discussion.id,
-                    line: DiscussionLineRequest(speaker: username,
-                                                role: "user",
-                                                side: nil,
-                                                text: trimmed,
-                                                startMS: 0,
-                                                isUser: true)
-                )
+                do {
+                    try await api.appendDiscussionLine(
+                        id: discussion.id,
+                        line: DiscussionLineRequest(speaker: username,
+                                                    role: "user",
+                                                    side: nil,
+                                                    text: trimmed,
+                                                    startMS: 0,
+                                                    isUser: true),
+                        shareToken: shareToken
+                    )
+                } catch APIError.http(403, _) {
+                    removeRejectedUserLine(line)
+                } catch {
+                }
             }
         }
     }
@@ -775,12 +793,18 @@ final class PlayerModel {
 
     /// Roles the human listener speaks under. The backend echoes these straight
     /// back over the socket (`PushUserMessage`) and also re-lists them in
-    /// transcript snapshots, so we classify them as user-authored everywhere —
-    /// the single source of truth for "this is the listener's own message", which
-    /// the UI hides. Matches the snapshot path's `role == "user" || "viewer"`.
+    /// transcript snapshots, so we classify them as user-authored everywhere.
+    /// Matches the snapshot path's `role == "user" || "viewer"`.
     nonisolated static func isUserRole(_ role: String) -> Bool {
         let r = role.lowercased()
         return r == "user" || r == "viewer"
+    }
+
+    /// User-authored rows are visible once they are part of local discussion
+    /// state. Role-only user echoes are still hidden so the WebSocket cannot
+    /// duplicate an optimistic send as a second transcript row.
+    nonisolated static func isVisibleTranscriptLine(_ line: LiveLine) -> Bool {
+        line.isUser || !isUserRole(line.role)
     }
 
     nonisolated static func captionSpeaker(for caption: String, in lines: [LiveLine]) -> String? {
@@ -829,10 +853,10 @@ final class PlayerModel {
             guard let speaker = data.speaker, let text = data.text else { return }
             let role = data.role ?? ""
             // The backend echoes the listener's own messages back here. We already
-            // recorded that line optimistically in `send(_:)`, and the UI hides
-            // user-authored lines — so drop the echo rather than re-adding it as a
-            // non-user line (`applyTranscriptEvent` always sets isUser:false), which
-            // would both render and double-persist into `discussion.lines`.
+            // recorded that line optimistically in `send(_:)`, so drop the echo
+            // rather than re-adding it as a non-user line (`applyTranscriptEvent`
+            // always sets isUser:false), which would both render and double-persist
+            // into `discussion.lines`.
             if Self.isUserRole(role) { return }
             if let completed = LiveLine.applyTranscriptEvent(to: &lines,
                                                              speaker: speaker,
@@ -894,7 +918,8 @@ final class PlayerModel {
                                             side: nil,
                                             text: trimmed,
                                             startMS: startMs,
-                                            isUser: isUser)
+                                            isUser: isUser),
+                shareToken: shareToken
             )
         }
     }
@@ -1089,6 +1114,7 @@ final class PlayerModel {
             downloadURL = URL(string: url)
         }
         discussion.status = .ready
+        discussion.allowSendingMessage = false
         updateNowPlayingInfo()
     }
 
@@ -1201,6 +1227,7 @@ final class PlayerModel {
         statusText = error ?? String(localized: "Generation failed",
                                      comment: "Fallback status when podcast generation failed without a server message")
         discussion.status = .failed
+        discussion.allowSendingMessage = false
         socket?.close()
         forceHideTranscriptLoading()
     }

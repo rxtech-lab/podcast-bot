@@ -13,6 +13,9 @@ struct PodcastPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
     let discussion: Discussion
     var onCreatedFromPlan: ((Discussion) -> Void)?
+    /// Non-nil when this discussion was opened via a private share link; passed
+    /// to the player model so a non-owner participant's comments are authorized.
+    var shareToken: String? = nil
 
     @State private var model: PlayerModel?
     @State private var message = ""
@@ -23,6 +26,7 @@ struct PodcastPlayerView: View {
     @State private var showingPointsHistory = false
     @State private var showingPublishSheet = false
     @State private var showingCoverEditor = false
+    @State private var showingShareSheet = false
     @State private var showingCreatorProfile = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAttachment = false
@@ -61,7 +65,7 @@ struct PodcastPlayerView: View {
             Text(createFromPlanError ?? "")
         }
         .sheet(isPresented: $showingPlan) {
-            PlanSheetView(discussion: discussion)
+            PlanSheetView(discussion: model?.discussion ?? discussion)
         }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
@@ -81,6 +85,10 @@ struct PodcastPlayerView: View {
                     set: { model.discussion = $0 }
                 ))
             }
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            ShareSheet(discussionID: (model?.discussion ?? discussion).id,
+                       api: APIClient(tokens: auth))
         }
         .sheet(isPresented: $showingCreatorProfile) {
             if let creator = currentCreator {
@@ -114,7 +122,8 @@ struct PodcastPlayerView: View {
             if model == nil {
                 let m = PlayerModel(discussion: discussion,
                                     api: APIClient(tokens: auth),
-                                    username: auth.currentUser?.name ?? "You")
+                                    username: auth.currentUser?.name ?? "You",
+                                    shareToken: shareToken)
                 m.start()
                 model = m
             }
@@ -165,6 +174,7 @@ struct PodcastPlayerView: View {
                         onPublish: { showingPublishSheet = true },
                         onEditCover: { showingCoverEditor = true },
                         onMakePrivate: { makePrivate(model) },
+                        onShare: { showingShareSheet = true },
                         isCreatingFromPlan: isCreatingFromPlan,
                         onCreateFromPlan: createFromPlanAction
                     )
@@ -243,16 +253,9 @@ struct PodcastPlayerView: View {
     }
 
     /// Transcript lines, plus the points summary as a trailing accessory row.
-    ///
-    /// The listener's own messages are intentionally hidden: a sent message is
-    /// only used to steer the panel, and the backend echoes it straight back
-    /// over the socket as a `role: "user"` transcript event. Surfacing it would
-    /// duplicate the listener's text in what is otherwise a podcast transcript,
-    /// so we drop any user-authored line here (the message is still sent and
-    /// persisted — just not rendered).
     private func transcriptItems(for model: PlayerModel) -> [TranscriptListItem] {
         var items = model.lines
-            .filter { !$0.isUser && !PlayerModel.isUserRole($0.role) }
+            .filter { PlayerModel.isVisibleTranscriptLine($0) }
             .map { TranscriptListItem.line($0) }
         // Show only the points this podcast consumed (planning + generation),
         // never the underlying token/cost detail. Points are known once the
@@ -292,7 +295,12 @@ struct PodcastPlayerView: View {
     }
 
     private func inputBar(_ model: PlayerModel) -> some View {
-        HStack(spacing: 10) {
+        let canSend = model.canSendMessages
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let disabledControlColor = Color(uiColor: .secondaryLabel)
+        let attachmentColor = canSend ? Theme.accent : disabledControlColor
+        let sendColor = canSend && !trimmedMessage.isEmpty ? Theme.accent : disabledControlColor
+        return HStack(spacing: 10) {
             Menu {
                 Button {
                     showingPhotos = true
@@ -306,22 +314,23 @@ struct PodcastPlayerView: View {
                 }
             } label: {
                 if isUploadingAttachment {
-                    ProgressView().controlSize(.small).tint(Theme.accent)
+                    ProgressView().controlSize(.small).tint(attachmentColor)
                 } else {
-                    Image(systemName: "paperclip").font(.title3).foregroundStyle(Theme.accent)
+                    Image(systemName: "paperclip").font(.title3).foregroundStyle(attachmentColor)
                 }
             }
-            .disabled(isUploadingAttachment)
+            .disabled(isUploadingAttachment || !canSend)
             TextField("Send message", text: $message, axis: .vertical)
                 .lineLimit(1 ... 3)
                 .textFieldStyle(.plain)
+                .disabled(!canSend)
             Button {
                 model.send(message)
                 message = ""
             } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.title2).foregroundStyle(Theme.accent)
+                Image(systemName: "arrow.up.circle.fill").font(.title2).foregroundStyle(sendColor)
             }
-            .disabled(message.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(!canSend || trimmedMessage.isEmpty)
         }
         .padding(12)
         .glassEffect(in: .capsule)
@@ -446,8 +455,16 @@ struct PodcastActionsMenu: View {
     let onPublish: () -> Void
     let onEditCover: () -> Void
     let onMakePrivate: () -> Void
+    /// Opens the private share sheet (duration picker + manage links). Only
+    /// invoked for private discussions; public ones share a plain link inline.
+    var onShare: () -> Void = {}
     let isCreatingFromPlan: Bool
     let onCreateFromPlan: (() -> Void)?
+
+    /// The plain, permanent public deep link for a published discussion.
+    private var publicShareURL: URL {
+        AppConfig.websiteBaseURL.appendingPathComponent("d").appendingPathComponent(model.discussion.id)
+    }
 
     var body: some View {
         Menu {
@@ -480,6 +497,17 @@ struct PodcastActionsMenu: View {
                     Button(action: onPublish) {
                         Label("Publish to Market", systemImage: "globe")
                     }
+                }
+            }
+            // Share: public discussions hand out a plain permanent link; private
+            // ones open the duration sheet to mint an expiring, revocable link.
+            if model.discussion.isPublic {
+                ShareLink(item: publicShareURL) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            } else if model.discussion.isOwner != false {
+                Button(action: onShare) {
+                    Label("Share Link", systemImage: "square.and.arrow.up")
                 }
             }
             if model.canDownloadPodcast {
@@ -589,9 +617,12 @@ struct PodcastDocumentExporter: UIViewControllerRepresentable {
 }
 
 private struct PlanSheetView: View {
+    @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
     @State private var discussion: Discussion
     @State private var showingSources = false
+    @State private var isLoadingFullPlan = false
+    @State private var loadError: String?
 
     init(discussion: Discussion) {
         _discussion = State(initialValue: discussion)
@@ -606,10 +637,23 @@ private struct PlanSheetView: View {
                         PlanSnapshotCard(label: "Plan", snapshot: PlanSnapshot(discussion: discussion)) {
                             showingSources = true
                         }
+                        if isLoadingFullPlan && discussion.script == nil {
+                            ProgressView()
+                                .tint(Theme.accent)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.top, 12)
+                        } else if let loadError, discussion.script == nil {
+                            Text(loadError)
+                                .font(.footnote)
+                                .foregroundStyle(Theme.secondaryText)
+                        }
                     }
                     .padding(16)
                 }
                 .scrollDismissesKeyboard(.interactively)
+            }
+            .task(id: discussion.id) {
+                await fetchFullPlanIfNeeded()
             }
             .navigationTitle("Plan")
             .navigationBarTitleDisplayMode(.inline)
@@ -629,6 +673,19 @@ private struct PlanSheetView: View {
                     allowsAddingSources: false
                 )
             }
+        }
+    }
+
+    private func fetchFullPlanIfNeeded() async {
+        guard discussion.script == nil else { return }
+        isLoadingFullPlan = true
+        defer { isLoadingFullPlan = false }
+        do {
+            discussion = try await APIClient(tokens: auth).discussion(id: discussion.id)
+            loadError = nil
+        } catch {
+            guard !APIClient.isCancellation(error) else { return }
+            loadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 }
