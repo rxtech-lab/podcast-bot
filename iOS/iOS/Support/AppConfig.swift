@@ -23,6 +23,13 @@ enum AppConfig {
         #endif
     }()
 
+    /// Public base of the deep-link website (no trailing slash). Used to build
+    /// shareable links like `https://podcast.rxlab.app/d/{id}` client-side.
+    static let websiteBaseURL: URL = {
+        if let s = value("AppWebsiteBaseURL"), let url = URL(string: s) { return url }
+        return URL(string: "https://podcast.rxlab.app")!
+    }()
+
     /// rxlab OIDC issuer.
     static let authIssuer: String = value("AppAuthIssuer") ?? "https://auth.rxlab.app"
 

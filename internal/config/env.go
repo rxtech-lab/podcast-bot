@@ -124,6 +124,11 @@ type Env struct {
 	// directly with the access token from RxAuthSwift. Empty disables it.
 	AuthIssuer string
 
+	// WebsiteBaseURL (WEBSITE_BASE_URL, e.g. https://podcast.rxlab.app) is the
+	// public base of the deep-link website. It is used to mint share-link URLs
+	// (…/s/{token}). Empty falls back to https://podcast.rxlab.app.
+	WebsiteBaseURL string
+
 	// SearchAPIKey / SearchAPIURL configure the web-search backend the planner
 	// uses to ground a discussion plan in real sources when research is
 	// requested. SearchAPIKey comes from SEARCH_API_KEY; SearchAPIURL
@@ -242,6 +247,7 @@ func LoadEnv() (*Env, error) {
 		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
 		AuthIssuer:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
+		WebsiteBaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("WEBSITE_BASE_URL")), "/"),
 		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
 		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
 		FirecrawlAPIKey:       strings.TrimSpace(os.Getenv("FIRECRAWL_API_KEY")),

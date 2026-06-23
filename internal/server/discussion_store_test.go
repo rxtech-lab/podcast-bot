@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -383,6 +384,9 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	if published.Visibility != DiscussionPublic || published.PublishedAt == nil || !published.Cover.Valid() {
 		t.Fatalf("published discussion mismatch: %+v", published)
 	}
+	if !published.ShowUsageSummary {
+		t.Fatalf("published owner ShowUsageSummary = false, want true")
+	}
 
 	public, err := store.ListPublic(ctx, viewer, "orbital", 20, 0)
 	if err != nil {
@@ -390,6 +394,9 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	}
 	if len(public) != 1 || public[0].ID != created.ID || public[0].IsLiked || public[0].IsOwner {
 		t.Fatalf("ListPublic = %+v, want one unliked non-owner item", public)
+	}
+	if public[0].ShowUsageSummary {
+		t.Fatalf("ListPublic ShowUsageSummary = true, want false for non-owner")
 	}
 	assertMarketListPayloadIsLightweight(t, public[0])
 	if public[0].Creator == nil {
@@ -403,6 +410,9 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	if visible == nil || visible.Script == nil || visible.Script.Title != "Space Markets" ||
 		visible.Markdown != resp.Markdown || len(visible.Sources) != 1 {
 		t.Fatalf("GetVisible full content = %+v", visible)
+	}
+	if visible.ShowUsageSummary {
+		t.Fatalf("GetVisible ShowUsageSummary = true, want false for non-owner")
 	}
 
 	liked, err := store.Like(ctx, viewer, created.ID)
@@ -434,6 +444,22 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	}
 	if unliked == nil || unliked.IsLiked || unliked.LikeCount != 0 {
 		t.Fatalf("Unlike returned %+v", unliked)
+	}
+}
+
+func TestSanitizeDiscussionUsageHidesPointsForNonCreator(t *testing.T) {
+	srv := New(Deps{})
+	creator := &Discussion{PointsCharged: 42, ShowUsageSummary: true}
+	viewer := &Discussion{PointsCharged: 42, ShowUsageSummary: false}
+
+	srv.sanitizeDiscussionUsage(creator)
+	srv.sanitizeDiscussionUsage(viewer)
+
+	if creator.PointsCharged != 42 {
+		t.Fatalf("creator PointsCharged = %d, want 42", creator.PointsCharged)
+	}
+	if viewer.PointsCharged != 0 {
+		t.Fatalf("viewer PointsCharged = %d, want 0", viewer.PointsCharged)
 	}
 }
 
@@ -677,8 +703,12 @@ func TestDiscussionStoreParticipationAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := store.SetJob(ctx, owner, d.ID, "job-live"); err != nil {
+	generating, err := store.SetJob(ctx, owner, d.ID, "job-live")
+	if err != nil {
 		t.Fatalf("SetJob: %v", err)
+	}
+	if generating == nil || !generating.AllowSendingMessage {
+		t.Fatalf("generating AllowSendingMessage = %+v, want true", generating)
 	}
 
 	if err := store.AuthorizeJobOwner(ctx, owner, "job-live"); err != nil {
@@ -717,6 +747,30 @@ func TestDiscussionStoreParticipationAuthorization(t *testing.T) {
 	}
 	if err := store.SetJobResult(ctx, d.ID, DiscussionReady, "https://audio.example/live.mp3"); err != nil {
 		t.Fatalf("SetJobResult ready: %v", err)
+	}
+	ready, err := store.Get(ctx, owner, d.ID)
+	if err != nil {
+		t.Fatalf("Get ready: %v", err)
+	}
+	if ready == nil || ready.AllowSendingMessage {
+		t.Fatalf("ready AllowSendingMessage = %+v, want false", ready)
+	}
+	data, err := json.Marshal(ready)
+	if err != nil {
+		t.Fatalf("marshal ready JSON: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatalf("decode ready JSON: %v", err)
+	}
+	if got, ok := encoded["allowSendingMessage"].(bool); !ok || got {
+		t.Fatalf("allowSendingMessage JSON = %#v, want false", encoded["allowSendingMessage"])
+	}
+	if err := store.AuthorizeJobParticipation(ctx, owner, d.ID, "job-live"); !errors.Is(err, errDiscussionForbidden) {
+		t.Fatalf("ready owner job participation = %v, want forbidden", err)
+	}
+	if err := store.AuthorizeDiscussionParticipation(ctx, owner, d.ID); !errors.Is(err, errDiscussionForbidden) {
+		t.Fatalf("ready owner discussion participation = %v, want forbidden", err)
 	}
 	if err := store.AuthorizeDiscussionParticipation(ctx, viewer, d.ID); !errors.Is(err, errDiscussionForbidden) {
 		t.Fatalf("ready public viewer participation = %v, want forbidden", err)

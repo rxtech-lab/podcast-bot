@@ -161,6 +161,38 @@ struct CoverUpdateRequest: Codable, Sendable {
     var cover: DiscussionCover
 }
 
+/// POST /api/discussions/{id}/shares request body: how long the minted private
+/// share link stays valid.
+struct ShareCreateRequest: Codable, Sendable {
+    var ttlSeconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case ttlSeconds = "ttl_seconds"
+    }
+}
+
+/// A private share link returned by the share endpoints. Dates arrive as RFC3339
+/// strings; `ShareLink` parses them into `Date` for display.
+struct ShareLinkDTO: Codable, Sendable {
+    var token: String
+    var url: String
+    var createdAt: String
+    var expiresAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case url
+        case createdAt = "created_at"
+        case expiresAt = "expires_at"
+    }
+}
+
+/// POST /api/discussions/{id}/join request body. The token authorizes a
+/// non-owner to join a private discussion via a share link.
+struct DiscussionJoinRequest: Codable, Sendable {
+    var token: String?
+}
+
 struct SourceSearchRequest: Codable, Sendable {
     var query: String
 }
@@ -227,11 +259,14 @@ struct JobMessageRequest: Codable, Sendable {
     var text: String
     var username: String
     var discussionID: String
+    /// Set when a shared participant comments on a private discussion's live job.
+    var shareToken: String?
 
     enum CodingKeys: String, CodingKey {
         case text
         case username
         case discussionID = "discussion_id"
+        case shareToken = "share_token"
     }
 }
 

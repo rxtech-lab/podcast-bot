@@ -13,6 +13,7 @@ struct RootView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
     @Environment(LaunchFlowStore.self) private var launchFlow
+    @Environment(DeepLinkRouter.self) private var deepLinks
 
     @State private var launchPlan: LaunchPlanPresentation?
     @State private var didRunLaunchFlow = false
@@ -56,8 +57,44 @@ struct RootView: View {
                             onFinished: { launchPlan = nil }
                         )
                     }
+                    // Resolve a deep link captured before/at sign-in, then again
+                    // whenever a new one arrives while signed in.
+                    .task(id: deepLinkPendingKey) { await resolveDeepLink() }
+                    .fullScreenCover(item: Bindable(deepLinks).opened) { opened in
+                        NavigationStack {
+                            PodcastPlayerView(discussion: opened.discussion,
+                                              shareToken: opened.shareToken)
+                                .toolbar {
+                                    ToolbarItem(placement: .topBarLeading) {
+                                        Button("Close") { deepLinks.opened = nil }
+                                    }
+                                }
+                        }
+                    }
+                    .alert("Couldn't open link", isPresented: Binding(
+                        get: { deepLinks.error != nil },
+                        set: { if !$0 { deepLinks.error = nil } }
+                    )) {
+                        Button("OK", role: .cancel) { deepLinks.error = nil }
+                    } message: {
+                        Text(deepLinks.error ?? "")
+                    }
             }
         }
+    }
+
+    /// Changes when a new deep link is captured, retriggering resolution.
+    private var deepLinkPendingKey: String {
+        switch deepLinks.pending {
+        case .none: return ""
+        case let .publicDiscussion(id): return "d:\(id)"
+        case let .sharedDiscussion(token): return "s:\(token)"
+        }
+    }
+
+    private func resolveDeepLink() async {
+        guard deepLinks.pending != nil else { return }
+        await deepLinks.resolvePending(api: APIClient(tokens: auth))
     }
 
     /// Computes the launch flow once per process, after subscription status is

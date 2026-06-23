@@ -125,25 +125,27 @@ type Discussion struct {
 	// discussion's whole lifecycle (planning + generation). It is the only
 	// usage figure shown to end users; the token/cost fields above are hidden
 	// from clients (zeroed) once the points economy is enabled.
-	PointsCharged    int64                `json:"points_charged"`
-	Visibility       DiscussionVisibility `json:"visibility"`
-	Cover            DiscussionCover      `json:"cover,omitempty"`
-	Creator          *CreatorProfile      `json:"creator,omitempty"`
-	LikeCount        int64                `json:"like_count"`
-	IsLiked          bool                 `json:"is_liked"`
-	IsOwner          bool                 `json:"is_owner"`
-	PublishedAt      *time.Time           `json:"published_at,omitempty"`
-	Script           *config.DebateTopic  `json:"script,omitempty"`
-	Markdown         string               `json:"markdown,omitempty"`
-	Sources          []config.Source      `json:"sources,omitempty"`
-	Researched       bool                 `json:"researched"`
-	Lines            []DiscussionLine     `json:"lines,omitempty"`
-	EditTurns        []DiscussionEditTurn `json:"edit_turns,omitempty"`
-	EditTurnsHasMore bool                 `json:"edit_turns_has_more,omitempty"`
-	EditTurnsBefore  int64                `json:"edit_turns_before,omitempty"`
-	Progress         *DiscussionProgress  `json:"progress,omitempty"`
-	CreatedAt        time.Time            `json:"created_at"`
-	UpdatedAt        time.Time            `json:"updated_at"`
+	PointsCharged       int64                `json:"points_charged"`
+	ShowUsageSummary    bool                 `json:"showUsageSummary"`
+	Visibility          DiscussionVisibility `json:"visibility"`
+	Cover               DiscussionCover      `json:"cover,omitempty"`
+	Creator             *CreatorProfile      `json:"creator,omitempty"`
+	LikeCount           int64                `json:"like_count"`
+	IsLiked             bool                 `json:"is_liked"`
+	IsOwner             bool                 `json:"is_owner"`
+	PublishedAt         *time.Time           `json:"published_at,omitempty"`
+	Script              *config.DebateTopic  `json:"script,omitempty"`
+	Markdown            string               `json:"markdown,omitempty"`
+	Sources             []config.Source      `json:"sources,omitempty"`
+	Researched          bool                 `json:"researched"`
+	Lines               []DiscussionLine     `json:"lines,omitempty"`
+	EditTurns           []DiscussionEditTurn `json:"edit_turns,omitempty"`
+	EditTurnsHasMore    bool                 `json:"edit_turns_has_more,omitempty"`
+	EditTurnsBefore     int64                `json:"edit_turns_before,omitempty"`
+	Progress            *DiscussionProgress  `json:"progress,omitempty"`
+	AllowSendingMessage bool                 `json:"allowSendingMessage"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 
 type DiscussionStore struct {
@@ -283,6 +285,24 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			ON creator_follows(creator_user_id)`,
 		`CREATE INDEX IF NOT EXISTS creator_follows_follower_created_idx
 			ON creator_follows(follower_user_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_shares (
+			token TEXT PRIMARY KEY,
+			discussion_id TEXT NOT NULL,
+			owner_user_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL,
+			revoked_at INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_shares_discussion_idx
+			ON native_discussion_shares(discussion_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_participants (
+			discussion_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			joined_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, user_id),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -1153,6 +1173,16 @@ func (s *DiscussionStore) AppendLineVisible(ctx context.Context, viewer, id stri
 	return s.appendLine(ctx, id, line)
 }
 
+// AppendLineVisibleWithToken appends a viewer's line, authorizing via a share
+// token when present (a signed-in participant of a valid share may comment on a
+// private discussion). An empty token behaves exactly like AppendLineVisible.
+func (s *DiscussionStore) AppendLineVisibleWithToken(ctx context.Context, viewer, id, token string, line DiscussionLine) error {
+	if err := s.AuthorizeShareParticipation(ctx, viewer, id, token); err != nil {
+		return err
+	}
+	return s.appendLine(ctx, id, line)
+}
+
 func (s *DiscussionStore) AuthorizeDiscussionParticipation(ctx context.Context, viewer, id string) error {
 	return s.authorizeParticipation(ctx, viewer, id, "")
 }
@@ -1200,6 +1230,9 @@ func (s *DiscussionStore) authorizeParticipation(ctx context.Context, viewer, id
 	}
 	if err != nil {
 		return err
+	}
+	if !discussionAllowsSendingMessage(DiscussionStatus(status)) {
+		return errDiscussionForbidden
 	}
 	if owner == viewer {
 		return nil
@@ -1441,6 +1474,7 @@ func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
 	d.IsLiked = liked != 0
 	d.IsOwner = owner != 0
+	d.ShowUsageSummary = d.IsOwner
 	return d, nil
 }
 
@@ -1478,6 +1512,7 @@ func finalizeScannedDiscussion(d *Discussion, scriptJSON, sourcesJSON string, re
 	}
 	d.LLMCostKnown = costKnown != 0
 	d.Researched = researched != 0
+	d.refreshComputedFields()
 	d.CreatedAt = time.UnixMilli(created)
 	d.UpdatedAt = time.UnixMilli(updated)
 	if published > 0 {
@@ -1486,11 +1521,23 @@ func finalizeScannedDiscussion(d *Discussion, scriptJSON, sourcesJSON string, re
 	}
 }
 
+func discussionAllowsSendingMessage(status DiscussionStatus) bool {
+	return status == DiscussionGenerating
+}
+
+func (d *Discussion) refreshComputedFields() {
+	if d == nil {
+		return
+	}
+	d.AllowSendingMessage = discussionAllowsSendingMessage(d.Status)
+}
+
 func markDiscussionViewer(d *Discussion, viewer string) {
 	if d == nil {
 		return
 	}
 	d.IsOwner = d.OwnerUserID == viewer
+	d.ShowUsageSummary = d.IsOwner
 }
 
 func (s *DiscussionStore) ensureColumn(ctx context.Context, table, column, definition string) error {

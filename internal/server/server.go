@@ -104,6 +104,11 @@ type Deps struct {
 	// exposed to browsers — the dashboard forwards it server-side only.
 	ServiceToken string
 
+	// WebsiteBaseURL is the public base of the deep-link website (e.g.
+	// https://podcast.rxlab.app) used to mint share-link URLs (…/s/{token}).
+	// Empty falls back to https://podcast.rxlab.app.
+	WebsiteBaseURL string
+
 	// AuthIssuer, when non-empty (e.g. https://auth.rxlab.app), enables
 	// per-user rxlab OAuth: a request carrying `Authorization: Bearer
 	// <access token>` is validated against the issuer's OIDC userinfo
@@ -236,6 +241,12 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/cover/generate", s.handleDiscussionCoverGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/cover", s.handleDiscussionCoverSet)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
+		s.mux.HandleFunc("POST /api/discussions/{id}/shares", s.handleDiscussionShareCreate)
+		s.mux.HandleFunc("GET /api/discussions/{id}/shares", s.handleDiscussionShareList)
+		s.mux.HandleFunc("DELETE /api/discussions/{id}/shares/{token}", s.handleDiscussionShareRevoke)
+		s.mux.HandleFunc("POST /api/discussions/{id}/join", s.handleDiscussionJoin)
+		s.mux.HandleFunc("POST /api/share/{token}/join", s.handleShareJoin)
+		s.mux.HandleFunc("GET /api/share/{token}", s.handleShareResolve)
 		s.mux.HandleFunc("GET /api/market/profile", s.handleMarketProfile)
 		s.mux.HandleFunc("GET /api/market/creators/following", s.handleMarketCreatorFollowing)
 		s.mux.HandleFunc("GET /api/market/creators/{id}", s.handleMarketCreatorGet)

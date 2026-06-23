@@ -14,6 +14,7 @@ struct FullScreenPlayerView: View {
     /// cover there's nothing to flip from, so the transcript shows immediately.
     @State private var showingTranscript = false
     @State private var showingCoverEditor = false
+    @State private var showingShareSheet = false
 
     /// Drives the "magic move" of the cover between the large centered artwork
     /// and the small header thumbnail shown in transcription mode.
@@ -75,6 +76,9 @@ struct FullScreenPlayerView: View {
                 get: { model.discussion },
                 set: { model.discussion = $0 }
             ))
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            ShareSheet(discussionID: model.discussion.id, api: model.api)
         }
         .task(id: coverColorKey) {
             await model.loadCoverColors()
@@ -241,6 +245,7 @@ struct FullScreenPlayerView: View {
                 onPublish: {},
                 onEditCover: { showingCoverEditor = true },
                 onMakePrivate: {},
+                onShare: { showingShareSheet = true },
                 isCreatingFromPlan: false,
                 onCreateFromPlan: nil
             )

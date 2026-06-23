@@ -15,6 +15,7 @@ struct iOSApp: App {
     @State private var auth = AuthManager()
     @State private var purchases: PurchaseManager
     @State private var launchFlow = LaunchFlowStore()
+    @State private var deepLinks = DeepLinkRouter()
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
@@ -37,8 +38,15 @@ struct iOSApp: App {
                 .environment(auth)
                 .environment(purchases)
                 .environment(launchFlow)
+                .environment(deepLinks)
                 .tint(Theme.accent)
                 .scrollDismissesKeyboard(.interactively)
+                // Universal links (https://podcast.rxlab.app/d|s/...) arrive as a
+                // browsing user activity; custom-scheme links via onOpenURL.
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    if let url = activity.webpageURL { deepLinks.handle(url: url) }
+                }
+                .onOpenURL { url in deepLinks.handle(url: url) }
         }
     }
 }
