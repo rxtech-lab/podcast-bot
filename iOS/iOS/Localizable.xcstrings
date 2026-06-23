@@ -43,6 +43,9 @@
         }
       }
     },
+    "%lld" : {
+
+    },
     "%lld people" : {
       "localizations" : {
         "zh-Hans" : {
@@ -268,6 +271,9 @@
         }
       }
     },
+    "AI" : {
+
+    },
     "Attach files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -372,6 +378,9 @@
     "Balance Unknown" : {
       "comment" : "User menu label when the points balance is unknown"
     },
+    "Browse" : {
+
+    },
     "Cancel" : {
       "localizations" : {
         "zh-Hans" : {
@@ -440,6 +449,12 @@
         }
       }
     },
+    "Choose File" : {
+
+    },
+    "Choose from Photos" : {
+
+    },
     "Choose how many people debate, the language, and the topic — we handle the rest." : {
       "localizations" : {
         "zh-Hans" : {
@@ -485,6 +500,9 @@
       }
     },
     "Could not load %@" : {
+
+    },
+    "Could not load market" : {
 
     },
     "Could not load podcasts" : {
@@ -578,6 +596,9 @@
           }
         }
       }
+    },
+    "Cover" : {
+
     },
     "Creating %@..." : {
 
@@ -1112,6 +1133,9 @@
     "Generate %@" : {
 
     },
+    "Generate Cover" : {
+
+    },
     "Generate podcast" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1160,6 +1184,9 @@
           }
         }
       }
+    },
+    "Generating" : {
+
     },
     "Generating..." : {
       "comment" : "Discussion row status: podcast is generating",
@@ -1296,6 +1323,12 @@
         }
       }
     },
+    "Gradient" : {
+
+    },
+    "Image prompt" : {
+
+    },
     "Invalid streaming response." : {
       "comment" : "Shown when the streaming plan response is not a valid HTTP response",
       "localizations" : {
@@ -1364,6 +1397,9 @@
           }
         }
       }
+    },
+    "Liked" : {
+
     },
     "Listen live" : {
       "localizations" : {
@@ -1531,6 +1567,9 @@
         }
       }
     },
+    "Make Private" : {
+
+    },
     "Manage Subscription" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1552,6 +1591,9 @@
           }
         }
       }
+    },
+    "Market" : {
+
     },
     "Minimize" : {
       "localizations" : {
@@ -1788,6 +1830,9 @@
           }
         }
       }
+    },
+    "Open market" : {
+
     },
     "Panelists" : {
       "localizations" : {
@@ -2408,6 +2453,15 @@
         }
       }
     },
+    "Publish" : {
+
+    },
+    "Publish Station" : {
+
+    },
+    "Publish to Market" : {
+
+    },
     "Reading added sources..." : {
       "comment" : "Progress text while newly added sources are being read",
       "localizations" : {
@@ -2618,6 +2672,9 @@
       }
     },
     "Search %@" : {
+
+    },
+    "Search public %@" : {
 
     },
     "Search your %@" : {
@@ -2877,6 +2934,9 @@
           }
         }
       }
+    },
+    "Station Visibility" : {
+
     },
     "Stations" : {
 
@@ -3236,6 +3296,9 @@
         }
       }
     },
+    "Update" : {
+
+    },
     "Updated plan" : {
       "comment" : "Label for the plan card after an edit or source update completes",
       "localizations" : {
@@ -3304,6 +3367,9 @@
           }
         }
       }
+    },
+    "Upload" : {
+
     },
     "Used %@" : {
       "localizations" : {

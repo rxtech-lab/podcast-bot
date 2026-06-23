@@ -176,6 +176,18 @@ final class APIClient: Sendable {
                                               comment: "Shown when a re-research update is still in progress after polling"))
     }
 
+    private func marketList(path: String, limit: Int, offset: Int, query: String?) async throws -> [Discussion] {
+        var queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedQuery.isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: trimmedQuery))
+        }
+        return try await get(path, query: queryItems)
+    }
+
     /// Uploads a reference file via a presigned object-storage URL, then asks
     /// the engine to return an attachment payload. Documents come back as
     /// markdown; images come back as direct image URLs for the model.
@@ -216,9 +228,51 @@ final class APIClient: Sendable {
         _ = try await perform(request(method: "DELETE", path: "/api/discussions/\(id)"))
     }
 
+    func updateDiscussionVisibility(id: String,
+                                    visibility: DiscussionVisibility,
+                                    cover: DiscussionCover? = nil) async throws -> Discussion {
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/visibility",
+            body: DiscussionVisibilityRequest(visibility: visibility, cover: cover)
+        )
+    }
+
+    func generateDiscussionCover(id: String, prompt: String) async throws -> DiscussionCover {
+        let response: CoverGenerateResponse = try await send(
+            "POST",
+            "/api/discussions/\(id)/cover/generate",
+            body: CoverGenerateRequest(prompt: prompt)
+        )
+        return response.cover
+    }
+
     func appendDiscussionLine(id: String, line: DiscussionLineRequest) async throws {
         let payload = try JSONEncoder().encode(line)
         _ = try await perform(request(method: "POST", path: "/api/discussions/\(id)/lines", body: payload))
+    }
+
+    // MARK: - Marketplace
+
+    func marketStations(limit: Int = 20, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
+        try await marketList(path: "/api/market/stations", limit: limit, offset: offset, query: query)
+    }
+
+    func likedMarketStations(limit: Int = 20, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
+        try await marketList(path: "/api/market/stations/liked", limit: limit, offset: offset, query: query)
+    }
+
+    func marketStation(id: String) async throws -> Discussion {
+        try await get("/api/market/stations/\(id)")
+    }
+
+    func likeMarketStation(id: String) async throws -> Discussion {
+        try await send("POST", "/api/market/stations/\(id)/like", body: EmptyRequest())
+    }
+
+    func unlikeMarketStation(id: String) async throws -> Discussion {
+        let (data, _) = try await perform(request(method: "DELETE", path: "/api/market/stations/\(id)/like"))
+        return try decode(data)
     }
 
     // MARK: - Points

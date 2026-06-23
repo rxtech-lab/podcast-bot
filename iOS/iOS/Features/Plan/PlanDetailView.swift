@@ -23,6 +23,7 @@ struct PlanDetailView: View {
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
     @State private var showingPointsHistory = false
+    @State private var showingPublishSheet = false
     @State private var editIsAtBottom = true
     /// Live progress line shown in the loading bubble while the plan streams in.
     @State private var progressText: String?
@@ -59,6 +60,7 @@ struct PlanDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingPointsHistory) { PointsHistoryView() }
+        .sheet(isPresented: $showingPublishSheet) { PublishStationSheet(discussion: $discussion) }
         .task { await purchases.refreshBalance() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -75,6 +77,20 @@ struct PlanDetailView: View {
                         }
                     }
                     .disabled(isGenerating)
+                    Divider()
+                    if discussion.isPublic {
+                        Button(role: .destructive) {
+                            makePrivate()
+                        } label: {
+                            Label("Make Private", systemImage: "lock")
+                        }
+                    } else {
+                        Button {
+                            showingPublishSheet = true
+                        } label: {
+                            Label("Publish to Market", systemImage: "globe")
+                        }
+                    }
                 } label: {
                     Label("Plan options", systemImage: "ellipsis.circle")
                 }
@@ -705,6 +721,19 @@ struct PlanDetailView: View {
                 showingPaywall = true
             } catch {
                 isGenerating = false
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func makePrivate() {
+        Task { @MainActor in
+            do {
+                discussion = try await APIClient(tokens: auth).updateDiscussionVisibility(
+                    id: discussion.id,
+                    visibility: .private
+                )
+            } catch {
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }

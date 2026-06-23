@@ -20,6 +20,7 @@ struct PodcastPlayerView: View {
     @State private var showingImporter = false
     @State private var showingPhotos = false
     @State private var showingPointsHistory = false
+    @State private var showingPublishSheet = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAttachment = false
     @State private var transcriptIsAtBottom = true
@@ -64,7 +65,9 @@ struct PodcastPlayerView: View {
                             model: model,
                             showsPoints: purchases.isConfigured,
                             pointsMenuLabel: pointsMenuLabel,
-                            onShowPoints: { showingPointsHistory = true }
+                            onShowPoints: { showingPointsHistory = true },
+                            onPublish: { showingPublishSheet = true },
+                            onMakePrivate: { makePrivate(model) }
                         )
                     } else {
                         PodcastLoadingMenu(
@@ -81,6 +84,14 @@ struct PodcastPlayerView: View {
         }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
+        }
+        .sheet(isPresented: $showingPublishSheet) {
+            if let model {
+                PublishStationSheet(discussion: Binding(
+                    get: { model.discussion },
+                    set: { model.discussion = $0 }
+                ))
+            }
         }
         .sheet(isPresented: Binding(
             get: { model?.showsDownloadDialog == true },
@@ -313,6 +324,20 @@ struct PodcastPlayerView: View {
             }
         }
     }
+
+    private func makePrivate(_ model: PlayerModel) {
+        Task { @MainActor in
+            do {
+                model.discussion = try await APIClient(tokens: auth).updateDiscussionVisibility(
+                    id: model.discussion.id,
+                    visibility: .private
+                )
+            } catch {
+                // The existing player surface does not have a toast lane; leave
+                // the station public and let the user retry from the menu.
+            }
+        }
+    }
 }
 
 private struct PodcastTranscriptLoadingView: View {
@@ -340,6 +365,8 @@ struct PodcastActionsMenu: View {
     let showsPoints: Bool
     let pointsMenuLabel: String
     let onShowPoints: () -> Void
+    let onPublish: () -> Void
+    let onMakePrivate: () -> Void
 
     var body: some View {
         Menu {
@@ -352,6 +379,17 @@ struct PodcastActionsMenu: View {
             }
             if showsPoints && model.showsPodcastActions {
                 Divider()
+            }
+            if model.discussion.isOwner != false {
+                if model.discussion.isPublic {
+                    Button(role: .destructive, action: onMakePrivate) {
+                        Label("Make Private", systemImage: "lock")
+                    }
+                } else {
+                    Button(action: onPublish) {
+                        Label("Publish to Market", systemImage: "globe")
+                    }
+                }
             }
             if model.canDownloadPodcast {
                 Button {

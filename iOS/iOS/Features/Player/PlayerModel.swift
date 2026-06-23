@@ -130,10 +130,10 @@ final class PlayerModel {
         TranscriptScrollToken.make(for: lines)
     }
     var canForceStop: Bool {
-        discussion.status == .generating && !isFinished && !isForceStopping && discussion.jobID != nil
+        discussion.isOwner == true && discussion.status == .generating && !isFinished && !isForceStopping && discussion.jobID != nil
     }
     var showsForceStopAction: Bool {
-        discussion.status == .generating && !isFinished && discussion.jobID != nil
+        discussion.isOwner == true && discussion.status == .generating && !isFinished && discussion.jobID != nil
     }
     var isReadyForDownload: Bool {
         discussion.status == .ready || (isFinished && downloadURL != nil)
@@ -793,7 +793,7 @@ final class PlayerModel {
     // MARK: - Live transcript (WebSocket)
 
     private func listenEvents(jobID: String) async {
-        let socket = JobSocket(api: api, jobID: jobID)
+        let socket = JobSocket(api: api, jobID: jobID, discussionID: discussion.id)
         self.socket = socket
         for await env in socket.events() {
             handle(env)

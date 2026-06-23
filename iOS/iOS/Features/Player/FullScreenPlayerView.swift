@@ -84,7 +84,9 @@ struct FullScreenPlayerView: View {
                     model: model,
                     showsPoints: false,
                     pointsMenuLabel: "Points",
-                    onShowPoints: {}
+                    onShowPoints: {},
+                    onPublish: {},
+                    onMakePrivate: {}
                 )
                     .font(.title3)
                     .foregroundStyle(.primary)

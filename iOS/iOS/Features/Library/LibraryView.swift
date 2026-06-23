@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var showingCustomerCenter = false
     @State private var showingPointsHistory = false
     @State private var showingWhatsNew = false
+    @State private var showingMarketplace = false
     @State private var path: [Discussion] = []
     /// Detail selection for the iPad split-view layout.
     @State private var selection: Discussion?
@@ -62,6 +63,9 @@ struct LibraryView: View {
             {
                 showingWhatsNew = false
             }
+        }
+        .fullScreenCover(isPresented: $showingMarketplace) {
+            MarketplaceView()
         }
         .task { await load() }
         .task { await purchases.refreshBalance() }
@@ -140,6 +144,10 @@ struct LibraryView: View {
     @ToolbarContentBuilder
     private var libraryToolbar: some ToolbarContent {
         DefaultToolbarItem(kind: .search, placement: .bottomBar)
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showingMarketplace = true } label: { Image(systemName: "square.grid.2x2.fill") }
+                .accessibilityLabel("Open market")
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingNew = true } label: { Image(systemName: "plus") }
         }

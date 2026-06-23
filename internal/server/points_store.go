@@ -16,6 +16,7 @@ const (
 	pointsReasonPlanning             = "planning"
 	pointsReasonGeneration           = "generation"
 	pointsReasonGenerationAdjustment = "generation_adjustment"
+	pointsReasonImageGeneration      = "image_generation"
 	pointsReasonSignup               = "signup_grant"
 	pointsReasonPurchase             = "purchase" // suffixed with the event type, e.g. "purchase:RENEWAL"
 )
@@ -370,7 +371,7 @@ func (s *PointsStore) matchingReserveByDiscussion(ctx context.Context, userID st
 }
 
 func collapsibleSettlementReason(reason string) bool {
-	return reason == pointsReasonPlanning || reason == pointsReasonGeneration
+	return reason == pointsReasonPlanning || reason == pointsReasonGeneration || reason == pointsReasonImageGeneration
 }
 
 func collapsibleReserveKind(reason string) (string, bool) {
@@ -379,6 +380,8 @@ func collapsibleReserveKind(reason string) (string, bool) {
 		return pointsReasonPlanning, true
 	case "reserve:" + pointsReasonGeneration:
 		return pointsReasonGeneration, true
+	case "reserve:" + pointsReasonImageGeneration:
+		return pointsReasonImageGeneration, true
 	default:
 		return "", false
 	}
@@ -659,6 +662,10 @@ func (s *PointsStore) settle(ctx context.Context, tx *sql.Tx, userID, discussion
 // the same request/goroutine that reserved). Pass actual=0 to fully refund the
 // reservation when the planning work failed.
 func (s *PointsStore) SettlePlanning(ctx context.Context, userID, discussionID string, reserveLedgerID, reserved, actual int64, detail PointsUsageDetail) (int64, error) {
+	return s.SettleReserved(ctx, userID, discussionID, reserveLedgerID, reserved, actual, pointsReasonPlanning, detail)
+}
+
+func (s *PointsStore) SettleReserved(ctx context.Context, userID, discussionID string, reserveLedgerID, reserved, actual int64, kind string, detail PointsUsageDetail) (int64, error) {
 	if s == nil {
 		return 0, errors.New("points store is not configured")
 	}
@@ -671,11 +678,11 @@ func (s *PointsStore) SettlePlanning(ctx context.Context, userID, discussionID s
 		if _, err := tx.ExecContext(ctx, `UPDATE points_ledger
 			SET discussion_id = ?
 			WHERE id = ? AND user_id = ? AND reason = ?`,
-			discussionID, reserveLedgerID, userID, "reserve:"+pointsReasonPlanning); err != nil {
+			discussionID, reserveLedgerID, userID, "reserve:"+kind); err != nil {
 			return 0, err
 		}
 	}
-	newBal, err := s.settle(ctx, tx, userID, discussionID, reserved, actual, pointsReasonPlanning, detail, time.Now().UnixMilli())
+	newBal, err := s.settle(ctx, tx, userID, discussionID, reserved, actual, kind, detail, time.Now().UnixMilli())
 	if err != nil {
 		return 0, err
 	}

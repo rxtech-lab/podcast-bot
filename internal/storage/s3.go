@@ -116,6 +116,10 @@ func (u *Uploader) Upload(ctx context.Context, localPath, key string) error {
 		contentType = "video/mp4"
 	} else if strings.HasSuffix(strings.ToLower(localPath), ".mp3") {
 		contentType = "audio/mpeg"
+	} else if strings.HasSuffix(strings.ToLower(localPath), ".png") {
+		contentType = "image/png"
+	} else if strings.HasSuffix(strings.ToLower(localPath), ".jpg") || strings.HasSuffix(strings.ToLower(localPath), ".jpeg") {
+		contentType = "image/jpeg"
 	}
 	uploader := manager.NewUploader(u.client)
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{

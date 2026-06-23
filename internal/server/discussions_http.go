@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	for i := range items {
 		s.applyDiscussionJobStatus(r, &items[i])
 		s.applyDiscussionProgress(r.Context(), &items[i])
+		s.refreshDiscussionCoverURL(r.Context(), &items[i])
 		s.sanitizeDiscussionUsage(&items[i])
 	}
 	writeJSON(w, items)
@@ -100,6 +102,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 		}
 		s.applyDiscussionJobStatus(r, d)
 		s.applyDiscussionProgress(r.Context(), d)
+		s.refreshDiscussionCoverURL(r.Context(), d)
 		s.sanitizeDiscussionUsage(d)
 		writeJSON(w, d)
 		return
@@ -110,6 +113,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
@@ -793,11 +797,22 @@ func (s *Server) handleDiscussionAppendLine(w http.ResponseWriter, r *http.Reque
 	if !decodeJSONBody(w, r, &line) {
 		return
 	}
-	if err := s.d.Discussions.AppendLine(r.Context(), s.requestUser(r).ID, r.PathValue("id"), line); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := s.d.Discussions.AppendLineVisible(r.Context(), s.requestUser(r).ID, r.PathValue("id"), line); err != nil {
+		writeDiscussionAccessError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeDiscussionAccessError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errDiscussionNotVisible):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, errDiscussionForbidden):
+		http.Error(w, err.Error(), http.StatusForbidden)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) handleDiscussionDelete(w http.ResponseWriter, r *http.Request) {
