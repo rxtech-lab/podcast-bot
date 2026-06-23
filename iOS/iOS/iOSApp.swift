@@ -14,6 +14,7 @@ import RevenueCat
 struct iOSApp: App {
     @State private var auth = AuthManager()
     @State private var purchases: PurchaseManager
+    @State private var launchFlow = LaunchFlowStore()
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
@@ -35,6 +36,7 @@ struct iOSApp: App {
             RootView()
                 .environment(auth)
                 .environment(purchases)
+                .environment(launchFlow)
                 .tint(Theme.accent)
                 .scrollDismissesKeyboard(.interactively)
         }

@@ -12,6 +12,18 @@ import RxAuthSwiftUI
 struct RootView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
+    @Environment(LaunchFlowStore.self) private var launchFlow
+
+    @State private var launchPlan: LaunchPlanPresentation?
+    @State private var didRunLaunchFlow = false
+
+    /// Wraps the captured steps so the launch sheet is presented via `item:`
+    /// (data travels with the presentation, avoiding a stale-state race where
+    /// the sheet renders before the steps array propagates).
+    private struct LaunchPlanPresentation: Identifiable {
+        let id = UUID()
+        let steps: [LaunchStep]
+    }
 
     var body: some View {
         Group {
@@ -35,8 +47,41 @@ struct RootView: View {
                             await purchases.identify(userID: subject)
                         }
                     }
+                    .task { await startLaunchFlow() }
+                    .sheet(item: $launchPlan) { plan in
+                        LaunchFlowView(
+                            steps: plan.steps,
+                            onWelcomeSeen: { launchFlow.markWelcomeSeen() },
+                            onFeaturesSeen: { launchFlow.markFeaturesSeen($0) },
+                            onFinished: { launchPlan = nil }
+                        )
+                    }
             }
         }
+    }
+
+    /// Computes the launch flow once per process, after subscription status is
+    /// settled (so `isPro` is accurate). Captures the steps into a stable batch
+    /// before presenting.
+    private func startLaunchFlow() async {
+        guard !didRunLaunchFlow else { return }
+        // Wait until RevenueCat has loaded customer info (or purchases are
+        // disabled) so `isPro` reflects the real entitlement state. Bounded so a
+        // failed load doesn't block the flow forever (~5s).
+        var attempts = 0
+        while purchases.isConfigured && purchases.customerInfo == nil && attempts < 50 {
+            try? await Task.sleep(for: .milliseconds(100))
+            attempts += 1
+        }
+        didRunLaunchFlow = true
+
+        let steps = LaunchFlowPlan.steps(
+            hasSeenWelcome: launchFlow.hasSeenWelcome,
+            unseenFeatures: launchFlow.unseenFeatures,
+            isPro: purchases.isPro
+        )
+        guard !steps.isEmpty else { return }
+        launchPlan = LaunchPlanPresentation(steps: steps)
     }
 }
 

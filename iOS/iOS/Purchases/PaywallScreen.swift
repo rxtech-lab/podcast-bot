@@ -9,12 +9,21 @@ struct PaywallScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PurchaseManager.self) private var purchases
 
+    /// Called when the paywall finishes (close or purchase completes). Defaults
+    /// to dismissing this view; the launch flow passes a callback to advance the
+    /// coordinator instead.
+    var onFinish: (() -> Void)?
+
+    private func finish() {
+        if let onFinish { onFinish() } else { dismiss() }
+    }
+
     var body: some View {
         PaywallView(displayCloseButton: true)
             .onPurchaseCompleted { _ in
                 Task {
                     await purchases.refreshBalanceAfterPurchase()
-                    dismiss()
+                    finish()
                 }
             }
             .onRestoreCompleted { _ in
