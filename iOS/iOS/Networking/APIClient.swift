@@ -126,10 +126,12 @@ final class APIClient: Sendable {
     /// the plan into it. Decouples creation from the multi-minute planning run.
     func createDiscussion(topic: String,
                           language: String,
+                          type: String = "discussion",
                           generateCover: Bool = false,
                           coverPrompt: String? = nil) async throws -> Discussion {
         try await send("POST", "/api/discussions",
                        body: DiscussionCreateRequest(topic: topic,
+                                                     type: type,
                                                      language: language,
                                                      generateCover: generateCover,
                                                      coverPrompt: coverPrompt))
@@ -269,6 +271,32 @@ final class APIClient: Sendable {
             "PATCH",
             "/api/discussions/\(id)/cover",
             body: CoverUpdateRequest(cover: cover)
+        )
+    }
+
+    /// The models available for per-speaker assignment, fetched live from the
+    /// gateway and cached server-side (24h). Empty when the gateway exposes no
+    /// model listing.
+    func availableModels() async throws -> [ModelInfoDTO] {
+        let response: ModelsResponseDTO = try await get("/api/models")
+        return response.models ?? []
+    }
+
+    /// The content types currently supported by the planner. Today this is a
+    /// single `discussion` entry, but the backend owns the list so clients do
+    /// not hard-code future options.
+    func discussionTypes() async throws -> [DiscussionTypeDTO] {
+        let response: DiscussionTypesResponseDTO = try await get("/api/discussion-types")
+        return response.types ?? []
+    }
+
+    /// Changes the LLM model for one speaker (host or discussant, by name) in a
+    /// discussion's plan and returns the updated discussion.
+    func updateSpeakerModel(id: String, speaker: String, model: String) async throws -> Discussion {
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/speaker-model",
+            body: SpeakerModelRequest(speaker: speaker, model: model)
         )
     }
 

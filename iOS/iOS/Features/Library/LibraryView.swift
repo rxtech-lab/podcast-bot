@@ -517,6 +517,7 @@ struct LibraryView: View {
         switch discussion.status {
         case .planning, .failed:
             PlanDetailView(discussion: discussion, initialPlan: pendingPlans[discussion.id]) { generated in
+                pendingPlans[generated.id] = nil
                 upsert(generated)
                 replaceCurrent(with: generated)
             }

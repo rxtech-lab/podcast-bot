@@ -786,6 +786,9 @@
         }
       }
     },
+    "Discussion" : {
+      "comment" : "Round-table discussion type option"
+    },
     "Done" : {
 
     },
@@ -1663,6 +1666,9 @@
         }
       }
     },
+    "Loading…" : {
+
+    },
     "Make Private" : {
 
     },
@@ -1712,6 +1718,9 @@
           }
         }
       }
+    },
+    "Models" : {
+
     },
     "My %@" : {
 
@@ -1800,6 +1809,9 @@
           }
         }
       }
+    },
+    "No models available" : {
+
     },
     "No podcasts yet" : {
       "extractionState" : "stale",
@@ -3097,6 +3109,9 @@
         }
       }
     },
+    "Speaker Models" : {
+
+    },
     "Station Visibility" : {
 
     },
@@ -3289,6 +3304,9 @@
         }
       }
     },
+    "The selected model is used for this speaker when the plan is generated." : {
+
+    },
     "This %@" : {
 
     },
@@ -3297,6 +3315,9 @@
     },
     "This discussion is full. Ask the host to remove someone or try again later." : {
       "comment" : "Error shown when a discussion has reached its participant limit"
+    },
+    "This plan has no speakers yet." : {
+
     },
     "This podcast" : {
       "extractionState" : "stale",
@@ -3466,6 +3487,9 @@
           }
         }
       }
+    },
+    "Type" : {
+
     },
     "Update" : {
 

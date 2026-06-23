@@ -29,6 +29,7 @@ func atoiDefault(s string, def int) int {
 // /api/discussions/{id}/plan/stream.
 type discussionCreateRequest struct {
 	Topic    string `json:"topic"`
+	Type     string `json:"type"`
 	Language string `json:"language"`
 	// GenerateCover, when true, kicks off background AI cover-art generation for
 	// the new discussion. The placeholder is returned immediately; the cover is
@@ -52,6 +53,13 @@ type discussionAddSourcesRequest struct {
 
 type discussionSourceSearchRequest struct {
 	Query string `json:"query"`
+}
+
+// discussionSpeakerModelRequest changes the LLM model assigned to one speaker
+// (the host or a discussant, matched by name) in a discussion's plan.
+type discussionSpeakerModelRequest struct {
+	Speaker string `json:"speaker"`
+	Model   string `json:"model"`
 }
 
 type discussionSourceSearchResponse struct {
@@ -149,6 +157,11 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "topic is required", http.StatusBadRequest)
 		return
 	}
+	contentType := strings.TrimSpace(req.Type)
+	if contentType != "" && contentType != config.ContentTypeDiscussion {
+		http.Error(w, "only discussion creation is supported", http.StatusBadRequest)
+		return
+	}
 	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), s.requestUser(r).ID, topic, strings.TrimSpace(req.Language))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -204,6 +217,37 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 		return
 	}
 	updated, err := s.d.Discussions.SetCover(r.Context(), s.requestUser(r).ID, r.PathValue("id"), req.Cover)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.applyDiscussionJobStatus(r, updated)
+	s.applyDiscussionProgress(r.Context(), updated)
+	s.refreshDiscussionCoverURL(r.Context(), updated)
+	s.sanitizeDiscussionUsage(updated)
+	writeJSON(w, updated)
+}
+
+// handleUpdateSpeakerModel changes the LLM model for one speaker (host or a
+// discussant, matched by name) in an owned discussion's plan, persisting only
+// the script so sources/markdown/research stay intact. The updated model is
+// picked up at generation time.
+func (s *Server) handleUpdateSpeakerModel(w http.ResponseWriter, r *http.Request) {
+	var req discussionSpeakerModelRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	speaker := strings.TrimSpace(req.Speaker)
+	model := strings.TrimSpace(req.Model)
+	if speaker == "" || model == "" {
+		http.Error(w, "speaker and model are required", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.d.Discussions.SetSpeakerModel(r.Context(), s.requestUser(r).ID, r.PathValue("id"), speaker, model)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -412,8 +456,34 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	if strings.TrimSpace(req.Topic) == "" {
 		req.Topic = d.Topic
 	}
+	if d.Script != nil {
+		s.sanitizeDiscussionUsage(d)
+		sse := newSSEWriter(w)
+		_ = sse.comment("ok")
+		_ = sse.send("done", d)
+		return
+	}
+	if progress := s.currentPlanProgress(r.Context(), id); progress != nil {
+		sse := newSSEWriter(w)
+		_ = sse.comment("ok")
+		s.streamExistingPlanProgress(r.Context(), user.ID, id, sse, progress, nil)
+		return
+	}
+	run, owned := s.claimDiscussionPlanRun(id)
+	if !owned {
+		sse := newSSEWriter(w)
+		_ = sse.comment("ok")
+		s.streamExistingPlanProgress(r.Context(), user.ID, id, sse, nil, run)
+		return
+	}
+	defer func() {
+		if run.err == nil {
+			s.finishDiscussionPlanRun(id, run, nil)
+		}
+	}()
 	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, id)
 	if !ok {
+		s.finishDiscussionPlanRun(id, run, errors.New("planning reservation failed"))
 		return
 	}
 	meter := &usageAccumulator{}
@@ -422,7 +492,9 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	defer cancel()
 	sse := newSSEWriter(w)
 	_ = sse.comment("ok")
-	s.recordDiscussionProgress(workCtx, id, "plan", planner.ProgressEvent{Phase: "thinking", Text: "Researching & planning..."})
+	initialProgress := planner.ProgressEvent{Phase: "thinking", Text: "Researching & planning..."}
+	s.recordDiscussionProgress(workCtx, id, "plan", initialProgress)
+	_ = sse.send("progress", initialProgress)
 	p.WithProgress(func(ev planner.ProgressEvent) {
 		s.recordDiscussionProgress(workCtx, id, "plan", ev)
 		_ = sse.send("progress", ev)
@@ -431,6 +503,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	if err != nil {
 		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
+		s.finishDiscussionPlanRun(id, run, err)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
@@ -439,12 +512,14 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	if err != nil {
 		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
+		s.finishDiscussionPlanRun(id, run, err)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	if updated == nil {
 		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
+		s.finishDiscussionPlanRun(id, run, errors.New("discussion not found"))
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
@@ -455,6 +530,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	}
 	s.clearDiscussionProgress(workCtx, id)
 	s.sanitizeDiscussionUsage(updated)
+	s.finishDiscussionPlanRun(id, run, nil)
 	_ = sse.send("done", updated)
 }
 
@@ -735,6 +811,102 @@ func (s *Server) clearDiscussionProgress(ctx context.Context, id string) {
 	if s.d.Progress != nil {
 		s.d.Progress.Clear(ctx, id)
 	}
+}
+
+func (s *Server) currentPlanProgress(ctx context.Context, id string) *DiscussionProgress {
+	if s.d.Progress == nil {
+		return nil
+	}
+	progress := s.d.Progress.Get(ctx, id)
+	if progress == nil || !progress.Active || progress.Operation != "plan" {
+		return nil
+	}
+	return progress
+}
+
+func (s *Server) claimDiscussionPlanRun(id string) (*discussionPlanRun, bool) {
+	s.discussionPlanMu.Lock()
+	defer s.discussionPlanMu.Unlock()
+	if run := s.discussionPlanRuns[id]; run != nil {
+		return run, false
+	}
+	run := &discussionPlanRun{done: make(chan struct{})}
+	s.discussionPlanRuns[id] = run
+	return run, true
+}
+
+func (s *Server) finishDiscussionPlanRun(id string, run *discussionPlanRun, err error) {
+	if run == nil {
+		return
+	}
+	s.discussionPlanMu.Lock()
+	if s.discussionPlanRuns[id] != run {
+		s.discussionPlanMu.Unlock()
+		return
+	}
+	run.err = err
+	delete(s.discussionPlanRuns, id)
+	s.discussionPlanMu.Unlock()
+	close(run.done)
+}
+
+func (s *Server) streamExistingPlanProgress(ctx context.Context, userID, id string, sse *sseWriter, progress *DiscussionProgress, run *discussionPlanRun) {
+	if progress != nil {
+		_ = sse.send("progress", planner.ProgressEvent{Phase: progress.Phase, Text: progress.Text})
+	} else {
+		_ = sse.send("progress", planner.ProgressEvent{Phase: "thinking", Text: "Researching & planning..."})
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-doneChan(run):
+			d, err := s.d.Discussions.Get(context.Background(), userID, id)
+			if err != nil {
+				_ = sse.send("error", map[string]string{"message": err.Error()})
+				return
+			}
+			if d != nil && d.Script != nil {
+				s.sanitizeDiscussionUsage(d)
+				_ = sse.send("done", d)
+				return
+			}
+			if run != nil && run.err != nil {
+				_ = sse.send("error", map[string]string{"message": run.err.Error()})
+				return
+			}
+			_ = sse.send("error", map[string]string{"message": "planning did not finish"})
+			return
+		case <-ticker.C:
+			d, err := s.d.Discussions.Get(ctx, userID, id)
+			if err != nil {
+				continue
+			}
+			if d != nil && d.Script != nil {
+				s.sanitizeDiscussionUsage(d)
+				_ = sse.send("done", d)
+				return
+			}
+			if progress := s.currentPlanProgress(ctx, id); progress != nil {
+				_ = sse.send("progress", planner.ProgressEvent{Phase: progress.Phase, Text: progress.Text})
+				continue
+			}
+			if run == nil {
+				_ = sse.send("error", map[string]string{"message": "planning did not finish"})
+				return
+			}
+		}
+	}
+}
+
+func doneChan(run *discussionPlanRun) <-chan struct{} {
+	if run == nil {
+		return nil
+	}
+	return run.done
 }
 
 func cleanedSourceURLs(raw []string) []string {

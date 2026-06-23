@@ -120,6 +120,7 @@
 				Features/Plan/PlanDetailView.swift,
 				Features/Plan/PlanSnapshotView.swift,
 				Features/Plan/SourcesView.swift,
+				Features/Plan/SpeakerModelsSheet.swift,
 				Features/Player/CoverPalette.swift,
 				Features/Player/FullScreenPlayerView.swift,
 				Features/Player/PlayerModel.swift,

@@ -81,6 +81,9 @@ struct PlanSnapshotCard: View {
     let label: String
     let snapshot: PlanSnapshot
     var onSourcesTapped: (() -> Void)? = nil
+    /// When set, a "Models" button is shown in the Panelists header that opens
+    /// the per-speaker model editor. nil hides it (e.g. read-only previews).
+    var onEditModels: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -108,7 +111,18 @@ struct PlanSnapshotCard: View {
 
             if !snapshot.people.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Panelists").font(.headline)
+                    HStack {
+                        Text("Panelists").font(.headline)
+                        if let onEditModels {
+                            Spacer()
+                            Button(action: onEditModels) {
+                                Label("Models", systemImage: "cpu")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.accent)
+                        }
+                    }
                     ForEach(snapshot.people) { person in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 8) {

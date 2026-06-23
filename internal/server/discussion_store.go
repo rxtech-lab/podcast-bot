@@ -1089,6 +1089,49 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	return s.Get(ctx, owner, id)
 }
 
+// SetSpeakerModel changes the LLM model for a single speaker (the host or a
+// discussant, matched by name) in the discussion's plan. Only script_json is
+// rewritten so sources/markdown/research survive. Returns nil (→ 404) when the
+// discussion has no plan or no speaker matches the given name.
+func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speaker, model string) (*Discussion, error) {
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	if d.Script == nil {
+		return nil, nil
+	}
+	matched := false
+	if d.Script.Host.Name == speaker {
+		d.Script.Host.Model = model
+		matched = true
+	}
+	for i := range d.Script.Discussants {
+		if d.Script.Discussants[i].Name == speaker {
+			d.Script.Discussants[i].Model = model
+			matched = true
+		}
+	}
+	if !matched {
+		return nil, nil
+	}
+	scriptJSON, err := marshalString(d.Script)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+		script_json = ?, updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`,
+		scriptJSON, time.Now().UnixMilli(), owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
 func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (*Discussion, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
 		status = ?, job_id = ?, prompt_tokens = 0, completion_tokens = 0, total_tokens = 0,

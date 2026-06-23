@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/tools"
 )
 
@@ -14,11 +15,49 @@ type modelsResponse struct {
 	Models   []config.ModelInfo   `json:"models"`
 }
 
+// discussionTypeMeta describes a plan type the native clients can offer in the
+// new-discussion sheet. Planning only supports round-table discussions today,
+// so the endpoint intentionally returns a single option.
+type discussionTypeMeta struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type discussionTypesResponse struct {
+	Types []discussionTypeMeta `json:"types"`
+}
+
+func (s *Server) handleDiscussionTypes(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, discussionTypesResponse{Types: []discussionTypeMeta{
+		{ID: config.ContentTypeDiscussion, Label: "Discussion"},
+	}})
+}
+
 // handleModels enumerates the LLM models the engine can drive agents with, so
-// the dashboard can populate its per-agent model pickers. The list is the
-// curated roster augmented with any env-configured defaults.
-func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
-	models, defaults := config.ModelsForEnv(s.d.Env)
+// the dashboard and app can populate their per-speaker model pickers. The list
+// is fetched live from the OpenAI-compatible gateway (GET /models) and cached
+// in Redis for 24h; a fetch failure degrades to an empty roster (the picker
+// keeps whatever model the speaker already has) rather than erroring.
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	defaults := config.DefaultsForEnv(s.d.Env)
+
+	if cached, ok := s.d.ModelCatalog.Get(r.Context()); ok {
+		writeJSON(w, modelsResponse{Defaults: defaults, Models: cached})
+		return
+	}
+
+	var models []config.ModelInfo
+	if s.d.Env != nil {
+		ids, err := llm.ListModels(r.Context(), s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey)
+		if err != nil {
+			if s.d.Log != nil {
+				s.d.Log.Warn("list gateway models", "err", err)
+			}
+		} else {
+			models = config.ModelsFromIDs(ids, defaults)
+			s.d.ModelCatalog.Set(r.Context(), models)
+		}
+	}
 	writeJSON(w, modelsResponse{Defaults: defaults, Models: models})
 }
 

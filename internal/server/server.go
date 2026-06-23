@@ -77,11 +77,14 @@ type Deps struct {
 	// Points backs the points economy (per-user balance, ledger, charges). nil
 	// disables points gating/charging/hiding entirely — the server behaves as
 	// before. Wired from the same database as Discussions.
-	Points     *PointsStore
-	Progress   *DiscussionProgressStore
-	Log        *slog.Logger
-	UploadRoot string
-	SubmitJob  func(jobID string, sub JobSubmission) error
+	Points   *PointsStore
+	Progress *DiscussionProgressStore
+	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
+	// in Redis for 24h. nil disables caching — the handler fetches live each time.
+	ModelCatalog *ModelCatalogStore
+	Log          *slog.Logger
+	UploadRoot   string
+	SubmitJob    func(jobID string, sub JobSubmission) error
 	// Password, when non-empty, gates every /api/* route behind a login
 	// cookie. Empty disables auth entirely (the default).
 	Password string
@@ -154,6 +157,14 @@ type Server struct {
 	jobMessageRateMu   sync.Mutex
 	jobMessageRateLast map[string]time.Time
 	jobMessageRateNow  func() time.Time
+
+	discussionPlanMu   sync.Mutex
+	discussionPlanRuns map[string]*discussionPlanRun
+}
+
+type discussionPlanRun struct {
+	done chan struct{}
+	err  error
 }
 
 // New builds a Server with all routes mounted.
@@ -163,6 +174,7 @@ func New(d Deps) *Server {
 		mux:                http.NewServeMux(),
 		jobMessageRateLast: make(map[string]time.Time),
 		jobMessageRateNow:  time.Now,
+		discussionPlanRuns: make(map[string]*discussionPlanRun),
 	}
 	if d.Password != "" {
 		s.authTok = authToken(d.Password)
@@ -182,6 +194,7 @@ func New(d Deps) *Server {
 	// Dashboard-facing metadata routes (always mounted): model + tool
 	// discovery and the planning/script-generation endpoints. They degrade
 	// gracefully when Env/MCPCfg are nil.
+	s.mux.HandleFunc("GET /api/discussion-types", s.handleDiscussionTypes)
 	s.mux.HandleFunc("GET /api/models", s.handleModels)
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
@@ -238,6 +251,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/visibility", s.handleDiscussionVisibility)
+		s.mux.HandleFunc("PATCH /api/discussions/{id}/speaker-model", s.handleUpdateSpeakerModel)
 		s.mux.HandleFunc("POST /api/discussions/{id}/cover/generate", s.handleDiscussionCoverGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/cover", s.handleDiscussionCoverSet)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)

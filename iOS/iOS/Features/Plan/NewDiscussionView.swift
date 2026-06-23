@@ -11,12 +11,19 @@ struct NewDiscussionView: View {
     var onPlanned: (Discussion, PlanRequest) -> Void = { _, _ in }
 
     @State private var topic = ""
+    @AppStorage("newDiscussion.type") private var discussionType = "discussion"
     @AppStorage("newDiscussion.discussants") private var discussants = 3
     @AppStorage("newDiscussion.language") private var language = "en-US"
     @State private var attachments: [PendingAttachment] = []
+    @State private var discussionTypes: [DiscussionTypeDTO] = Self.defaultDiscussionTypes
     @AppStorage("newDiscussion.generateCover") private var generateCover = false
     @State private var isPlanning = false
     @State private var errorMessage: String?
+
+    private static let defaultDiscussionTypes = [
+        DiscussionTypeDTO(id: "discussion",
+                          label: String(localized: "Discussion", comment: "Round-table discussion type option"))
+    ]
 
     var body: some View {
         NavigationStack {
@@ -46,6 +53,9 @@ struct NewDiscussionView: View {
         }
         .interactiveDismissDisabled(true)
         .onAppear(perform: normalizeStoredSettings)
+        .task {
+            await loadDiscussionTypes()
+        }
     }
 
     private var form: some View {
@@ -89,6 +99,8 @@ struct NewDiscussionView: View {
         VStack(spacing: 0) {
             AttachmentsRow(attachments: $attachments, grouped: true)
             rowDivider
+            discussionTypeRow
+            rowDivider
             panelistsRow
             rowDivider
             DiscussionLanguageMenu(selection: $language, grouped: true)
@@ -96,6 +108,36 @@ struct NewDiscussionView: View {
             generateCoverRow
         }
         .glassEffect(in: .rect(cornerRadius: 16))
+    }
+
+    private var discussionTypeRow: some View {
+        Menu {
+            Picker("Type", selection: $discussionType) {
+                ForEach(discussionTypes) { type in
+                    Text(type.displayLabel).tag(type.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Type")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(labelForDiscussionType(discussionType))
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .padding(12)
+        }
+        .tint(Theme.accent)
     }
 
     /// Opt-in toggle: when on, the server generates AI cover art in the
@@ -151,6 +193,30 @@ struct NewDiscussionView: View {
     private func normalizeStoredSettings() {
         discussants = min(max(discussants, 2), 6)
         language = DiscussionLanguage.normalized(language)
+        normalizeDiscussionType()
+    }
+
+    @MainActor
+    private func loadDiscussionTypes() async {
+        do {
+            let api = APIClient(tokens: auth)
+            let fetched = try await api.discussionTypes()
+            discussionTypes = fetched.isEmpty ? Self.defaultDiscussionTypes : fetched
+            normalizeDiscussionType()
+        } catch {
+            discussionTypes = Self.defaultDiscussionTypes
+            normalizeDiscussionType()
+        }
+    }
+
+    private func normalizeDiscussionType() {
+        if !discussionTypes.contains(where: { $0.id == discussionType }) {
+            discussionType = discussionTypes.first?.id ?? "discussion"
+        }
+    }
+
+    private func labelForDiscussionType(_ id: String) -> String {
+        discussionTypes.first(where: { $0.id == id })?.displayLabel ?? id
     }
 
     /// Creates the placeholder discussion (fast), then hands it plus the plan
@@ -164,12 +230,13 @@ struct NewDiscussionView: View {
         errorMessage = nil
         let api = APIClient(tokens: auth)
         let ready = attachments.apiAttachments
-        let request = PlanRequest(topic: trimmed, language: language, discussants: discussants,
+        let request = PlanRequest(type: discussionType, topic: trimmed, language: language, discussants: discussants,
                                   research: true, attachments: ready.isEmpty ? nil : ready)
         Task {
             do {
                 let created = try await api.createDiscussion(topic: trimmed,
                                                              language: language,
+                                                             type: discussionType,
                                                              generateCover: generateCover)
                 isPlanning = false
                 dismiss()

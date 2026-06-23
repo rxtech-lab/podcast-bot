@@ -1,9 +1,14 @@
 package config
 
+import "strings"
+
 // ModelInfo describes one selectable LLM the engine can drive an agent with.
 // Models are referenced by ID (the string written into an AgentSpec.Model
 // field, e.g. "anthropic/claude-opus-4-8"); Label/Provider/Capabilities are
-// presentation hints for the dashboard's model pickers.
+// presentation hints for the dashboard's model pickers. The roster is fetched
+// live from the OpenAI-compatible gateway (see llm.ListModels) — there is no
+// curated list — so Label defaults to the raw id and Provider is derived from
+// the "provider/model" id prefix.
 type ModelInfo struct {
 	ID           string   `json:"id"`
 	Label        string   `json:"label"`
@@ -15,31 +20,6 @@ type ModelInfo struct {
 	DefaultFor []string `json:"default_for,omitempty"`
 }
 
-// capTools marks a model usable for tool-calling agents (host/discussants);
-// everything in the curated list below supports it, but the field keeps the
-// contract explicit for the dashboard.
-var (
-	capChat   = []string{"tools", "reasoning"}
-	capVision = []string{"tools", "vision", "reasoning"}
-)
-
-// CuratedModels is the engine's known-good roster of OpenAI-compatible gateway
-// model ids. The gateway exposes no reliable cross-provider /models listing,
-// so this curated set is the source of truth for the dashboard's pickers.
-// Keep ids in the provider/model form the gateway expects.
-func CuratedModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "anthropic/claude-opus-4-8", Label: "Claude Opus 4.8", Provider: "anthropic", Capabilities: capVision},
-		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", Capabilities: capVision},
-		{ID: "anthropic/claude-haiku-4-5", Label: "Claude Haiku 4.5", Provider: "anthropic", Capabilities: capVision},
-		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "openai", Capabilities: capVision},
-		{ID: "openai/gpt-4o", Label: "GPT-4o", Provider: "openai", Capabilities: capVision},
-		{ID: "openai/gpt-4o-mini", Label: "GPT-4o mini", Provider: "openai", Capabilities: capChat},
-		{ID: "google/gemini-2.5-pro", Label: "Gemini 2.5 Pro", Provider: "google", Capabilities: capVision},
-		{ID: "google/gemini-2.5-flash", Label: "Gemini 2.5 Flash", Provider: "google", Capabilities: capChat},
-	}
-}
-
 // ModelDefaults maps engine roles to the configured default model ids.
 type ModelDefaults struct {
 	Host         string `json:"host"`
@@ -47,46 +27,47 @@ type ModelDefaults struct {
 	Compression  string `json:"compression"`
 }
 
-// ModelsForEnv returns the curated roster augmented with any env-configured
-// default models that aren't already present (marked provider "env-default"),
-// and stamps DefaultFor on the models the env points at. The returned defaults
-// let the dashboard preselect sensible models for each role.
-func ModelsForEnv(e *Env) ([]ModelInfo, ModelDefaults) {
-	models := CuratedModels()
-	defaults := ModelDefaults{}
+// DefaultsForEnv reports the env-configured default model id for each engine
+// role so the dashboard/app can preselect sensible models.
+func DefaultsForEnv(e *Env) ModelDefaults {
 	if e == nil {
-		return models, defaults
+		return ModelDefaults{}
 	}
-	defaults = ModelDefaults{
+	return ModelDefaults{
 		Host:         e.HostModel,
 		ScenePlanner: e.ScenePlannerModel,
 		Compression:  e.CompressionModel,
 	}
+}
 
-	index := func(id string) int {
-		for i := range models {
-			if models[i].ID == id {
-				return i
-			}
+// ModelsFromIDs turns a flat list of gateway model ids into ModelInfo entries,
+// deriving Provider from the "provider/model" id prefix and stamping DefaultFor
+// for any id the env points at as a role default. Blank/duplicate ids are
+// dropped so the resulting roster is clean for the pickers.
+func ModelsFromIDs(ids []string, defaults ModelDefaults) []ModelInfo {
+	out := make([]ModelInfo, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
 		}
-		return -1
+		seen[id] = true
+		provider := "openai"
+		if i := strings.Index(id, "/"); i > 0 {
+			provider = id[:i]
+		}
+		info := ModelInfo{ID: id, Label: id, Provider: provider}
+		if id == defaults.Host {
+			info.DefaultFor = append(info.DefaultFor, "host")
+		}
+		if id == defaults.ScenePlanner {
+			info.DefaultFor = append(info.DefaultFor, "scene_planner")
+		}
+		if id == defaults.Compression {
+			info.DefaultFor = append(info.DefaultFor, "compression")
+		}
+		out = append(out, info)
 	}
-	ensure := func(id, role string) {
-		if id == "" {
-			return
-		}
-		i := index(id)
-		if i < 0 {
-			models = append(models, ModelInfo{
-				ID: id, Label: id, Provider: "env-default", Capabilities: capChat,
-				DefaultFor: []string{role},
-			})
-			return
-		}
-		models[i].DefaultFor = append(models[i].DefaultFor, role)
-	}
-	ensure(e.HostModel, "host")
-	ensure(e.ScenePlannerModel, "scene_planner")
-	ensure(e.CompressionModel, "compression")
-	return models, defaults
+	return out
 }
