@@ -165,6 +165,7 @@ func New(d Deps) *Server {
 	if d.AuthIssuer != "" {
 		s.oauth = newOAuthValidator(d.AuthIssuer, d.Log)
 	}
+	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
@@ -235,6 +236,12 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/cover/generate", s.handleDiscussionCoverGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/cover", s.handleDiscussionCoverSet)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
+		s.mux.HandleFunc("GET /api/market/profile", s.handleMarketProfile)
+		s.mux.HandleFunc("GET /api/market/creators/following", s.handleMarketCreatorFollowing)
+		s.mux.HandleFunc("GET /api/market/creators/{id}", s.handleMarketCreatorGet)
+		s.mux.HandleFunc("GET /api/market/creators/{id}/stations", s.handleMarketCreatorStations)
+		s.mux.HandleFunc("POST /api/market/creators/{id}/follow", s.handleMarketCreatorFollow)
+		s.mux.HandleFunc("DELETE /api/market/creators/{id}/follow", s.handleMarketCreatorUnfollow)
 		s.mux.HandleFunc("GET /api/market/stations", s.handleMarketList)
 		s.mux.HandleFunc("GET /api/market/stations/liked", s.handleMarketLikedList)
 		s.mux.HandleFunc("GET /api/market/stations/{id}", s.handleMarketGet)
@@ -317,6 +324,52 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// hide video-only options and present an audio feed.
 		"force_audio": s.d.ForceAudio,
 	})
+}
+
+type healthCheckResult struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+type healthResponse struct {
+	Status string                       `json:"status"`
+	Checks map[string]healthCheckResult `json:"checks,omitempty"`
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	checks := map[string]healthCheckResult{}
+	healthy := true
+	check := func(name string, fn func(context.Context) error) {
+		if err := fn(ctx); err != nil {
+			healthy = false
+			checks[name] = healthCheckResult{Status: "error", Error: err.Error()}
+			return
+		}
+		checks[name] = healthCheckResult{Status: "ok"}
+	}
+
+	if s.d.Jobs != nil {
+		check("jobs_db", s.d.Jobs.Ping)
+	}
+	if s.d.Discussions != nil {
+		check("discussions_db", s.d.Discussions.Ping)
+	}
+	if s.d.Progress != nil {
+		check("redis", s.d.Progress.Ping)
+	}
+
+	status := "ok"
+	code := http.StatusOK
+	if !healthy {
+		status = "error"
+		code = http.StatusInternalServerError
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(healthResponse{Status: status, Checks: checks})
 }
 
 // Handler exposes the served handler (auth-wrapped when a password is set).

@@ -43,6 +43,22 @@ type DiscussionCover struct {
 	Prompt        string `json:"prompt,omitempty"`
 }
 
+type CreatorProfile struct {
+	ID            string `json:"id"`
+	DisplayName   string `json:"display_name"`
+	Username      string `json:"username,omitempty"`
+	AvatarURL     string `json:"avatar_url,omitempty"`
+	FollowerCount int64  `json:"follower_count"`
+	IsFollowed    bool   `json:"is_followed"`
+	IsSelf        bool   `json:"is_self"`
+}
+
+type MarketProfile struct {
+	Profile   CreatorProfile   `json:"profile"`
+	Stations  []Discussion     `json:"stations"`
+	Following []CreatorProfile `json:"following"`
+}
+
 // Pagination bounds for listing discussions.
 const (
 	defaultDiscussionPageSize = 20
@@ -106,6 +122,7 @@ type Discussion struct {
 	PointsCharged    int64                `json:"points_charged"`
 	Visibility       DiscussionVisibility `json:"visibility"`
 	Cover            DiscussionCover      `json:"cover,omitempty"`
+	Creator          *CreatorProfile      `json:"creator,omitempty"`
 	LikeCount        int64                `json:"like_count"`
 	IsLiked          bool                 `json:"is_liked"`
 	IsOwner          bool                 `json:"is_owner"`
@@ -169,6 +186,13 @@ func (s *DiscussionStore) Close() error {
 		err = s.db.Close()
 	}
 	return err
+}
+
+func (s *DiscussionStore) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.PingContext(ctx)
 }
 
 func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
@@ -236,6 +260,23 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			ON native_discussion_likes(user_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS native_discussion_likes_discussion_idx
 			ON native_discussion_likes(discussion_id)`,
+		`CREATE TABLE IF NOT EXISTS creator_profiles (
+			user_id TEXT PRIMARY KEY,
+			display_name TEXT NOT NULL DEFAULT '',
+			username TEXT NOT NULL DEFAULT '',
+			avatar_url TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS creator_follows (
+			follower_user_id TEXT NOT NULL,
+			creator_user_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY(follower_user_id, creator_user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS creator_follows_creator_idx
+			ON creator_follows(creator_user_id)`,
+		`CREATE INDEX IF NOT EXISTS creator_follows_follower_created_idx
+			ON creator_follows(follower_user_id, created_at DESC)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -481,6 +522,50 @@ func (s *DiscussionStore) ListLiked(ctx context.Context, viewer, query string, l
 	return s.listMarket(ctx, viewer, query, limit, offset, true)
 }
 
+func (s *DiscussionStore) ListByCreator(ctx context.Context, viewer, creatorID, query string, limit, offset int) ([]Discussion, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query = strings.TrimSpace(query)
+	args := []any{viewer, viewer, creatorID, string(DiscussionPublic), string(DiscussionGenerating), string(DiscussionReady)}
+	where := ` WHERE d.owner_user_id = ? AND d.visibility = ? AND d.status IN (?, ?)`
+	if query != "" {
+		pattern := "%" + escapeLike(query) + "%"
+		where += ` AND (d.topic LIKE ? ESCAPE '\' OR d.title LIKE ? ESCAPE '\' OR d.markdown LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern)
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionSelectColumns("d")+`,
+		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
+		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
+		d.owner_user_id = ? AS is_owner
+		FROM native_discussions d`+where+`
+		ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussionWithMarket(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, viewer)
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.AttachCreatorProfiles(ctx, viewer, out)
+}
+
 func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, limit, offset int, likedOnly bool) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
@@ -524,7 +609,10 @@ func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, 
 		markDiscussionViewer(&d, viewer)
 		out = append(out, d)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.AttachCreatorProfiles(ctx, viewer, out)
 }
 
 func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*Discussion, error) {
@@ -555,6 +643,11 @@ func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*D
 		}
 		d.EditTurns = turns
 	}
+	if profile, err := s.CreatorProfile(ctx, viewer, d.OwnerUserID); err == nil {
+		d.Creator = profile
+	} else {
+		return nil, err
+	}
 	return &d, nil
 }
 
@@ -576,6 +669,177 @@ func (s *DiscussionStore) Unlike(ctx context.Context, viewer, id string) (*Discu
 		return nil, err
 	}
 	return s.GetVisible(ctx, viewer, id)
+}
+
+func (s *DiscussionStore) UpsertCreatorProfile(ctx context.Context, profile CreatorProfile) error {
+	if s == nil {
+		return errors.New("discussion store is not configured")
+	}
+	profile.ID = strings.TrimSpace(profile.ID)
+	if profile.ID == "" || profile.ID == "anonymous" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO creator_profiles
+		(user_id, display_name, username, avatar_url, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			display_name = excluded.display_name,
+			username = excluded.username,
+			avatar_url = excluded.avatar_url,
+			updated_at = excluded.updated_at`,
+		profile.ID, strings.TrimSpace(profile.DisplayName), strings.TrimSpace(profile.Username),
+		strings.TrimSpace(profile.AvatarURL), time.Now().UnixMilli())
+	return err
+}
+
+func (s *DiscussionStore) CreatorProfile(ctx context.Context, viewer, creatorID string) (*CreatorProfile, error) {
+	var profile *CreatorProfile
+	err := retryTransientDBConnection(ctx, func() error {
+		var err error
+		profile, err = s.creatorProfileOnce(ctx, viewer, creatorID)
+		return err
+	})
+	return profile, err
+}
+
+func (s *DiscussionStore) creatorProfileOnce(ctx context.Context, viewer, creatorID string) (*CreatorProfile, error) {
+	creatorID = strings.TrimSpace(creatorID)
+	if creatorID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT
+		? AS user_id,
+		COALESCE(p.display_name, '') AS display_name,
+		COALESCE(p.username, '') AS username,
+		COALESCE(p.avatar_url, '') AS avatar_url,
+		(SELECT COUNT(1) FROM creator_follows f WHERE f.creator_user_id = ?) AS follower_count,
+		EXISTS(SELECT 1 FROM creator_follows f WHERE f.creator_user_id = ? AND f.follower_user_id = ?) AS is_followed,
+		? = ? AS is_self,
+		EXISTS(SELECT 1 FROM native_discussions d WHERE d.owner_user_id = ? AND (d.owner_user_id = ? OR d.visibility = ?)) AS has_visible_discussion
+		FROM (SELECT 1) seed
+		LEFT JOIN creator_profiles p ON p.user_id = ?`,
+		creatorID, creatorID, creatorID, viewer, creatorID, viewer, creatorID, viewer, string(DiscussionPublic), creatorID)
+	profile, visible, err := scanCreatorProfile(row)
+	if err != nil {
+		return nil, err
+	}
+	if !visible && !profile.IsSelf {
+		return nil, nil
+	}
+	return &profile, nil
+}
+
+func retryTransientDBConnection(ctx context.Context, op func() error) error {
+	err := op()
+	if err == nil || !isTransientDBConnectionError(err) {
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		if ctx.Err() != nil {
+			return err
+		}
+		time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+		if retryErr := op(); retryErr != nil {
+			err = retryErr
+			if !isTransientDBConnectionError(err) {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	return err
+}
+
+func (s *DiscussionStore) FollowCreator(ctx context.Context, follower, creatorID string) (*CreatorProfile, error) {
+	follower = strings.TrimSpace(follower)
+	creatorID = strings.TrimSpace(creatorID)
+	if follower == "" || creatorID == "" {
+		return nil, nil
+	}
+	target, err := s.CreatorProfile(ctx, follower, creatorID)
+	if err != nil || target == nil {
+		return target, err
+	}
+	if follower != creatorID {
+		_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO creator_follows
+			(follower_user_id, creator_user_id, created_at) VALUES (?, ?, ?)`,
+			follower, creatorID, time.Now().UnixMilli())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.CreatorProfile(ctx, follower, creatorID)
+}
+
+func (s *DiscussionStore) UnfollowCreator(ctx context.Context, follower, creatorID string) (*CreatorProfile, error) {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM creator_follows WHERE follower_user_id = ? AND creator_user_id = ?`, follower, creatorID)
+	if err != nil {
+		return nil, err
+	}
+	return s.CreatorProfile(ctx, follower, creatorID)
+}
+
+func (s *DiscussionStore) ListFollowing(ctx context.Context, viewer string, limit, offset int) ([]CreatorProfile, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		f.creator_user_id,
+		COALESCE(p.display_name, '') AS display_name,
+		COALESCE(p.username, '') AS username,
+		COALESCE(p.avatar_url, '') AS avatar_url,
+		(SELECT COUNT(1) FROM creator_follows ff WHERE ff.creator_user_id = f.creator_user_id) AS follower_count,
+		1 AS is_followed,
+		f.creator_user_id = ? AS is_self,
+		1 AS has_visible_discussion
+		FROM creator_follows f
+		LEFT JOIN creator_profiles p ON p.user_id = f.creator_user_id
+		WHERE f.follower_user_id = ?
+		ORDER BY f.created_at DESC LIMIT ? OFFSET ?`, viewer, viewer, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]CreatorProfile, 0)
+	for rows.Next() {
+		p, _, err := scanCreatorProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *DiscussionStore) AttachCreatorProfiles(ctx context.Context, viewer string, items []Discussion) error {
+	if len(items) == 0 {
+		return nil
+	}
+	cache := map[string]*CreatorProfile{}
+	for i := range items {
+		creatorID := strings.TrimSpace(items[i].OwnerUserID)
+		if creatorID == "" {
+			continue
+		}
+		profile, ok := cache[creatorID]
+		if !ok {
+			var err error
+			profile, err = s.CreatorProfile(ctx, viewer, creatorID)
+			if err != nil {
+				return err
+			}
+			cache[creatorID] = profile
+		}
+		items[i].Creator = profile
+	}
+	return nil
 }
 
 func (s *DiscussionStore) SetVisibility(ctx context.Context, owner, id string, visibility DiscussionVisibility, cover DiscussionCover) (*Discussion, error) {
@@ -1101,6 +1365,24 @@ func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 	d.IsLiked = liked != 0
 	d.IsOwner = owner != 0
 	return d, nil
+}
+
+func scanCreatorProfile(row discussionScanner) (CreatorProfile, bool, error) {
+	var p CreatorProfile
+	var followed, self, visible int
+	err := row.Scan(&p.ID, &p.DisplayName, &p.Username, &p.AvatarURL, &p.FollowerCount, &followed, &self, &visible)
+	if err != nil {
+		return p, false, err
+	}
+	if strings.TrimSpace(p.DisplayName) == "" {
+		p.DisplayName = "Creator"
+	}
+	p.IsFollowed = followed != 0
+	p.IsSelf = self != 0
+	if p.IsSelf {
+		p.IsFollowed = false
+	}
+	return p, visible != 0, nil
 }
 
 func finalizeScannedDiscussion(d *Discussion, scriptJSON, sourcesJSON string, researched, costKnown int, published, created, updated int64) {

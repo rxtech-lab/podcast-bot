@@ -157,6 +157,72 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
     }
 
+    func testMarketProfileDecodesCreatorAndStationsWithoutEmail() async throws {
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/market/profile")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data("""
+            {
+              "profile":{"id":"oauth:user-1","display_name":"Qiwei","avatar_url":"https://auth.example/avatar.png","follower_count":2,"is_self":true},
+              "stations":[{"id":"discussion-1","topic":"Topic","title":"Title","status":"ready","language":"en","visibility":"public","creator":{"id":"oauth:user-1","display_name":"Qiwei","avatar_url":"https://auth.example/avatar.png"}}],
+              "following":[{"id":"oauth:user-2","display_name":"Creator Two","follower_count":1,"is_followed":true}]
+            }
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        let profile = try await api.marketProfile()
+
+        XCTAssertEqual(profile.profile.displayName, "Qiwei")
+        XCTAssertEqual(profile.profile.avatarURL, "https://auth.example/avatar.png")
+        XCTAssertEqual(profile.stations.first?.creator?.id, "oauth:user-1")
+        XCTAssertEqual(profile.following.first?.displayName, "Creator Two")
+    }
+
+    func testCreatorAPIsUseCreatorRoutes() async throws {
+        var captured: [(String, String)] = []
+        URLProtocolStub.handler = { request in
+            captured.append((request.httpMethod ?? "", request.url?.path ?? ""))
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            if request.url?.path.hasSuffix("/stations") == true {
+                return (response, Data("[]".utf8))
+            }
+            return (response, Data("""
+            {"id":"oauth:creator","display_name":"Creator","follower_count":1,"is_followed":true}
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        _ = try await api.creatorProfile(id: "oauth:creator")
+        _ = try await api.creatorStations(id: "oauth:creator", limit: 10, offset: 20)
+        _ = try await api.followCreator(id: "oauth:creator")
+        _ = try await api.unfollowCreator(id: "oauth:creator")
+
+        XCTAssertEqual(captured.map(\.0), ["GET", "GET", "POST", "DELETE"])
+        XCTAssertEqual(captured.map(\.1), [
+            "/api/market/creators/oauth:creator",
+            "/api/market/creators/oauth:creator/stations",
+            "/api/market/creators/oauth:creator/follow",
+            "/api/market/creators/oauth:creator/follow",
+        ])
+    }
+
     func testPublishVisibilityPatchEncodesCover() async throws {
         var capturedRequest: URLRequest?
         var capturedBody: Data?

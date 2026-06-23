@@ -413,6 +413,108 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreCreatorProfilesAndFollows(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:owner"
+	viewer := "oauth:viewer"
+	if err := store.UpsertCreatorProfile(ctx, CreatorProfile{
+		ID:          owner,
+		DisplayName: "Creator One",
+		Username:    "creator",
+		AvatarURL:   "https://auth.example/avatar.png",
+	}); err != nil {
+		t.Fatalf("UpsertCreatorProfile: %v", err)
+	}
+	d, err := store.Create(ctx, owner, "creator topic", planResponse{
+		Script: &config.DebateTopic{Title: "Creator Station", Type: config.ContentTypeDiscussion, Language: "en-US"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, d.ID, "job-creator"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if _, err := store.SetVisibility(ctx, owner, d.ID, DiscussionPublic, DiscussionCover{Type: "gradient", GradientStart: "#111111", GradientEnd: "#777777"}); err != nil {
+		t.Fatalf("SetVisibility: %v", err)
+	}
+
+	profile, err := store.CreatorProfile(ctx, viewer, owner)
+	if err != nil {
+		t.Fatalf("CreatorProfile: %v", err)
+	}
+	if profile == nil || profile.DisplayName != "Creator One" || profile.AvatarURL == "" || profile.IsFollowed || profile.IsSelf {
+		t.Fatalf("creator profile = %+v", profile)
+	}
+
+	followed, err := store.FollowCreator(ctx, viewer, owner)
+	if err != nil {
+		t.Fatalf("FollowCreator: %v", err)
+	}
+	if followed == nil || !followed.IsFollowed || followed.FollowerCount != 1 {
+		t.Fatalf("followed profile = %+v", followed)
+	}
+	following, err := store.ListFollowing(ctx, viewer, 20, 0)
+	if err != nil {
+		t.Fatalf("ListFollowing: %v", err)
+	}
+	if len(following) != 1 || following[0].ID != owner {
+		t.Fatalf("following = %+v", following)
+	}
+
+	stations, err := store.ListByCreator(ctx, viewer, owner, "", 20, 0)
+	if err != nil {
+		t.Fatalf("ListByCreator: %v", err)
+	}
+	if len(stations) != 1 || stations[0].Creator == nil || stations[0].Creator.DisplayName != "Creator One" {
+		t.Fatalf("creator stations = %+v", stations)
+	}
+
+	unfollowed, err := store.UnfollowCreator(ctx, viewer, owner)
+	if err != nil {
+		t.Fatalf("UnfollowCreator: %v", err)
+	}
+	if unfollowed == nil || unfollowed.IsFollowed || unfollowed.FollowerCount != 0 {
+		t.Fatalf("unfollowed profile = %+v", unfollowed)
+	}
+}
+
+func TestRetryTransientDBConnection(t *testing.T) {
+	ctx := context.Background()
+	attempts := 0
+	err := retryTransientDBConnection(ctx, func() error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("stream is closed: driver: bad connection")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryTransientDBConnection returned %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+
+	nonTransient := errors.New("syntax error")
+	attempts = 0
+	err = retryTransientDBConnection(ctx, func() error {
+		attempts++
+		return nonTransient
+	})
+	if !errors.Is(err, nonTransient) {
+		t.Fatalf("retryTransientDBConnection returned %v, want %v", err, nonTransient)
+	}
+	if attempts != 1 {
+		t.Fatalf("non-transient attempts = %d, want 1", attempts)
+	}
+}
+
 func TestDiscussionStoreCreateFromVisiblePlan(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")

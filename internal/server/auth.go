@@ -181,9 +181,10 @@ func bearerToken(r *http.Request) string {
 }
 
 type requestUser struct {
-	ID    string
-	Name  string
-	Email string
+	ID        string
+	Name      string
+	Email     string
+	AvatarURL string
 }
 
 func (s *Server) requestUser(r *http.Request) requestUser {
@@ -196,7 +197,7 @@ func (s *Server) requestUser(r *http.Request) requestUser {
 				if id == "" {
 					id = fallback
 				}
-				return requestUser{ID: "oauth:" + id, Name: user.Name, Email: user.Email}
+				return requestUser{ID: "oauth:" + id, Name: user.Name, Email: user.Email, AvatarURL: user.Picture}
 			}
 		}
 		if s.d.ServiceToken != "" &&

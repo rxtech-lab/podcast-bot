@@ -46,6 +46,9 @@
     "%lld" : {
 
     },
+    "%lld followers" : {
+      "comment" : "Plural creator follower count"
+    },
     "%lld people" : {
       "localizations" : {
         "zh-Hans" : {
@@ -135,6 +138,9 @@
           }
         }
       }
+    },
+    "1 follower" : {
+      "comment" : "Singular creator follower count"
     },
     "Activity" : {
       "localizations" : {
@@ -508,6 +514,9 @@
     "Could not load %@" : {
 
     },
+    "Could not load creator" : {
+
+    },
     "Could not load market" : {
 
     },
@@ -663,6 +672,15 @@
           }
         }
       }
+    },
+    "Creator" : {
+      "comment" : "Fallback creator name"
+    },
+    "Creator Not Found" : {
+
+    },
+    "Creators you follow appear here." : {
+
     },
     "Current plan" : {
       "comment" : "Label for the plan card shown when there is no edit history",
@@ -1062,6 +1080,9 @@
         }
       }
     },
+    "Follow" : {
+
+    },
     "Follow along with a per-speaker transcript while the episode is generated in real time." : {
       "localizations" : {
         "zh-Hans" : {
@@ -1083,6 +1104,12 @@
           }
         }
       }
+    },
+    "Followed" : {
+
+    },
+    "Following" : {
+
     },
     "Force Stop" : {
       "localizations" : {
@@ -1641,6 +1668,9 @@
         }
       }
     },
+    "My %@" : {
+
+    },
     "New %@" : {
 
     },
@@ -1693,6 +1723,9 @@
 
     },
     "No %@ yet" : {
+
+    },
+    "No Followed Creators" : {
 
     },
     "No links added" : {
@@ -2489,8 +2522,26 @@
     "Private %@ stay visible only to you." : {
 
     },
+    "Profile" : {
+
+    },
+    "Profile section" : {
+
+    },
+    "Profile Unavailable" : {
+
+    },
     "Public" : {
       "comment" : "Library visibility filter: public stations"
+    },
+    "Public %@" : {
+
+    },
+    "Public %@ from this creator appear here." : {
+
+    },
+    "Public %@ you created appear here." : {
+
     },
     "Publish" : {
 
@@ -2593,6 +2644,9 @@
           }
         }
       }
+    },
+    "Refresh the market to load your profile." : {
+
     },
     "Reload history" : {
       "localizations" : {
@@ -3178,6 +3232,9 @@
     "This %@" : {
 
     },
+    "This creator profile is not available." : {
+
+    },
     "This podcast" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3440,6 +3497,9 @@
           }
         }
       }
+    },
+    "View creator" : {
+
     },
     "Welcome to %@" : {
 

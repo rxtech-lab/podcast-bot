@@ -42,6 +42,7 @@ type marketCoverGenerateResponse struct {
 
 func (s *Server) handleMarketList(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
 	items, err := s.d.Discussions.ListPublic(
 		r.Context(),
 		user.ID,
@@ -59,6 +60,7 @@ func (s *Server) handleMarketList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMarketLikedList(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
 	items, err := s.d.Discussions.ListLiked(
 		r.Context(),
 		user.ID,
@@ -75,7 +77,9 @@ func (s *Server) handleMarketLikedList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
-	d, err := s.d.Discussions.GetVisible(r.Context(), s.requestUser(r).ID, r.PathValue("id"))
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	d, err := s.d.Discussions.GetVisible(r.Context(), user.ID, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -92,7 +96,9 @@ func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
-	d, err := s.d.Discussions.Like(r.Context(), s.requestUser(r).ID, r.PathValue("id"))
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	d, err := s.d.Discussions.Like(r.Context(), user.ID, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -109,7 +115,9 @@ func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMarketUnlike(w http.ResponseWriter, r *http.Request) {
-	d, err := s.d.Discussions.Unlike(r.Context(), s.requestUser(r).ID, r.PathValue("id"))
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	d, err := s.d.Discussions.Unlike(r.Context(), user.ID, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -123,6 +131,118 @@ func (s *Server) handleMarketUnlike(w http.ResponseWriter, r *http.Request) {
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
+}
+
+func (s *Server) handleMarketProfile(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	profile, err := s.d.Discussions.CreatorProfile(r.Context(), user.ID, user.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if profile == nil {
+		profile = &CreatorProfile{ID: user.ID, DisplayName: userDisplayName(user), AvatarURL: strings.TrimSpace(user.AvatarURL), IsSelf: true}
+	}
+	stations, err := s.d.Discussions.ListByCreator(
+		r.Context(),
+		user.ID,
+		user.ID,
+		"",
+		atoiDefault(r.URL.Query().Get("limit"), 0),
+		atoiDefault(r.URL.Query().Get("offset"), 0),
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.prepareMarketDiscussions(r, stations)
+	following, err := s.d.Discussions.ListFollowing(r.Context(), user.ID, defaultDiscussionPageSize, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, MarketProfile{Profile: *profile, Stations: stations, Following: following})
+}
+
+func (s *Server) handleMarketCreatorGet(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	profile, err := s.d.Discussions.CreatorProfile(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if profile == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, profile)
+}
+
+func (s *Server) handleMarketCreatorStations(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	items, err := s.d.Discussions.ListByCreator(
+		r.Context(),
+		user.ID,
+		r.PathValue("id"),
+		strings.TrimSpace(r.URL.Query().Get("q")),
+		atoiDefault(r.URL.Query().Get("limit"), 0),
+		atoiDefault(r.URL.Query().Get("offset"), 0),
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.prepareMarketDiscussions(r, items)
+	writeJSON(w, items)
+}
+
+func (s *Server) handleMarketCreatorFollow(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	profile, err := s.d.Discussions.FollowCreator(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if profile == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, profile)
+}
+
+func (s *Server) handleMarketCreatorUnfollow(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	profile, err := s.d.Discussions.UnfollowCreator(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if profile == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, profile)
+}
+
+func (s *Server) handleMarketCreatorFollowing(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	items, err := s.d.Discussions.ListFollowing(
+		r.Context(),
+		user.ID,
+		atoiDefault(r.URL.Query().Get("limit"), 0),
+		atoiDefault(r.URL.Query().Get("offset"), 0),
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, items)
 }
 
 func (s *Server) handleDiscussionVisibility(w http.ResponseWriter, r *http.Request) {
@@ -202,12 +322,42 @@ func (s *Server) handleDiscussionCoverGenerate(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) prepareMarketDiscussions(r *http.Request, items []Discussion) {
+	viewer := s.requestUser(r).ID
 	for i := range items {
 		s.applyDiscussionJobStatus(r, &items[i])
 		s.applyDiscussionProgress(r.Context(), &items[i])
 		s.refreshDiscussionCoverURL(r.Context(), &items[i])
 		s.sanitizeDiscussionUsage(&items[i])
 	}
+	if err := s.d.Discussions.AttachCreatorProfiles(r.Context(), viewer, items); err != nil {
+		s.logger().Warn("creator profile attach failed", "err", err)
+	}
+}
+
+func (s *Server) rememberCreatorProfile(ctx context.Context, user requestUser) {
+	if s.d.Discussions == nil {
+		return
+	}
+	if err := s.d.Discussions.UpsertCreatorProfile(ctx, CreatorProfile{
+		ID:          user.ID,
+		DisplayName: userDisplayName(user),
+		AvatarURL:   user.AvatarURL,
+	}); err != nil {
+		s.logger().Warn("creator profile upsert failed", "user", user.ID, "err", err)
+	}
+}
+
+func userDisplayName(user requestUser) string {
+	if name := strings.TrimSpace(user.Name); name != "" {
+		return name
+	}
+	if email := strings.TrimSpace(user.Email); email != "" {
+		if before, _, ok := strings.Cut(email, "@"); ok && strings.TrimSpace(before) != "" {
+			return strings.TrimSpace(before)
+		}
+		return email
+	}
+	return "Creator"
 }
 
 func (s *Server) refreshDiscussionCoverURL(ctx context.Context, d *Discussion) {

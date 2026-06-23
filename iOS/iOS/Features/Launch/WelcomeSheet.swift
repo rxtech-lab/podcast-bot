@@ -16,7 +16,7 @@ struct WelcomeSheet: View {
 
     private let slides: [Slide] = [
         Slide(icon: "waveform.circle.fill",
-              title: "Welcome to \(AppStringLiteral.appTitle)",
+              title: "Welcome to \(AppStringLiteral.appTitleRaw)",
               subtitle: "Plan a \(AppStringLiteral.stationNameRaw), generate it, and listen with synced captions."),
         Slide(icon: "person.3.fill",
               title: "Pick your speakers",

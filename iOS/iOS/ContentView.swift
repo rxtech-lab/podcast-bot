@@ -95,8 +95,8 @@ private struct SignInScreen: View {
             RxSignInView(
                 manager: auth.manager,
                 appearance: RxSignInAppearance(
-                    title: AppStringLiteral.stationsName,
-                    subtitle: "Sign in with rxlab to plan and generate AI \(AppStringLiteral.stationsNameRaw).",
+                    title: AppStringLiteral.appTitle,
+                    subtitle: "Sign in with rxlab to plan and generate AI \(AppStringLiteral.appTitleRaw).",
                     accentColor: Theme.accent
                 ),
                 onAuthSuccess: {},

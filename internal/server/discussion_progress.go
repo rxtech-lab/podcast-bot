@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ type DiscussionProgress struct {
 type DiscussionProgressStore struct {
 	client *redis.Client
 	log    *slog.Logger
+	err    error
 }
 
 func NewDiscussionProgressStore(redisURL string, log *slog.Logger) *DiscussionProgressStore {
@@ -35,9 +37,22 @@ func NewDiscussionProgressStore(redisURL string, log *slog.Logger) *DiscussionPr
 		if log != nil {
 			log.Warn("invalid REDIS_URL; discussion stream recovery disabled", "err", err)
 		}
-		return nil
+		return &DiscussionProgressStore{log: log, err: err}
 	}
 	return &DiscussionProgressStore{client: redis.NewClient(opts), log: log}
+}
+
+func (s *DiscussionProgressStore) Ping(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if s.err != nil {
+		return s.err
+	}
+	if s.client == nil {
+		return errors.New("redis client is not configured")
+	}
+	return s.client.Ping(ctx).Err()
 }
 
 func (s *DiscussionProgressStore) Set(ctx context.Context, id string, p DiscussionProgress) {
