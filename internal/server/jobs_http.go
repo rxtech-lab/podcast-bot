@@ -196,13 +196,17 @@ func (s *Server) handleJobStop(w http.ResponseWriter, r *http.Request) {
 
 // handleJobList returns every job currently tracked by the registry.
 // Useful for debugging; the SPA reads its own job by id.
-func (s *Server) handleJobList(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleJobList(w http.ResponseWriter, r *http.Request) {
 	if s.d.Jobs == nil {
 		http.Error(w, "video mode not configured", http.StatusInternalServerError)
 		return
 	}
+	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
 	items := s.d.Jobs.List()
 	for i := range items {
+		if label, ok := contentcreator.PhaseLabelFromString(items[i].Type, items[i].Phase, lang); ok {
+			items[i].PhaseLabel = label
+		}
 		s.sanitizeJobUsage(&items[i])
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -228,6 +232,15 @@ func (s *Server) handleJobGet(w http.ResponseWriter, r *http.Request) {
 	}
 	if url := s.jobDownloadURL(r.Context(), j); url != "" {
 		j.DownloadURL = url
+	}
+	// Localize the phase label per request, mirroring the SSE/WS path. The
+	// persisted job only stores the Traditional-default label, so derive it
+	// from the phase string in the caller's negotiated language. j is a fresh
+	// per-call copy (JobRegistry.Get builds it from the DB record), so mutating
+	// it doesn't affect other clients.
+	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
+	if label, ok := contentcreator.PhaseLabelFromString(j.Type, j.Phase, lang); ok {
+		j.PhaseLabel = label
 	}
 	s.sanitizeJobUsage(j)
 	w.Header().Set("Content-Type", "application/json")

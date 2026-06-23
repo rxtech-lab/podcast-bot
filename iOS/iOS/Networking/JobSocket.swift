@@ -62,6 +62,7 @@ final class JobSocket: @unchecked Sendable {
     private func openAndStream(continuation: AsyncStream<JobEventEnvelope>.Continuation) async -> Bool {
         let token = await api.currentToken()
         var req = URLRequest(url: api.webSocketURL(jobID: jobID))
+        req.setValue(AcceptLanguage.headerValue, forHTTPHeaderField: "Accept-Language")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let task = URLSession.shared.webSocketTask(with: req)
         self.task = task

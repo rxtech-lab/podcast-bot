@@ -192,7 +192,7 @@ struct AttachmentsRow: View {
             if access { url.stopAccessingSecurityScopedResource() }
             let filename = url.lastPathComponent
             guard let data else {
-                attachments.append(PendingAttachment(filename: filename, status: .failed("Couldn't read file"), markdown: nil))
+                attachments.append(PendingAttachment(filename: filename, status: .failed(String(localized: "Couldn't read file", comment: "Attachment error when a picked file's bytes can't be read")), markdown: nil))
                 continue
             }
             let mime = url.mimeType
@@ -227,7 +227,7 @@ struct AttachmentsRow: View {
             Task {
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
-                        updateStatus(id, status: .failed("Couldn't read photo"), response: nil)
+                        updateStatus(id, status: .failed(String(localized: "Couldn't read photo", comment: "Attachment error when a picked photo's bytes can't be loaded")), response: nil)
                         return
                     }
                     let resp = try await api.uploadFile(data: data, filename: filename, mimeType: mime)

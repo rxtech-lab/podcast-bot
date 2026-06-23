@@ -40,6 +40,7 @@ func (s *Server) handleJobWS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
 
 	// Origin enforcement is handled by the CORS middleware / service-token
 	// auth in front of this handler; accept the upgrade from any origin the
@@ -101,7 +102,7 @@ func (s *Server) handleJobWS(w http.ResponseWriter, r *http.Request) {
 			if eid := contentcreator.MsgChannelID(v); eid != "" && eid != jobID {
 				continue
 			}
-			env, fine := envelope(v)
+			env, fine := envelope(v, lang)
 			if !fine {
 				continue
 			}

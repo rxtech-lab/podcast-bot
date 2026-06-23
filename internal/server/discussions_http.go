@@ -64,7 +64,14 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
 	limit := atoiDefault(r.URL.Query().Get("limit"), 0)
 	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
-	items, err := s.d.Discussions.List(r.Context(), user.ID, limit, offset)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	var items []Discussion
+	var err error
+	if query != "" {
+		items, err = s.d.Discussions.Search(r.Context(), user.ID, query, limit, offset)
+	} else {
+		items, err = s.d.Discussions.List(r.Context(), user.ID, limit, offset)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

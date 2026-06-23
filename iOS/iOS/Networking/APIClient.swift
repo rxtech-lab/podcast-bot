@@ -18,12 +18,19 @@ enum APIError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notAuthenticated: return "You're signed out. Please sign in again."
+        case .notAuthenticated:
+            return String(localized: "You're signed out. Please sign in again.",
+                          comment: "Error shown when the user's session has expired")
         case let .invalidRequest(msg): return msg
-        case let .http(code, msg): return "Request failed (\(code)): \(msg)"
+        case let .http(code, msg):
+            return String(localized: "Request failed (\(code)): \(msg)",
+                          comment: "Generic HTTP error; code is the status code, msg is the server message")
         case let .insufficientPoints(required, balance):
-            return "You need \(required) points but have \(balance). Top up to continue."
-        case let .decoding(msg): return "Couldn't read the server response: \(msg)"
+            return String(localized: "You need \(required) points but have \(balance). Top up to continue.",
+                          comment: "Error shown when the user lacks enough points to start an action")
+        case let .decoding(msg):
+            return String(localized: "Couldn't read the server response: \(msg)",
+                          comment: "Error shown when the server response could not be decoded")
         }
     }
 }
@@ -68,11 +75,16 @@ final class APIClient: Sendable {
 
     // MARK: - Server-owned discussions
 
-    func discussions(limit: Int = 20, offset: Int = 0) async throws -> [Discussion] {
-        try await get("/api/discussions", query: [
+    func discussions(limit: Int = 20, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
+        var queryItems = [
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset)),
-        ])
+        ]
+        let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedQuery.isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: trimmedQuery))
+        }
+        return try await get("/api/discussions", query: queryItems)
     }
 
     func discussion(id: String, editLimit: Int? = nil, editBefore: Int64? = nil) async throws -> Discussion {
@@ -160,7 +172,8 @@ final class APIClient: Sendable {
                 return current
             }
         }
-        throw APIError.invalidRequest("The plan update is still running. Refresh this discussion in a moment.")
+        throw APIError.invalidRequest(String(localized: "The plan update is still running. Refresh this discussion in a moment.",
+                                              comment: "Shown when a re-research update is still in progress after polling"))
     }
 
     /// Uploads a reference file via a presigned object-storage URL, then asks
@@ -270,7 +283,8 @@ final class APIClient: Sendable {
                               title: String,
                               progress: @escaping (Double) -> Void) async throws -> URL {
         guard let primaryURL = sourceURL ?? jobID.map({ finalAudioURL(jobID: $0) }) else {
-            throw APIError.invalidRequest("Podcast download is not ready yet.")
+            throw APIError.invalidRequest(String(localized: "Podcast download is not ready yet.",
+                                                  comment: "Shown when the user tries to download a podcast before it is available"))
         }
 
         do {
@@ -506,7 +520,8 @@ final class APIClient: Sendable {
         req.timeoutInterval = 600
         let (bytes, resp) = try await session.bytes(for: req)
         guard let http = resp as? HTTPURLResponse else {
-            throw APIError.invalidRequest("Invalid streaming response.")
+            throw APIError.invalidRequest(String(localized: "Invalid streaming response.",
+                                                  comment: "Shown when the streaming plan response is not a valid HTTP response"))
         }
         return (bytes, http)
     }
@@ -537,7 +552,10 @@ final class APIClient: Sendable {
            let message = obj["message"], !message.isEmpty {
             return message
         }
-        return data.isEmpty ? "The plan update failed. Please try again." : data
+        return data.isEmpty
+            ? String(localized: "The plan update failed. Please try again.",
+                     comment: "Fallback error when an SSE error event carries no message")
+            : data
     }
 
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
@@ -565,6 +583,7 @@ final class APIClient: Sendable {
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
+        req.setValue(AcceptLanguage.headerValue, forHTTPHeaderField: "Accept-Language")
         if let body {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -658,7 +677,8 @@ private final class PodcastDownloadDelegate: NSObject, URLSessionDownloadDelegat
         case let .failure(error):
             continuation?.resume(throwing: error)
         case .none:
-            continuation?.resume(throwing: APIError.invalidRequest("Download did not produce a file."))
+            continuation?.resume(throwing: APIError.invalidRequest(String(localized: "Download did not produce a file.",
+                                                                          comment: "Shown when a podcast download completes without producing a file")))
         }
         continuation = nil
     }
