@@ -50,11 +50,15 @@ type Env struct {
 
 	// ---- Points economy ----
 	//
+	// PointsCostLeverage is the multiplier applied over the points sale rate
+	// (1000 pts = $1.50 → ~666.7 pts/$) to derive PointsPerUSDCost. Default 3.
+	// Override with POINTS_COST_LEVERAGE.
+	PointsCostLeverage float64
+
 	// PointsPerUSDCost converts a podcast's real provider cost (USD) into the
 	// points charged to the user: points = ceil(costUSD * PointsPerUSDCost). The
-	// markup over the raw cost is the company margin — it must exceed the sale
-	// rate (1000 pts = $1.50 → ~666.7 pts/$) to clear Apple's 30% cut and profit.
-	// Default 1340 ≈ a 2× markup. Override with POINTS_PER_USD_COST.
+	// markup over the raw cost is the company margin. By default this is derived
+	// from POINTS_COST_LEVERAGE. Override exactly with POINTS_PER_USD_COST.
 	PointsPerUSDCost float64
 
 	// PointsEstCostPerMinuteUSD estimates a podcast's cost from its target
@@ -199,6 +203,7 @@ type Env struct {
 // silently shadows the project's .env, which is a frequent footgun.
 func LoadEnv() (*Env, error) {
 	_ = godotenv.Overload() // .env wins over inherited shell env
+	pointsCostLeverage, pointsPerUSDCost := loadPointsCostConfig()
 
 	e := &Env{
 		OpenAIBaseURL:      strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
@@ -220,18 +225,19 @@ func LoadEnv() (*Env, error) {
 		LyriaCostPerGeneration: parseFloatEnvDefault(
 			"LYRIA_COST_PER_GENERATION", 0.08,
 		),
-		PointsPerUSDCost:          parseFloatEnvDefault("POINTS_PER_USD_COST", 1340),
+		PointsCostLeverage:        pointsCostLeverage,
+		PointsPerUSDCost:          pointsPerUSDCost,
 		PointsEstCostPerMinuteUSD: parseFloatEnvDefault("POINTS_EST_COST_PER_MINUTE_USD", 0.02),
 		PointsPlanGateUSD:         parseFloatEnvDefault("POINTS_PLAN_GATE_USD", 0.05),
 		PointsMinPerPodcast:       parseIntEnvDefault("POINTS_MIN_PER_PODCAST", 1),
 		PointsSignupGrant:         parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
 		RevenueCatWebhookAuth:     strings.TrimSpace(os.Getenv("REVENUECAT_WEBHOOK_AUTH")),
-		AzureSpeechKey:    strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
-		AzureSpeechRegion: strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
-		ElevenLabsAPIKey:  strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
-		GeminiAPIKey:      strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		OutDir:            strings.TrimSpace(os.Getenv("OUT_DIR")),
-		PersistentRoot:    strings.TrimSpace(os.Getenv("SERIES_ROOT")),
+		AzureSpeechKey:            strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
+		AzureSpeechRegion:         strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
+		ElevenLabsAPIKey:          strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
+		GeminiAPIKey:              strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		OutDir:                    strings.TrimSpace(os.Getenv("OUT_DIR")),
+		PersistentRoot:            strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 
 		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),

@@ -69,7 +69,7 @@ struct PlanDetailView: View {
                         }
                         Divider()
                     }
-                    Picker("Podcast language", selection: $selectedLanguage) {
+                    Picker("\(AppStringLiteral.stationNameRaw) language", selection: $selectedLanguage) {
                         ForEach(DiscussionLanguage.supported) { language in
                             Text(language.label).tag(language.code)
                         }
@@ -92,18 +92,18 @@ struct PlanDetailView: View {
                 }
                 .labelStyle(.iconOnly)
                 .disabled(isGenerating || isImproving || isEditStreaming || discussion.script == nil)
-                .accessibilityLabel("Generate podcast")
+                .accessibilityLabel("Generate \(AppStringLiteral.stationNameRaw)")
             }
         }
         .confirmationDialog(
-            "Generate this podcast?",
+            "Generate this \(AppStringLiteral.stationNameRaw)?",
             isPresented: $showingGenerateConfirm,
             titleVisibility: .visible
         ) {
             Button("Generate") { generate() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This turns the current plan into an audio podcast in \(DiscussionLanguage.label(for: selectedLanguage)). It can take a few minutes and uses generation credits.")
+            Text("This turns the current plan into an audio \(AppStringLiteral.stationNameRaw) in \(DiscussionLanguage.label(for: selectedLanguage)). It can take a few minutes and uses generation credits.")
         }
         .sheet(isPresented: $showingSources) {
             SourcesSheet(
@@ -179,7 +179,7 @@ struct PlanDetailView: View {
                     .foregroundStyle(Theme.accent)
             }
             VStack(spacing: 4) {
-                Text("Loading discussion...")
+                Text("Loading \(AppStringLiteral.stationNameRaw)...")
                     .font(.headline)
                 Text("Fetching latest messages")
                     .font(.subheadline)
@@ -192,7 +192,7 @@ struct PlanDetailView: View {
         .multilineTextAlignment(.center)
         .glassCard(cornerRadius: 20)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Loading discussion")
+        .accessibilityLabel("Loading \(AppStringLiteral.stationNameRaw)")
     }
 
     /// Streaming is in effect whenever a loading row is present — the user just
@@ -516,7 +516,7 @@ struct PlanDetailView: View {
     }
 
     private var planOptionsAccessibilityLabel: String {
-        var parts = [String(localized: "Podcast language: \(DiscussionLanguage.label(for: selectedLanguage)).",
+        var parts = [String(localized: "\(AppStringLiteral.stationNameRaw) language: \(DiscussionLanguage.label(for: selectedLanguage)).",
                             comment: "Accessibility label stating the selected podcast language")]
         if purchases.isConfigured {
             parts.insert(String(localized: "Remaining points: \(pointsMenuLabel).",

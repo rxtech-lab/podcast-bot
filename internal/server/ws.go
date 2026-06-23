@@ -55,6 +55,7 @@ func (s *Server) handleJobWS(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	user := s.requestUser(r)
 
 	// Inbound reader: viewer participation messages → orchestrator.
 	go func() {
@@ -75,6 +76,9 @@ func (s *Server) handleJobWS(w http.ResponseWriter, r *http.Request) {
 				username := in.Username
 				if username == "" {
 					username = "viewer"
+				}
+				if _, ok := s.allowJobMessage(jobID, user, username); !ok {
+					continue
 				}
 				orch.PushUserMessage(in.Text, username)
 			}

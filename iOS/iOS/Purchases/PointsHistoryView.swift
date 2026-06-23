@@ -81,7 +81,7 @@ struct PointsHistoryView: View {
                 ContentUnavailableView(
                     "No usage yet",
                     systemImage: "chart.line.uptrend.xyaxis",
-                    description: Text("Planning and generating podcasts will show up here.")
+                    description: Text("Planning and generating \(AppStringLiteral.stationsNameRaw) will show up here.")
                 )
             }
         }
@@ -277,9 +277,9 @@ private struct LedgerRow: View {
         switch entry.reason {
         case "signup_grant": return "Welcome bonus"
         case "planning": return "Planning"
-        case "generation": return "Podcast"
+        case "generation": return AppStringLiteral.stationNameRaw
         case "reserve:planning": return "Planning (hold)"
-        case "reserve:generation": return "Podcast (hold)"
+        case "reserve:generation": return "\(AppStringLiteral.stationNameRaw) (hold)"
         default:
             if entry.reason.hasPrefix("refund") { return "Refund" }
             return entry.reason.replacingOccurrences(of: "_", with: " ").capitalized

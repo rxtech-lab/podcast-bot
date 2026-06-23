@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
@@ -76,11 +77,11 @@ type Deps struct {
 	// Points backs the points economy (per-user balance, ledger, charges). nil
 	// disables points gating/charging/hiding entirely — the server behaves as
 	// before. Wired from the same database as Discussions.
-	Points   *PointsStore
-	Progress *DiscussionProgressStore
-	Log         *slog.Logger
-	UploadRoot  string
-	SubmitJob   func(jobID string, sub JobSubmission) error
+	Points     *PointsStore
+	Progress   *DiscussionProgressStore
+	Log        *slog.Logger
+	UploadRoot string
+	SubmitJob  func(jobID string, sub JobSubmission) error
 	// Password, when non-empty, gates every /api/* route behind a login
 	// cookie. Empty disables auth entirely (the default).
 	Password string
@@ -144,11 +145,20 @@ type Server struct {
 	// oauth validates per-user rxlab bearer tokens via the issuer's userinfo
 	// endpoint (nil when AuthIssuer is unset).
 	oauth *oauthValidator
+
+	jobMessageRateMu   sync.Mutex
+	jobMessageRateLast map[string]time.Time
+	jobMessageRateNow  func() time.Time
 }
 
 // New builds a Server with all routes mounted.
 func New(d Deps) *Server {
-	s := &Server{d: d, mux: http.NewServeMux()}
+	s := &Server{
+		d:                  d,
+		mux:                http.NewServeMux(),
+		jobMessageRateLast: make(map[string]time.Time),
+		jobMessageRateNow:  time.Now,
+	}
 	if d.Password != "" {
 		s.authTok = authToken(d.Password)
 	}

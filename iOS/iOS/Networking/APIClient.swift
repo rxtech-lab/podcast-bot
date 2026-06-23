@@ -172,7 +172,7 @@ final class APIClient: Sendable {
                 return current
             }
         }
-        throw APIError.invalidRequest(String(localized: "The plan update is still running. Refresh this discussion in a moment.",
+        throw APIError.invalidRequest(String(localized: "The plan update is still running. Refresh this \(AppStringLiteral.stationNameRaw) in a moment.",
                                               comment: "Shown when a re-research update is still in progress after polling"))
     }
 
@@ -283,7 +283,7 @@ final class APIClient: Sendable {
                               title: String,
                               progress: @escaping (Double) -> Void) async throws -> URL {
         guard let primaryURL = sourceURL ?? jobID.map({ finalAudioURL(jobID: $0) }) else {
-            throw APIError.invalidRequest(String(localized: "Podcast download is not ready yet.",
+            throw APIError.invalidRequest(String(localized: "\(AppStringLiteral.stationNameRaw) download is not ready yet.",
                                                   comment: "Shown when the user tries to download a podcast before it is available"))
         }
 
@@ -440,7 +440,7 @@ final class APIClient: Sendable {
         let sanitized = title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
         let baseName = String(sanitized)
             .trimmingCharacters(in: CharacterSet(charactersIn: " -_"))
-        let name = baseName.isEmpty ? "Podcast" : String(baseName.prefix(80))
+        let name = baseName.isEmpty ? AppStringLiteral.stationNameRaw : String(baseName.prefix(80))
         let ext = sourceURL.pathExtension.isEmpty ? "mp3" : sourceURL.pathExtension
         return directory
             .appendingPathComponent(name)

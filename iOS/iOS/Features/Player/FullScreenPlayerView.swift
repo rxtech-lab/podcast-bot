@@ -66,7 +66,7 @@ struct FullScreenPlayerView: View {
             Spacer()
 
             VStack(spacing: 2) {
-                Text(model.discussion.displayTitle.isEmpty ? "Podcast" : model.discussion.displayTitle)
+                Text(model.discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : model.discussion.displayTitle)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 if !model.phaseLabel.isEmpty || !model.statusText.isEmpty {

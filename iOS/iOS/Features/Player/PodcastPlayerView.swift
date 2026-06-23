@@ -46,7 +46,7 @@ struct PodcastPlayerView: View {
                 ProgressView().tint(Theme.accent)
             }
         }
-        .navigationTitle(discussion.displayTitle.isEmpty ? "Podcast" : discussion.displayTitle)
+        .navigationTitle(discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : discussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -325,7 +325,7 @@ private struct PodcastTranscriptLoadingView: View {
                 Text("Preparing Transcript")
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text("Loading podcast...")
+                Text("Loading \(AppStringLiteral.stationNameRaw)...")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -357,7 +357,7 @@ struct PodcastActionsMenu: View {
                 Button {
                     model.downloadPodcast()
                 } label: {
-                    Label(model.isDownloadingPodcast ? "Downloading" : "Download Podcast",
+                    Label(model.isDownloadingPodcast ? "Downloading" : "Download \(AppStringLiteral.stationNameRaw)",
                           systemImage: model.isDownloadingPodcast ? "hourglass" : "arrow.down.circle")
                 }
                 .disabled(model.isDownloadingPodcast)
@@ -373,7 +373,7 @@ struct PodcastActionsMenu: View {
         } label: {
             Image(systemName: "ellipsis")
         }
-        .accessibilityLabel("Podcast actions")
+        .accessibilityLabel("\(AppStringLiteral.stationNameRaw) actions")
     }
 }
 
@@ -394,7 +394,7 @@ struct PodcastLoadingMenu: View {
         } label: {
             Image(systemName: "ellipsis.circle")
         }
-        .accessibilityLabel("Podcast actions")
+        .accessibilityLabel("\(AppStringLiteral.stationNameRaw) actions")
     }
 }
 
@@ -406,7 +406,7 @@ struct DownloadProgressSheet: View {
             Image(systemName: model.downloadErrorText == nil ? "arrow.down.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.system(size: 44, weight: .semibold))
                 .foregroundStyle(model.downloadErrorText == nil ? Theme.accent : .orange)
-            Text(model.downloadErrorText == nil ? "Downloading Podcast" : "Download Failed")
+            Text(model.downloadErrorText == nil ? "Downloading \(AppStringLiteral.stationNameRaw)" : "Download Failed")
                 .font(.headline)
             if model.isDownloadingPodcast && model.downloadProgress <= 0 {
                 ProgressView()
@@ -667,7 +667,7 @@ private struct PointsSummaryBubble: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 6) {
-                Label("This podcast", systemImage: "sparkles")
+                Label("This \(AppStringLiteral.stationNameRaw)", systemImage: "sparkles")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Theme.accent)
                 Text("Used \(points)")

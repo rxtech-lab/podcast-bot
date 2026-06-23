@@ -334,6 +334,8 @@ final class PlayerModel {
                                             text: trimmed,
                                             username: username,
                                             discussionID: discussion.id)
+            } catch APIError.http(429, _) {
+                removeRejectedUserLine(line)
             } catch {
                 try? await api.appendDiscussionLine(
                     id: discussion.id,
@@ -346,6 +348,19 @@ final class PlayerModel {
                 )
             }
         }
+    }
+
+    private func removeRejectedUserLine(_ line: LiveLine) {
+        lines.removeAll { $0.id == line.id }
+        guard var cachedLines = discussion.lines,
+              let index = cachedLines.lastIndex(where: {
+                  $0.speaker == line.speaker &&
+                      $0.role == line.role &&
+                      $0.text == line.text &&
+                      $0.isUser == line.isUser
+              }) else { return }
+        cachedLines.remove(at: index)
+        discussion.lines = cachedLines
     }
 
     func forceStop() {
@@ -1150,7 +1165,7 @@ final class PlayerModel {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: nowPlayingTitle,
             MPMediaItemPropertyArtist: nowPlayingSubtitle,
-            MPMediaItemPropertyAlbumTitle: "PanelFM",
+            MPMediaItemPropertyAlbumTitle: AppStringLiteral.appTitleRaw,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
         ]
@@ -1172,7 +1187,7 @@ final class PlayerModel {
     private var nowPlayingTitle: String {
         if !discussion.displayTitle.isEmpty { return discussion.displayTitle }
         if !discussion.topic.isEmpty { return discussion.topic }
-        return String(localized: "Podcast", comment: "Fallback now-playing title when the discussion has no title or topic")
+        return AppStringLiteral.stationNameRaw
     }
 
     private var nowPlayingSubtitle: String {
@@ -1182,7 +1197,7 @@ final class PlayerModel {
         }
         if !phaseLabel.isEmpty { return phaseLabel }
         if !statusText.isEmpty { return statusText }
-        return "PanelFM"
+        return AppStringLiteral.appTitleRaw
     }
 
     private var nowPlayingDuration: Double {

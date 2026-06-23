@@ -247,6 +247,55 @@ func TestJobStopRequiresActiveJob(t *testing.T) {
 	}
 }
 
+func TestJobMessageRateLimitRejectsImmediateRepeat(t *testing.T) {
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	jobs.Add("job-a")
+	orch := contentcreator.NewForTest(func(any) {}, nil)
+	jobs.SetOrch("job-a", orch)
+	defer jobs.ClearOrch("job-a")
+
+	now := time.Unix(1000, 0)
+	srv := New(Deps{Mode: ModeDashboard, Jobs: jobs})
+	srv.jobMessageRateNow = func() time.Time { return now }
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	post := func() *http.Response {
+		t.Helper()
+		body := strings.NewReader(`{"text":"hello","username":"alice"}`)
+		resp, err := http.Post(ts.URL+"/api/jobs/job-a/messages", "application/json", body)
+		if err != nil {
+			t.Fatalf("post message: %v", err)
+		}
+		return resp
+	}
+
+	resp := post()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", resp.StatusCode)
+	}
+
+	resp = post()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After = %q, want 2", got)
+	}
+
+	now = now.Add(jobMessageMinInterval)
+	resp = post()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("third status = %d, want 204", resp.StatusCode)
+	}
+}
+
 func TestJobStopRequestsActiveOrchestratorFinalization(t *testing.T) {
 	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {

@@ -7,7 +7,7 @@ struct WhatsNewFeature: Identifiable, Equatable {
     let id: String
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey
-    let icon: String   // SF Symbol
+    let icon: String // SF Symbol
 
     static func == (lhs: WhatsNewFeature, rhs: WhatsNewFeature) -> Bool {
         lhs.id == rhs.id
@@ -17,8 +17,8 @@ struct WhatsNewFeature: Identifiable, Equatable {
     static let all: [WhatsNewFeature] = [
         WhatsNewFeature(
             id: "discussion-search",
-            title: "Search your discussions",
-            subtitle: "Find any podcast instantly with live, server-side search in your library.",
+            title: "Search your \(AppStringLiteral.stationTitleRaw)",
+            subtitle: "Find any \(AppStringLiteral.stationNameRaw) instantly with live, server-side search in your library.",
             icon: "magnifyingglass"
         ),
         WhatsNewFeature(
