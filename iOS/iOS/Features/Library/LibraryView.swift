@@ -9,6 +9,7 @@ struct LibraryView: View {
     @State private var showingNew = false
     @State private var showingCustomerCenter = false
     @State private var showingPointsHistory = false
+    @State private var showingWhatsNew = false
     @State private var path: [Discussion] = []
     /// Detail selection for the iPad split-view layout.
     @State private var selection: Discussion?
@@ -54,6 +55,12 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
+        }
+        .sheet(isPresented: $showingWhatsNew) {
+            WhatsNewSheet(features: WhatsNewFeature.all,
+                          allowsInteractiveDismiss: true) {
+                showingWhatsNew = false
+            }
         }
         .task { await load() }
         .task { await purchases.refreshBalance() }
@@ -142,6 +149,7 @@ struct LibraryView: View {
                     Button("Manage Subscription") { showingCustomerCenter = true }
                     Divider()
                 }
+                Button("What's New") { showingWhatsNew = true }
                 Button("Refresh") {
                     Task {
                         await load(searchQuery: searchText)
