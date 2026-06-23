@@ -843,7 +843,7 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 			d.DownloadURL = j.DownloadURL
 		}
 		_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionReady, d.DownloadURL)
-		if j.TotalTokens > 0 {
+		if jobHasBillableUsage(j) {
 			d.PromptTokens = j.PromptTokens
 			d.CompletionTokens = j.CompletionTokens
 			d.TotalTokens = j.TotalTokens
@@ -881,4 +881,8 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 		d.Status = DiscussionFailed
 		_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionFailed, d.DownloadURL)
 	}
+}
+
+func jobHasBillableUsage(j *Job) bool {
+	return j != nil && (j.TotalTokens > 0 || j.LLMCostUSD > 0 || j.TTSCostUSD > 0 || j.MusicCostUSD > 0)
 }

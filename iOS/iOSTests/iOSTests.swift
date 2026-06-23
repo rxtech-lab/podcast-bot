@@ -142,6 +142,11 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(ready.pointsText, "21 points")
     }
 
+    func testSpeakerInitialsIgnoreParenthesizedRomanization() {
+        XCTAssertEqual(SpeakerPalette.initials(for: "陆严 (LU YAN)"), "陆")
+        XCTAssertEqual(SpeakerPalette.initials(for: "陆严（LU YAN）"), "陆")
+    }
+
     func testTranscriptLoadingDelayKeepsOneSecondMinimum() {
         let start = Date(timeIntervalSinceReferenceDate: 100)
 

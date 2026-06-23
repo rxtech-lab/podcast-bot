@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -271,6 +274,177 @@ func TestHistoryDoesNotDuplicateHydratedPlanningReserveOnLaterPage(t *testing.T)
 	}
 }
 
+func TestHistoryCollapsesSettledGenerationHoldIntoUsage(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 1000, "signup_grant", "signup:u1"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if ok, _, err := ps.Reserve(ctx, owner, d.ID, 804, pointsReasonGeneration); err != nil || !ok {
+		t.Fatalf("Reserve generation = ok=%v err=%v", ok, err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 372, PointsUsageDetail{CostUSD: 0.28}); err != nil {
+		t.Fatalf("SettleGeneration: %v", err)
+	}
+
+	page, err := ps.History(ctx, owner, 200, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) != 2 {
+		t.Fatalf("History returned %d entries, want 2: %#v", len(page.Entries), page.Entries)
+	}
+	if page.Entries[0].Reason != "generation" || page.Entries[0].Delta != -372 || page.Entries[0].BalanceAfter != 628 {
+		t.Fatalf("latest entry = (%q, %d, balance %d), want collapsed generation -372 balance 628",
+			page.Entries[0].Reason, page.Entries[0].Delta, page.Entries[0].BalanceAfter)
+	}
+	bal, err := ps.Balance(ctx, owner)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != page.Entries[0].BalanceAfter {
+		t.Fatalf("balance = %d, want latest history balance_after %d", bal, page.Entries[0].BalanceAfter)
+	}
+	for _, entry := range page.Entries {
+		if entry.Reason == "reserve:generation" {
+			t.Fatalf("settled generation hold should be hidden: %#v", page.Entries)
+		}
+	}
+}
+
+func TestHistoryBalanceMatchesCollapsedPodcastRow(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := range 11 {
+		if _, err := ps.Credit(ctx, owner, 1000, "purchase:TEST", fmt.Sprintf("purchase-%02d", i)); err != nil {
+			t.Fatalf("Credit %d: %v", i, err)
+		}
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, 0, 0, 13, PointsUsageDetail{CostUSD: 0.01}); err != nil {
+		t.Fatalf("SettlePlanning 13: %v", err)
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, 0, 0, 8, PointsUsageDetail{CostUSD: 0.006}); err != nil {
+		t.Fatalf("SettlePlanning 8: %v", err)
+	}
+	if ok, bal, err := ps.Reserve(ctx, owner, d.ID, 1433, pointsReasonGeneration); err != nil || !ok || bal != 9546 {
+		t.Fatalf("Reserve generation = (ok=%v, bal=%d, err=%v), want (true, 9546, nil)", ok, bal, err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 372, PointsUsageDetail{CostUSD: 0.278}); err != nil {
+		t.Fatalf("SettleGeneration: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `UPDATE user_points_balance SET balance = ? WHERE user_id = ?`, int64(9546), owner); err != nil {
+		t.Fatalf("corrupt cached balance: %v", err)
+	}
+
+	page, err := ps.History(ctx, owner, 50, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatalf("History returned no entries")
+	}
+	latest := page.Entries[0]
+	if latest.Reason != pointsReasonGeneration || latest.Delta != -372 || latest.BalanceAfter != 10607 {
+		t.Fatalf("latest entry = (%q, %d, balance %d), want podcast -372 balance 10607",
+			latest.Reason, latest.Delta, latest.BalanceAfter)
+	}
+	bal, err := ps.Balance(ctx, owner)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 10607 {
+		t.Fatalf("balance = %d, want 10607", bal)
+	}
+	if bal != latest.BalanceAfter {
+		t.Fatalf("balance = %d, want latest history balance_after %d", bal, latest.BalanceAfter)
+	}
+	var cached int64
+	if err := ps.db.QueryRowContext(ctx, `SELECT balance FROM user_points_balance WHERE user_id = ?`, owner).Scan(&cached); err != nil {
+		t.Fatalf("read cached balance: %v", err)
+	}
+	if cached != 10607 {
+		t.Fatalf("repaired cached balance = %d, want 10607", cached)
+	}
+	for _, entry := range page.Entries {
+		if entry.Reason == "reserve:generation" {
+			t.Fatalf("settled generation hold should be hidden: %#v", page.Entries)
+		}
+	}
+}
+
+func TestPointsHistoryEndpointBalanceMatchesCollapsedPodcastRow(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "anonymous"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := range 11 {
+		if _, err := ps.Credit(ctx, owner, 1000, "purchase:TEST", fmt.Sprintf("endpoint-purchase-%02d", i)); err != nil {
+			t.Fatalf("Credit %d: %v", i, err)
+		}
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, 0, 0, 13, PointsUsageDetail{}); err != nil {
+		t.Fatalf("SettlePlanning 13: %v", err)
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, 0, 0, 8, PointsUsageDetail{}); err != nil {
+		t.Fatalf("SettlePlanning 8: %v", err)
+	}
+	if ok, bal, err := ps.Reserve(ctx, owner, d.ID, 1433, pointsReasonGeneration); err != nil || !ok || bal != 9546 {
+		t.Fatalf("Reserve generation = (ok=%v, bal=%d, err=%v), want (true, 9546, nil)", ok, bal, err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 372, PointsUsageDetail{}); err != nil {
+		t.Fatalf("SettleGeneration: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `UPDATE user_points_balance SET balance = ? WHERE user_id = ?`, int64(9546), owner); err != nil {
+		t.Fatalf("corrupt cached balance: %v", err)
+	}
+
+	srv := New(Deps{
+		Mode:        ModeDashboard,
+		Discussions: ds,
+		Points:      ps,
+		Env:         &config.Env{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/points/history?limit=50&offset=0", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Balance int64               `json:"balance"`
+		Entries []PointsLedgerEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode history body %q: %v", rec.Body.String(), err)
+	}
+	if body.Balance != 10607 {
+		t.Fatalf("response balance = %d, want 10607", body.Balance)
+	}
+	if len(body.Entries) == 0 {
+		t.Fatalf("response entries empty")
+	}
+	if body.Entries[0].Reason != pointsReasonGeneration || body.Entries[0].Delta != -372 || body.Entries[0].BalanceAfter != 10607 {
+		t.Fatalf("latest response entry = (%q, %d, balance %d), want podcast -372 balance 10607",
+			body.Entries[0].Reason, body.Entries[0].Delta, body.Entries[0].BalanceAfter)
+	}
+	if body.Balance != body.Entries[0].BalanceAfter {
+		t.Fatalf("response balance = %d, want latest history balance_after %d", body.Balance, body.Entries[0].BalanceAfter)
+	}
+}
+
 func TestSettleGenerationReconcilesAndIsIdempotent(t *testing.T) {
 	ps, ds := newTestPointsStore(t)
 	ctx := context.Background()
@@ -306,6 +480,163 @@ func TestSettleGenerationReconcilesAndIsIdempotent(t *testing.T) {
 	total, _ := ps.DiscussionPoints(ctx, d.ID)
 	if total != 600 {
 		t.Fatalf("points_charged = %d, want 600", total)
+	}
+}
+
+func TestSettleGenerationUpgradesIncompleteFirstSettlement(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 2000, "signup_grant", "signup:u1"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if ok, _, err := ps.Reserve(ctx, owner, d.ID, 804, pointsReasonGeneration); err != nil || !ok {
+		t.Fatalf("Reserve generation = ok=%v err=%v", ok, err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 21, PointsUsageDetail{CostUSD: 0.015}); err != nil {
+		t.Fatalf("SettleGeneration initial: %v", err)
+	}
+	total, _ := ps.DiscussionPoints(ctx, d.ID)
+	if total != 21 {
+		t.Fatalf("points_charged after initial settle = %d, want 21", total)
+	}
+
+	detail := PointsUsageDetail{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		TotalTokens:      1500,
+		LLMCostUSD:       0.015,
+		LLMCostKnown:     true,
+		TTSCostUSD:       0.30,
+		MusicCostUSD:     0.356,
+		CostUSD:          0.671,
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 900, detail); err != nil {
+		t.Fatalf("SettleGeneration upgrade: %v", err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 900, detail); err != nil {
+		t.Fatalf("SettleGeneration replay after upgrade: %v", err)
+	}
+	total, _ = ps.DiscussionPoints(ctx, d.ID)
+	if total != 900 {
+		t.Fatalf("points_charged after upgrade = %d, want 900", total)
+	}
+	bal, _ := ps.Balance(ctx, owner)
+	if bal != 1100 {
+		t.Fatalf("balance after upgrade = %d, want 1100", bal)
+	}
+	page, err := ps.History(ctx, owner, 200, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if page.Entries[0].Reason != pointsReasonGeneration || page.Entries[0].Delta != -879 || page.Entries[0].BalanceAfter != 1100 {
+		t.Fatalf("latest history entry = (%q, %d, balance %d), want generation adjustment -879 balance 1100",
+			page.Entries[0].Reason, page.Entries[0].Delta, page.Entries[0].BalanceAfter)
+	}
+	var adjustments int
+	if err := ps.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM points_ledger WHERE discussion_id = ? AND reason = ?`,
+		d.ID, pointsReasonGenerationAdjustment).Scan(&adjustments); err != nil {
+		t.Fatalf("count adjustments: %v", err)
+	}
+	if adjustments != 1 {
+		t.Fatalf("generation adjustment rows = %d, want 1", adjustments)
+	}
+}
+
+func TestSettleGenerationUpgradeAfterLaterLedgerActivityKeepsBalance(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "anonymous"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 2000, "signup_grant", "signup:anonymous"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if ok, _, err := ps.Reserve(ctx, owner, d.ID, 804, pointsReasonGeneration); err != nil || !ok {
+		t.Fatalf("Reserve generation = ok=%v err=%v", ok, err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 21, PointsUsageDetail{CostUSD: 0.015}); err != nil {
+		t.Fatalf("SettleGeneration initial: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 100, "purchase:TEST", "later-credit"); err != nil {
+		t.Fatalf("later Credit: %v", err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 900, PointsUsageDetail{CostUSD: 0.671}); err != nil {
+		t.Fatalf("SettleGeneration upgrade: %v", err)
+	}
+	if err := ps.SettleGeneration(ctx, d.ID, 900, PointsUsageDetail{CostUSD: 0.671}); err != nil {
+		t.Fatalf("SettleGeneration replay: %v", err)
+	}
+
+	bal, err := ps.Balance(ctx, owner)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 1200 {
+		t.Fatalf("balance after upgrade with later activity = %d, want 1200", bal)
+	}
+	total, err := ps.DiscussionPoints(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("DiscussionPoints: %v", err)
+	}
+	if total != 900 {
+		t.Fatalf("points_charged = %d, want 900", total)
+	}
+	var adjustments int
+	if err := ps.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM points_ledger WHERE discussion_id = ? AND reason = ?`,
+		d.ID, pointsReasonGenerationAdjustment).Scan(&adjustments); err != nil {
+		t.Fatalf("count adjustments: %v", err)
+	}
+	if adjustments != 1 {
+		t.Fatalf("generation adjustment rows = %d, want 1", adjustments)
+	}
+
+	page, err := ps.History(ctx, owner, 50, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatalf("History returned no entries")
+	}
+	if page.Entries[0].Reason != pointsReasonGeneration || page.Entries[0].Delta != -879 || page.Entries[0].BalanceAfter != 1200 {
+		t.Fatalf("latest history entry = (%q, %d, balance %d), want generation adjustment -879 balance 1200",
+			page.Entries[0].Reason, page.Entries[0].Delta, page.Entries[0].BalanceAfter)
+	}
+
+	srv := New(Deps{
+		Mode:        ModeDashboard,
+		Discussions: ds,
+		Points:      ps,
+		Env:         &config.Env{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/points/history?limit=50&offset=0", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Balance int64               `json:"balance"`
+		Entries []PointsLedgerEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode history body %q: %v", rec.Body.String(), err)
+	}
+	if body.Balance != 1200 {
+		t.Fatalf("response balance = %d, want 1200", body.Balance)
+	}
+	if len(body.Entries) == 0 {
+		t.Fatalf("response entries empty")
+	}
+	if body.Entries[0].Reason != pointsReasonGeneration || body.Entries[0].Delta != -879 || body.Entries[0].BalanceAfter != 1200 {
+		t.Fatalf("latest response entry = (%q, %d, balance %d), want generation adjustment -879 balance 1200",
+			body.Entries[0].Reason, body.Entries[0].Delta, body.Entries[0].BalanceAfter)
 	}
 }
 

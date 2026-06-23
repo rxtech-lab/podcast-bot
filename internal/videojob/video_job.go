@@ -44,11 +44,11 @@ type Queue interface {
 // to each per-job orchestrator; today most uploads run with empty mcp
 // configs but the seam is here for future tools.
 type Deps struct {
-	Env          *config.Env
-	MCPCfg       *config.MCPConfig
-	Bus          *eventbus.Bus
-	Jobs         *server.JobRegistry
-	Discussions  *server.DiscussionStore
+	Env         *config.Env
+	MCPCfg      *config.MCPConfig
+	Bus         *eventbus.Bus
+	Jobs        *server.JobRegistry
+	Discussions *server.DiscussionStore
 	// Points, when set, reconciles the generation reservation against actual
 	// usage at job completion so a finished podcast is charged immediately (not
 	// lazily on a later discussion fetch). nil disables points charging.
@@ -706,7 +706,7 @@ func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog
 		return
 	}
 	usage := orch.UsageSummary()
-	if usage.TotalTokens == 0 {
+	if usage.TotalTokens == 0 && usage.CostUSD <= 0 && usage.TTSCharacters == 0 && usage.TTSCostUSD <= 0 && usage.MusicGenerations == 0 && usage.MusicCostUSD <= 0 {
 		return
 	}
 	text := contentcreator.FormatUsageSummary(usage)
