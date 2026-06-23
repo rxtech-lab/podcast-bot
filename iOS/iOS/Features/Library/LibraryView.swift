@@ -45,7 +45,7 @@ struct LibraryView: View {
                 navigate(to: discussion)
             }
         }
-        .alert("Could not load discussions", isPresented: errorBinding) {
+        .alert("Could not load \(AppStringLiteral.stationTitle)", isPresented: errorBinding) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
@@ -58,7 +58,8 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showingWhatsNew) {
             WhatsNewSheet(features: WhatsNewFeature.all,
-                          allowsInteractiveDismiss: true) {
+                          allowsInteractiveDismiss: true)
+            {
                 showingWhatsNew = false
             }
         }
@@ -77,11 +78,11 @@ struct LibraryView: View {
     private var stackView: some View {
         NavigationStack(path: $path) {
             libraryContainer
-                .navigationTitle("Discussions")
+                .navigationTitle(AppStringLiteral.stationTitle)
                 .toolbar { libraryToolbar }
                 .searchable(text: $searchText,
                             placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search discussions")
+                            prompt: "Search \(AppStringLiteral.stationsNameRaw)")
                 .navigationDestination(for: Discussion.self) { discussion in
                     destination(for: discussion)
                 }
@@ -92,11 +93,11 @@ struct LibraryView: View {
     private var splitView: some View {
         NavigationSplitView {
             libraryContainer
-                .navigationTitle("Discussions")
+                .navigationTitle(AppStringLiteral.stationTitle)
                 .toolbar { libraryToolbar }
                 .searchable(text: $searchText,
                             placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search discussions")
+                            prompt: "Search \(AppStringLiteral.stationsNameRaw)")
         } detail: {
             NavigationStack {
                 if let selection {
@@ -164,12 +165,12 @@ struct LibraryView: View {
     /// Balance label for the user menu, e.g. "Points (Balance 1,200 Points)".
     private var pointsMenuLabel: String {
         guard let balance = purchases.pointsBalance else {
-            return String(localized: "Points", comment: "User menu label when the points balance is unknown")
+            return String(localized: "Balance Unknown", comment: "User menu label when the points balance is unknown")
         }
         let unit = balance == 1
             ? String(localized: "Point", comment: "Singular unit for a points balance")
             : String(localized: "Points", comment: "Plural unit for a points balance")
-        return String(localized: "Points (\(UsageSummary.formatInt(balance)) \(unit))",
+        return String(localized: "Balance (\(UsageSummary.formatInt(balance)) \(unit))",
                       comment: "User menu points label; first value is the formatted balance, second is the localized unit")
     }
 
@@ -177,9 +178,9 @@ struct LibraryView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
             ContentUnavailableView(
-                "Select a discussion",
+                "Select a \(AppStringLiteral.stationNameRaw)",
                 systemImage: "waveform.circle",
-                description: Text("Pick a discussion from the list, or create a new one.")
+                description: Text("Pick a \(AppStringLiteral.stationNameRaw) from the list, or create a new one.")
             )
         }
     }
@@ -243,7 +244,7 @@ struct LibraryView: View {
                     .foregroundStyle(Theme.accent)
             }
             VStack(spacing: 4) {
-                Text("Loading discussions...")
+                Text("Loading \(AppStringLiteral.stationsNameRaw)...")
                     .font(.headline)
                 Text("Syncing your library")
                     .font(.subheadline)
@@ -253,10 +254,11 @@ struct LibraryView: View {
                 .tint(Theme.accent)
                 .controlSize(.small)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
         .multilineTextAlignment(.center)
-        .glassCard(cornerRadius: 20)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Loading discussions")
+        .accessibilityLabel("Loading \(AppStringLiteral.stationsNameRaw)")
     }
 
     private func load(searchQuery: String? = nil, showsSearchOverlay: Bool = false) async {
@@ -375,16 +377,16 @@ struct LibraryView: View {
             Image(systemName: "waveform.circle")
                 .font(.system(size: 56))
                 .foregroundStyle(Theme.accent)
-            Text("No discussions yet")
+            Text("No \(AppStringLiteral.stationsNameRaw) yet")
                 .font(.title3.weight(.semibold))
-            Text("Plan an AI panel discussion and generate it as a podcast.")
+            Text("Plan an AI \(AppStringLiteral.stationNameRaw) and generate the audio.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
             Button {
                 showingNew = true
             } label: {
-                Label("New Discussion", systemImage: "plus")
+                Label("New \(AppStringLiteral.stationNameRaw)", systemImage: "plus")
                     .padding(.horizontal, 8)
             }
             .buttonStyle(.glassProminent)
@@ -397,7 +399,7 @@ struct LibraryView: View {
         ContentUnavailableView(
             "No Results",
             systemImage: "magnifyingglass",
-            description: Text("No discussions match your search.")
+            description: Text("No \(AppStringLiteral.stationsNameRaw) match your search.")
         )
     }
 

@@ -27,6 +27,8 @@ const (
 	jobPriorsName = "priors.zip"
 )
 
+const jobMessageMinInterval = 2 * time.Second
+
 // handleJobSubmit accepts a multipart upload, registers a new pending
 // job, stages the uploads on disk, and hands them off to the runner.
 //
@@ -164,9 +166,15 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = "viewer"
 	}
+	user := s.requestUser(r)
+	if retryAfter, ok := s.allowJobMessage(id, user, username); !ok {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSeconds(retryAfter)))
+		http.Error(w, "message rate limit: wait before sending another message", http.StatusTooManyRequests)
+		return
+	}
 	orch.PushUserMessage(req.Text, username)
 	if s.d.Discussions != nil && strings.TrimSpace(req.DiscussionID) != "" {
-		_ = s.d.Discussions.AppendLine(r.Context(), s.requestUser(r).ID, req.DiscussionID, DiscussionLine{
+		_ = s.d.Discussions.AppendLine(r.Context(), user.ID, req.DiscussionID, DiscussionLine{
 			Speaker: username,
 			Role:    "user",
 			Text:    req.Text,
@@ -174,6 +182,52 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) allowJobMessage(jobID string, user requestUser, username string) (time.Duration, bool) {
+	nowFn := s.jobMessageRateNow
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	key := jobMessageRateKey(jobID, user, username)
+
+	s.jobMessageRateMu.Lock()
+	defer s.jobMessageRateMu.Unlock()
+	if s.jobMessageRateLast == nil {
+		s.jobMessageRateLast = make(map[string]time.Time)
+	}
+	if last, ok := s.jobMessageRateLast[key]; ok {
+		if elapsed := now.Sub(last); elapsed < jobMessageMinInterval {
+			return jobMessageMinInterval - elapsed, false
+		}
+	}
+	s.jobMessageRateLast[key] = now
+	if len(s.jobMessageRateLast) > 1024 {
+		for k, last := range s.jobMessageRateLast {
+			if now.Sub(last) > 10*jobMessageMinInterval {
+				delete(s.jobMessageRateLast, k)
+			}
+		}
+	}
+	return 0, true
+}
+
+func jobMessageRateKey(jobID string, user requestUser, username string) string {
+	identity := strings.TrimSpace(user.ID)
+	if identity == "" || identity == "anonymous" || identity == "service:dashboard" {
+		if name := sanitizeUsername(username); name != "" {
+			identity = identity + ":" + name
+		}
+	}
+	return jobID + "\x00" + identity
+}
+
+func retryAfterSeconds(d time.Duration) int {
+	if d <= 0 {
+		return 1
+	}
+	return int((d + time.Second - time.Nanosecond) / time.Second)
 }
 
 // handleJobStop force-stops generation for a running job. The runner still

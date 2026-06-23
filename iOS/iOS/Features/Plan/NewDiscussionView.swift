@@ -23,7 +23,7 @@ struct NewDiscussionView: View {
                 Theme.background.ignoresSafeArea()
                 form
             }
-            .navigationTitle("New Discussion")
+            .navigationTitle("New \(AppStringLiteral.stationNameRaw)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -71,7 +71,7 @@ struct NewDiscussionView: View {
                 if isPlanning {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text("Creating discussion…")
+                        Text("Creating \(AppStringLiteral.stationNameRaw)...")
                     }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -181,7 +181,7 @@ struct DiscussionLanguage: Identifiable, Hashable {
 
 struct DiscussionLanguageMenu: View {
     @Binding var selection: String
-    var title = String(localized: "Podcast language", comment: "Label for the podcast language picker")
+    var title = String(localized: "\(AppStringLiteral.stationNameRaw) language", comment: "Label for the podcast language picker")
     /// Grouped renders the row without its own glass background so it can share
     /// one card with another control (e.g. the attach-files row).
     var grouped: Bool = false

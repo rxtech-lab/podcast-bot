@@ -97,6 +97,8 @@ Required vars (validated at startup — the process refuses to boot if any are m
 | `SERIES_ROOT` | — | cross-run archive root for `series` episodes (default `OUT_DIR`) |
 | `APP_PASSWORD` | — | if set, gate the web UI + API behind this password (same as `--password`) |
 | `REVENUECAT_WEBHOOK_AUTH` | for points purchases | shared secret expected in `Authorization` on `POST /api/revenuecat/webhook`; empty disables purchase credits |
+| `POINTS_COST_LEVERAGE` | — | multiplier over the points sale rate used for usage charges; default `3` |
+| `POINTS_PER_USD_COST` | — | exact raw points-per-provider-dollar override; bypasses `POINTS_COST_LEVERAGE` when set |
 | `POINTS_PRODUCT_GRANTS` | for points purchases | comma-separated RevenueCat product-id to point grants, e.g. `points_1000:1000,points_5000:5000` |
 | `POINTS_SIGNUP_GRANT` | — | optional starter balance granted once per signed-in user |
 
