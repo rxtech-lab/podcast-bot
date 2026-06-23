@@ -290,6 +290,51 @@ func TestDiscussionStoreSearch(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreListAndSearchByVisibility(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	mk := func(topic, title string) *Discussion {
+		d, err := store.Create(ctx, owner, topic, planResponse{
+			Script: &config.DebateTopic{Title: title, Type: config.ContentTypeDiscussion, Language: "en-US"},
+		})
+		if err != nil {
+			t.Fatalf("Create %s: %v", title, err)
+		}
+		return d
+	}
+	private := mk("station visibility", "Private Station")
+	public := mk("station visibility", "Public Station")
+	if _, err := store.SetVisibility(ctx, owner, public.ID, DiscussionPublic, DiscussionCover{
+		Type:          "gradient",
+		GradientStart: "#111111",
+		GradientEnd:   "#777777",
+	}); err != nil {
+		t.Fatalf("SetVisibility public: %v", err)
+	}
+
+	publicRows, err := store.ListByVisibility(ctx, owner, DiscussionPublic, 20, 0)
+	if err != nil {
+		t.Fatalf("ListByVisibility public: %v", err)
+	}
+	if len(publicRows) != 1 || publicRows[0].ID != public.ID {
+		t.Fatalf("public rows = %+v, want only %s", publicRows, public.ID)
+	}
+
+	privateRows, err := store.SearchByVisibility(ctx, owner, "station", DiscussionPrivate, 20, 0)
+	if err != nil {
+		t.Fatalf("SearchByVisibility private: %v", err)
+	}
+	if len(privateRows) != 1 || privateRows[0].ID != private.ID {
+		t.Fatalf("private search rows = %+v, want only %s", privateRows, private.ID)
+	}
+}
+
 func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
@@ -365,6 +410,65 @@ func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	}
 	if unliked == nil || unliked.IsLiked || unliked.LikeCount != 0 {
 		t.Fatalf("Unlike returned %+v", unliked)
+	}
+}
+
+func TestDiscussionStoreCreateFromVisiblePlan(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:owner"
+	viewer := "oauth:viewer"
+	source, err := store.Create(ctx, owner, "space economy", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Space Markets",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+		},
+		Markdown:   "Orbital economics and reusable launch systems.",
+		Sources:    []config.Source{{Title: "Launch data", URL: "https://example.com/launch"}},
+		Researched: true,
+	})
+	if err != nil {
+		t.Fatalf("Create source: %v", err)
+	}
+
+	if clone, err := store.CreateFromVisiblePlan(ctx, viewer, source.ID); err != nil || clone != nil {
+		t.Fatalf("private source clone = (%+v, %v), want not found", clone, err)
+	}
+	if _, err := store.SetVisibility(ctx, owner, source.ID, DiscussionPublic, DiscussionCover{
+		Type:          "gradient",
+		GradientStart: "#111111",
+		GradientEnd:   "#777777",
+	}); err != nil {
+		t.Fatalf("SetVisibility public: %v", err)
+	}
+
+	clone, err := store.CreateFromVisiblePlan(ctx, viewer, source.ID)
+	if err != nil {
+		t.Fatalf("CreateFromVisiblePlan: %v", err)
+	}
+	if clone == nil {
+		t.Fatal("CreateFromVisiblePlan returned nil")
+	}
+	if clone.ID == source.ID || clone.OwnerUserID != viewer || clone.Visibility != DiscussionPrivate {
+		t.Fatalf("clone identity/visibility = %+v, source id %s", clone, source.ID)
+	}
+	if clone.Status != DiscussionPlanning || clone.JobID != "" || clone.DownloadURL != "" || clone.PointsCharged != 0 {
+		t.Fatalf("clone carried generated state: %+v", clone)
+	}
+	if clone.Script == nil || clone.Script.Title != "Space Markets" || clone.Markdown != "Orbital economics and reusable launch systems." {
+		t.Fatalf("clone plan mismatch: %+v", clone)
+	}
+	if len(clone.Sources) != 1 || clone.Sources[0].URL != "https://example.com/launch" || !clone.Researched {
+		t.Fatalf("clone sources/research mismatch: %+v", clone)
+	}
+	if len(clone.EditTurns) != 1 || clone.EditTurns[0].Role != "plan" || clone.EditTurns[0].Text != "Current plan" {
+		t.Fatalf("clone edit turns = %+v, want current plan snapshot", clone.EditTurns)
 	}
 }
 
@@ -474,6 +578,64 @@ func TestDiscussionStoreCoverImageKeyPersistedWithoutSignedURL(t *testing.T) {
 	}
 	if len(public) != 1 || public[0].Cover.ImageKey != imageKey || public[0].Cover.ImageURL != "" {
 		t.Fatalf("public cover = %+v, want durable key without stored signed URL", public)
+	}
+}
+
+func TestDiscussionStoreSetCoverLeavesVisibilityPrivate(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:owner"
+	d, err := store.CreatePlaceholder(ctx, owner, "cover anytime", "en-US")
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+
+	// A gradient cover can be set without publishing.
+	updated, err := store.SetCover(ctx, owner, d.ID, DiscussionCover{
+		Type:          "gradient",
+		GradientStart: "#8E5CF7",
+		GradientEnd:   "#00A3FF",
+	})
+	if err != nil {
+		t.Fatalf("SetCover gradient: %v", err)
+	}
+	if updated.Visibility != DiscussionPrivate {
+		t.Fatalf("visibility = %q, want private after SetCover", updated.Visibility)
+	}
+	if updated.Cover.GradientStart != "#8E5CF7" || updated.Cover.GradientEnd != "#00A3FF" {
+		t.Fatalf("gradient cover not persisted: %+v", updated.Cover)
+	}
+
+	// An AI image cover stores the durable key, not the signed URL.
+	imageKey := "covers/oauth-owner/" + d.ID + ".webp"
+	updated, err = store.SetCover(ctx, owner, d.ID, DiscussionCover{
+		Type:     "ai",
+		ImageURL: "https://storage.example/" + imageKey + "?X-Amz-Expires=900",
+		ImageKey: imageKey,
+		Prompt:   "a clean flat cover",
+	})
+	if err != nil {
+		t.Fatalf("SetCover ai: %v", err)
+	}
+	if updated.Cover.ImageKey != imageKey || updated.Cover.ImageURL != "" {
+		t.Fatalf("ai cover = %+v, want durable key without stored signed URL", updated.Cover)
+	}
+	if updated.Visibility != DiscussionPrivate {
+		t.Fatalf("visibility = %q, want still private", updated.Visibility)
+	}
+
+	// Setting a cover for an unknown id reports no rows updated.
+	missing, err := store.SetCover(ctx, owner, "does-not-exist", DiscussionCover{Type: "gradient", GradientStart: "#000", GradientEnd: "#fff"})
+	if err != nil {
+		t.Fatalf("SetCover missing: %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("SetCover for missing id = %+v, want nil", missing)
 	}
 }
 

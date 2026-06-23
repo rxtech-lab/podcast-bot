@@ -116,13 +116,17 @@ final class iOSTests: XCTestCase {
                             tokens: StaticTokenProvider(token: "token-1"),
                             session: session)
 
-        _ = try await api.discussions(limit: 10, offset: 20, query: "  vibe coding  ")
+        _ = try await api.discussions(limit: 10,
+                                      offset: 20,
+                                      query: "  vibe coding  ",
+                                      visibility: .public)
 
         XCTAssertEqual(capturedRequest?.httpMethod, "GET")
         XCTAssertEqual(capturedRequest?.url?.path, "/api/discussions")
         XCTAssertEqual(capturedRequest?.url?.queryItems["limit"], "10")
         XCTAssertEqual(capturedRequest?.url?.queryItems["offset"], "20")
         XCTAssertEqual(capturedRequest?.url?.queryItems["q"], "vibe coding")
+        XCTAssertEqual(capturedRequest?.url?.queryItems["visibility"], "public")
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
     }
 

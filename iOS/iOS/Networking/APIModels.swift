@@ -58,6 +58,18 @@ struct Attachment: Codable, Sendable {
 struct DiscussionCreateRequest: Codable, Sendable {
     var topic: String
     var language: String
+    /// When true, the server kicks off background AI cover-art generation for the
+    /// new discussion; the cover is filled in asynchronously and picked up the
+    /// next time the discussion is fetched (e.g. when the player opens).
+    var generateCover: Bool = false
+    var coverPrompt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case topic
+        case language
+        case generateCover = "generate_cover"
+        case coverPrompt = "cover_prompt"
+    }
 }
 
 /// POST /api/plan request body.
@@ -140,6 +152,12 @@ struct CoverGenerateRequest: Codable, Sendable {
 }
 
 struct CoverGenerateResponse: Codable, Sendable {
+    var cover: DiscussionCover
+}
+
+/// PATCH /api/discussions/{id}/cover request body: persists a cover on a
+/// discussion without changing its visibility.
+struct CoverUpdateRequest: Codable, Sendable {
     var cover: DiscussionCover
 }
 

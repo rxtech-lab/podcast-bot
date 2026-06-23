@@ -726,6 +726,9 @@ func (s *PointsStore) SettleGeneration(ctx context.Context, discussionID string,
 	if err != nil {
 		return err
 	}
+	if reserved <= 0 {
+		return nil
+	}
 	now := time.Now().UnixMilli()
 	if _, err := s.settle(ctx, tx, owner, discussionID, reserved, actual, pointsReasonGeneration, detail, now); err != nil {
 		return err
@@ -825,10 +828,11 @@ func (s *PointsStore) GenerationPoints(env *config.Env, costUSD float64) int64 {
 	return pts
 }
 
-// ChargeGeneration reconciles a generation reservation from a finished run's
-// usage. Computes the points (with the per-podcast minimum) and settles
+// ChargeGeneration reconciles an active generation reservation from a finished
+// run's usage. Computes the points (with the per-podcast minimum) and settles
 // idempotently. Safe to call from both the job-completion path and the lazy
-// discussion-fetch path.
+// discussion-fetch path; if no generation reservation exists, no charge is
+// created.
 func (s *PointsStore) ChargeGeneration(ctx context.Context, env *config.Env, discussionID string, detail PointsUsageDetail) error {
 	if s == nil {
 		return nil

@@ -274,6 +274,9 @@
     "AI" : {
 
     },
+    "All" : {
+      "comment" : "Library visibility filter: all stations"
+    },
     "Attach files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -499,6 +502,9 @@
         }
       }
     },
+    "Could not create %@" : {
+
+    },
     "Could not load %@" : {
 
     },
@@ -598,6 +604,15 @@
       }
     },
     "Cover" : {
+
+    },
+    "Create AI cover art in the background" : {
+
+    },
+    "Create from Plan" : {
+
+    },
+    "Creating" : {
 
     },
     "Creating %@..." : {
@@ -858,6 +873,9 @@
         }
       }
     },
+    "Edit Cover" : {
+
+    },
     "Edit using chat" : {
       "localizations" : {
         "zh-Hans" : {
@@ -969,6 +987,9 @@
           }
         }
       }
+    },
+    "Filter %@" : {
+
     },
     "Finalising" : {
       "localizations" : {
@@ -1131,6 +1152,9 @@
       }
     },
     "Generate %@" : {
+
+    },
+    "Generate cover" : {
 
     },
     "Generate Cover" : {
@@ -1715,6 +1739,12 @@
           }
         }
       }
+    },
+    "No Private %@" : {
+
+    },
+    "No Public %@" : {
+
     },
     "No readable content was returned for this source." : {
       "localizations" : {
@@ -2453,6 +2483,15 @@
         }
       }
     },
+    "Private" : {
+      "comment" : "Library visibility filter: private stations"
+    },
+    "Private %@ stay visible only to you." : {
+
+    },
+    "Public" : {
+      "comment" : "Library visibility filter: public stations"
+    },
     "Publish" : {
 
     },
@@ -2460,6 +2499,9 @@
 
     },
     "Publish to Market" : {
+
+    },
+    "Published %@ will appear here." : {
 
     },
     "Reading added sources..." : {
@@ -2819,6 +2861,12 @@
           }
         }
       }
+    },
+    "Show cover" : {
+
+    },
+    "Show transcript" : {
+
     },
     "Sign in with rxlab to plan and generate AI %@." : {
 

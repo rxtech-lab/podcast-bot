@@ -321,6 +321,31 @@ func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp 
 	return s.Get(ctx, owner, id)
 }
 
+// CreateFromVisiblePlan copies the current plan from a discussion the requester
+// can see into a new private planning discussion owned by owner.
+func (s *DiscussionStore) CreateFromVisiblePlan(ctx context.Context, owner, sourceID string) (*Discussion, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil, errors.New("plan id is required")
+	}
+	source, err := s.GetVisible(ctx, owner, sourceID)
+	if err != nil || source == nil {
+		return source, err
+	}
+	if source.Script == nil {
+		return nil, errors.New("source plan is not available")
+	}
+	return s.Create(ctx, owner, source.Topic, planResponse{
+		Script:     source.Script,
+		Markdown:   source.Markdown,
+		Sources:    source.Sources,
+		Researched: source.Researched,
+	})
+}
+
 // CreatePlaceholder inserts an empty discussion in the planning state so the
 // client gets an id immediately and can stream the plan into it. The plan body
 // (script/sources/markdown) is filled in later via UpdatePlan once the planner
@@ -350,6 +375,15 @@ func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, l
 // limit/offset paginate the result; a non-positive limit falls back to the
 // default page size and offsets below zero are clamped to zero.
 func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset int) ([]Discussion, error) {
+	return s.list(ctx, owner, "", limit, offset)
+}
+
+// ListByVisibility returns an owner's public or private discussions, newest first.
+func (s *DiscussionStore) ListByVisibility(ctx context.Context, owner string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
+	return s.list(ctx, owner, visibility, limit, offset)
+}
+
+func (s *DiscussionStore) list(ctx context.Context, owner string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -359,9 +393,16 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 	if offset < 0 {
 		offset = 0
 	}
+	where := "owner_user_id = ?"
+	args := []any{owner}
+	if visibility != "" {
+		where += " AND visibility = ?"
+		args = append(args, string(visibility))
+	}
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
-		FROM native_discussions WHERE owner_user_id = ?
-		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, limit, offset)
+		FROM native_discussions WHERE `+where+`
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +424,15 @@ func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset 
 // List's column set, scanning, and limit/offset clamping; an empty query is the
 // caller's responsibility (handlers fall back to List in that case).
 func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit, offset int) ([]Discussion, error) {
+	return s.search(ctx, owner, query, "", limit, offset)
+}
+
+// SearchByVisibility returns matching owner discussions filtered to public or private visibility.
+func (s *DiscussionStore) SearchByVisibility(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
+	return s.search(ctx, owner, query, visibility, limit, offset)
+}
+
+func (s *DiscussionStore) search(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -393,13 +443,20 @@ func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit
 		offset = 0
 	}
 	pattern := "%" + escapeLike(query) + "%"
+	where := "owner_user_id = ?"
+	args := []any{owner}
+	if visibility != "" {
+		where += " AND visibility = ?"
+		args = append(args, string(visibility))
+	}
+	args = append(args, pattern, pattern, pattern, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
 		FROM native_discussions
-		WHERE owner_user_id = ? AND (
+		WHERE `+where+` AND (
 			topic LIKE ? ESCAPE '\' OR
 			title LIKE ? ESCAPE '\' OR
 			markdown LIKE ? ESCAPE '\')
-		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, owner, pattern, pattern, pattern, limit, offset)
+		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -535,6 +592,28 @@ func (s *DiscussionStore) SetVisibility(ctx context.Context, owner, id string, v
 		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
 		string(visibility), publishedAt, strings.TrimSpace(cover.Type), storedCoverImageURL(cover), strings.TrimSpace(cover.ImageKey),
+		strings.TrimSpace(cover.GradientStart), strings.TrimSpace(cover.GradientEnd), strings.TrimSpace(cover.Prompt),
+		now, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
+// SetCover updates only the cover columns for an owned discussion, leaving
+// visibility untouched. This lets any discussion carry cover art — not just
+// published ones — set from the new-discussion sheet or the player's cover
+// editor. Passing an empty cover clears the existing art.
+func (s *DiscussionStore) SetCover(ctx context.Context, owner, id string, cover DiscussionCover) (*Discussion, error) {
+	now := time.Now().UnixMilli()
+	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+		cover_type = ?, cover_image_url = ?, cover_image_key = ?,
+		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`,
+		strings.TrimSpace(cover.Type), storedCoverImageURL(cover), strings.TrimSpace(cover.ImageKey),
 		strings.TrimSpace(cover.GradientStart), strings.TrimSpace(cover.GradientEnd), strings.TrimSpace(cover.Prompt),
 		now, owner, id)
 	if err != nil {

@@ -3,10 +3,12 @@ import SwiftUI
 struct MarketplaceView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
+    let onCreateFromPlan: (Discussion) -> Void
 
     @State private var selectedTab: MarketTab = .market
     @State private var marketStations: [Discussion] = []
     @State private var likedStations: [Discussion] = []
+    @State private var searchResults: [Discussion] = []
     @State private var path: [Discussion] = []
     @State private var searchText = ""
     @State private var loadedSearchQuery = ""
@@ -14,25 +16,47 @@ struct MarketplaceView: View {
     @State private var isLoadingMore = false
     @State private var canLoadMoreMarket = true
     @State private var canLoadMoreLiked = true
+    @State private var canLoadMoreSearch = false
     @State private var errorMessage: String?
     @State private var searchTask: Task<Void, Never>?
 
     private let pageSize = 20
 
+    init(onCreateFromPlan: @escaping (Discussion) -> Void = { _ in }) {
+        self.onCreateFromPlan = onCreateFromPlan
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             TabView(selection: $selectedTab) {
-                marketContent(stations: marketStations,
-                              emptyTitle: "No Public \(AppStringLiteral.stationsNameRaw)",
-                              emptyMessage: "Public \(AppStringLiteral.stationsNameRaw) will appear here.")
-                    .tabItem { Label("Market", systemImage: "music.note.list") }
-                    .tag(MarketTab.market)
+                Tab("Market", systemImage: "music.note.list", value: MarketTab.market) {
+                    marketContent(tab: .market,
+                                  stations: marketStations,
+                                  emptyTitle: "No Public \(AppStringLiteral.stationsNameRaw)",
+                                  emptyMessage: "Public \(AppStringLiteral.stationsNameRaw) will appear here.")
+                }
 
-                marketContent(stations: likedStations,
-                              emptyTitle: "No Liked \(AppStringLiteral.stationsNameRaw)",
-                              emptyMessage: "Saved \(AppStringLiteral.stationsNameRaw) appear here.")
-                    .tabItem { Label("Liked", systemImage: "heart.fill") }
-                    .tag(MarketTab.liked)
+                Tab("Liked", systemImage: "heart.fill", value: MarketTab.liked) {
+                    marketContent(tab: .liked,
+                                  stations: likedStations,
+                                  emptyTitle: "No Liked \(AppStringLiteral.stationsNameRaw)",
+                                  emptyMessage: "Saved \(AppStringLiteral.stationsNameRaw) appear here.")
+                }
+
+                Tab(value: MarketTab.search, role: .search) {
+                    marketContent(tab: .search,
+                                  stations: searchResults,
+                                  emptyTitle: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Search Market" : "No Results",
+                                  emptyMessage: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Search public \(AppStringLiteral.stationsNameRaw)." : "No public \(AppStringLiteral.stationsNameRaw) match your search.")
+                        .searchable(text: $searchText,
+                                    prompt: "Search public \(AppStringLiteral.stationsNameRaw)")
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                        .onSubmit(of: .search) {
+                            searchTask?.cancel()
+                            Task { await load(reset: true) }
+                        }
+                }
             }
             .navigationTitle("Market")
             .navigationBarTitleDisplayMode(.inline)
@@ -42,12 +66,9 @@ struct MarketplaceView: View {
                         .accessibilityLabel("Close")
                 }
             }
-            .searchable(text: $searchText,
-                        placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Search public \(AppStringLiteral.stationsNameRaw)")
             .background(Theme.background.ignoresSafeArea())
             .navigationDestination(for: Discussion.self) { discussion in
-                PodcastPlayerView(discussion: discussion)
+                PodcastPlayerView(discussion: discussion, onCreatedFromPlan: onCreateFromPlan)
             }
         }
         .task { await load(reset: true) }
@@ -67,10 +88,17 @@ struct MarketplaceView: View {
     }
 
     private var currentStations: [Discussion] {
-        selectedTab == .market ? marketStations : likedStations
+        switch selectedTab {
+        case .market:
+            marketStations
+        case .liked:
+            likedStations
+        case .search:
+            searchResults
+        }
     }
 
-    private func marketContent(stations: [Discussion], emptyTitle: String, emptyMessage: String) -> some View {
+    private func marketContent(tab: MarketTab, stations: [Discussion], emptyTitle: String, emptyMessage: String) -> some View {
         Group {
             if isLoading && stations.isEmpty {
                 ProgressView()
@@ -84,7 +112,7 @@ struct MarketplaceView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        if selectedTab == .market, let featured = stations.first {
+                        if tab == .market, let featured = stations.first {
                             MarketFeaturedStation(
                                 discussion: featured,
                                 onOpen: { path.append(featured) },
@@ -94,13 +122,13 @@ struct MarketplaceView: View {
                             .padding(.top, 12)
                         }
 
-                        if selectedTab == .market {
+                        if tab == .market {
                             marketShelf(title: "On Air",
                                         stations: stations.filter { $0.status == .generating })
                         }
 
                         VStack(alignment: .leading, spacing: 12) {
-                            Text(selectedTab == .market ? "Browse" : "Liked")
+                            Text(sectionTitle(for: tab))
                                 .font(.headline)
                                 .padding(.horizontal, 16)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 18) {
@@ -112,7 +140,7 @@ struct MarketplaceView: View {
                                     )
                                     .onAppear {
                                         if station.id == stations.last?.id {
-                                            Task { await loadMore() }
+                                            Task { await loadMore(for: tab) }
                                         }
                                     }
                                 }
@@ -134,6 +162,17 @@ struct MarketplaceView: View {
                 .refreshable { await load(reset: true) }
                 .scrollDismissesKeyboard(.interactively)
             }
+        }
+    }
+
+    private func sectionTitle(for tab: MarketTab) -> String {
+        switch tab {
+        case .market:
+            "Browse"
+        case .liked:
+            "Liked"
+        case .search:
+            "Results"
         }
     }
 
@@ -163,12 +202,20 @@ struct MarketplaceView: View {
 
     @MainActor
     private func load(reset: Bool) async {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = selectedTab == .search ? searchText.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        if selectedTab == .search, query.isEmpty {
+            searchResults = []
+            canLoadMoreSearch = false
+            loadedSearchQuery = ""
+            return
+        }
         if reset {
             if selectedTab == .market {
                 canLoadMoreMarket = true
-            } else {
+            } else if selectedTab == .liked {
                 canLoadMoreLiked = true
+            } else {
+                canLoadMoreSearch = true
             }
         }
         guard reset || currentCanLoadMore else { return }
@@ -184,10 +231,14 @@ struct MarketplaceView: View {
                 items = try await api.marketStations(limit: pageSize, offset: reset ? 0 : marketStations.count, query: query)
                 if reset { marketStations = items } else { append(items, to: .market) }
                 canLoadMoreMarket = items.count == pageSize
-            } else {
+            } else if selectedTab == .liked {
                 items = try await api.likedMarketStations(limit: pageSize, offset: reset ? 0 : likedStations.count, query: query)
                 if reset { likedStations = items } else { append(items, to: .liked) }
                 canLoadMoreLiked = items.count == pageSize
+            } else {
+                items = try await api.marketStations(limit: pageSize, offset: reset ? 0 : searchResults.count, query: query)
+                if reset { searchResults = items } else { append(items, to: .search) }
+                canLoadMoreSearch = items.count == pageSize
             }
         } catch {
             report(error)
@@ -195,7 +246,8 @@ struct MarketplaceView: View {
     }
 
     @MainActor
-    private func loadMore() async {
+    private func loadMore(for tab: MarketTab) async {
+        guard selectedTab == tab else { return }
         guard !isLoadingMore, currentCanLoadMore else { return }
         isLoadingMore = true
         defer { isLoadingMore = false }
@@ -203,7 +255,14 @@ struct MarketplaceView: View {
     }
 
     private var currentCanLoadMore: Bool {
-        selectedTab == .market ? canLoadMoreMarket : canLoadMoreLiked
+        switch selectedTab {
+        case .market:
+            canLoadMoreMarket
+        case .liked:
+            canLoadMoreLiked
+        case .search:
+            canLoadMoreSearch
+        }
     }
 
     @MainActor
@@ -211,13 +270,17 @@ struct MarketplaceView: View {
         if tab == .market {
             let existing = Set(marketStations.map(\.id))
             marketStations.append(contentsOf: items.filter { !existing.contains($0.id) })
-        } else {
+        } else if tab == .liked {
             let existing = Set(likedStations.map(\.id))
             likedStations.append(contentsOf: items.filter { !existing.contains($0.id) })
+        } else {
+            let existing = Set(searchResults.map(\.id))
+            searchResults.append(contentsOf: items.filter { !existing.contains($0.id) })
         }
     }
 
     private func scheduleSearch(_ value: String) {
+        guard selectedTab == .search else { return }
         searchTask?.cancel()
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(350))
@@ -245,6 +308,7 @@ struct MarketplaceView: View {
     @MainActor
     private func upsert(_ station: Discussion) {
         replace(station, in: &marketStations)
+        replace(station, in: &searchResults)
         if station.isLiked == true {
             replace(station, in: &likedStations)
             if !likedStations.contains(where: { $0.id == station.id }) {
@@ -271,6 +335,7 @@ struct MarketplaceView: View {
 private enum MarketTab {
     case market
     case liked
+    case search
 }
 
 private struct MarketFeaturedStation: View {

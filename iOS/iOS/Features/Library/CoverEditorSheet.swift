@@ -1,6 +1,9 @@
 import SwiftUI
 
-struct PublishStationSheet: View {
+/// Sets a cover on a discussion without publishing it. Presented from the
+/// player's actions menu so any podcast — public or private — can carry cover
+/// art. Saving persists the cover via PATCH /api/discussions/{id}/cover.
+struct CoverEditorSheet: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
@@ -33,7 +36,7 @@ struct PublishStationSheet: View {
                     }
                 }
             }
-            .navigationTitle(discussion.isPublic ? "Station Visibility" : "Publish Station")
+            .navigationTitle("Cover")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -41,13 +44,13 @@ struct PublishStationSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        publish()
+                        save()
                     } label: {
                         if isWorking {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Text(discussion.isPublic ? "Update" : "Publish")
+                            Text("Save")
                         }
                     }
                     .disabled(isWorking || !cover.isPublishable)
@@ -58,17 +61,13 @@ struct PublishStationSheet: View {
         .interactiveDismissDisabled(isWorking)
     }
 
-    private func publish() {
+    private func save() {
         isWorking = true
         errorMessage = nil
         Task { @MainActor in
             defer { isWorking = false }
             do {
-                discussion = try await APIClient(tokens: auth).updateDiscussionVisibility(
-                    id: discussion.id,
-                    visibility: .public,
-                    cover: cover
-                )
+                discussion = try await APIClient(tokens: auth).updateDiscussionCover(id: discussion.id, cover: cover)
                 dismiss()
             } catch {
                 guard !APIClient.isCancellation(error) else { return }

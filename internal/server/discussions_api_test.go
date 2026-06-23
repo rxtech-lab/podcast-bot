@@ -92,6 +92,65 @@ func TestDiscussionHistoryAPIWorksForPendingAndCompletedPlan(t *testing.T) {
 	}
 }
 
+func TestDiscussionCreateFromPlanAPICopiesVisiblePlan(t *testing.T) {
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	srv := New(Deps{Discussions: store})
+
+	source, err := store.Create(context.Background(), "oauth:owner", "market plan", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Market Plan",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+		},
+		Markdown:   "Plan markdown",
+		Sources:    []config.Source{{Title: "Source", URL: "https://example.com/source"}},
+		Researched: true,
+	})
+	if err != nil {
+		t.Fatalf("Create source: %v", err)
+	}
+	if _, err := store.SetVisibility(context.Background(), "oauth:owner", source.ID, DiscussionPublic, DiscussionCover{
+		Type:          "gradient",
+		GradientStart: "#111111",
+		GradientEnd:   "#777777",
+	}); err != nil {
+		t.Fatalf("SetVisibility: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/discussions/"+source.ID+"/create/plan", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: usernameCookie, Value: "MarketViewer"})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clone status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var clone Discussion
+	if err := json.NewDecoder(rec.Body).Decode(&clone); err != nil {
+		t.Fatalf("decode clone: %v", err)
+	}
+	if clone.ID == "" || clone.ID == source.ID {
+		t.Fatalf("clone identity = %+v", clone)
+	}
+	persisted, err := store.Get(context.Background(), "cookie:MarketViewer", clone.ID)
+	if err != nil {
+		t.Fatalf("Get clone: %v", err)
+	}
+	if persisted == nil || persisted.OwnerUserID != "cookie:MarketViewer" {
+		t.Fatalf("persisted clone = %+v", persisted)
+	}
+	if clone.Script == nil || clone.Script.Title != "Market Plan" || clone.Markdown != "Plan markdown" {
+		t.Fatalf("clone plan = %+v", clone)
+	}
+	if clone.Visibility != DiscussionPrivate || clone.Status != DiscussionPlanning {
+		t.Fatalf("clone visibility/status = %+v", clone)
+	}
+}
+
 func TestDiscussionImproveStreamPersistsUserTurnBeforePlanFinishes(t *testing.T) {
 	env := newDiscussionAPITestEnv(t)
 	env.openai.Enqueue(mockOpenAIResponse{Title: "Original Plan"})

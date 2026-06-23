@@ -71,7 +71,7 @@ func TestGenerateGeminiImageUsesNativeInteractionsAPI(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	raw, err := client.Generate(context.Background(), Request{
-		Model:  "google/gemini-3.1-flash-image",
+		Model:  PuzzleSceneModel,
 		Prompt: "Square podcast cover artwork",
 		Size:   "1024x1024",
 	})

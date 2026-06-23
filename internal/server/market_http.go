@@ -17,6 +17,10 @@ const (
 	stationCoverImageSize    = "1024x1024"
 	stationCoverImageCostUSD = 0.067
 	stationCoverURLTTL       = 30 * 24 * time.Hour
+
+	// coverGenerationBackgroundTimeout bounds the fire-and-forget cover
+	// generation kicked off at discussion creation.
+	coverGenerationBackgroundTimeout = 5 * time.Minute
 )
 
 type marketVisibilityRequest struct {
@@ -26,6 +30,10 @@ type marketVisibilityRequest struct {
 
 type marketCoverGenerateRequest struct {
 	Prompt string `json:"prompt"`
+}
+
+type marketCoverSetRequest struct {
+	Cover DiscussionCover `json:"cover"`
 }
 
 type marketCoverGenerateResponse struct {
@@ -244,6 +252,30 @@ func (s *Server) reserveImageGeneration(w http.ResponseWriter, r *http.Request, 
 	return required, reserveLedgerID, true
 }
 
+// reserveImageGenerationBackground is the context-only counterpart to
+// reserveImageGeneration for fire-and-forget background generation: it has no
+// ResponseWriter to report to, so insufficient points or errors simply yield
+// ok=false and are logged by the caller.
+func (s *Server) reserveImageGenerationBackground(ctx context.Context, userID, discID string) (int64, int64, bool) {
+	if !s.pointsEnabled() {
+		return 0, 0, true
+	}
+	required := pointsForUSD(s.d.Env, stationCoverImageCostUSD)
+	if required <= 0 {
+		return 0, 0, true
+	}
+	ok, bal, reserveLedgerID, err := s.d.Points.ReserveWithLedgerID(ctx, userID, discID, required, pointsReasonImageGeneration)
+	if err != nil {
+		s.logger().Warn("background cover reservation failed", "discussion", discID, "err", err)
+		return 0, 0, false
+	}
+	if !ok {
+		s.logger().Info("background cover generation skipped: insufficient points", "discussion", discID, "required", required, "balance", bal)
+		return 0, 0, false
+	}
+	return required, reserveLedgerID, true
+}
+
 func (s *Server) settleImageGeneration(ctx context.Context, userID, discID string, reserved, reserveLedgerID int64) {
 	if !s.pointsEnabled() || reserved <= 0 {
 		return
@@ -276,14 +308,19 @@ func (s *Server) generateStationCover(ctx context.Context, userID, discID, promp
 	if err != nil {
 		return DiscussionCover{}, err
 	}
-	ext := generatedCoverExtension(raw)
-	tmp, err := os.CreateTemp("", "station-cover-*"+ext)
+	// Image models return PNG/JPEG; re-encode to WebP so covers are small and
+	// match the format the iOS upload path already produces.
+	webp, err := imagegen.ToWebP(raw)
+	if err != nil {
+		return DiscussionCover{}, err
+	}
+	tmp, err := os.CreateTemp("", "station-cover-*.webp")
 	if err != nil {
 		return DiscussionCover{}, err
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(raw); err != nil {
+	if _, err := tmp.Write(webp); err != nil {
 		tmp.Close()
 		return DiscussionCover{}, err
 	}
@@ -306,21 +343,10 @@ func (s *Server) generateStationCover(ctx context.Context, userID, discID, promp
 	}, nil
 }
 
-func generatedCoverExtension(raw []byte) string {
-	switch http.DetectContentType(raw) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	default:
-		return ".img"
-	}
-}
-
 func stationCoverGenerationPrompt(subject string) string {
 	subject = strings.TrimSpace(subject)
 	return fmt.Sprintf(`Create a square podcast cover image for this discussion:
 %q
 
-Design it like polished iTunes podcast artwork: strong central composition, legible visual metaphor, premium editorial lighting, and clean modern typography only when it improves the cover. Do not write an essay, markdown, explanation, or article. Return only the generated cover image.`, subject)
+Design it as simple, flat podcast cover artwork: minimal visual elements, clean geometric layout, restrained color palette, crisp edges, and little to no shadows. Avoid busy scenes, realistic lighting, 3D effects, heavy textures, clutter, and detailed illustrations. Use clean modern typography only when it improves the cover. Do not write an essay, markdown, explanation, or article. Return only the generated cover image.`, subject)
 }

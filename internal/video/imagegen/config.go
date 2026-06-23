@@ -13,7 +13,7 @@ var GatewayURL = "https://ai-gateway.vercel.sh/v1/images/generations"
 var GeminiInteractionsURL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
 // PuzzleSceneModel is the model slug used to generate puzzle scene
-// backgrounds at runtime. Gemini's flash-image preview is fast and cheap
+// backgrounds at runtime. Gemini's flash-image model is fast and cheap
 // (a few cents for the 4 scenes in a single puzzle), which matters because
 // each puzzle topic regenerates from scratch.
-const PuzzleSceneModel = "google/gemini-3.1-flash-image-preview"
+const PuzzleSceneModel = "google/gemini-3.1-flash-image"

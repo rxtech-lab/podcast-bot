@@ -575,6 +575,82 @@ func TestApplyDiscussionJobStatusChargesFromStoredDiscussionUsage(t *testing.T) 
 	}
 }
 
+func TestApplyDiscussionJobStatusDoesNotChargeStoredUsageWithoutReservation(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	points, err := NewPointsStore(store)
+	if err != nil {
+		t.Fatalf("NewPointsStore: %v", err)
+	}
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+
+	owner := "oauth:user-1"
+	if _, err := points.Credit(ctx, owner, 1000, "purchase:TEST", "evt-unreserved-usage"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script:   &config.DebateTopic{Title: "AI Safety", Type: config.ContentTypeDiscussion, Language: "en-US"},
+		Markdown: "# AI Safety",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-a"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.SetUsage(ctx, created.ID, 1000, 250, 1250, 0.032, true, 0.10, 0); err != nil {
+		t.Fatalf("SetUsage: %v", err)
+	}
+	discussion, err := store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	jobs.Add("job-a")
+	jobs.Update("job-a", func(j *Job) {
+		j.Status = JobDone
+		j.HasAudio = true
+	})
+
+	s := &Server{d: Deps{
+		Env:         &config.Env{PointsPerUSDCost: 1000, PointsMinPerPodcast: 1},
+		Jobs:        jobs,
+		Discussions: store,
+		Points:      points,
+		UploadRoot:  filepath.Join(t.TempDir(), "uploads"),
+	}}
+	req := httptest.NewRequest(http.MethodPatch, "/api/discussions/"+created.ID+"/visibility", nil)
+	s.applyDiscussionJobStatus(req, discussion)
+	if discussion.Status != DiscussionReady {
+		t.Fatalf("status = %q, want ready", discussion.Status)
+	}
+	if discussion.PointsCharged != 0 {
+		t.Fatalf("points_charged = %d, want 0", discussion.PointsCharged)
+	}
+	bal, err := points.Balance(ctx, owner)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 1000 {
+		t.Fatalf("balance = %d, want 1000", bal)
+	}
+	history, err := points.History(ctx, owner, 10, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	for _, entry := range history.Entries {
+		if entry.Reason == pointsReasonGeneration {
+			t.Fatalf("unexpected generation ledger entry: %+v", entry)
+		}
+	}
+}
+
 func TestJobTranscriptReturnsNativeDiscussionTranscriptFromDB(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")

@@ -30,6 +30,13 @@ func atoiDefault(s string, def int) int {
 type discussionCreateRequest struct {
 	Topic    string `json:"topic"`
 	Language string `json:"language"`
+	// GenerateCover, when true, kicks off background AI cover-art generation for
+	// the new discussion. The placeholder is returned immediately; the cover is
+	// filled in asynchronously and picked up the next time the discussion is
+	// fetched (e.g. when the player opens). CoverPrompt overrides the default
+	// prompt derived from the topic.
+	GenerateCover bool   `json:"generate_cover"`
+	CoverPrompt   string `json:"cover_prompt"`
 }
 
 type discussionImproveRequest struct {
@@ -66,10 +73,19 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	limit := atoiDefault(r.URL.Query().Get("limit"), 0)
 	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	visibility := DiscussionVisibility(strings.TrimSpace(r.URL.Query().Get("visibility")))
+	if visibility != "" && visibility != DiscussionPrivate && visibility != DiscussionPublic {
+		http.Error(w, "invalid visibility", http.StatusBadRequest)
+		return
+	}
 	var items []Discussion
 	var err error
-	if query != "" {
+	if query != "" && visibility != "" {
+		items, err = s.d.Discussions.SearchByVisibility(r.Context(), user.ID, query, visibility, limit, offset)
+	} else if query != "" {
 		items, err = s.d.Discussions.Search(r.Context(), user.ID, query, limit, offset)
+	} else if visibility != "" {
+		items, err = s.d.Discussions.ListByVisibility(r.Context(), user.ID, visibility, limit, offset)
 	} else {
 		items, err = s.d.Discussions.List(r.Context(), user.ID, limit, offset)
 	}
@@ -138,6 +154,86 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if req.GenerateCover {
+		s.startBackgroundCoverGeneration(s.requestUser(r).ID, d.ID, strings.TrimSpace(req.CoverPrompt), topic)
+	}
+	writeJSON(w, d)
+}
+
+// startBackgroundCoverGeneration reserves points and spawns a goroutine that
+// generates AI cover art for a discussion, persisting it when ready. It is
+// fire-and-forget: the caller has already returned the discussion, so failures
+// (including insufficient points or storage being disabled) are logged and the
+// reservation refunded rather than surfaced to the client.
+func (s *Server) startBackgroundCoverGeneration(userID, discID, prompt, topic string) {
+	if s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		s.logger().Warn("skipping background cover generation: storage disabled", "discussion", discID)
+		return
+	}
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "Square podcast cover artwork for " + strings.TrimSpace(topic)
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), coverGenerationBackgroundTimeout)
+		defer cancel()
+		reserved, reserveLedgerID, ok := s.reserveImageGenerationBackground(ctx, userID, discID)
+		if !ok {
+			return
+		}
+		cover, err := s.generateStationCover(ctx, userID, discID, prompt)
+		if err != nil {
+			s.refundImageGeneration(ctx, userID, discID, reserved, reserveLedgerID)
+			s.logger().Warn("background cover generation failed", "discussion", discID, "err", err)
+			return
+		}
+		if _, err := s.d.Discussions.SetCover(ctx, userID, discID, cover); err != nil {
+			s.refundImageGeneration(ctx, userID, discID, reserved, reserveLedgerID)
+			s.logger().Warn("background cover persist failed", "discussion", discID, "err", err)
+			return
+		}
+		s.settleImageGeneration(ctx, userID, discID, reserved, reserveLedgerID)
+	}()
+}
+
+// handleDiscussionCoverSet persists a cover (gradient, uploaded image, or a
+// previously generated AI image) on an owned discussion without changing its
+// visibility, so any discussion can carry cover art.
+func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request) {
+	var req marketCoverSetRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	updated, err := s.d.Discussions.SetCover(r.Context(), s.requestUser(r).ID, r.PathValue("id"), req.Cover)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.applyDiscussionJobStatus(r, updated)
+	s.applyDiscussionProgress(r.Context(), updated)
+	s.refreshDiscussionCoverURL(r.Context(), updated)
+	s.sanitizeDiscussionUsage(updated)
+	writeJSON(w, updated)
+}
+
+func (s *Server) handleDiscussionCreateFromPlan(w http.ResponseWriter, r *http.Request) {
+	d, err := s.d.Discussions.CreateFromVisiblePlan(r.Context(), s.requestUser(r).ID, r.PathValue("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "plan id is required") || strings.Contains(err.Error(), "source plan is not available") {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
 

@@ -75,7 +75,10 @@ final class APIClient: Sendable {
 
     // MARK: - Server-owned discussions
 
-    func discussions(limit: Int = 20, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
+    func discussions(limit: Int = 20,
+                     offset: Int = 0,
+                     query: String? = nil,
+                     visibility: DiscussionVisibility? = nil) async throws -> [Discussion] {
         var queryItems = [
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset)),
@@ -83,6 +86,9 @@ final class APIClient: Sendable {
         let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedQuery.isEmpty {
             queryItems.append(URLQueryItem(name: "q", value: trimmedQuery))
+        }
+        if let visibility {
+            queryItems.append(URLQueryItem(name: "visibility", value: visibility.rawValue))
         }
         return try await get("/api/discussions", query: queryItems)
     }
@@ -112,9 +118,21 @@ final class APIClient: Sendable {
     /// Creates an empty placeholder discussion (status "planning") and returns it
     /// with a server id, so the client can navigate to the plan page and stream
     /// the plan into it. Decouples creation from the multi-minute planning run.
-    func createDiscussion(topic: String, language: String) async throws -> Discussion {
+    func createDiscussion(topic: String,
+                          language: String,
+                          generateCover: Bool = false,
+                          coverPrompt: String? = nil) async throws -> Discussion {
         try await send("POST", "/api/discussions",
-                       body: DiscussionCreateRequest(topic: topic, language: language))
+                       body: DiscussionCreateRequest(topic: topic,
+                                                     language: language,
+                                                     generateCover: generateCover,
+                                                     coverPrompt: coverPrompt))
+    }
+
+    /// Creates a private planning discussion by copying the current plan from a
+    /// public or owned market discussion.
+    func createDiscussionFromPlan(id: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/create/plan", body: EmptyRequest())
     }
 
     /// Streaming plan generation into an existing placeholder discussion: emits
@@ -235,6 +253,16 @@ final class APIClient: Sendable {
             "PATCH",
             "/api/discussions/\(id)/visibility",
             body: DiscussionVisibilityRequest(visibility: visibility, cover: cover)
+        )
+    }
+
+    /// Persists a cover on a discussion without publishing it, so any discussion
+    /// can carry cover art (set from the new-discussion sheet or cover editor).
+    func updateDiscussionCover(id: String, cover: DiscussionCover) async throws -> Discussion {
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/cover",
+            body: CoverUpdateRequest(cover: cover)
         )
     }
 

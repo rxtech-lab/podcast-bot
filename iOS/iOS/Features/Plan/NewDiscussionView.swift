@@ -14,6 +14,7 @@ struct NewDiscussionView: View {
     @AppStorage("newDiscussion.discussants") private var discussants = 3
     @AppStorage("newDiscussion.language") private var language = "en-US"
     @State private var attachments: [PendingAttachment] = []
+    @AppStorage("newDiscussion.generateCover") private var generateCover = false
     @State private var isPlanning = false
     @State private var errorMessage: String?
 
@@ -91,8 +92,34 @@ struct NewDiscussionView: View {
             panelistsRow
             rowDivider
             DiscussionLanguageMenu(selection: $language, grouped: true)
+            rowDivider
+            generateCoverRow
         }
         .glassEffect(in: .rect(cornerRadius: 16))
+    }
+
+    /// Opt-in toggle: when on, the server generates AI cover art in the
+    /// background after the discussion is created, and it appears the next time
+    /// the discussion is opened.
+    private var generateCoverRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "photo.badge.plus")
+                .foregroundStyle(Theme.accent)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Generate cover")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text("Create AI cover art in the background")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer()
+            Toggle("Generate cover", isOn: $generateCover)
+                .labelsHidden()
+                .tint(Theme.accent)
+        }
+        .padding(12)
     }
 
     private var panelistsRow: some View {
@@ -141,7 +168,9 @@ struct NewDiscussionView: View {
                                   research: true, attachments: ready.isEmpty ? nil : ready)
         Task {
             do {
-                let created = try await api.createDiscussion(topic: trimmed, language: language)
+                let created = try await api.createDiscussion(topic: trimmed,
+                                                             language: language,
+                                                             generateCover: generateCover)
                 isPlanning = false
                 dismiss()
                 onPlanned(created, request)
