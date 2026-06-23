@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -29,9 +30,9 @@ func TestPointsForCostRoundsUp(t *testing.T) {
 		want int64
 	}{
 		{0, 0},
-		{0.05, 67},   // ceil(67.0)
-		{0.60, 804},  // 30-min podcast at observed cost
-		{0.0001, 1},  // tiny cost still rounds up to 1
+		{0.05, 67},  // ceil(67.0)
+		{0.60, 804}, // 30-min podcast at observed cost
+		{0.0001, 1}, // tiny cost still rounds up to 1
 	}
 	for _, c := range cases {
 		if got := pointsForCost(env, c.cost); got != c.want {
@@ -113,7 +114,7 @@ func TestSettlePlanningRefundsRemainder(t *testing.T) {
 	if err != nil || !ok || bal != 50 {
 		t.Fatalf("Reserve = (ok=%v, bal=%d, err=%v), want (true, 50, nil)", ok, bal, err)
 	}
-	bal, err = ps.SettlePlanning(ctx, owner, d.ID, 50, 20, PointsUsageDetail{CostUSD: 0.015})
+	bal, err = ps.SettlePlanning(ctx, owner, d.ID, 0, 50, 20, PointsUsageDetail{CostUSD: 0.015})
 	if err != nil {
 		t.Fatalf("SettlePlanning: %v", err)
 	}
@@ -126,6 +127,147 @@ func TestSettlePlanningRefundsRemainder(t *testing.T) {
 	}
 	if total != 20 {
 		t.Fatalf("points_charged = %d, want 20", total)
+	}
+}
+
+func TestHistoryShowsOnlyPlanningHoldUntilSettled(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 100, "signup_grant", "signup:u1"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if ok, _, err := ps.Reserve(ctx, owner, d.ID, 50, pointsReasonPlanning); err != nil || !ok {
+		t.Fatalf("Reserve = ok=%v err=%v", ok, err)
+	}
+	page, err := ps.History(ctx, owner, 200, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	entries := page.Entries
+	if len(entries) < 1 {
+		t.Fatalf("History returned no entries")
+	}
+	if entries[0].Reason != "reserve:planning" || entries[0].Delta != -50 {
+		t.Fatalf("latest entry = (%q, %d), want planning hold -50", entries[0].Reason, entries[0].Delta)
+	}
+}
+
+func TestHistoryCollapsesSettledPlanningHoldIntoUsage(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 100, "signup_grant", "signup:u1"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if ok, _, err := ps.Reserve(ctx, owner, d.ID, 50, pointsReasonPlanning); err != nil || !ok {
+		t.Fatalf("Reserve = ok=%v err=%v", ok, err)
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, 0, 50, 20, PointsUsageDetail{CostUSD: 0.015}); err != nil {
+		t.Fatalf("SettlePlanning: %v", err)
+	}
+	page, err := ps.History(ctx, owner, 200, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	entries := page.Entries
+	if len(entries) != 2 {
+		t.Fatalf("History returned %d entries, want 2: %#v", len(entries), entries)
+	}
+	if entries[0].Reason != "planning" || entries[0].Delta != -20 || entries[0].BalanceAfter != 80 {
+		t.Fatalf("latest entry = (%q, %d, balance %d), want planning -20 balance 80",
+			entries[0].Reason, entries[0].Delta, entries[0].BalanceAfter)
+	}
+	for _, entry := range entries {
+		if entry.Reason == "reserve:planning" {
+			t.Fatalf("settled planning hold should be hidden: %#v", entries)
+		}
+	}
+}
+
+func TestHistoryCollapsesPlanningHoldOutsideInitialRawBatch(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 1000, "signup_grant", "signup:u1"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	ok, _, reserveLedgerID, err := ps.ReserveWithLedgerID(ctx, owner, "", 50, pointsReasonPlanning)
+	if err != nil || !ok {
+		t.Fatalf("Reserve = ok=%v err=%v", ok, err)
+	}
+	for i := range 150 {
+		if _, err := ps.Credit(ctx, owner, 1, "purchase:TEST", fmt.Sprintf("evt-gap-%03d", i)); err != nil {
+			t.Fatalf("Credit gap %d: %v", i, err)
+		}
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, reserveLedgerID, 50, 20, PointsUsageDetail{CostUSD: 0.015}); err != nil {
+		t.Fatalf("SettlePlanning: %v", err)
+	}
+
+	// limit=1 makes the first raw batch 100 rows. The matching hold is older
+	// than that, so History must explicitly hydrate it before projecting.
+	page, err := ps.History(ctx, owner, 1, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) != 1 {
+		t.Fatalf("History returned %d entries, want 1: %#v", len(page.Entries), page.Entries)
+	}
+	if page.Entries[0].Reason != "planning" || page.Entries[0].Delta != -20 {
+		t.Fatalf("latest entry = (%q, %d), want collapsed planning -20", page.Entries[0].Reason, page.Entries[0].Delta)
+	}
+}
+
+func TestHistoryDoesNotDuplicateHydratedPlanningReserveOnLaterPage(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 1000, "signup_grant", "signup:u1"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	ok, _, reserveLedgerID, err := ps.ReserveWithLedgerID(ctx, owner, "", 50, pointsReasonPlanning)
+	if err != nil || !ok {
+		t.Fatalf("Reserve = ok=%v err=%v", ok, err)
+	}
+	for i := range 150 {
+		if _, err := ps.Credit(ctx, owner, 1, "purchase:TEST", fmt.Sprintf("evt-page-gap-%03d", i)); err != nil {
+			t.Fatalf("Credit gap %d: %v", i, err)
+		}
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, reserveLedgerID, 50, 20, PointsUsageDetail{CostUSD: 0.015}); err != nil {
+		t.Fatalf("SettlePlanning: %v", err)
+	}
+
+	page, err := ps.History(ctx, owner, 50, 100)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	seen := map[int64]bool{}
+	for _, entry := range page.Entries {
+		if seen[entry.ID] {
+			t.Fatalf("duplicate entry id %d in page: %#v", entry.ID, page.Entries)
+		}
+		seen[entry.ID] = true
+		if entry.Reason == "reserve:planning" {
+			t.Fatalf("settled planning hold should not be visible on later page: %#v", page.Entries)
+		}
 	}
 }
 
@@ -246,5 +388,40 @@ func TestEnsureSignupGrantOnce(t *testing.T) {
 	}
 	if bal != 250 {
 		t.Fatalf("balance = %d, want 250 (granted once)", bal)
+	}
+}
+
+func TestHistoryPaginatesProjectedEntries(t *testing.T) {
+	ps, _ := newTestPointsStore(t)
+	ctx := context.Background()
+	eventIDs := []string{"evt-page-a", "evt-page-b", "evt-page-c", "evt-page-d", "evt-page-e"}
+	for i, pts := range []int64{10, 20, 30, 40, 50} {
+		if _, err := ps.Credit(ctx, "u1", pts, "purchase:TEST", eventIDs[i]); err != nil {
+			t.Fatalf("Credit %d: %v", i, err)
+		}
+	}
+
+	page, err := ps.History(ctx, "u1", 2, 0)
+	if err != nil {
+		t.Fatalf("History page 1: %v", err)
+	}
+	if !page.HasMore || len(page.Entries) != 2 || page.Entries[0].Delta != 50 || page.Entries[1].Delta != 40 {
+		t.Fatalf("page 1 = %+v, want 50/40 with has_more", page)
+	}
+
+	page, err = ps.History(ctx, "u1", 2, 2)
+	if err != nil {
+		t.Fatalf("History page 2: %v", err)
+	}
+	if !page.HasMore || len(page.Entries) != 2 || page.Entries[0].Delta != 30 || page.Entries[1].Delta != 20 {
+		t.Fatalf("page 2 = %+v, want 30/20 with has_more", page)
+	}
+
+	page, err = ps.History(ctx, "u1", 2, 4)
+	if err != nil {
+		t.Fatalf("History page 3: %v", err)
+	}
+	if page.HasMore || len(page.Entries) != 1 || page.Entries[0].Delta != 10 {
+		t.Fatalf("page 3 = %+v, want 10 without has_more", page)
 	}
 }

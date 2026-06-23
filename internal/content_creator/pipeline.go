@@ -35,11 +35,12 @@ type Deps struct {
 	// hardcoding the per-format mapping.
 	ContentType string
 	// AudioOnly marks an audio-only feed whose audio.mp3 is recorded straight
-	// from the LiveStream at t=0 with no stitch StartOffset trim, so vttBias
-	// (a trim-compensation offset) must not be applied to its sidecar cues.
+	// from the LiveStream at t=0 with no stitch StartOffset trim. Most formats
+	// skip the trim-compensation VTT bias in this mode; discussion keeps its
+	// calibrated live-podcast delay so captions do not lead the heard audio.
 	AudioOnly  bool
 	Transcript *Transcript
-	LiveStream  *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
+	LiveStream *audio.LiveStream // shared mp3 broadcaster (paced by ffmpeg -re)
 
 	// MusicPaths maps planner directive prefix → mp3 file path for turns
 	// that should play with a Lyria-generated background bed mixed under
@@ -202,11 +203,14 @@ func (p *Pipeline) SubtitleCues() []SubtitleCue {
 }
 
 func (p *Pipeline) vttBias() time.Duration {
-	// Audio-only feeds record audio.mp3 straight from the LiveStream at t=0
-	// with no stitch StartOffset trim. vttBias exists only to realign the
-	// sidecar .vtt against that front-trimmed mp4, so it would push captions
-	// late (~2.5s for discussion) against the untrimmed recording. Skip it.
 	if p != nil && p.d.AudioOnly {
+		// Discussion podcasts are consumed live through the audio-only HLS
+		// rendition, whose audible output trails the raw LiveStream cue anchor by
+		// the same empirically measured 2.5s as discussion video sidecars. Keep
+		// that delay for both live captions and the final audio.mp3 sidecar.
+		if p.d.ContentType == config.ContentTypeDiscussion {
+			return vttBaseBias + vttDiscussionBias
+		}
 		return 0
 	}
 	bias := vttBaseBias

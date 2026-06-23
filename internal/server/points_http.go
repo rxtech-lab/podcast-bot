@@ -49,6 +49,9 @@ func (s *Server) userBalance(ctx context.Context, userID string) (int64, error) 
 	if !s.pointsEnabled() {
 		return 0, nil
 	}
+	if err := s.d.Points.EnsureUser(ctx, userID); err != nil {
+		return 0, err
+	}
 	if g := s.d.Env.PointsSignupGrant; g > 0 {
 		_ = s.d.Points.EnsureSignupGrant(ctx, userID, g)
 	}
@@ -102,33 +105,34 @@ func (s *Server) reserveGeneration(w http.ResponseWriter, r *http.Request, userI
 
 // reservePlanning atomically holds a small estimate before a planning / improve
 // / add-sources round runs (so planning is never free and the gate is
-// concurrency-safe). Returns the reserved amount and ok; writes 402 when short.
+// concurrency-safe). Returns the reserved amount, reserve ledger id, and ok;
+// writes 402 when short.
 // The caller MUST later settlePlanning (on success) or refundPlanning (on
 // failure) to reconcile/release the hold.
-func (s *Server) reservePlanning(w http.ResponseWriter, r *http.Request, userID, discID string) (int64, bool) {
+func (s *Server) reservePlanning(w http.ResponseWriter, r *http.Request, userID, discID string) (int64, int64, bool) {
 	if !s.pointsEnabled() {
-		return 0, true
+		return 0, 0, true
 	}
 	required := pointsForUSD(s.d.Env, s.d.Env.PointsPlanGateUSD)
 	if required <= 0 {
-		return 0, true
+		return 0, 0, true
 	}
-	ok, bal, err := s.d.Points.Reserve(r.Context(), userID, discID, required, pointsReasonPlanning)
+	ok, bal, reserveLedgerID, err := s.d.Points.ReserveWithLedgerID(r.Context(), userID, discID, required, pointsReasonPlanning)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return 0, false
+		return 0, 0, false
 	}
 	if !ok {
 		writeInsufficientPoints(w, required, bal)
-		return 0, false
+		return 0, 0, false
 	}
-	return required, true
+	return required, reserveLedgerID, true
 }
 
 // settlePlanning reconciles a planning reservation against the round's actual
 // LLM usage, refunding the unused remainder and adding the actual to the
 // discussion's points total. Best-effort: failures are logged, not surfaced.
-func (s *Server) settlePlanning(ctx context.Context, userID, discID string, reserved int64, acc *usageAccumulator) {
+func (s *Server) settlePlanning(ctx context.Context, userID, discID string, reserved, reserveLedgerID int64, acc *usageAccumulator) {
 	if !s.pointsEnabled() || reserved <= 0 {
 		return
 	}
@@ -142,7 +146,7 @@ func (s *Server) settlePlanning(ctx context.Context, userID, discID string, rese
 		LLMCostKnown:     sum.CostKnown,
 		CostUSD:          sum.CostUSD,
 	}
-	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserved, actual, detail); err != nil {
+	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserveLedgerID, reserved, actual, detail); err != nil {
 		s.logger().Warn("planning settle failed", "discussion", discID, "err", err)
 	}
 }
@@ -150,22 +154,22 @@ func (s *Server) settlePlanning(ctx context.Context, userID, discID string, rese
 // settleFlatPlanning charges the full reserved amount for a planning-class action
 // that has no itemised LLM meter (e.g. Firecrawl source search, billed as a flat
 // fee). No refund — the reserved fee is the price of the call.
-func (s *Server) settleFlatPlanning(ctx context.Context, userID, discID string, reserved int64) {
+func (s *Server) settleFlatPlanning(ctx context.Context, userID, discID string, reserved, reserveLedgerID int64) {
 	if !s.pointsEnabled() || reserved <= 0 {
 		return
 	}
-	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserved, reserved, PointsUsageDetail{}); err != nil {
+	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserveLedgerID, reserved, reserved, PointsUsageDetail{}); err != nil {
 		s.logger().Warn("flat planning settle failed", "discussion", discID, "err", err)
 	}
 }
 
 // refundPlanning releases a planning reservation in full when the round failed
 // before producing chargeable work.
-func (s *Server) refundPlanning(ctx context.Context, userID, discID string, reserved int64) {
+func (s *Server) refundPlanning(ctx context.Context, userID, discID string, reserved, reserveLedgerID int64) {
 	if !s.pointsEnabled() || reserved <= 0 {
 		return
 	}
-	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserved, 0, PointsUsageDetail{}); err != nil {
+	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserveLedgerID, reserved, 0, PointsUsageDetail{}); err != nil {
 		s.logger().Warn("planning refund failed", "discussion", discID, "err", err)
 	}
 }
@@ -244,13 +248,17 @@ func (s *Server) handlePointsHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries := []PointsLedgerEntry{}
+	hasMore := false
 	if s.pointsEnabled() {
 		limit := atoiDefault(r.URL.Query().Get("limit"), 0)
-		entries, err = s.d.Points.History(r.Context(), user.ID, limit)
+		offset := atoiDefault(r.URL.Query().Get("offset"), 0)
+		page, err := s.d.Points.History(r.Context(), user.ID, limit, offset)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		entries = page.Entries
+		hasMore = page.HasMore
 	}
-	writeJSON(w, map[string]any{"balance": bal, "entries": entries})
+	writeJSON(w, map[string]any{"balance": bal, "entries": entries, "has_more": hasMore})
 }

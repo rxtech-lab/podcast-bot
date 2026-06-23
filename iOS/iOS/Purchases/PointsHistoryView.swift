@@ -12,8 +12,12 @@ struct PointsHistoryView: View {
     @State private var balance: Int?
     @State private var entries: [PointsLedgerEntry] = []
     @State private var isLoading = false
+    @State private var isLoadingMore = false
+    @State private var canLoadMore = false
+    @State private var hasLoadedInitialPage = false
     @State private var errorMessage: String?
     @State private var showingPaywall = false
+    private let pageSize = 50
 
     /// Oldest → newest, for a left-to-right chart.
     private var chronological: [PointsLedgerEntry] {
@@ -37,12 +41,16 @@ struct PointsHistoryView: View {
                     Button { Task { await load() } } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(isLoading)
+                    .disabled(isLoading || isLoadingMore)
                     .accessibilityLabel("Reload history")
                 }
             }
             .sheet(isPresented: $showingPaywall) { PaywallScreen() }
-            .task { await load() }
+            .task {
+                if !hasLoadedInitialPage {
+                    await load()
+                }
+            }
             .refreshable { await load() }
         }
     }
@@ -50,7 +58,7 @@ struct PointsHistoryView: View {
     @ViewBuilder
     private var content: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            LazyVStack(spacing: 20) {
                 header
                 if let errorMessage {
                     Text(errorMessage)
@@ -62,13 +70,14 @@ struct PointsHistoryView: View {
                     chartCard
                 }
                 ledgerSection
+                loadMoreFooter
             }
             .padding(16)
         }
         .overlay {
-            if isLoading && entries.isEmpty {
+            if isLoading && !hasLoadedInitialPage {
                 ProgressView().tint(Theme.accent)
-            } else if !isLoading && entries.isEmpty && errorMessage == nil {
+            } else if hasLoadedInitialPage && !isLoading && entries.isEmpty && errorMessage == nil {
                 ContentUnavailableView(
                     "No usage yet",
                     systemImage: "chart.line.uptrend.xyaxis",
@@ -149,28 +158,66 @@ struct PointsHistoryView: View {
                 .font(.caption.weight(.bold))
                 .foregroundStyle(Theme.secondaryText)
                 .padding(.bottom, 8)
-            ForEach(entries) { entry in
-                LedgerRow(entry: entry)
-                if entry.id != entries.last?.id {
-                    Divider().overlay(Theme.secondaryText.opacity(0.15))
+            LazyVStack(spacing: 0) {
+                ForEach(entries) { entry in
+                    LedgerRow(entry: entry)
+                    if entry.id != entries.last?.id {
+                        Divider().overlay(Theme.secondaryText.opacity(0.15))
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
+    private var loadMoreFooter: some View {
+        if isLoadingMore {
+            ProgressView()
+                .tint(Theme.accent)
+                .padding(.vertical, 12)
+        } else if canLoadMore && !entries.isEmpty {
+            ProgressView()
+                .tint(Theme.accent)
+                .padding(.vertical, 12)
+                .onAppear {
+                    Task { await loadMore() }
+                }
+        }
+    }
+
     private func load() async {
+        guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
+        defer {
+            isLoading = false
+            hasLoadedInitialPage = true
+        }
         do {
-            let resp = try await APIClient(tokens: auth).pointsHistory()
+            let resp = try await APIClient(tokens: auth).pointsHistory(limit: pageSize, offset: 0)
             balance = resp.balance
             entries = resp.entries
+            canLoadMore = resp.hasMore
             await purchases.refreshBalance()
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
-        isLoading = false
+    }
+
+    private func loadMore() async {
+        guard canLoadMore, !isLoadingMore, !isLoading else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let resp = try await APIClient(tokens: auth).pointsHistory(limit: pageSize, offset: entries.count)
+            balance = resp.balance
+            let existing = Set(entries.map(\.id))
+            entries.append(contentsOf: resp.entries.filter { !existing.contains($0.id) })
+            canLoadMore = resp.hasMore
+        } catch {
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }
 

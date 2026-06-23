@@ -142,7 +142,7 @@ func (s *Server) handleDiscussionPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Reserve before the chargeable planner call; refund if it fails.
-	reserved, ok := s.reservePlanning(w, r, user.ID, "")
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, "")
 	if !ok {
 		return
 	}
@@ -150,20 +150,20 @@ func (s *Server) handleDiscussionPlan(w http.ResponseWriter, r *http.Request) {
 	p.WithUsageRecorder(meter.record)
 	res, err := p.Generate(r.Context(), req)
 	if err != nil {
-		s.refundPlanning(r.Context(), user.ID, "", reserved)
+		s.refundPlanning(r.Context(), user.ID, "", reserved, reserveLedgerID)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	d, err := s.d.Discussions.Create(r.Context(), user.ID, req.Topic, resp)
 	if err != nil {
-		s.refundPlanning(r.Context(), user.ID, "", reserved)
+		s.refundPlanning(r.Context(), user.ID, "", reserved, reserveLedgerID)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// Reconcile to actual usage against the now-created discussion so the points
 	// are never orphaned from the podcast total.
-	s.settlePlanning(r.Context(), user.ID, d.ID, reserved, meter)
+	s.settlePlanning(r.Context(), user.ID, d.ID, reserved, reserveLedgerID, meter)
 	if total, err := s.pointsCharged(r.Context(), d.ID); err == nil {
 		d.PointsCharged = total
 	}
@@ -197,7 +197,7 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, id)
 	if !ok {
 		return
 	}
@@ -205,11 +205,11 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 	p.WithUsageRecorder(meter.record)
 	res, err := p.Improve(r.Context(), d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
 	if err != nil {
-		s.refundPlanning(r.Context(), user.ID, id, reserved)
+		s.refundPlanning(r.Context(), user.ID, id, reserved, reserveLedgerID)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.settlePlanning(r.Context(), user.ID, id, reserved, meter)
+	s.settlePlanning(r.Context(), user.ID, id, reserved, reserveLedgerID, meter)
 	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", instruction)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	// Append the plan snapshot before UpdatePlan reloads, so the returned
@@ -246,7 +246,7 @@ func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// Reserve before SSE starts so a 402 is delivered as an HTTP status.
-	reserved, ok := s.reservePlanning(w, r, user.ID, "")
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, "")
 	if !ok {
 		return
 	}
@@ -257,18 +257,18 @@ func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Reque
 	p.WithProgress(func(ev planner.ProgressEvent) { _ = sse.send("progress", ev) })
 	res, err := p.Generate(r.Context(), req)
 	if err != nil {
-		s.refundPlanning(r.Context(), user.ID, "", reserved)
+		s.refundPlanning(r.Context(), user.ID, "", reserved, reserveLedgerID)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	d, err := s.d.Discussions.Create(r.Context(), user.ID, req.Topic, resp)
 	if err != nil {
-		s.refundPlanning(r.Context(), user.ID, "", reserved)
+		s.refundPlanning(r.Context(), user.ID, "", reserved, reserveLedgerID)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	s.settlePlanning(r.Context(), user.ID, d.ID, reserved, meter)
+	s.settlePlanning(r.Context(), user.ID, d.ID, reserved, reserveLedgerID, meter)
 	if total, err := s.pointsCharged(r.Context(), d.ID); err == nil {
 		d.PointsCharged = total
 	}
@@ -305,7 +305,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	if strings.TrimSpace(req.Topic) == "" {
 		req.Topic = d.Topic
 	}
-	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, id)
 	if !ok {
 		return
 	}
@@ -322,7 +322,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	})
 	res, err := p.Generate(workCtx, req)
 	if err != nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
@@ -330,19 +330,19 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	updated, err := s.d.Discussions.UpdatePlan(workCtx, user.ID, id, resp)
 	if err != nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	if updated == nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": "discussion not found"})
 		return
 	}
 	_ = s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Current plan", resp)
-	s.settlePlanning(workCtx, user.ID, id, reserved, meter)
+	s.settlePlanning(workCtx, user.ID, id, reserved, reserveLedgerID, meter)
 	if total, err := s.pointsCharged(workCtx, id); err == nil {
 		updated.PointsCharged = total
 	}
@@ -380,7 +380,7 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, id)
 	if !ok {
 		return
 	}
@@ -396,21 +396,21 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		_ = sse.send("progress", ev)
 	})
 	if err := s.d.Discussions.AppendEditTurn(workCtx, user.ID, id, "user", instruction); err != nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	res, err := p.Improve(workCtx, d.Script, instruction, pastUserMessages(d.EditTurns), req.Attachments)
 	if err != nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	// Plan work succeeded — reconcile the reservation to actual usage now, before
 	// the persistence steps, so the charge is recorded even if a later write fails.
-	s.settlePlanning(workCtx, user.ID, id, reserved, meter)
+	s.settlePlanning(workCtx, user.ID, id, reserved, reserveLedgerID, meter)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	// Append the plan snapshot before UpdatePlan reloads, so the "done" payload
 	// already carries the new plan card in its edit-turn history.
@@ -470,7 +470,7 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 	// Reserve BEFORE launching the background re-research, since the handler
 	// returns immediately and can't reject afterwards. The goroutine settles to
 	// actual usage on success, or refunds on failure.
-	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, id)
 	if !ok {
 		return
 	}
@@ -482,7 +482,7 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 	// Record the user's action up front so the chat history reflects it even if
 	// the background re-research later fails.
 	_ = s.d.Discussions.AppendEditTurn(r.Context(), user.ID, id, "user", addSourcesTurnText(urls))
-	go s.updateDiscussionWithAddedSources(user.ID, id, prev, urls, p, meter, reserved)
+	go s.updateDiscussionWithAddedSources(user.ID, id, prev, urls, p, meter, reserved, reserveLedgerID)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
@@ -517,7 +517,7 @@ func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	reserved, ok := s.reservePlanning(w, r, user.ID, id)
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, id)
 	if !ok {
 		return
 	}
@@ -537,19 +537,19 @@ func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http
 	})
 
 	if err := s.d.Discussions.AppendEditTurn(workCtx, user.ID, id, "user", addSourcesTurnText(urls)); err != nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
 	res, err := p.AddSources(workCtx, &prev, urls)
 	if err != nil {
-		s.refundPlanning(workCtx, user.ID, id, reserved)
+		s.refundPlanning(workCtx, user.ID, id, reserved, reserveLedgerID)
 		s.clearDiscussionProgress(workCtx, id)
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	s.settlePlanning(workCtx, user.ID, id, reserved, meter)
+	s.settlePlanning(workCtx, user.ID, id, reserved, reserveLedgerID, meter)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	if err := s.d.Discussions.AppendPlanTurn(workCtx, user.ID, id, "Updated plan with added sources", resp); err != nil {
 		s.clearDiscussionProgress(workCtx, id)
@@ -644,18 +644,18 @@ func addSourcesTurnText(urls []string) string {
 	return sb.String()
 }
 
-func (s *Server) updateDiscussionWithAddedSources(owner, id string, prev config.DebateTopic, urls []string, p *planner.Planner, meter *usageAccumulator, reserved int64) {
+func (s *Server) updateDiscussionWithAddedSources(owner, id string, prev config.DebateTopic, urls []string, p *planner.Planner, meter *usageAccumulator, reserved, reserveLedgerID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), addSourcesBackgroundTimeout)
 	defer cancel()
 	res, err := p.AddSources(ctx, &prev, urls)
 	if err != nil {
 		// Release the held reservation since no chargeable work landed.
-		s.refundPlanning(ctx, owner, id, reserved)
+		s.refundPlanning(ctx, owner, id, reserved, reserveLedgerID)
 		s.logger().Warn("add sources background update failed", "discussion", id, "err", err)
 		return
 	}
 	// Reconcile the reservation to actual usage now that the async run succeeded.
-	s.settlePlanning(ctx, owner, id, reserved, meter)
+	s.settlePlanning(ctx, owner, id, reserved, reserveLedgerID, meter)
 	resp := planResponse{Script: res.Script, Markdown: res.Markdown, Sources: res.Sources, Researched: res.Researched}
 	updated, err := s.d.Discussions.UpdatePlan(ctx, owner, id, resp)
 	if err != nil {
@@ -699,17 +699,17 @@ func (s *Server) handleDiscussionSearchSources(w http.ResponseWriter, r *http.Re
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	reserved, ok := s.reservePlanning(w, r, user.ID, d.ID)
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, user.ID, d.ID)
 	if !ok {
 		return
 	}
 	sources, err := p.SearchSources(r.Context(), query)
 	if err != nil {
-		s.refundPlanning(r.Context(), user.ID, d.ID, reserved)
+		s.refundPlanning(r.Context(), user.ID, d.ID, reserved, reserveLedgerID)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.settleFlatPlanning(r.Context(), user.ID, d.ID, reserved)
+	s.settleFlatPlanning(r.Context(), user.ID, d.ID, reserved, reserveLedgerID)
 	writeJSON(w, discussionSourceSearchResponse{Sources: sources})
 }
 

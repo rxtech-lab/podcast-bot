@@ -291,6 +291,13 @@ struct PointsLedgerEntry: Decodable, Identifiable, Sendable {
 struct PointsHistoryResponse: Decodable, Sendable {
     var balance: Int
     var entries: [PointsLedgerEntry]
+    var hasMore: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case balance
+        case entries
+        case hasMore = "has_more"
+    }
 }
 
 /// Body of a 402 response when the user lacks the points to start an action.

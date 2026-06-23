@@ -134,6 +134,14 @@ final class iOSTests: XCTestCase {
         XCTAssertTrue(PlayerModel.containsPodcastTranscript(podcastLines))
     }
 
+    func testDiscussionPointsTextWaitsForReadyStatus() throws {
+        let generating = try decodeDiscussion(status: "generating", pointsCharged: 21)
+        let ready = try decodeDiscussion(status: "ready", pointsCharged: 21)
+
+        XCTAssertNil(generating.pointsText)
+        XCTAssertEqual(ready.pointsText, "21 points")
+    }
+
     func testTranscriptLoadingDelayKeepsOneSecondMinimum() {
         let start = Date(timeIntervalSinceReferenceDate: 100)
 
@@ -265,6 +273,20 @@ final class iOSTests: XCTestCase {
         XCTAssertFalse(APIClient.isCancellation(URLError(.timedOut)))
         XCTAssertFalse(APIClient.isCancellation(APIError.notAuthenticated))
     }
+}
+
+private func decodeDiscussion(status: String, pointsCharged: Int) throws -> Discussion {
+    let json = """
+    {
+      "id": "discussion-1",
+      "topic": "Topic",
+      "title": "Title",
+      "status": "\(status)",
+      "language": "en",
+      "points_charged": \(pointsCharged)
+    }
+    """
+    return try JSONDecoder().decode(Discussion.self, from: Data(json.utf8))
 }
 
 private struct StaticTokenProvider: TokenProviding {

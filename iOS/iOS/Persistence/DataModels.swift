@@ -118,8 +118,9 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var usageSummaryText: String? { usageSummary?.singleLineText }
 
     /// User-facing points label for a finished/known podcast, e.g. "812 points".
-    /// nil until any points have been charged.
+    /// nil until generation has finished and any points have been charged.
     var pointsText: String? {
+        guard status == .ready else { return nil }
         guard let pts = pointsCharged, pts > 0 else { return nil }
         let formatted = UsageSummary.formatInt(pts)
         return "\(formatted) point\(pts == 1 ? "" : "s")"

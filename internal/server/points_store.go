@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -129,6 +130,33 @@ func (s *PointsStore) Balance(ctx context.Context, userID string) (int64, error)
 	return bal, err
 }
 
+// EnsureUser registers a signed-in user with a zero balance if they have never
+// held or spent points. This gives external purchase webhooks a local user
+// existence check without granting any free balance.
+func (s *PointsStore) EnsureUser(ctx context.Context, userID string) error {
+	if s == nil {
+		return errors.New("points store is not configured")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO user_points_balance (user_id, balance, updated_at)
+		VALUES (?, 0, ?)
+		ON CONFLICT(user_id) DO NOTHING`, userID, time.Now().UnixMilli())
+	return err
+}
+
+// UserExists reports whether the backend has seen this user before through the
+// points ledger/balance table or an owned discussion.
+func (s *PointsStore) UserExists(ctx context.Context, userID string) (bool, error) {
+	if s == nil {
+		return false, errors.New("points store is not configured")
+	}
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM user_points_balance WHERE user_id = ?) OR
+		EXISTS(SELECT 1 FROM native_discussions WHERE owner_user_id = ?)`,
+		userID, userID).Scan(&exists)
+	return exists != 0, err
+}
+
 // DiscussionPoints returns the running points total charged to a discussion.
 func (s *PointsStore) DiscussionPoints(ctx context.Context, id string) (int64, error) {
 	if s == nil {
@@ -152,19 +180,72 @@ type PointsLedgerEntry struct {
 	Reason       string `json:"reason"`
 	BalanceAfter int64  `json:"balance_after"`
 	CreatedAt    int64  `json:"created_at"` // unix milliseconds
+	DiscussionID string `json:"-"`
 }
 
-// History returns the user's most recent ledger entries, newest first, for the
-// points-usage history view (which plots balance_after over time).
-func (s *PointsStore) History(ctx context.Context, userID string, limit int) ([]PointsLedgerEntry, error) {
+type PointsHistoryPage struct {
+	Entries []PointsLedgerEntry
+	HasMore bool
+}
+
+// History returns the user's most recent user-facing ledger entries, newest
+// first, for the points-usage history view (which plots balance_after over
+// time). The raw ledger keeps planning reservations and settlements separate for
+// accounting; this projection collapses a settled planning hold into one
+// "planning" usage row. An unsettled hold is still shown as "reserve:planning".
+func (s *PointsStore) History(ctx context.Context, userID string, limit, offset int) (PointsHistoryPage, error) {
 	if s == nil {
-		return nil, errors.New("points store is not configured")
+		return PointsHistoryPage{}, errors.New("points store is not configured")
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, delta, reason, balance_after, created_at
-		FROM points_ledger WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
+	if offset < 0 {
+		offset = 0
+	}
+	target := offset + limit + 1
+	batchSize := pointsHistoryRawBatchSize(limit)
+	rawOffset := 0
+	raw := []PointsLedgerEntry{}
+	rawIDs := map[int64]bool{}
+	for {
+		batch, err := s.pointsLedgerBatch(ctx, userID, batchSize, rawOffset)
+		if err != nil {
+			return PointsHistoryPage{}, err
+		}
+		for _, entry := range batch {
+			if rawIDs[entry.ID] {
+				continue
+			}
+			raw = append(raw, entry)
+			rawIDs[entry.ID] = true
+		}
+		raw, err = s.resolvePlanningHistoryWindow(ctx, userID, raw, rawIDs)
+		if err != nil {
+			return PointsHistoryPage{}, err
+		}
+		projected := projectPointsHistory(raw)
+		if len(projected) >= target || len(batch) < batchSize {
+			return paginatePointsHistory(projected, limit, offset), nil
+		}
+		rawOffset += len(batch)
+	}
+}
+
+func pointsHistoryRawBatchSize(displayLimit int) int {
+	size := displayLimit * 2
+	if size < 100 {
+		return 100
+	}
+	if size > 1000 {
+		return 1000
+	}
+	return size
+}
+
+func (s *PointsStore) pointsLedgerBatch(ctx context.Context, userID string, limit, offset int) ([]PointsLedgerEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, discussion_id, delta, reason, balance_after, created_at
+		FROM points_ledger WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -172,12 +253,161 @@ func (s *PointsStore) History(ctx context.Context, userID string, limit int) ([]
 	out := make([]PointsLedgerEntry, 0, limit)
 	for rows.Next() {
 		var e PointsLedgerEntry
-		if err := rows.Scan(&e.ID, &e.Delta, &e.Reason, &e.BalanceAfter, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.DiscussionID, &e.Delta, &e.Reason, &e.BalanceAfter, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *PointsStore) resolvePlanningHistoryWindow(ctx context.Context, userID string, raw []PointsLedgerEntry, seen map[int64]bool) ([]PointsLedgerEntry, error) {
+	added := false
+	for _, entry := range raw {
+		if entry.Reason != pointsReasonPlanning || entry.DiscussionID == "" {
+			continue
+		}
+		reserve, ok, err := s.matchingPlanningReserve(ctx, userID, entry)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || seen[reserve.ID] {
+			continue
+		}
+		raw = append(raw, reserve)
+		seen[reserve.ID] = true
+		added = true
+	}
+	if added {
+		sort.Slice(raw, func(i, j int) bool { return raw[i].ID > raw[j].ID })
+	}
+	return raw, nil
+}
+
+func (s *PointsStore) matchingPlanningReserve(ctx context.Context, userID string, settlement PointsLedgerEntry) (PointsLedgerEntry, bool, error) {
+	reserve, ok, err := s.matchingPlanningReserveByDiscussion(ctx, userID, settlement, settlement.DiscussionID)
+	if err != nil || ok {
+		return reserve, ok, err
+	}
+	return s.matchingPlanningReserveByDiscussion(ctx, userID, settlement, "")
+}
+
+func (s *PointsStore) matchingPlanningReserveByDiscussion(ctx context.Context, userID string, settlement PointsLedgerEntry, reserveDiscussionID string) (PointsLedgerEntry, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT r.id, r.discussion_id, r.delta, r.reason, r.balance_after, r.created_at
+		FROM points_ledger r
+		WHERE r.user_id = ?
+			AND r.reason = ?
+			AND r.discussion_id = ?
+			AND r.id < ?
+			AND NOT EXISTS (
+				SELECT 1 FROM points_ledger p
+				WHERE p.user_id = r.user_id
+					AND p.reason = ?
+					AND p.discussion_id = r.discussion_id
+					AND p.id > r.id
+					AND p.id < ?
+			)
+		ORDER BY r.id DESC
+		LIMIT 1`,
+		userID, "reserve:"+pointsReasonPlanning, reserveDiscussionID, settlement.ID,
+		pointsReasonPlanning, settlement.ID)
+
+	var reserve PointsLedgerEntry
+	err := row.Scan(
+		&reserve.ID,
+		&reserve.DiscussionID,
+		&reserve.Delta,
+		&reserve.Reason,
+		&reserve.BalanceAfter,
+		&reserve.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PointsLedgerEntry{}, false, nil
+	}
+	if err != nil {
+		return PointsLedgerEntry{}, false, err
+	}
+	return reserve, true, nil
+}
+
+func projectPointsHistory(rawNewestFirst []PointsLedgerEntry) []PointsLedgerEntry {
+	type outputEntry struct {
+		entry  PointsLedgerEntry
+		hidden bool
+	}
+	out := make([]outputEntry, 0, len(rawNewestFirst))
+	pendingPlanningHolds := map[string][]int{}
+	var pendingPlanningHoldsWithoutDiscussion []int
+
+	for i := len(rawNewestFirst) - 1; i >= 0; i-- {
+		entry := rawNewestFirst[i]
+		out = append(out, outputEntry{entry: entry})
+		outIndex := len(out) - 1
+
+		switch entry.Reason {
+		case "reserve:" + pointsReasonPlanning:
+			if entry.DiscussionID != "" {
+				pendingPlanningHolds[entry.DiscussionID] = append(pendingPlanningHolds[entry.DiscussionID], outIndex)
+			} else {
+				pendingPlanningHoldsWithoutDiscussion = append(pendingPlanningHoldsWithoutDiscussion, outIndex)
+			}
+		case pointsReasonPlanning:
+			holdIndex, ok := popFirstHoldIndex(pendingPlanningHolds, entry.DiscussionID)
+			if !ok && len(pendingPlanningHoldsWithoutDiscussion) > 0 {
+				holdIndex = pendingPlanningHoldsWithoutDiscussion[0]
+				pendingPlanningHoldsWithoutDiscussion = pendingPlanningHoldsWithoutDiscussion[1:]
+				ok = true
+			}
+			if ok {
+				out[holdIndex].hidden = true
+				out[outIndex].entry.Delta += out[holdIndex].entry.Delta
+			}
+		}
+	}
+
+	projected := make([]PointsLedgerEntry, 0, len(out))
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].hidden {
+			continue
+		}
+		projected = append(projected, out[i].entry)
+	}
+	return projected
+}
+
+func paginatePointsHistory(entries []PointsLedgerEntry, limit, offset int) PointsHistoryPage {
+	if offset >= len(entries) {
+		return PointsHistoryPage{Entries: []PointsLedgerEntry{}}
+	}
+	end := offset + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	page := append([]PointsLedgerEntry(nil), entries[offset:end]...)
+	return PointsHistoryPage{
+		Entries: page,
+		HasMore: end < len(entries),
+	}
+}
+
+func popFirstHoldIndex(holds map[string][]int, discussionID string) (int, bool) {
+	if discussionID == "" {
+		return 0, false
+	}
+	queue := holds[discussionID]
+	if len(queue) == 0 {
+		return 0, false
+	}
+	idx := queue[0]
+	if len(queue) == 1 {
+		delete(holds, discussionID)
+	} else {
+		holds[discussionID] = queue[1:]
+	}
+	return idx, true
 }
 
 // EnsureSignupGrant credits the configured starter balance the first time it is
@@ -187,7 +417,7 @@ func (s *PointsStore) EnsureSignupGrant(ctx context.Context, userID string, gran
 	if s == nil || grant <= 0 {
 		return nil
 	}
-	_, err := s.credit(ctx, userID, grant, pointsReasonSignup, "signup:"+userID)
+	_, _, err := s.credit(ctx, userID, grant, pointsReasonSignup, "signup:"+userID)
 	return err
 }
 
@@ -195,58 +425,67 @@ func (s *PointsStore) EnsureSignupGrant(ctx context.Context, userID string, gran
 // rcEventID is non-empty the credit is idempotent: a second call with the same
 // id is a no-op (returns the unchanged balance).
 func (s *PointsStore) Credit(ctx context.Context, userID string, points int64, reason, rcEventID string) (int64, error) {
+	bal, _, err := s.CreditWithResult(ctx, userID, points, reason, rcEventID)
+	return bal, err
+}
+
+// CreditWithResult is Credit plus an applied flag. applied=false means the
+// event id had already been processed, so the returned balance is unchanged.
+func (s *PointsStore) CreditWithResult(ctx context.Context, userID string, points int64, reason, rcEventID string) (balance int64, applied bool, err error) {
 	return s.credit(ctx, userID, points, reason, rcEventID)
 }
 
-func (s *PointsStore) credit(ctx context.Context, userID string, points int64, reason, rcEventID string) (int64, error) {
+func (s *PointsStore) credit(ctx context.Context, userID string, points int64, reason, rcEventID string) (int64, bool, error) {
 	if s == nil {
-		return 0, errors.New("points store is not configured")
+		return 0, false, errors.New("points store is not configured")
 	}
 	if points <= 0 {
-		return s.Balance(ctx, userID)
+		bal, err := s.Balance(ctx, userID)
+		return bal, false, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer tx.Rollback()
 
 	if rcEventID != "" {
 		var n int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM points_ledger WHERE rc_event_id = ?`, rcEventID).Scan(&n); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if n > 0 {
 			// Already processed — return the current balance unchanged. Read via
 			// the open tx: a fresh DB query would deadlock since the pool holds a
 			// single connection (SetMaxOpenConns(1)) already taken by this tx.
-			return txBalance(ctx, tx, userID)
+			bal, err := txBalance(ctx, tx, userID)
+			return bal, false, err
 		}
 	}
 
 	bal, err := txBalance(ctx, tx, userID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	newBal := bal + points
 	now := time.Now().UnixMilli()
 	if err := upsertBalance(ctx, tx, userID, newBal, now); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	if err := insertLedger(ctx, tx, ledgerRow{
-		userID:      userID,
-		delta:       points,
-		reason:      reason,
-		rcEventID:   rcEventID,
+	if _, err := insertLedger(ctx, tx, ledgerRow{
+		userID:       userID,
+		delta:        points,
+		reason:       reason,
+		rcEventID:    rcEventID,
 		balanceAfter: newBal,
-		createdAt:   now,
+		createdAt:    now,
 	}); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return newBal, nil
+	return newBal, true, nil
 }
 
 // Reserve atomically holds `points` from the user's balance BEFORE chargeable
@@ -258,52 +497,58 @@ func (s *PointsStore) credit(ctx context.Context, userID string, points int64, r
 // (points_reserved) so the completion path, which runs in a separate goroutine,
 // can reconcile against it.
 func (s *PointsStore) Reserve(ctx context.Context, userID, discussionID string, points int64, kind string) (bool, int64, error) {
+	ok, bal, _, err := s.ReserveWithLedgerID(ctx, userID, discussionID, points, kind)
+	return ok, bal, err
+}
+
+func (s *PointsStore) ReserveWithLedgerID(ctx context.Context, userID, discussionID string, points int64, kind string) (bool, int64, int64, error) {
 	if s == nil {
-		return false, 0, errors.New("points store is not configured")
+		return false, 0, 0, errors.New("points store is not configured")
 	}
 	if points <= 0 {
 		bal, err := s.Balance(ctx, userID)
-		return true, bal, err
+		return true, bal, 0, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
 	defer tx.Rollback()
 
 	bal, err := txBalance(ctx, tx, userID)
 	if err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
 	if bal < points {
 		// Insufficient — make no change so no work is started uncharged.
-		return false, bal, nil
+		return false, bal, 0, nil
 	}
 	newBal := bal - points
 	now := time.Now().UnixMilli()
 	if err := upsertBalance(ctx, tx, userID, newBal, now); err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
-	if err := insertLedger(ctx, tx, ledgerRow{
+	reserveLedgerID, err := insertLedger(ctx, tx, ledgerRow{
 		userID:       userID,
 		discussionID: discussionID,
 		delta:        -points,
 		reason:       "reserve:" + kind,
 		balanceAfter: newBal,
 		createdAt:    now,
-	}); err != nil {
-		return false, 0, err
+	})
+	if err != nil {
+		return false, 0, 0, err
 	}
 	if kind == pointsReasonGeneration && discussionID != "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE native_discussions SET points_reserved = ?, updated_at = ? WHERE id = ?`,
 			points, now, discussionID); err != nil {
-			return false, 0, err
+			return false, 0, 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return false, 0, err
+		return false, 0, 0, err
 	}
-	return true, newBal, nil
+	return true, newBal, reserveLedgerID, nil
 }
 
 // settle reconciles a reservation against the actual cost within an open tx: it
@@ -325,7 +570,7 @@ func (s *PointsStore) settle(ctx context.Context, tx *sql.Tx, userID, discussion
 	if err := upsertBalance(ctx, tx, userID, newBal, now); err != nil {
 		return 0, err
 	}
-	if err := insertLedger(ctx, tx, ledgerRow{
+	if _, err := insertLedger(ctx, tx, ledgerRow{
 		userID:       userID,
 		discussionID: discussionID,
 		delta:        newBal - bal,
@@ -352,7 +597,7 @@ func (s *PointsStore) settle(ctx context.Context, tx *sql.Tx, userID, discussion
 // SettlePlanning reconciles a planning reservation synchronously (called once, in
 // the same request/goroutine that reserved). Pass actual=0 to fully refund the
 // reservation when the planning work failed.
-func (s *PointsStore) SettlePlanning(ctx context.Context, userID, discussionID string, reserved, actual int64, detail PointsUsageDetail) (int64, error) {
+func (s *PointsStore) SettlePlanning(ctx context.Context, userID, discussionID string, reserveLedgerID, reserved, actual int64, detail PointsUsageDetail) (int64, error) {
 	if s == nil {
 		return 0, errors.New("points store is not configured")
 	}
@@ -361,6 +606,14 @@ func (s *PointsStore) SettlePlanning(ctx context.Context, userID, discussionID s
 		return 0, err
 	}
 	defer tx.Rollback()
+	if reserveLedgerID > 0 && discussionID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE points_ledger
+			SET discussion_id = ?
+			WHERE id = ? AND user_id = ? AND reason = ?`,
+			discussionID, reserveLedgerID, userID, "reserve:"+pointsReasonPlanning); err != nil {
+			return 0, err
+		}
+	}
 	newBal, err := s.settle(ctx, tx, userID, discussionID, reserved, actual, pointsReasonPlanning, detail, time.Now().UnixMilli())
 	if err != nil {
 		return 0, err
@@ -453,7 +706,7 @@ func (s *PointsStore) Refund(ctx context.Context, userID, discussionID string, p
 	if err := upsertBalance(ctx, tx, userID, newBal, now); err != nil {
 		return err
 	}
-	if err := insertLedger(ctx, tx, ledgerRow{
+	if _, err := insertLedger(ctx, tx, ledgerRow{
 		userID:       userID,
 		discussionID: discussionID,
 		delta:        points,
@@ -482,8 +735,8 @@ type ledgerRow struct {
 	createdAt    int64
 }
 
-func insertLedger(ctx context.Context, tx *sql.Tx, row ledgerRow) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO points_ledger
+func insertLedger(ctx context.Context, tx *sql.Tx, row ledgerRow) (int64, error) {
+	result, err := tx.ExecContext(ctx, `INSERT INTO points_ledger
 		(user_id, discussion_id, delta, reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
 		 llm_cost_usd, tts_cost_usd, music_cost_usd, rc_event_id, balance_after, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -491,7 +744,10 @@ func insertLedger(ctx context.Context, tx *sql.Tx, row ledgerRow) error {
 		row.detail.PromptTokens, row.detail.CompletionTokens, row.detail.TotalTokens,
 		row.detail.LLMCostUSD, row.detail.TTSCostUSD, row.detail.MusicCostUSD,
 		row.rcEventID, row.balanceAfter, row.createdAt)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 
 func txBalance(ctx context.Context, tx *sql.Tx, userID string) (int64, error) {

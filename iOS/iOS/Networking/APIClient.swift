@@ -218,8 +218,11 @@ final class APIClient: Sendable {
 
     /// The user's points balance plus recent ledger entries (newest first) for
     /// the points-usage history view.
-    func pointsHistory(limit: Int = 200) async throws -> PointsHistoryResponse {
-        try await get("/api/points/history", query: [URLQueryItem(name: "limit", value: String(limit))])
+    func pointsHistory(limit: Int = 50, offset: Int = 0) async throws -> PointsHistoryResponse {
+        try await get("/api/points/history", query: [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ])
     }
 
     // MARK: - Jobs

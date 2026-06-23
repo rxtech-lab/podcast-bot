@@ -91,9 +91,8 @@ struct DownloadedPodcastFile: Identifiable, Equatable {
 @MainActor
 @Observable
 final class PlayerModel {
-    // The backend now emits zero-bias VTT for audio-only feeds (cues align with
-    // the untrimmed recording), so no manual lead is needed. A non-zero value
-    // here would make live captions appear early.
+    // Caption timing is encoded in the backend VTT; the client should not add
+    // a second manual lead. A positive value here would surface captions early.
     nonisolated static let liveCaptionLeadSeconds = 0.0
     nonisolated private static let lyricGroupMinRunes = 28
     nonisolated private static let lyricGroupMaxRunes = 96

@@ -96,8 +96,64 @@ Required vars (validated at startup — the process refuses to boot if any are m
 | `OUT_DIR` | — | output root for audio/video/transcripts (default `./out`) |
 | `SERIES_ROOT` | — | cross-run archive root for `series` episodes (default `OUT_DIR`) |
 | `APP_PASSWORD` | — | if set, gate the web UI + API behind this password (same as `--password`) |
+| `REVENUECAT_WEBHOOK_AUTH` | for points purchases | shared secret expected in `Authorization` on `POST /api/revenuecat/webhook`; empty disables purchase credits |
+| `POINTS_PRODUCT_GRANTS` | for points purchases | comma-separated RevenueCat product-id to point grants, e.g. `points_1000:1000,points_5000:5000` |
+| `POINTS_SIGNUP_GRANT` | — | optional starter balance granted once per signed-in user |
 
 Provider-specific TTS keys are only required when a `topic.md` selects that provider.
+
+### Points purchases with RevenueCat
+
+The iOS app uses RevenueCat for paywalls, but the server owns the points balance.
+After a successful purchase, the app polls `GET /api/points/balance`; points are
+credited only when RevenueCat posts a webhook to `POST /api/revenuecat/webhook`.
+
+Configure every top-up product explicitly. The server does not infer points from
+the App Store price:
+
+```bash
+REVENUECAT_WEBHOOK_AUTH=change-me
+POINTS_PRODUCT_GRANTS="points_1000:1000,points_5000:5000,points_10000:10000"
+```
+
+Use the exact RevenueCat `product_id` values. For example, if the products are
+`app.rxlab.debatebot.points1000`, `app.rxlab.debatebot.points5000`, and
+`app.rxlab.debatebot.points10000`, configure:
+
+```bash
+POINTS_PRODUCT_GRANTS="app.rxlab.debatebot.points1000:1000,app.rxlab.debatebot.points5000:5000,app.rxlab.debatebot.points10000:10000"
+```
+
+Built-in defaults exist for early testing (`consumable:1000`, `monthly:6667`,
+`yearly:0`), but production top-ups should be listed with their real product ids.
+If a purchase webhook arrives for an unknown product id, the server rejects it
+with `400 {"error":"invalid_product_id"}` instead of silently crediting `0`
+points.
+
+For iOS local development, copy `iOS/Config/Secrets.xcconfig.example` to
+`iOS/Config/Secrets.xcconfig` and set:
+
+```xcconfig
+REVENUECAT_API_KEY = your-revenuecat-public-sdk-key
+```
+
+To test points locally, RevenueCat must be able to reach your server. Either expose
+the local engine with a tunnel and use that public URL as the RevenueCat webhook
+URL, or simulate the webhook yourself:
+
+```bash
+curl -X POST http://localhost:8000/api/revenuecat/webhook \
+  -H 'Authorization: change-me' \
+  -H 'Content-Type: application/json' \
+  --data '{"event":{"id":"evt-local-1","type":"INITIAL_PURCHASE","app_user_id":"OAUTH_SUBJECT","product_id":"points_1000"}}'
+```
+
+`app_user_id` must be the signed-in OAuth subject without the `oauth:` prefix; the
+server credits `oauth:<app_user_id>`. The app should fetch the balance at least
+once before a purchase so the backend has registered that user locally; otherwise
+the webhook returns `400 {"error":"invalid_user_id"}`. Use a fresh webhook
+`event.id` for each manual test because RevenueCat events are idempotent; replaying
+the same id returns the unchanged balance with `credited:0` and `duplicate:true`.
 
 ## Running
 

@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 /// mockups.
 struct PodcastPlayerView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(PurchaseManager.self) private var purchases
     @Environment(\.scenePhase) private var scenePhase
     let discussion: Discussion
 
@@ -18,6 +19,7 @@ struct PodcastPlayerView: View {
     @State private var showingFullPlayer = false
     @State private var showingImporter = false
     @State private var showingPhotos = false
+    @State private var showingPointsHistory = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAttachment = false
     @State private var transcriptIsAtBottom = true
@@ -55,14 +57,30 @@ struct PodcastPlayerView: View {
                 }
                 .accessibilityLabel("Plan")
             }
-            if let model, model.showsPodcastActions {
+            if purchases.isConfigured || model?.showsPodcastActions == true {
                 ToolbarItem(placement: .topBarTrailing) {
-                    PodcastActionsMenu(model: model)
+                    if let model {
+                        PodcastActionsMenu(
+                            model: model,
+                            showsPoints: purchases.isConfigured,
+                            pointsMenuLabel: pointsMenuLabel,
+                            onShowPoints: { showingPointsHistory = true }
+                        )
+                    } else {
+                        PodcastLoadingMenu(
+                            showsPoints: purchases.isConfigured,
+                            pointsMenuLabel: pointsMenuLabel,
+                            onShowPoints: { showingPointsHistory = true }
+                        )
+                    }
                 }
             }
         }
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: discussion)
+        }
+        .sheet(isPresented: $showingPointsHistory) {
+            PointsHistoryView()
         }
         .sheet(isPresented: Binding(
             get: { model?.showsDownloadDialog == true },
@@ -93,6 +111,7 @@ struct PodcastPlayerView: View {
                 m.start()
                 model = m
             }
+            await purchases.refreshBalance()
         }
         .onDisappear {
             // Presenting the full-screen cover disappears this view; don't tear
@@ -106,6 +125,13 @@ struct PodcastPlayerView: View {
             // immediately to recover anything that streamed in the background.
             if phase == .active { model?.foregroundRefresh() }
         }
+    }
+
+    /// Balance label for the podcast options menu, matching the discussion page.
+    private var pointsMenuLabel: String {
+        guard let balance = purchases.pointsBalance else { return "Points" }
+        let pointLabel = balance == 1 ? "Point" : "Points"
+        return "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))"
     }
 
     private func transcript(_ model: PlayerModel) -> some View {
@@ -306,9 +332,22 @@ private struct PodcastTranscriptLoadingView: View {
 
 struct PodcastActionsMenu: View {
     @Bindable var model: PlayerModel
+    let showsPoints: Bool
+    let pointsMenuLabel: String
+    let onShowPoints: () -> Void
 
     var body: some View {
         Menu {
+            if showsPoints {
+                Button {
+                    onShowPoints()
+                } label: {
+                    Label(pointsMenuLabel, systemImage: "sparkles")
+                }
+            }
+            if showsPoints && model.showsPodcastActions {
+                Divider()
+            }
             if model.canDownloadPodcast {
                 Button {
                     model.downloadPodcast()
@@ -325,6 +364,27 @@ struct PodcastActionsMenu: View {
                           systemImage: model.isForceStopping ? "hourglass" : "stop.fill")
                 }
                 .disabled(!model.canForceStop)
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("Podcast actions")
+    }
+}
+
+struct PodcastLoadingMenu: View {
+    let showsPoints: Bool
+    let pointsMenuLabel: String
+    let onShowPoints: () -> Void
+
+    var body: some View {
+        Menu {
+            if showsPoints {
+                Button {
+                    onShowPoints()
+                } label: {
+                    Label(pointsMenuLabel, systemImage: "sparkles")
+                }
             }
         } label: {
             Image(systemName: "ellipsis.circle")

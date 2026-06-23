@@ -61,27 +61,24 @@ struct PlanDetailView: View {
         .sheet(isPresented: $showingPointsHistory) { PointsHistoryView() }
         .task { await purchases.refreshBalance() }
         .toolbar {
-            if purchases.isConfigured {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { showingPointsHistory = true } label: {
-                        Label(pointsBalanceLabel, systemImage: "sparkles")
-                            .font(.subheadline.weight(.semibold))
-                            .monospacedDigit()
-                    }
-                    .accessibilityLabel("Remaining points: \(pointsBalanceLabel). Tap to view usage history.")
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if purchases.isConfigured {
+                        Button { showingPointsHistory = true } label: {
+                            Label(pointsMenuLabel, systemImage: "sparkles")
+                        }
+                        Divider()
+                    }
                     Picker("Podcast language", selection: $selectedLanguage) {
                         ForEach(DiscussionLanguage.supported) { language in
                             Text(language.label).tag(language.code)
                         }
                     }
+                    .disabled(isGenerating)
                 } label: {
-                    Label("Podcast language", systemImage: "globe")
+                    Label("Plan options", systemImage: "ellipsis.circle")
                 }
-                .disabled(isGenerating)
+                .accessibilityLabel("Plan options. \(planOptionsAccessibilityLabel)")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -487,11 +484,20 @@ struct PlanDetailView: View {
         .disabled(isGenerating)
     }
 
-    /// Compact remaining-points label for the toolbar chip (falls back to
-    /// "Points" until the balance has loaded).
-    private var pointsBalanceLabel: String {
+    /// Balance label for the plan options menu, e.g.
+    /// "Points (Balance 1,200 Points)".
+    private var pointsMenuLabel: String {
         guard let balance = purchases.pointsBalance else { return "Points" }
-        return UsageSummary.formatInt(balance)
+        let pointLabel = balance == 1 ? "Point" : "Points"
+        return "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))"
+    }
+
+    private var planOptionsAccessibilityLabel: String {
+        var parts = ["Podcast language: \(DiscussionLanguage.label(for: selectedLanguage))."]
+        if purchases.isConfigured {
+            parts.insert("Remaining points: \(pointsMenuLabel).", at: 0)
+        }
+        return parts.joined(separator: " ")
     }
 
     /// Allow sending when there's an instruction (and nothing is in flight).
