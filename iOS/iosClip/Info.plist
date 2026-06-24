@@ -23,6 +23,11 @@
 	<string>$(AppAuthRedirectURI)</string>
 	<key>AppAuthScopes</key>
 	<string>$(AppAuthScopes)</string>
+	<!-- Voice messages: the shared player surface can request mic/speech access. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PanelFM uses the microphone to record voice messages you send into a discussion.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PanelFM transcribes your voice messages on this device so the panel can read them as text.</string>
 	<key>NSAppClip</key>
 	<dict>
 		<key>NSAppClipRequestEphemeralUserNotification</key>

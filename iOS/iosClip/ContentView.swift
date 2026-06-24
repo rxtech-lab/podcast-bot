@@ -66,6 +66,7 @@ struct ClipRootView: View {
                     accentColor: clipAccent,
                     secondaryColor: .cyan
                 ),
+                style: .native,
                 onAuthSuccess: {
                     clipLog.info("App Clip sign-in succeeded")
                     Task { await restoreAuth() }
@@ -86,7 +87,8 @@ struct ClipRootView: View {
         case let .joined(discussion):
             NavigationStack {
                 PodcastPlayerView(discussion: discussion,
-                                  shareToken: router.resolvedToken)
+                                  shareToken: router.resolvedToken,
+                                  onSignOut: signOut)
             }
         case let .failed(message):
             ClipStatusView(message: message)
@@ -102,12 +104,20 @@ struct ClipRootView: View {
     private func restoreAuth() async {
         clipLog.info("App Clip auth restore started")
         await auth.restore()
-        clipLog.info("App Clip auth restore finished: \(String(describing: self.auth.authState), privacy: .public)")
+        clipLog.info("App Clip auth restore finished: \(String(describing: auth.authState), privacy: .public)")
     }
 
     private func joinIfReady() async {
         guard auth.authState == .authenticated else { return }
         await router.joinIfNeeded(auth: auth)
+    }
+
+    private func signOut() {
+        router.resetJoin()
+        Task {
+            await purchases.signOut()
+            await auth.signOut()
+        }
     }
 }
 
@@ -169,6 +179,10 @@ final class ClipShareRouter {
 
     var canAttemptJoin: Bool {
         state.canAttemptJoin
+    }
+
+    func resetJoin() {
+        joinState = .idle
     }
 
     func handle(url: URL) {
@@ -279,7 +293,7 @@ private struct ClipShareAPI {
             throw ClipShareError.message("The server did not return a valid response.")
         }
         clipLog.info("App Clip HTTP status \(http.statusCode, privacy: .public) for \(http.url?.path ?? "", privacy: .public)")
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             let body = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             switch http.statusCode {
             case 401:

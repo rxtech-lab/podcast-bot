@@ -163,6 +163,9 @@
     "12 hours" : {
       "comment" : "Share-link duration option"
     },
+    "Account" : {
+
+    },
     "Active links" : {
 
     },
@@ -514,6 +517,7 @@
       }
     },
     "Close" : {
+      "comment" : "Dismiss the voice recorder after an error",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -534,6 +538,12 @@
           }
         }
       }
+    },
+    "Copied User ID" : {
+
+    },
+    "Copy User ID" : {
+
     },
     "Could not create %@" : {
 
@@ -1697,6 +1707,9 @@
     "Market" : {
 
     },
+    "Microphone and speech recognition access are needed to record a voice message." : {
+      "comment" : "Shown when mic/speech permission is denied"
+    },
     "Minimize" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2534,6 +2547,15 @@
         }
       }
     },
+    "Points used" : {
+
+    },
+    "Points used: %@" : {
+
+    },
+    "Preparing language…" : {
+      "comment" : "Shown while the on-device transcription model loads"
+    },
     "Preparing live audio..." : {
       "comment" : "Status while waiting for the live audio stream to become ready",
       "localizations" : {
@@ -2685,6 +2707,9 @@
           }
         }
       }
+    },
+    "Record Audio" : {
+
     },
     "Refresh" : {
       "localizations" : {
@@ -2982,6 +3007,9 @@
         }
       }
     },
+    "Settings" : {
+
+    },
     "Share" : {
 
     },
@@ -3041,6 +3069,9 @@
           }
         }
       }
+    },
+    "Signed in" : {
+
     },
     "Source" : {
       "localizations" : {
@@ -3164,6 +3195,9 @@
         }
       }
     },
+    "Subscription" : {
+
+    },
     "Syncing your library" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3185,6 +3219,9 @@
           }
         }
       }
+    },
+    "Tap to send" : {
+      "comment" : "Hint under the stop button in the voice recorder"
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {
@@ -3307,14 +3344,17 @@
     "The selected model is used for this speaker when the plan is generated." : {
 
     },
-    "This %@" : {
-
-    },
     "This creator profile is not available." : {
 
     },
     "This discussion is full. Ask the host to remove someone or try again later." : {
       "comment" : "Error shown when a discussion has reached its participant limit"
+    },
+    "This language isn't available for on-device transcription on this device." : {
+      "comment" : "Shown when the chosen voice-message language has no on-device model"
+    },
+    "This language isn't available on-device — your audio will be transcribed after you send it." : {
+      "comment" : "Shown while recording when on-device transcription isn't available and the server will transcribe"
     },
     "This plan has no speakers yet." : {
 
@@ -3491,6 +3531,9 @@
     "Type" : {
 
     },
+    "Unknown" : {
+      "comment" : "Fallback user id in settings"
+    },
     "Update" : {
 
     },
@@ -3567,6 +3610,7 @@
 
     },
     "Used %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3587,6 +3631,15 @@
           }
         }
       }
+    },
+    "User" : {
+      "comment" : "Fallback account display name"
+    },
+    "USER" : {
+      "comment" : "Badge marking a transcript line as written by a human participant, not an AI panelist"
+    },
+    "User ID" : {
+
     },
     "View creator" : {
 

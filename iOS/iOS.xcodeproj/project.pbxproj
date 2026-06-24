@@ -16,6 +16,8 @@
 		DF6ADDF42FEB03A30045484F /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF32FEB03A30045484F /* RxAuthSwift */; };
 		DF6ADDF62FEB03A30045484F /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF52FEB03A30045484F /* RxAuthSwiftUI */; };
 		DF6ADDF92FEB03C60045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF82FEB03C60045484F /* RevenueCatUI */; };
+		DF6AE3552FEB92030045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF42A6552FE9BC8900001207 /* icon.icon */; };
+		DF6AE3562FEB92030045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF42A6552FE9BC8900001207 /* icon.icon */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -121,10 +123,13 @@
 				Features/Plan/PlanSnapshotView.swift,
 				Features/Plan/SourcesView.swift,
 				Features/Plan/SpeakerModelsSheet.swift,
+				Features/Player/AudioMessagePlayer.swift,
 				Features/Player/CoverPalette.swift,
 				Features/Player/FullScreenPlayerView.swift,
 				Features/Player/PlayerModel.swift,
 				Features/Player/PodcastPlayerView.swift,
+				Features/Player/VoiceMessageRecorder.swift,
+				Features/Player/VoiceRecorderSheet.swift,
 				Features/Share/ShareSheet.swift,
 				Networking/AcceptLanguage.swift,
 				Networking/APIClient.swift,
@@ -508,6 +513,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF6AE3552FEB92030045484F /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -529,6 +535,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF6AE3562FEB92030045484F /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -742,7 +749,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = DFF526A12FE852D0007BEF2A /* Debug.xcconfig */;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -791,7 +798,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = DFF526A22FE852D0007BEF2A /* Release.xcconfig */;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -942,7 +949,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = DFF526A12FE852D0007BEF2A /* Debug.xcconfig */;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = iosClip/iosClip.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -980,7 +987,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = DFF526A22FE852D0007BEF2A /* Release.xcconfig */;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = iosClip/iosClip.entitlements;
 				CODE_SIGN_STYLE = Automatic;

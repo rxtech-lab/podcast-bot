@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,6 +217,47 @@ func TestDiscussionStoreListOrderingAndPagination(t *testing.T) {
 	}
 	if page4 == nil || len(page4) != 0 {
 		t.Fatalf("page4 = %+v, want empty slice", page4)
+	}
+}
+
+func TestDiscussionStoreListJoinsVideoJobsForStatus(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "shared.db")
+	jobs, err := NewJobRegistry(dbPath, "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	store, err := NewDiscussionStore(dbPath, "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script: &config.DebateTopic{Title: "AI Safety", Type: config.ContentTypeDiscussion, Language: "en-US"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-ready"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	jobs.Add("job-ready")
+	jobs.Update("job-ready", func(j *Job) {
+		j.Status = JobDone
+		j.HasAudio = true
+	})
+
+	items, err := store.List(ctx, owner, 10, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("List len = %d, want 1", len(items))
+	}
+	if items[0].Status != DiscussionReady {
+		t.Fatalf("status = %q, want %q", items[0].Status, DiscussionReady)
 	}
 }
 
@@ -934,5 +977,226 @@ func TestDiscussionStoreEditTurnPagination(t *testing.T) {
 	}
 	if len(page3) != 2 || page3[0].Role != "plan" || page3[1].Text != "edit-0" {
 		t.Fatalf("page3 = %+v, want initial plan plus oldest edit", page3)
+	}
+}
+
+func TestDiscussionStoreVoiceMessageLineRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:owner"
+	d, err := store.CreatePlaceholder(ctx, owner, "voice round trip", "en-US")
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+
+	const (
+		key = "uploads/oauth-owner/abc123.m4a"
+		url = "https://storage.example/" + key + "?X-Amz-Expires=900"
+	)
+	line := DiscussionLine{
+		Speaker:  "Listener",
+		Role:     "user",
+		Text:     "what about the counterargument?",
+		IsUser:   true,
+		AudioURL: url,
+		AudioKey: key,
+	}
+	if err := store.AppendLine(ctx, owner, d.ID, line); err != nil {
+		t.Fatalf("AppendLine: %v", err)
+	}
+
+	lines, err := store.Lines(ctx, owner, d.ID)
+	if err != nil {
+		t.Fatalf("Lines: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("lines = %+v, want exactly one", lines)
+	}
+	got := lines[0]
+	if got.AudioURL != url {
+		t.Fatalf("AudioURL = %q, want %q", got.AudioURL, url)
+	}
+	if got.AudioKey != key {
+		t.Fatalf("AudioKey = %q, want %q", got.AudioKey, key)
+	}
+	if got.Text != line.Text {
+		t.Fatalf("Text = %q, want %q", got.Text, line.Text)
+	}
+
+	// A second voice note with the SAME transcript but a distinct upload key must
+	// coexist — it is a different recording, not a duplicate. The legacy text-only
+	// uniqueness would have dropped it (and lost its audio).
+	const key2 = "uploads/oauth-owner/def456.m4a"
+	if err := store.AppendLine(ctx, owner, d.ID, DiscussionLine{
+		Speaker: "Listener", Role: "user", Text: line.Text, IsUser: true,
+		AudioURL: "https://storage.example/" + key2, AudioKey: key2,
+	}); err != nil {
+		t.Fatalf("AppendLine second voice: %v", err)
+	}
+	// A plain text line with the same transcript (no audio) must also coexist.
+	if err := store.AppendLine(ctx, owner, d.ID, DiscussionLine{
+		Speaker: "Listener", Role: "user", Text: line.Text, IsUser: true,
+	}); err != nil {
+		t.Fatalf("AppendLine text dup: %v", err)
+	}
+	lines, err = store.Lines(ctx, owner, d.ID)
+	if err != nil {
+		t.Fatalf("Lines after dups: %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("lines after dups = %d, want 3 (two voice + one text)", len(lines))
+	}
+
+	// Re-appending the exact same voice note (identical key) is still idempotent.
+	if err := store.AppendLine(ctx, owner, d.ID, line); err != nil {
+		t.Fatalf("AppendLine idempotent re-send: %v", err)
+	}
+	if again, err := store.Lines(ctx, owner, d.ID); err != nil {
+		t.Fatalf("Lines after re-send: %v", err)
+	} else if len(again) != 3 {
+		t.Fatalf("lines after identical re-send = %d, want 3", len(again))
+	}
+}
+
+func TestDiscussionStoreLineUniquenessMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Stand up a legacy-shaped lines table: text-only uniqueness, no audio columns.
+	raw, err := sql.Open("sqlite3", sqliteDSN(path))
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `CREATE TABLE native_discussion_lines (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		discussion_id TEXT NOT NULL,
+		speaker TEXT NOT NULL,
+		role TEXT NOT NULL,
+		side TEXT NOT NULL DEFAULT '',
+		text TEXT NOT NULL,
+		start_ms INTEGER NOT NULL DEFAULT 0,
+		is_user INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		UNIQUE(discussion_id, speaker, role, text, is_user),
+		FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+	)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `INSERT INTO native_discussion_lines
+		(discussion_id, speaker, role, side, text, start_ms, is_user, created_at)
+		VALUES ('d1','Host','host','','welcome',0,0,1)`); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	// Opening the store runs ensureSchema → adds audio columns → migrates uniqueness.
+	store, err := NewDiscussionStore(path, "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	var ddl string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='native_discussion_lines'`).Scan(&ddl); err != nil {
+		t.Fatalf("read ddl: %v", err)
+	}
+	if !strings.Contains(ddl, "is_user, audio_key") {
+		t.Fatalf("post-migration ddl missing audio_key uniqueness:\n%s", ddl)
+	}
+
+	// The pre-existing row survived the table rebuild.
+	var n int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM native_discussion_lines WHERE text='welcome'`).Scan(&n); err != nil {
+		t.Fatalf("count legacy: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("legacy row count = %d, want 1", n)
+	}
+
+	// Re-running ensureSchema is an idempotent no-op (no second rebuild).
+	if err := store.ensureSchema(ctx); err != nil {
+		t.Fatalf("re-run ensureSchema: %v", err)
+	}
+}
+
+// TestDiscussionLineSenderAndOrdering covers two guarantees the player relies on:
+// (1) sender_user_id is server-owned — stamped from the authenticated principal on
+// user lines and cleared on agent lines, never trusted from the caller's payload;
+// and (2) lines read back in true chronological order by created_at, so a user
+// message sent between two agent turns interleaves between them even though the
+// agent lines are (re-)inserted by ReplaceTranscript after the user line.
+func TestDiscussionLineSenderAndOrdering(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:owner-1"
+	created, err := store.Create(ctx, owner, "topic", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Ordering Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	base := time.Now()
+	// Client tries to spoof a different sender id; the store must overwrite it with
+	// the authenticated owner. The user line is sent "now" (created_at ~ base).
+	if err := store.AppendLine(ctx, owner, created.ID, DiscussionLine{
+		Speaker:      "Me",
+		Role:         "user",
+		Text:         "second",
+		IsUser:       true,
+		SenderUserID: "oauth:attacker",
+	}); err != nil {
+		t.Fatalf("AppendLine: %v", err)
+	}
+	// Agent turns straddle the user line in wall-clock time. They are inserted after
+	// the user line, so id-order would clump them after it; created_at-order must not.
+	if err := store.ReplaceTranscript(ctx, created.ID, []agent.TranscriptLine{
+		{Speaker: "Host", Role: agent.RoleHost, Text: "first", At: base.Add(-2 * time.Second)},
+		{Speaker: "Host", Role: agent.RoleHost, Text: "third", At: base.Add(2 * time.Second)},
+	}); err != nil {
+		t.Fatalf("ReplaceTranscript: %v", err)
+	}
+
+	got, err := store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.Lines) != 3 {
+		t.Fatalf("line count = %d, want 3: %+v", len(got.Lines), got.Lines)
+	}
+	wantOrder := []string{"first", "second", "third"}
+	for i, w := range wantOrder {
+		if got.Lines[i].Text != w {
+			t.Fatalf("line[%d].Text = %q, want %q (full order %+v)", i, got.Lines[i].Text, w, got.Lines)
+		}
+	}
+	// User line carries the authenticated owner id, not the spoofed value.
+	if userLine := got.Lines[1]; userLine.SenderUserID != owner {
+		t.Fatalf("user line SenderUserID = %q, want %q", userLine.SenderUserID, owner)
+	}
+	// Agent lines never carry a sender id.
+	for _, idx := range []int{0, 2} {
+		if got.Lines[idx].SenderUserID != "" {
+			t.Fatalf("agent line[%d] SenderUserID = %q, want empty", idx, got.Lines[idx].SenderUserID)
+		}
 	}
 }

@@ -9,6 +9,9 @@ struct PointsHistoryView: View {
     @Environment(PurchaseManager.self) private var purchases
     @Environment(\.dismiss) private var dismiss
 
+    var embedsInNavigationStack = true
+    var showsCloseButton = true
+
     @State private var balance: Int?
     @State private var entries: [PointsLedgerEntry] = []
     @State private var isLoading = false
@@ -25,34 +28,44 @@ struct PointsHistoryView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                content
+        if embedsInNavigationStack {
+            NavigationStack {
+                pointsScreen
             }
-            .navigationTitle("Points")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+        } else {
+            pointsScreen
+        }
+    }
+
+    private var pointsScreen: some View {
+        ZStack {
+            Theme.background.ignoresSafeArea()
+            content
+        }
+        .navigationTitle("Points")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if showsCloseButton {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }
                         .accessibilityLabel("Close")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await load() } } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(isLoading || isLoadingMore)
-                    .accessibilityLabel("Reload history")
-                }
             }
-            .sheet(isPresented: $showingPaywall) { PaywallScreen() }
-            .task {
-                if !hasLoadedInitialPage {
-                    await load()
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { Task { await load() } } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
+                .disabled(isLoading || isLoadingMore)
+                .accessibilityLabel("Reload history")
             }
-            .refreshable { await load() }
         }
+        .sheet(isPresented: $showingPaywall) { PaywallScreen() }
+        .task {
+            if !hasLoadedInitialPage {
+                await load()
+            }
+        }
+        .refreshable { await load() }
     }
 
     @ViewBuilder

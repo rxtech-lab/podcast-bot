@@ -34,7 +34,14 @@ struct PaywallScreen: View {
 
 /// The RevenueCat Customer Center for managing / restoring subscriptions.
 struct CustomerCenterScreen: View {
+    var showsCloseButton = true
+
     var body: some View {
-        CustomerCenterView()
+        CustomerCenterView(
+            navigationOptions: CustomerCenterNavigationOptions(
+                usesExistingNavigation: !showsCloseButton,
+                shouldShowCloseButton: showsCloseButton
+            )
+        )
     }
 }

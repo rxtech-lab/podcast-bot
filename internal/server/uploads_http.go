@@ -188,7 +188,9 @@ func (s *Server) finishUploadedObject(ctx context.Context, key, filename, mimeTy
 	if err != nil || fetchURL == "" {
 		return uploadResponse{}, errUpload("presign upload")
 	}
-	if isImageMIME(mimeType) {
+	if isImageMIME(mimeType) || isAudioMIME(mimeType) {
+		// Images are sent to the model directly; audio (voice messages) is only
+		// ever replayed by humans — neither needs markitdown text extraction.
 		return uploadResponse{Filename: filename, Key: key, URL: fetchURL, MIMEType: mimeType}, nil
 	}
 	if s.d.Env == nil || strings.TrimSpace(s.d.Env.MarkitdownServerURL) == "" {
@@ -215,6 +217,21 @@ func (s *Server) ownsUploadKey(userID, key string) bool {
 	return strings.HasPrefix(key, prefix)
 }
 
+// validatedAudioKey returns a voice-message storage key only if it is a real
+// upload owned by the authenticated sender; otherwise it returns "". This stops a
+// participant from persisting an arbitrary bucket key (or a forged URL) that the
+// server would later re-sign and hand out as a playback URL.
+func (s *Server) validatedAudioKey(userID, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return ""
+	}
+	if !s.ownsUploadKey(userID, key) {
+		return ""
+	}
+	return key
+}
+
 func normalizedUploadMIME(mimeType string) string {
 	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
 	if mimeType == "" {
@@ -225,6 +242,10 @@ func normalizedUploadMIME(mimeType string) string {
 
 func isImageMIME(mimeType string) bool {
 	return strings.HasPrefix(normalizedUploadMIME(mimeType), "image/")
+}
+
+func isAudioMIME(mimeType string) bool {
+	return strings.HasPrefix(normalizedUploadMIME(mimeType), "audio/")
 }
 
 // safeKeySegment makes an arbitrary id safe for use as one S3 key path segment.

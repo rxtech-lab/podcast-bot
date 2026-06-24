@@ -1,4 +1,6 @@
+import RxAuthSwift
 import SwiftUI
+import UIKit
 
 /// Home: the user's server-owned discussions, newest first.
 struct LibraryView: View {
@@ -7,8 +9,8 @@ struct LibraryView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @State private var discussions: [Discussion] = []
     @State private var showingNew = false
-    @State private var showingCustomerCenter = false
     @State private var showingPointsHistory = false
+    @State private var showingSettings = false
     @State private var showingWhatsNew = false
     @State private var showingMarketplace = false
     @State private var path: [Discussion] = []
@@ -53,11 +55,16 @@ struct LibraryView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .sheet(isPresented: $showingCustomerCenter) {
-            CustomerCenterScreen()
-        }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
+        }
+        .fullScreenCover(isPresented: $showingSettings) {
+            LibrarySettingsView(
+                userName: auth.currentUser?.name,
+                userID: auth.currentUser?.id,
+                canManageSubscription: purchases.isConfigured,
+                pointsLabel: purchases.isConfigured ? pointsMenuLabel : nil
+            )
         }
         .sheet(isPresented: $showingWhatsNew) {
             WhatsNewSheet(features: WhatsNewFeature.all,
@@ -183,9 +190,9 @@ struct LibraryView: View {
             Menu {
                 if purchases.isConfigured {
                     Button(pointsMenuLabel) { showingPointsHistory = true }
-                    Button("Manage Subscription") { showingCustomerCenter = true }
-                    Divider()
                 }
+                Button("Settings") { showingSettings = true }
+                Divider()
                 Button("What's New") { showingWhatsNew = true }
                 Button("Refresh") {
                     Task {
@@ -523,6 +530,142 @@ struct LibraryView: View {
             }
         case .generating, .ready:
             PodcastPlayerView(discussion: discussion)
+        }
+    }
+}
+
+private struct LibrarySettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    let userName: String?
+    let userID: String?
+    let canManageSubscription: Bool
+    let pointsLabel: String?
+    @State private var didCopyUserID = false
+
+    private var displayName: String {
+        let trimmed = userName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? String(localized: "User", comment: "Fallback account display name") : trimmed
+    }
+
+    private var displayUserID: String {
+        let trimmed = userID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? String(localized: "Unknown", comment: "Fallback user id in settings") : trimmed
+    }
+
+    private var avatarInitial: String {
+        String(displayName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)).uppercased()
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    accountHeader
+                }
+
+                Section("Account") {
+                    userIDRow
+                }
+
+                if canManageSubscription {
+                    Section("Subscription") {
+                        if let pointsLabel {
+                            NavigationLink {
+                                PointsHistoryView(embedsInNavigationStack: false, showsCloseButton: false)
+                            } label: {
+                                SettingsRowLabel(title: pointsLabel, systemImage: "sparkles")
+                            }
+                        }
+
+                        NavigationLink {
+                            CustomerCenterScreen(showsCloseButton: false)
+                                .navigationTitle("Manage Subscription")
+                                .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            SettingsRowLabel(title: "Manage Subscription", systemImage: "creditcard")
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(Theme.background.ignoresSafeArea())
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var accountHeader: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Theme.accent.opacity(0.16))
+                Text(avatarInitial)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            .frame(width: 64, height: 64)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(displayName)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                Text("Signed in")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var userIDRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("User ID")
+                    .font(.body)
+                Text(displayUserID)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                UIPasteboard.general.string = displayUserID
+                didCopyUserID = true
+            } label: {
+                Image(systemName: didCopyUserID ? "checkmark" : "doc.on.doc")
+                    .font(.body.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(didCopyUserID ? "Copied User ID" : "Copy User ID")
+        }
+    }
+}
+
+private struct SettingsRowLabel: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 26, height: 26)
+            Text(title)
+                .foregroundStyle(.primary)
+            Spacer()
         }
     }
 }

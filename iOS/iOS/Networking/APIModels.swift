@@ -175,6 +175,21 @@ struct UploadCompleteRequest: Codable, Sendable {
     }
 }
 
+/// POST /api/transcribe request body — asks the server to transcribe an
+/// already-uploaded voice message (gateway whisper) when the device couldn't do
+/// it on-device.
+struct TranscribeRequest: Codable, Sendable {
+    var audioKey: String
+
+    enum CodingKeys: String, CodingKey {
+        case audioKey = "audio_key"
+    }
+}
+
+struct TranscribeResponse: Codable, Sendable {
+    var text: String
+}
+
 /// POST /api/discussions/{id}/sources request body — links the user added in
 /// the sources sheet for the agent to research and fold into the plan.
 struct AddSourcesRequest: Codable, Sendable {
@@ -300,12 +315,19 @@ struct JobMessageRequest: Codable, Sendable {
     var discussionID: String
     /// Set when a shared participant comments on a private discussion's live job.
     var shareToken: String?
+    /// Playback URL and durable storage key for a voice message. The orchestrator
+    /// receives only `text` (the on-device transcript); audio is persisted so
+    /// other participants can replay it.
+    var audioURL: String?
+    var audioKey: String?
 
     enum CodingKeys: String, CodingKey {
         case text
         case username
         case discussionID = "discussion_id"
         case shareToken = "share_token"
+        case audioURL = "audio_url"
+        case audioKey = "audio_key"
     }
 }
 
@@ -445,6 +467,10 @@ struct DiscussionLineRequest: Codable, Sendable {
     var text: String
     var startMS: Int?
     var isUser: Bool
+    /// Playback URL and durable storage key for a voice message. The server keeps
+    /// the key so it can re-sign the URL on later reads; the agent sees only text.
+    var audioURL: String? = nil
+    var audioKey: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case speaker
@@ -453,5 +479,7 @@ struct DiscussionLineRequest: Codable, Sendable {
         case text
         case startMS = "start_ms"
         case isUser = "is_user"
+        case audioURL = "audio_url"
+        case audioKey = "audio_key"
     }
 }

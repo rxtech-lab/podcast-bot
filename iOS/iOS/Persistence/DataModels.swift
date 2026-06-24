@@ -36,6 +36,12 @@ struct DiscussionCover: Codable, Hashable, Sendable {
         return !url.isEmpty || !key.isEmpty
     }
 
+    var renderableImageURL: URL? {
+        guard let urlString = imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !urlString.isEmpty else { return nil }
+        return URL(string: urlString)
+    }
+
     var hasGradient: Bool {
         let start = gradientStart?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let end = gradientEnd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -189,6 +195,21 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
 
     var isPublic: Bool { visibility == .public }
 
+    func preservingRenderableCover(from existing: Discussion) -> Discussion {
+        guard id == existing.id,
+              cover?.renderableImageURL == nil,
+              let existingCover = existing.cover,
+              existingCover.renderableImageURL != nil else { return self }
+        var copy = self
+        if var cover = copy.cover {
+            cover.imageURL = existingCover.imageURL
+            copy.cover = cover
+        } else {
+            copy.cover = existingCover
+        }
+        return copy
+    }
+
     var canSendMessages: Bool {
         status == .generating && (allowSendingMessage ?? true)
     }
@@ -275,6 +296,13 @@ struct DiscussionLineDTO: Codable, Hashable, Sendable {
     var text: String
     var startMS: Int?
     var isUser: Bool
+    /// Server-owned id of the human who sent this line, used to tell *my* messages
+    /// apart from other participants' (both arrive with `isUser == true`). Nil for
+    /// agent lines and for legacy rows persisted before the column existed.
+    var senderUserID: String? = nil
+    /// Ephemeral playback URL for a voice message, re-signed by the server on each
+    /// read. Nil for normal text lines.
+    var audioURL: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case speaker
@@ -283,5 +311,7 @@ struct DiscussionLineDTO: Codable, Hashable, Sendable {
         case text
         case startMS = "start_ms"
         case isUser = "is_user"
+        case senderUserID = "sender_user_id"
+        case audioURL = "audio_url"
     }
 }

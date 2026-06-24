@@ -54,6 +54,12 @@
 		</dict>
 	</array>
 
+	<!-- Voice messages: record from the mic and transcribe on-device. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PanelFM uses the microphone to record voice messages you send into a discussion.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PanelFM transcribes your voice messages on this device so the panel can read them as text.</string>
+
 	<!-- Keep audio playing when backgrounded / screen locked. -->
 	<key>UIBackgroundModes</key>
 	<array>

@@ -41,8 +41,10 @@ type marketCoverGenerateResponse struct {
 }
 
 func (s *Server) handleMarketList(w http.ResponseWriter, r *http.Request) {
+	timer := newStationTimer()
 	user := s.requestUser(r)
 	s.rememberCreatorProfile(r.Context(), user)
+	qStart := time.Now()
 	items, err := s.d.Discussions.ListPublic(
 		r.Context(),
 		user.ID,
@@ -50,17 +52,21 @@ func (s *Server) handleMarketList(w http.ResponseWriter, r *http.Request) {
 		atoiDefault(r.URL.Query().Get("limit"), 0),
 		atoiDefault(r.URL.Query().Get("offset"), 0),
 	)
+	timer.mark("query", qStart)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.prepareMarketDiscussions(r, items)
+	s.prepareMarketDiscussions(r, items, timer)
 	writeJSON(w, items)
+	s.logStationTiming("market.list", len(items), timer)
 }
 
 func (s *Server) handleMarketLikedList(w http.ResponseWriter, r *http.Request) {
+	timer := newStationTimer()
 	user := s.requestUser(r)
 	s.rememberCreatorProfile(r.Context(), user)
+	qStart := time.Now()
 	items, err := s.d.Discussions.ListLiked(
 		r.Context(),
 		user.ID,
@@ -68,12 +74,14 @@ func (s *Server) handleMarketLikedList(w http.ResponseWriter, r *http.Request) {
 		atoiDefault(r.URL.Query().Get("limit"), 0),
 		atoiDefault(r.URL.Query().Get("offset"), 0),
 	)
+	timer.mark("query", qStart)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.prepareMarketDiscussions(r, items)
+	s.prepareMarketDiscussions(r, items, timer)
 	writeJSON(w, items)
+	s.logStationTiming("market.liked", len(items), timer)
 }
 
 func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
@@ -88,9 +96,10 @@ func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.applyDiscussionJobStatus(r, d)
+	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
+	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
@@ -107,7 +116,7 @@ func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.applyDiscussionJobStatus(r, d)
+	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
@@ -126,7 +135,7 @@ func (s *Server) handleMarketUnlike(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.applyDiscussionJobStatus(r, d)
+	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
@@ -144,6 +153,8 @@ func (s *Server) handleMarketProfile(w http.ResponseWriter, r *http.Request) {
 	if profile == nil {
 		profile = &CreatorProfile{ID: user.ID, DisplayName: userDisplayName(user), AvatarURL: strings.TrimSpace(user.AvatarURL), IsSelf: true}
 	}
+	timer := newStationTimer()
+	qStart := time.Now()
 	stations, err := s.d.Discussions.ListByCreator(
 		r.Context(),
 		user.ID,
@@ -152,17 +163,19 @@ func (s *Server) handleMarketProfile(w http.ResponseWriter, r *http.Request) {
 		atoiDefault(r.URL.Query().Get("limit"), 0),
 		atoiDefault(r.URL.Query().Get("offset"), 0),
 	)
+	timer.mark("query", qStart)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.prepareMarketDiscussions(r, stations)
+	s.prepareMarketDiscussions(r, stations, timer)
 	following, err := s.d.Discussions.ListFollowing(r.Context(), user.ID, defaultDiscussionPageSize, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, MarketProfile{Profile: *profile, Stations: stations, Following: following})
+	s.logStationTiming("market.profile", len(stations), timer)
 }
 
 func (s *Server) handleMarketCreatorGet(w http.ResponseWriter, r *http.Request) {
@@ -181,8 +194,10 @@ func (s *Server) handleMarketCreatorGet(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleMarketCreatorStations(w http.ResponseWriter, r *http.Request) {
+	timer := newStationTimer()
 	user := s.requestUser(r)
 	s.rememberCreatorProfile(r.Context(), user)
+	qStart := time.Now()
 	items, err := s.d.Discussions.ListByCreator(
 		r.Context(),
 		user.ID,
@@ -191,12 +206,14 @@ func (s *Server) handleMarketCreatorStations(w http.ResponseWriter, r *http.Requ
 		atoiDefault(r.URL.Query().Get("limit"), 0),
 		atoiDefault(r.URL.Query().Get("offset"), 0),
 	)
+	timer.mark("query", qStart)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.prepareMarketDiscussions(r, items)
+	s.prepareMarketDiscussions(r, items, timer)
 	writeJSON(w, items)
+	s.logStationTiming("market.creator", len(items), timer)
 }
 
 func (s *Server) handleMarketCreatorFollow(w http.ResponseWriter, r *http.Request) {
@@ -275,7 +292,7 @@ func (s *Server) handleDiscussionVisibility(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
-	s.applyDiscussionJobStatus(r, updated)
+	s.applyDiscussionJobStatus(r, updated, true)
 	s.applyDiscussionProgress(r.Context(), updated)
 	s.refreshDiscussionCoverURL(r.Context(), updated)
 	s.sanitizeDiscussionUsage(updated)
@@ -321,21 +338,70 @@ func (s *Server) handleDiscussionCoverGenerate(w http.ResponseWriter, r *http.Re
 	writeJSON(w, marketCoverGenerateResponse{Cover: cover})
 }
 
-func (s *Server) prepareMarketDiscussions(r *http.Request, items []Discussion) {
+func (s *Server) prepareMarketDiscussions(r *http.Request, items []Discussion, timer *stationTimer) {
 	viewer := s.requestUser(r).ID
-	for i := range items {
-		s.applyDiscussionJobStatus(r, &items[i])
-		s.refreshDiscussionCoverURL(r.Context(), &items[i])
-		s.sanitizeDiscussionUsage(&items[i])
-	}
-	s.applyDiscussionProgresses(r.Context(), items)
+	s.prepareDiscussionListRows(r, items, timer)
 	if !needsCreatorProfileAttach(items) {
 		return
 	}
+	cpStart := time.Now()
 	if err := s.d.Discussions.AttachCreatorProfiles(r.Context(), viewer, items); err != nil {
 		s.logger().Warn("creator profile attach failed", "err", err)
 	}
+	timer.mark("creatorProfiles", cpStart)
 }
+
+// stationTimer accumulates per-phase durations for station-list endpoints so a
+// slow load can be diagnosed. Durations are dumped to stdout (and the structured
+// logger) by logStationTiming.
+type stationTimer struct {
+	start time.Time
+	steps []stationStep
+}
+
+type stationStep struct {
+	name string
+	d    time.Duration
+}
+
+func newStationTimer() *stationTimer { return &stationTimer{start: time.Now()} }
+
+// mark records the duration of a phase that began at `since`.
+func (t *stationTimer) mark(name string, since time.Time) {
+	if t == nil {
+		return
+	}
+	t.steps = append(t.steps, stationStep{name: name, d: time.Since(since)})
+}
+
+// add records a pre-measured phase duration (e.g. a per-item step accumulated
+// across a loop).
+func (t *stationTimer) add(name string, d time.Duration) {
+	if t == nil {
+		return
+	}
+	t.steps = append(t.steps, stationStep{name: name, d: d})
+}
+
+// logStationTiming writes a one-line timing breakdown to stdout and the
+// structured logger so slow station loads can be debugged.
+func (s *Server) logStationTiming(op string, count int, t *stationTimer) {
+	if t == nil {
+		return
+	}
+	total := time.Since(t.start)
+	var b strings.Builder
+	attrs := []any{"op", op, "count", count, "total_ms", durMS(total)}
+	for _, st := range t.steps {
+		fmt.Fprintf(&b, " %s=%.1fms", st.name, durMS(st.d))
+		attrs = append(attrs, st.name+"_ms", durMS(st.d))
+	}
+	fmt.Fprintf(os.Stdout, "[station-timing] op=%s count=%d total=%.1fms%s\n",
+		op, count, durMS(total), b.String())
+	s.logger().Info("station timing", attrs...)
+}
+
+func durMS(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 func needsCreatorProfileAttach(items []Discussion) bool {
 	for i := range items {
@@ -382,6 +448,27 @@ func (s *Server) refreshDiscussionCoverURL(ctx context.Context, d *Discussion) {
 		return
 	}
 	d.Cover.ImageURL = url
+}
+
+// refreshDiscussionLineAudioURLs re-signs the playback URL of every voice-message
+// line from its durable AudioKey, so replay keeps working after the URL captured
+// at send time expires. Lines without an AudioKey are left untouched.
+func (s *Server) refreshDiscussionLineAudioURLs(ctx context.Context, d *Discussion) {
+	if d == nil || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return
+	}
+	for i := range d.Lines {
+		key := strings.TrimSpace(d.Lines[i].AudioKey)
+		if key == "" {
+			continue
+		}
+		url, err := s.d.Uploader.DownloadURL(ctx, key, time.Hour)
+		if err != nil {
+			s.logger().Warn("voice message download url failed", "discussion", d.ID, "err", err)
+			continue
+		}
+		d.Lines[i].AudioURL = url
+	}
 }
 
 func (d Discussion) DisplayTitle() string {

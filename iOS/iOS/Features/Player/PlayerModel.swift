@@ -16,6 +16,12 @@ struct LiveLine: Identifiable, Equatable {
     var text: String
     var isUser: Bool
     var done: Bool
+    /// Server-owned id of the human who authored this line. Used to distinguish the
+    /// current user's own messages from other participants' (both are `isUser`).
+    /// Nil for agent lines and legacy rows without a persisted sender.
+    var senderUserID: String? = nil
+    /// Playback URL when this line is a voice message; nil for text-only lines.
+    var audioURL: String? = nil
 
     @discardableResult
     static func applyTranscriptEvent(to lines: inout [LiveLine],
@@ -108,6 +114,14 @@ final class PlayerModel {
     /// authenticated client instead of constructing another.
     let api: APIClient
     private let username: String
+    /// The current participant's authenticated id. Exposed so the transcript can
+    /// reliably tell *this* user's own messages apart from other participants' —
+    /// both persist with `isUser == true`, but each user line now carries a
+    /// server-owned `senderUserID`. Empty only when signed out / unknown.
+    let currentUserID: String
+    /// The current participant's display name. Retained as a legacy fallback for
+    /// lines persisted before `senderUserID` existed (no sender id to compare).
+    var currentUsername: String { username }
     /// Set when this discussion was opened via a private share link; authorizes
     /// a non-owner participant's comments on the backend.
     private let shareToken: String?
@@ -260,10 +274,12 @@ final class PlayerModel {
         return Self.captionSpeaker(for: group.text, in: lines) ?? ""
     }
 
-    init(discussion: Discussion, api: APIClient, username: String, shareToken: String? = nil) {
+    init(discussion: Discussion, api: APIClient, username: String, userID: String = "",
+         shareToken: String? = nil) {
         self.discussion = discussion
         self.api = api
         self.username = username
+        self.currentUserID = userID
         self.shareToken = shareToken
     }
 
@@ -275,7 +291,8 @@ final class PlayerModel {
         autoplayOnEntry = !(discussion.status == .ready || isFinished)
         // Replay persisted transcript for a finished discussion.
         lines = discussion.sortedLines.map {
-            LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true)
+            LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true,
+                     senderUserID: $0.senderUserID, audioURL: $0.audioURL)
         }
         if discussion.jobID != nil && !hasPodcastTranscript {
             showTranscriptLoadingIfNeeded()
@@ -288,7 +305,13 @@ final class PlayerModel {
 
         configureRemoteCommands()
         updateNowPlayingInfo()
-        tasks.append(Task { await loadTranscriptSnapshot(jobID: jobID) })
+        // Load the persisted detail (with re-signed voice-message URLs) BEFORE the
+        // text-only job-transcript snapshot, so voice lines exist with their audio
+        // and the snapshot won't re-persist them as plain text.
+        tasks.append(Task {
+            await self.hydratePersistedLines()
+            await self.loadTranscriptSnapshot(jobID: jobID)
+        })
         tasks.append(Task { await setupPlayer(jobID: jobID) })
         if discussion.status == .generating {
             tasks.append(Task { await listenEvents(jobID: jobID) })
@@ -338,13 +361,21 @@ final class PlayerModel {
         beginPlayback(item: item)
     }
 
-    func send(_ text: String) {
+    /// Sends a user message. When `audioURL`/`audioKey` are set the message is a
+    /// voice message: `text` is its on-device transcript (what the agent reads),
+    /// while the audio is persisted so other participants can replay it.
+    func send(_ text: String, audioURL: String? = nil, audioKey: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSendMessages, !trimmed.isEmpty else { return }
-        let line = LiveLine(speaker: username, role: "user", text: trimmed, isUser: true, done: true)
+        // A voice message carries audio, so it is allowed to send even when its
+        // transcript is empty (no on-device model and the cloud transcription
+        // failed): the audio is still replayable. Text-only messages stay gated.
+        let isVoice = audioURL != nil || audioKey != nil
+        guard canSendMessages, !trimmed.isEmpty || isVoice else { return }
+        let line = LiveLine(speaker: username, role: "user", text: trimmed, isUser: true, done: true,
+                            senderUserID: currentUserID.isEmpty ? nil : currentUserID, audioURL: audioURL)
         lines.append(line)
         let jobID = discussion.jobID
-        persistIfNeeded(line: line, syncRemote: jobID == nil)
+        persistIfNeeded(line: line, syncRemote: jobID == nil, audioURL: audioURL, audioKey: audioKey)
         guard let jobID else { return }
         Task {
             do {
@@ -352,7 +383,9 @@ final class PlayerModel {
                                             text: trimmed,
                                             username: username,
                                             discussionID: discussion.id,
-                                            shareToken: shareToken)
+                                            shareToken: shareToken,
+                                            audioURL: audioURL,
+                                            audioKey: audioKey)
             } catch APIError.http(429, _) {
                 removeRejectedUserLine(line)
             } catch APIError.http(403, _) {
@@ -366,7 +399,9 @@ final class PlayerModel {
                                                     side: nil,
                                                     text: trimmed,
                                                     startMS: 0,
-                                                    isUser: true),
+                                                    isUser: true,
+                                                    audioURL: audioURL,
+                                                    audioKey: audioKey),
                         shareToken: shareToken
                     )
                 } catch APIError.http(403, _) {
@@ -885,13 +920,17 @@ final class PlayerModel {
         persistIfNeeded(line: line, startMs: Int(currentTime * 1000))
     }
 
-    private func persistIfNeeded(line: LiveLine, startMs: Int = 0, syncRemote: Bool = true) {
+    private func persistIfNeeded(line: LiveLine, startMs: Int = 0, syncRemote: Bool = true,
+                                 audioURL: String? = nil, audioKey: String? = nil) {
         persistIfNeeded(speaker: line.speaker,
                         role: line.role,
                         text: line.text,
                         startMs: startMs,
                         isUser: line.isUser,
-                        syncRemote: syncRemote)
+                        senderUserID: line.senderUserID,
+                        syncRemote: syncRemote,
+                        audioURL: audioURL,
+                        audioKey: audioKey)
     }
 
     private func persistIfNeeded(speaker: String,
@@ -899,15 +938,26 @@ final class PlayerModel {
                                  text: String,
                                  startMs: Int = 0,
                                  isUser: Bool,
-                                 syncRemote: Bool = true) {
+                                 senderUserID: String? = nil,
+                                 syncRemote: Bool = true,
+                                 audioURL: String? = nil,
+                                 audioKey: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let exists = discussion.sortedLines.contains {
-            $0.speaker == speaker && $0.role == role && $0.text == trimmed && $0.isUser == isUser
+        // Keep an empty voice message (audio present, transcript unavailable) — its
+        // audio is still worth persisting; only empty text-only lines are dropped.
+        let isVoice = audioURL != nil || audioKey != nil
+        guard !trimmed.isEmpty || isVoice else { return }
+        // A voice message is never a duplicate of an earlier line that happens to
+        // share its transcript — distinct recordings carry distinct audio, so they
+        // must not be deduped by text alone (that would drop the second note).
+        let exists = audioURL == nil && discussion.sortedLines.contains {
+            $0.speaker == speaker && $0.role == role && $0.text == trimmed
+                && $0.isUser == isUser && $0.audioURL == nil
         }
         guard !exists else { return }
         let dto = DiscussionLineDTO(speaker: speaker, role: role, side: nil,
-                                    text: trimmed, startMS: startMs, isUser: isUser)
+                                    text: trimmed, startMS: startMs, isUser: isUser,
+                                    senderUserID: senderUserID, audioURL: audioURL)
         discussion.lines = (discussion.lines ?? []) + [dto]
         guard syncRemote else { return }
         Task {
@@ -918,10 +968,60 @@ final class PlayerModel {
                                             side: nil,
                                             text: trimmed,
                                             startMS: startMs,
-                                            isUser: isUser),
+                                            isUser: isUser,
+                                            audioURL: audioURL,
+                                            audioKey: audioKey),
                 shareToken: shareToken
             )
         }
+    }
+
+    /// Loads the full discussion detail on entry and adopts its persisted lines.
+    ///
+    /// The library opens the player from a lightweight list row that omits
+    /// `native_discussion_lines`, so a re-entered discussion starts with no voice
+    /// lines. The detail endpoint returns them with freshly re-signed `audioURL`s.
+    /// Adopting them here (a) restores the replay control, (b) refreshes playback
+    /// URLs that expire ~1h after the last fetch, and (c) gives the subsequent
+    /// text-only job-transcript snapshot an existing audio line to recognize, so it
+    /// won't re-persist the utterance as a duplicate plain-text row.
+    private func hydratePersistedLines() async {
+        guard let fresh = try? await api.discussion(id: discussion.id) else { return }
+        // The library/market list responses omit the presigned audio download
+        // URL (it is resolved only on the detail endpoint to keep lists fast), so
+        // adopt it here to give the export/share action a direct link. Playback
+        // and the download fallback already work from the jobID regardless.
+        if let url = fresh.downloadURLString, !url.isEmpty {
+            discussion.downloadURLString = url
+            downloadURL = URL(string: url)
+        }
+        let persisted = fresh.sortedLines
+        guard !persisted.isEmpty else { return }
+
+        // Adopt persisted lines as the authoritative cache without dropping any
+        // local lines not yet synced server-side.
+        var cache = persisted
+        for local in discussion.sortedLines where !cache.contains(local) {
+            cache.append(local)
+        }
+        discussion.lines = cache
+
+        // Reflect persisted lines into the visible transcript: upgrade a matching
+        // text line with its audio URL, or append one we don't have yet.
+        for dto in persisted {
+            if let idx = lines.firstIndex(where: {
+                $0.speaker == dto.speaker && $0.role == dto.role && $0.text == dto.text && $0.isUser == dto.isUser
+            }) {
+                if lines[idx].audioURL == nil, let audio = dto.audioURL, !audio.isEmpty {
+                    lines[idx].audioURL = audio
+                }
+            } else {
+                lines.append(LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
+                                      isUser: dto.isUser, done: true,
+                                      senderUserID: dto.senderUserID, audioURL: dto.audioURL))
+            }
+        }
+        hideTranscriptLoadingIfReady()
     }
 
     private func loadTranscriptSnapshot(jobID: String) async {
@@ -966,9 +1066,18 @@ final class PlayerModel {
             guard !text.isEmpty else { continue }
             let role = item.role
             let isUser = role == "user" || role == "viewer"
-            if !lines.contains(where: { $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser }) {
+            let existing = lines.first { $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser }
+            if existing == nil {
                 lines.append(LiveLine(speaker: item.speaker, role: role, text: text, isUser: isUser, done: true))
                 didChange = true
+            }
+            // The job transcript has no audio metadata, so a voice message comes
+            // back as plain text. If we already hold it as a voice line, it is
+            // already persisted (with its audio) — re-persisting would add a
+            // duplicate text-only row that survives reload. A genuine user text
+            // message (no audioURL) still backfills normally.
+            if let existing, existing.isUser, existing.audioURL?.isEmpty == false {
+                continue
             }
             persistIfNeeded(speaker: item.speaker, role: role, text: text, isUser: isUser)
         }
