@@ -44,8 +44,6 @@ defaults delete com.apple.dt.Xcode IDEPackageEnablePrebuilts || true
 
 mkdir -p "$(dirname "$BUILD_DIR")"
 
-"$PROJECT_ROOT/scripts/sync-ios-app-icon.sh"
-
 echo "======================================"
 echo "Debate Bot iOS Build Script"
 echo "======================================"
