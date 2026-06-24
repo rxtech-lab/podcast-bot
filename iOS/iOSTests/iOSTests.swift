@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import AVFoundation
 @testable import iOS
 
 final class iOSTests: XCTestCase {
@@ -346,6 +347,65 @@ final class iOSTests: XCTestCase {
         XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(localUserMessage))
         XCTAssertFalse(PlayerModel.isVisibleTranscriptLine(roleOnlyEcho))
         XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(panelLine))
+    }
+
+    func testAudioOnlyVoiceMessageDoesNotRequireDisplayText() {
+        let voiceLine = LiveLine(speaker: "Qiwei",
+                                 role: "user",
+                                 text: "   ",
+                                 isUser: true,
+                                 done: true,
+                                 audioURL: "https://media.example/voice.m4a")
+        let textLine = LiveLine(speaker: "Qiwei",
+                                role: "user",
+                                text: "hello",
+                                isUser: true,
+                                done: true)
+
+        XCTAssertTrue(voiceLine.hasAudio)
+        XCTAssertFalse(voiceLine.hasDisplayText)
+        XCTAssertFalse(textLine.hasAudio)
+        XCTAssertTrue(textLine.hasDisplayText)
+    }
+
+    func testAudioInterruptionResumeOptionIsRecognized() {
+        let resumable: [AnyHashable: Any] = [
+            AVAudioSessionInterruptionOptionKey: AVAudioSession.InterruptionOptions.shouldResume.rawValue
+        ]
+        let notResumable: [AnyHashable: Any] = [
+            AVAudioSessionInterruptionOptionKey: UInt(0)
+        ]
+
+        XCTAssertTrue(PlayerModel.audioInterruptionShouldResume(resumable))
+        XCTAssertFalse(PlayerModel.audioInterruptionShouldResume(notResumable))
+        XCTAssertFalse(PlayerModel.audioInterruptionShouldResume(nil))
+    }
+
+    func testNowPlayingArtworkSourceKeyUsesRenderableCover() {
+        let imageCover = DiscussionCover(type: "image",
+                                         imageURL: "https://cdn.example/cover.webp",
+                                         imageKey: "covers/cover.webp",
+                                         gradientStart: nil,
+                                         gradientEnd: nil,
+                                         prompt: nil)
+        let gradientCover = DiscussionCover(type: "gradient",
+                                            imageURL: nil,
+                                            imageKey: nil,
+                                            gradientStart: "#111111",
+                                            gradientEnd: "#777777",
+                                            prompt: nil)
+        let keyOnlyCover = DiscussionCover(type: "image",
+                                           imageURL: nil,
+                                           imageKey: "covers/cover.webp",
+                                           gradientStart: nil,
+                                           gradientEnd: nil,
+                                           prompt: nil)
+
+        XCTAssertEqual(PlayerModel.nowPlayingArtworkSourceKey(for: imageCover),
+                       "image:https://cdn.example/cover.webp")
+        XCTAssertEqual(PlayerModel.nowPlayingArtworkSourceKey(for: gradientCover),
+                       "gradient:#111111:#777777")
+        XCTAssertNil(PlayerModel.nowPlayingArtworkSourceKey(for: keyOnlyCover))
     }
 
     func testPersistedSenderMetadataMarksReloadedJobTranscriptUserLineAsMine() {

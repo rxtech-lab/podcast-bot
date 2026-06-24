@@ -335,6 +335,9 @@
         }
       }
     },
+    "Audio message" : {
+      "comment" : "Fallback label for a voice message whose transcript is unavailable"
+    },
     "Audio stream is still warming up. Try again in a moment." : {
       "comment" : "Status after playback retries are exhausted",
       "localizations" : {
