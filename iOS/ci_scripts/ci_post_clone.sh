@@ -16,8 +16,6 @@ IOS_PROJECT_FILE="$IOS_PROJECT_DIR/iOS.xcodeproj/project.pbxproj"
 echo "== Xcode Cloud: ci_post_clone =="
 echo "Repo root: $REPO_ROOT"
 
-"$REPO_ROOT/scripts/sync-ios-app-icon.sh"
-
 # Package plugin/macro validation can block CI before the build starts.
 defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES || true
 defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES || true
