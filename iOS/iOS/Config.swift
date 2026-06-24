@@ -13,7 +13,7 @@ import TipKit
 /// views (Text, Label, navigationTitle, etc.) and the `Raw` String variants in
 /// code, interpolation, and APIs that take `String`.
 enum AppStringLiteral {
-    static let appTitleRaw = "PanelFM"
+    static let appTitleRaw = "PodcastFM"
     static var appTitle: LocalizedStringKey { LocalizedStringKey(appTitleRaw) }
 
     static let stationTitleRaw = "Stations"

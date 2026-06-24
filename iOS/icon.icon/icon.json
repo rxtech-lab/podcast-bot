@@ -1,17 +1,29 @@
 {
-  "fill" : "automatic",
+  "fill" : {
+    "solid" : "display-p3:0.70290,0.96783,0.27308,1.00000"
+  },
   "groups" : [
     {
       "layers" : [
         {
-          "glass" : false,
-          "image-name" : "image.png",
-          "name" : "image",
+          "image-name" : "image1.png",
+          "name" : "image1",
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
-              0,
-              38.2265625
+              5,
+              142.4375
+            ]
+          }
+        },
+        {
+          "image-name" : "image2.png",
+          "name" : "image2",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              5.4140625,
+              -38.7421875
             ]
           }
         }

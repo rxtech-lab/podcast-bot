@@ -1209,6 +1209,9 @@
         }
       }
     },
+    "Force stop this %@?" : {
+
+    },
     "French" : {
       "comment" : "Podcast language option",
       "localizations" : {
@@ -3304,6 +3307,9 @@
           }
         }
       }
+    },
+    "The current generation will stop after finalising audio that has already been created. New turns will not be generated." : {
+
     },
     "The edit didn’t finish. Pull to refresh or try again." : {
       "comment" : "Fallback error when a plan edit never produced a revised plan",

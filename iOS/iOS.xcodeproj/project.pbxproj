@@ -16,8 +16,8 @@
 		DF6ADDF42FEB03A30045484F /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF32FEB03A30045484F /* RxAuthSwift */; };
 		DF6ADDF62FEB03A30045484F /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF52FEB03A30045484F /* RxAuthSwiftUI */; };
 		DF6ADDF92FEB03C60045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF82FEB03C60045484F /* RevenueCatUI */; };
-		DF6AE3552FEB92030045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF42A6552FE9BC8900001207 /* icon.icon */; };
-		DF6AE3562FEB92030045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF42A6552FE9BC8900001207 /* icon.icon */; };
+		DF6AE8592FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
+		DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -78,10 +78,10 @@
 		DF0DA32F2FE8445500A02339 /* iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF0DA33E2FE8445600A02339 /* iOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF0DA3482FE8445600A02339 /* iOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		DF42A6552FE9BC8900001207 /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DF6ADD9E2FEAF2CB0045484F /* iosClip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iosClip.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF6ADDAE2FEAF2CC0045484F /* iosClipTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosClipTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF6ADDB82FEAF2CC0045484F /* iosClipUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosClipUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF6AE8582FEBD09E0045484F /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DFF526A12FE852D0007BEF2A /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		DFF526A22FE852D0007BEF2A /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		DFF526A32FE852D0007BEF2A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -247,7 +247,7 @@
 		DF0DA3262FE8445500A02339 = {
 			isa = PBXGroup;
 			children = (
-				DF42A6552FE9BC8900001207 /* icon.icon */,
+				DF6AE8582FEBD09E0045484F /* icon.icon */,
 				DFF526A52FE852D0007BEF2A /* Config */,
 				DF0DA3312FE8445500A02339 /* iOS */,
 				DF0DA3412FE8445600A02339 /* iOSTests */,
@@ -513,7 +513,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DF6AE3552FEB92030045484F /* icon.icon in Resources */,
+				DF6AE8592FEBD09E0045484F /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -535,7 +535,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DF6AE3562FEB92030045484F /* icon.icon in Resources */,
+				DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -761,7 +761,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = PanelFM;
+				INFOPLIST_KEY_CFBundleDisplayName = "Podcast FM";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -810,7 +810,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = PanelFM;
+				INFOPLIST_KEY_CFBundleDisplayName = "Podcast FM";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
