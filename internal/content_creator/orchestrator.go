@@ -547,11 +547,20 @@ func (o *Orchestrator) Shutdown() {
 	}
 }
 
+type UserMessageMetadata struct {
+	SenderUserID string
+	AudioURL     string
+}
+
 // PushUserMessage queues user input into the planner. username is the
 // viewer's chosen handle (typically a random name persisted in localStorage
 // on the frontend); empty string falls back to "user" for the speaker tag so
 // past clients without a username still render reasonably.
 func (o *Orchestrator) PushUserMessage(text, username string) {
+	o.PushUserMessageWithMetadata(text, username, UserMessageMetadata{})
+}
+
+func (o *Orchestrator) PushUserMessageWithMetadata(text, username string, meta UserMessageMetadata) {
 	o.Queue.push(userMessage{Username: username, Text: text})
 	if text == "/end" {
 		return
@@ -561,7 +570,15 @@ func (o *Orchestrator) PushUserMessage(text, username string) {
 		speaker = "user"
 	}
 	o.Transcript.AppendUser(speaker, text)
-	o.Send(TranscriptMsg{Speaker: speaker, Role: "user", Text: text, Done: true})
+	o.Send(TranscriptMsg{
+		Speaker:       speaker,
+		Role:          "user",
+		Text:          text,
+		Done:          true,
+		IsUserMessage: true,
+		SenderUserID:  meta.SenderUserID,
+		AudioURL:      meta.AudioURL,
+	})
 }
 
 // EnsureOutDir makes sure the output dir exists (called before logger setup).

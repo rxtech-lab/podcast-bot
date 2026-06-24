@@ -1,6 +1,7 @@
 import PhotosUI
 import RxAuthSwift
 import SwiftUI
+import TipKit
 import UIKit
 import UniformTypeIdentifiers
 
@@ -31,6 +32,7 @@ struct PodcastPlayerView: View {
     @State private var showingCreatorProfile = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingRecorder = false
+    @State private var resumePlaybackAfterRecorder = false
     @State private var isUploadingAttachment = false
     @State private var isCreatingFromPlan = false
     @State private var createFromPlanError: String?
@@ -165,6 +167,7 @@ struct PodcastPlayerView: View {
                 Image(systemName: "doc.text")
             }
             .accessibilityLabel("Plan")
+            .popoverTip(PodcastPlanTip(), arrowEdge: .top)
         }
         if showsActionsMenu {
             ToolbarItem(placement: .topBarTrailing) {
@@ -267,18 +270,11 @@ struct PodcastPlayerView: View {
     /// matching is used only as a fallback for legacy rows that predate the sender
     /// id (no id on either side to compare).
     private func isMyLine(_ line: LiveLine) -> Bool {
-        guard line.isUser else { return false }
-        if let sender = line.senderUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !sender.isEmpty {
-            let myID = (model?.currentUserID ?? auth.currentUser?.id ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return !myID.isEmpty && sender == myID
-        }
-        // Legacy fallback: rows persisted before senderUserID existed.
-        let me = (model?.currentUsername ?? auth.currentUser?.name ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !me.isEmpty else { return false }
-        return line.speaker.caseInsensitiveCompare(me) == .orderedSame
+        PlayerModel.isLineAuthoredByCurrentUser(
+            line,
+            currentUserID: model?.currentUserID ?? auth.currentUser?.id ?? "",
+            currentUsername: model?.currentUsername ?? auth.currentUser?.name ?? ""
+        )
     }
 
     /// Transcript lines, plus the points summary as a trailing accessory row.
@@ -332,6 +328,12 @@ struct PodcastPlayerView: View {
         return HStack(spacing: 10) {
             Menu {
                 Button {
+                    if model.isPlaying {
+                        resumePlaybackAfterRecorder = true
+                        model.togglePlay()
+                    } else {
+                        resumePlaybackAfterRecorder = false
+                    }
                     showingRecorder = true
                 } label: {
                     Label("Record Audio", systemImage: "mic.fill")
@@ -354,6 +356,7 @@ struct PodcastPlayerView: View {
                 }
             }
             .disabled(isUploadingAttachment || !canSend)
+            .popoverTip(SendAudioTip(), arrowEdge: .bottom)
             TextField("Send message", text: $message, axis: .vertical)
                 .lineLimit(1 ... 3)
                 .textFieldStyle(.plain)
@@ -380,10 +383,20 @@ struct PodcastPlayerView: View {
         .onChange(of: selectedPhoto) { _, item in
             if let item { sharePhoto(item, model: model) }
         }
-        .sheet(isPresented: $showingRecorder) {
+        .sheet(isPresented: $showingRecorder, onDismiss: {
+            resumePlaybackIfNeededAfterRecorder(model)
+        }) {
             VoiceRecorderSheet(defaultLanguage: model.discussion.language) { recording in
                 sendVoiceMessage(recording, model: model)
             }
+        }
+    }
+
+    private func resumePlaybackIfNeededAfterRecorder(_ model: PlayerModel) {
+        guard resumePlaybackAfterRecorder else { return }
+        resumePlaybackAfterRecorder = false
+        if !model.isPlaying {
+            model.togglePlay()
         }
     }
 
@@ -521,6 +534,8 @@ private struct PodcastTranscriptLoadingView: View {
 
 struct PodcastActionsMenu: View {
     @Bindable var model: PlayerModel
+    @State private var showingForceStopConfirm = false
+
     let showsPoints: Bool
     let pointsMenuLabel: String
     let onShowPoints: () -> Void
@@ -537,6 +552,16 @@ struct PodcastActionsMenu: View {
     /// The plain, permanent public deep link for a published discussion.
     private var publicShareURL: URL {
         AppConfig.websiteBaseURL.appendingPathComponent("d").appendingPathComponent(model.discussion.id)
+    }
+
+    private var actionsTip: (any Tip)? {
+        if model.discussion.isPublic {
+            return ShareStationTip()
+        }
+        if model.discussion.isOwner != false {
+            return PublishToMarketTip()
+        }
+        return nil
     }
 
     var body: some View {
@@ -593,7 +618,7 @@ struct PodcastActionsMenu: View {
                 .disabled(model.isDownloadingPodcast)
             } else if model.showsForceStopAction {
                 Button(role: .destructive) {
-                    model.forceStop()
+                    showingForceStopConfirm = true
                 } label: {
                     Label(model.isForceStopping ? "Finalising" : "Force Stop",
                           systemImage: model.isForceStopping ? "hourglass" : "stop.fill")
@@ -612,6 +637,19 @@ struct PodcastActionsMenu: View {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("\(AppStringLiteral.stationNameRaw) actions")
+        .popoverTip(actionsTip, arrowEdge: .top)
+        .confirmationDialog(
+            "Force stop this \(AppStringLiteral.stationNameRaw)?",
+            isPresented: $showingForceStopConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Force Stop", role: .destructive) {
+                model.forceStop()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The current generation will stop after finalising audio that has already been created. New turns will not be generated.")
+        }
     }
 
     private var hasNonSignOutActions: Bool {

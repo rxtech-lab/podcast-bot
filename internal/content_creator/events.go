@@ -38,6 +38,9 @@ type TranscriptMsg struct {
 	Side          string
 	Text          string
 	Done          bool
+	IsUserMessage bool
+	SenderUserID  string
+	AudioURL      string
 	AudioDuration time.Duration
 }
 

@@ -348,6 +348,36 @@ final class iOSTests: XCTestCase {
         XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(panelLine))
     }
 
+    func testPersistedSenderMetadataMarksReloadedJobTranscriptUserLineAsMine() {
+        var reloadedLine = LiveLine(speaker: "Qiwei",
+                                    role: "user",
+                                    text: "What about the budget?",
+                                    isUser: true,
+                                    done: true)
+        let persistedLine = DiscussionLineDTO(speaker: "Qiwei",
+                                              role: "user",
+                                              side: nil,
+                                              text: "What about the budget?",
+                                              startMS: nil,
+                                              isUser: true,
+                                              senderUserID: "oauth:me")
+
+        XCTAssertFalse(PlayerModel.isLineAuthoredByCurrentUser(
+            reloadedLine,
+            currentUserID: "oauth:me",
+            currentUsername: "Renamed User"
+        ))
+
+        PlayerModel.applyPersistedMetadata(to: &reloadedLine, from: persistedLine)
+
+        XCTAssertEqual(reloadedLine.senderUserID, "oauth:me")
+        XCTAssertTrue(PlayerModel.isLineAuthoredByCurrentUser(
+            reloadedLine,
+            currentUserID: "oauth:me",
+            currentUsername: "Renamed User"
+        ))
+    }
+
     func testDiscussionPointsTextWaitsForReadyStatus() throws {
         let generating = try decodeDiscussion(status: "generating", pointsCharged: 21)
         let ready = try decodeDiscussion(status: "ready", pointsCharged: 21)

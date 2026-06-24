@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import TipKit
 import UIKit
 import RevenueCat
 
@@ -19,6 +20,10 @@ struct iOSApp: App {
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
+        try? Tips.configure([
+            .datastoreLocation(.applicationDefault),
+            .displayFrequency(.immediate)
+        ])
         // Configure RevenueCat before anything reads Purchases.shared. Guarded so
         // a missing key disables purchases instead of crashing.
         if AppConfig.hasRevenueCat {

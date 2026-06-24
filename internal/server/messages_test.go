@@ -29,6 +29,38 @@ type testEnv struct {
 	dbPath   string
 }
 
+func TestTranscriptEnvelopeIncludesUserMessageMetadata(t *testing.T) {
+	env, ok := envelope(contentcreator.TranscriptMsg{
+		ChannelID:     "job-a",
+		Speaker:       "Alice",
+		Role:          "user",
+		Text:          "voice note",
+		Done:          true,
+		IsUserMessage: true,
+		SenderUserID:  "oauth:user-1",
+		AudioURL:      "https://media.example/voice.m4a",
+	}, contentcreator.LangEN)
+	if !ok {
+		t.Fatal("envelope returned ok=false")
+	}
+	if env.tag != "transcript" {
+		t.Fatalf("event tag = %q, want transcript", env.tag)
+	}
+	payload, ok := env.payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", env.payload)
+	}
+	if got := payload["isUserMessage"]; got != true {
+		t.Fatalf("isUserMessage = %#v, want true", got)
+	}
+	if got := payload["sender_user_id"]; got != "oauth:user-1" {
+		t.Fatalf("sender_user_id = %#v, want oauth:user-1", got)
+	}
+	if got := payload["audio_url"]; got != "https://media.example/voice.m4a" {
+		t.Fatalf("audio_url = %#v, want signed audio url", got)
+	}
+}
+
 // newTestServer wires up a real Bus + SessionRegistry + Server, and registers
 // a single non-off-air channel "tech" backed by a NewForTest orchestrator
 // whose Send is wrapped to publish channel-stamped events on the bus
@@ -108,7 +140,8 @@ func readSSEEvent(br *bufio.Reader) (string, []byte, error) {
 // posting to /api/messages?channel=tech must surface as a transcript event on
 // /api/events?channel=tech. If this fails, the message stream is broken.
 func TestPostMessageDeliveredViaSSE(t *testing.T) {
-	env := newTestServer(t); ts := env.ts
+	env := newTestServer(t)
+	ts := env.ts
 
 	// Subscribe to SSE first so we don't race the publish.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -197,7 +230,8 @@ func TestPostMessageDeliveredViaSSE(t *testing.T) {
 // (/api/transcript?channel=X) returns the user's posted message after a
 // page reload.
 func TestPostMessageStoredInTranscript(t *testing.T) {
-	env := newTestServer(t); ts := env.ts
+	env := newTestServer(t)
+	ts := env.ts
 
 	body := strings.NewReader(`{"text":"hello world"}`)
 	preq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/messages?channel=tech", body)
@@ -240,7 +274,8 @@ func TestPostMessageStoredInTranscript(t *testing.T) {
 // resolve an orchestrator. Today's behavior is 503; the test pins it so we
 // don't accidentally start swallowing messages with no error.
 func TestPostMessageWithoutChannelReturns503(t *testing.T) {
-	env := newTestServer(t); ts := env.ts
+	env := newTestServer(t)
+	ts := env.ts
 
 	body := strings.NewReader(`{"text":"orphan"}`)
 	preq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/messages", body)
@@ -259,7 +294,8 @@ func TestPostMessageWithoutChannelReturns503(t *testing.T) {
 // `debate-bot-username` cookie, the live transcript event must use that name
 // as the speaker (instead of minting a new random one).
 func TestPostMessageUsesCookieUsername(t *testing.T) {
-	env := newTestServer(t); ts := env.ts
+	env := newTestServer(t)
+	ts := env.ts
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -317,7 +353,8 @@ func TestPostMessageUsesCookieUsername(t *testing.T) {
 // channel should return [] not 404 so the frontend renders gracefully when
 // tuning to an off-air channel.
 func TestTranscriptHistoryEmptyChannel(t *testing.T) {
-	env := newTestServer(t); ts := env.ts
+	env := newTestServer(t)
+	ts := env.ts
 
 	for _, q := range []string{"", "?channel=nonexistent"} {
 		resp, err := http.Get(ts.URL + "/api/transcript" + q)
@@ -341,7 +378,8 @@ func TestTranscriptHistoryEmptyChannel(t *testing.T) {
 // TestMultipleMessagesPreserveOrder — two messages posted in order must arrive
 // over SSE in the same order, and both must end up in the transcript snapshot.
 func TestMultipleMessagesPreserveOrder(t *testing.T) {
-	env := newTestServer(t); ts := env.ts
+	env := newTestServer(t)
+	ts := env.ts
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -508,7 +546,8 @@ func fetchTranscript(t *testing.T, url string) []transcriptLine {
 // TestSSEFiltersOtherChannels — events stamped with channel A must not reach
 // a subscriber filtering by channel B.
 func TestSSEFiltersOtherChannels(t *testing.T) {
-	env := newTestServer(t); ts, bus := env.ts, env.bus
+	env := newTestServer(t)
+	ts, bus := env.ts, env.bus
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -567,4 +606,3 @@ type postErr struct {
 func (e *postErr) Error() string {
 	return "post returned " + http.StatusText(e.status) + ": " + e.body
 }
-

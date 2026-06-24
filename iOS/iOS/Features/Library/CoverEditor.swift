@@ -1,6 +1,7 @@
 import ImageIO
 import PhotosUI
 import SwiftUI
+import TipKit
 import UniformTypeIdentifiers
 
 /// Reusable cover-art picker — AI generate / upload / gradient — with a live
@@ -70,6 +71,7 @@ struct CoverEditor: View {
                         Label(isWorking ? "Generating" : "Generate Cover", systemImage: "sparkles")
                     }
                     .disabled(isWorking || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .popoverTip(GenerateCoverTip(), arrowEdge: .top)
                 case .upload:
                     PhotosPicker(selection: $selectedPhoto, matching: .images) {
                         Label("Choose from Photos", systemImage: "photo.on.rectangle")

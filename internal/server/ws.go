@@ -25,6 +25,7 @@ type wsInbound struct {
 	Text         string `json:"text"`
 	Username     string `json:"username"`
 	DiscussionID string `json:"discussion_id"`
+	AudioKey     string `json:"audio_key"`
 }
 
 // handleJobWS upgrades to a WebSocket that streams a single job's events
@@ -86,7 +87,24 @@ func (s *Server) handleJobWS(w http.ResponseWriter, r *http.Request) {
 				if _, ok := s.allowJobMessage(jobID, user, username); !ok {
 					continue
 				}
-				orch.PushUserMessage(in.Text, username)
+				audioKey := s.validatedAudioKey(user.ID, in.AudioKey)
+				audioURL := s.voiceMessageAudioURL(ctx, audioKey)
+				if s.d.Discussions != nil && in.DiscussionID != "" {
+					if err := s.d.Discussions.AppendLineVisibleWithToken(ctx, user.ID, in.DiscussionID, "", DiscussionLine{
+						Speaker:  username,
+						Role:     "user",
+						Text:     in.Text,
+						IsUser:   true,
+						AudioURL: audioURL,
+						AudioKey: audioKey,
+					}); err != nil {
+						continue
+					}
+				}
+				orch.PushUserMessageWithMetadata(in.Text, username, contentcreator.UserMessageMetadata{
+					SenderUserID: user.ID,
+					AudioURL:     audioURL,
+				})
 			}
 		}
 	}()
