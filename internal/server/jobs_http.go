@@ -139,6 +139,12 @@ type jobMessageReq struct {
 	// ShareToken, when set, authorizes a signed-in participant who joined via a
 	// share link to comment on a private discussion's live job.
 	ShareToken string `json:"share_token"`
+	// AudioKey is a voice message's durable storage key. The orchestrator still
+	// only receives Text (the on-device transcript); the audio is persisted so
+	// other participants can replay it. The key is validated against the sender
+	// before use, and the playback URL is derived server-side — the client cannot
+	// supply an arbitrary URL.
+	AudioKey string `json:"audio_key"`
 }
 
 // handleJobMessage injects a viewer message into a running video job's
@@ -190,10 +196,11 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 	orch.PushUserMessage(req.Text, username)
 	if s.d.Discussions != nil && strings.TrimSpace(req.DiscussionID) != "" {
 		if err := s.d.Discussions.AppendLineVisibleWithToken(r.Context(), user.ID, req.DiscussionID, strings.TrimSpace(req.ShareToken), DiscussionLine{
-			Speaker: username,
-			Role:    "user",
-			Text:    req.Text,
-			IsUser:  true,
+			Speaker:  username,
+			Role:     "user",
+			Text:     req.Text,
+			IsUser:   true,
+			AudioKey: s.validatedAudioKey(user.ID, req.AudioKey),
 		}); err != nil {
 			writeDiscussionAccessError(w, err)
 			return

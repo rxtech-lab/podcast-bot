@@ -245,6 +245,18 @@ final class APIClient: Sendable {
         )
     }
 
+    /// Transcribes an already-uploaded voice message server-side (gateway whisper)
+    /// when the device can't transcribe it on-device. Returns the recognized text,
+    /// which may be empty if the audio held no speech.
+    func transcribeAudio(key: String) async throws -> String {
+        let resp: TranscribeResponse = try await send(
+            "POST",
+            "/api/transcribe",
+            body: TranscribeRequest(audioKey: key)
+        )
+        return resp.text
+    }
+
     func generateDiscussion(id: String, language: String) async throws -> Discussion {
         try await send("POST", "/api/discussions/\(id)/generate",
                        body: DiscussionGenerateRequest(language: language))
@@ -449,8 +461,10 @@ final class APIClient: Sendable {
         try await get("/api/jobs/\(id)")
     }
 
-    func sendJobMessage(id: String, text: String, username: String, discussionID: String, shareToken: String? = nil) async throws {
-        let req = JobMessageRequest(text: text, username: username, discussionID: discussionID, shareToken: shareToken)
+    func sendJobMessage(id: String, text: String, username: String, discussionID: String, shareToken: String? = nil,
+                        audioURL: String? = nil, audioKey: String? = nil) async throws {
+        let req = JobMessageRequest(text: text, username: username, discussionID: discussionID, shareToken: shareToken,
+                                    audioURL: audioURL, audioKey: audioKey)
         try await sendNoContent("POST", "/api/jobs/\(id)/messages", body: req)
     }
 

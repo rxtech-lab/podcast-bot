@@ -202,6 +202,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /api/uploads/presign", s.handleUploadPresign)
 	s.mux.HandleFunc("POST /api/uploads/complete", s.handleUploadComplete)
 	s.mux.HandleFunc("POST /api/uploads", s.handleUpload)
+	s.mux.HandleFunc("POST /api/transcribe", s.handleTranscribeAudio)
 
 	// "video" and "dashboard" both run the upload-and-render job pipeline;
 	// only the embedded SPA differs (dashboard has its own frontend). Stream

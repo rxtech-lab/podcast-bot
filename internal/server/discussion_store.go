@@ -89,6 +89,21 @@ type DiscussionLine struct {
 	Text    string `json:"text"`
 	StartMS int64  `json:"start_ms,omitempty"`
 	IsUser  bool   `json:"is_user"`
+	// SenderUserID is the authenticated id of the human who sent this line. It is
+	// server-owned — set from the request principal in the append wrappers, never
+	// trusted from the client — so a client cannot impersonate another participant
+	// by spoofing the display name in Speaker. Empty for agent/panelist lines (no
+	// human sender) and for legacy rows written before this column existed; clients
+	// fall back to name matching only in that empty case.
+	SenderUserID string `json:"sender_user_id,omitempty"`
+	// AudioURL is a (re-signed, ephemeral) playback URL for a voice message; the
+	// agent only ever sees Text, but other participants can replay the audio. It is
+	// always derived server-side from AudioKey on read — never trusted from clients.
+	AudioURL string `json:"audio_url,omitempty"`
+	// AudioKey is the durable storage key behind AudioURL. It is server-internal
+	// (never serialized to clients) and is validated against the sender before
+	// being persisted, so it can be safely re-signed on read.
+	AudioKey string `json:"-"`
 }
 
 type DiscussionEditTurn struct {
@@ -149,7 +164,8 @@ type Discussion struct {
 }
 
 type DiscussionStore struct {
-	db *sql.DB
+	db            *sql.DB
+	joinVideoJobs bool
 }
 
 func NewDiscussionStore(dbPath, primaryURL, authToken string) (*DiscussionStore, error) {
@@ -182,6 +198,7 @@ func NewDiscussionStore(dbPath, primaryURL, authToken string) (*DiscussionStore,
 		_ = s.Close()
 		return nil, err
 	}
+	s.joinVideoJobs = s.tableExists(context.Background(), "video_jobs")
 	return s, nil
 }
 
@@ -201,6 +218,22 @@ func (s *DiscussionStore) Ping(ctx context.Context) error {
 		return nil
 	}
 	return s.db.PingContext(ctx)
+}
+
+func (s *DiscussionStore) tableExists(ctx context.Context, name string) bool {
+	if s == nil || s.db == nil || strings.TrimSpace(name) == "" {
+		return false
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
+	return err == nil && count > 0
+}
+
+func (s *DiscussionStore) videoJobsJoin() string {
+	if s != nil && s.joinVideoJobs {
+		return ` LEFT JOIN video_jobs j ON j.id = d.job_id`
+	}
+	return ""
 }
 
 func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
@@ -240,8 +273,11 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			text TEXT NOT NULL,
 			start_ms INTEGER NOT NULL DEFAULT 0,
 			is_user INTEGER NOT NULL DEFAULT 0,
+			sender_user_id TEXT NOT NULL DEFAULT '',
+			audio_url TEXT NOT NULL DEFAULT '',
+			audio_key TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
-			UNIQUE(discussion_id, speaker, role, text, is_user),
+			UNIQUE(discussion_id, speaker, role, text, is_user, audio_key),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS native_discussion_lines_discussion_idx
@@ -353,7 +389,86 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	// Voice-message columns on transcript lines are newer than the table; backfill
+	// them on databases created before audio messages were supported.
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"audio_url", "audio_url TEXT NOT NULL DEFAULT ''"},
+		{"audio_key", "audio_key TEXT NOT NULL DEFAULT ''"},
+		{"sender_user_id", "sender_user_id TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, "native_discussion_lines", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	if err := s.migrateLineUniqueness(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateLineUniqueness rebuilds native_discussion_lines so its uniqueness key
+// includes audio_key. The legacy key — (discussion_id, speaker, role, text,
+// is_user) — silently dropped a second voice message whose transcript matched an
+// earlier line (e.g. two "yes" notes, or a text line then a voice note with the
+// same words), losing its audio. Including audio_key keeps agent/text dedupe
+// intact (those rows have an empty key) while letting distinct voice notes (each
+// with a unique upload key) coexist. Idempotent: a no-op once migrated.
+func (s *DiscussionStore) migrateLineUniqueness(ctx context.Context) error {
+	var ddl string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='native_discussion_lines'`).Scan(&ddl)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if strings.Contains(ddl, "is_user, audio_key") {
+		return nil // already migrated
+	}
+	if !strings.Contains(ddl, "UNIQUE(discussion_id, speaker, role, text, is_user)") {
+		return nil // unknown shape; leave it alone
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmts := []string{
+		`CREATE TABLE native_discussion_lines_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			discussion_id TEXT NOT NULL,
+			speaker TEXT NOT NULL,
+			role TEXT NOT NULL,
+			side TEXT NOT NULL DEFAULT '',
+			text TEXT NOT NULL,
+			start_ms INTEGER NOT NULL DEFAULT 0,
+			is_user INTEGER NOT NULL DEFAULT 0,
+			sender_user_id TEXT NOT NULL DEFAULT '',
+			audio_url TEXT NOT NULL DEFAULT '',
+			audio_key TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			UNIQUE(discussion_id, speaker, role, text, is_user, audio_key),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`INSERT OR IGNORE INTO native_discussion_lines_new
+			(id, discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at)
+			SELECT id, discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at
+			FROM native_discussion_lines`,
+		`DROP TABLE native_discussion_lines`,
+		`ALTER TABLE native_discussion_lines_new RENAME TO native_discussion_lines`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_lines_discussion_idx
+			ON native_discussion_lines(discussion_id, id)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp planResponse) (*Discussion, error) {
@@ -460,16 +575,16 @@ func (s *DiscussionStore) list(ctx context.Context, owner string, visibility Dis
 	if offset < 0 {
 		offset = 0
 	}
-	where := "owner_user_id = ?"
+	where := "d.owner_user_id = ?"
 	args := []any{owner}
 	if visibility != "" {
-		where += " AND visibility = ?"
+		where += " AND d.visibility = ?"
 		args = append(args, string(visibility))
 	}
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionListSelectColumns+`
-			FROM native_discussions WHERE `+where+`
-			ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
+			FROM native_discussions d`+s.videoJobsJoin()+` WHERE `+where+`
+			ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -510,20 +625,20 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 		offset = 0
 	}
 	pattern := "%" + escapeLike(query) + "%"
-	where := "owner_user_id = ?"
+	where := "d.owner_user_id = ?"
 	args := []any{owner}
 	if visibility != "" {
-		where += " AND visibility = ?"
+		where += " AND d.visibility = ?"
 		args = append(args, string(visibility))
 	}
 	args = append(args, pattern, pattern, pattern, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionListSelectColumns+`
-			FROM native_discussions
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
+			FROM native_discussions d`+s.videoJobsJoin()+`
 			WHERE `+where+` AND (
-			topic LIKE ? ESCAPE '\' OR
-			title LIKE ? ESCAPE '\' OR
-			markdown LIKE ? ESCAPE '\')
-		ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
+			d.topic LIKE ? ESCAPE '\' OR
+			d.title LIKE ? ESCAPE '\' OR
+			d.markdown LIKE ? ESCAPE '\')
+		ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -567,11 +682,11 @@ func (s *DiscussionStore) ListByCreator(ctx context.Context, viewer, creatorID, 
 		args = append(args, pattern, pattern, pattern)
 	}
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d")+`,
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`,
 		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
 		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
 		d.owner_user_id = ? AS is_owner
-		FROM native_discussions d`+where+`
+		FROM native_discussions d`+s.videoJobsJoin()+where+`
 		ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
@@ -604,7 +719,7 @@ func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, 
 	}
 	query = strings.TrimSpace(query)
 	args := []any{viewer, viewer}
-	from := ` FROM native_discussions d`
+	from := ` FROM native_discussions d` + s.videoJobsJoin()
 	where := ` WHERE d.visibility = ? AND d.status IN (?, ?)`
 	if likedOnly {
 		from += ` JOIN native_discussion_likes mine ON mine.discussion_id = d.id AND mine.user_id = ?`
@@ -617,7 +732,7 @@ func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, 
 		args = append(args, pattern, pattern, pattern)
 	}
 	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d")+`,
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`,
 		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
 		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
 		d.owner_user_id = ? AS is_owner`+from+where+`
@@ -1206,14 +1321,14 @@ func (s *DiscussionStore) AppendLine(ctx context.Context, owner, id string, line
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return err
 	}
-	return s.appendLine(ctx, id, line)
+	return s.appendLine(ctx, id, stampSender(line, owner))
 }
 
 func (s *DiscussionStore) AppendLineVisible(ctx context.Context, viewer, id string, line DiscussionLine) error {
 	if err := s.AuthorizeDiscussionParticipation(ctx, viewer, id); err != nil {
 		return err
 	}
-	return s.appendLine(ctx, id, line)
+	return s.appendLine(ctx, id, stampSender(line, viewer))
 }
 
 // AppendLineVisibleWithToken appends a viewer's line, authorizing via a share
@@ -1223,7 +1338,19 @@ func (s *DiscussionStore) AppendLineVisibleWithToken(ctx context.Context, viewer
 	if err := s.AuthorizeShareParticipation(ctx, viewer, id, token); err != nil {
 		return err
 	}
-	return s.appendLine(ctx, id, line)
+	return s.appendLine(ctx, id, stampSender(line, viewer))
+}
+
+// stampSender fixes the line's sender identity to the authenticated principal so
+// it is server-owned and unspoofable: a user line is attributed to the caller,
+// and any client-supplied SenderUserID on a non-user (agent) line is cleared.
+func stampSender(line DiscussionLine, userID string) DiscussionLine {
+	if line.IsUser {
+		line.SenderUserID = strings.TrimSpace(userID)
+	} else {
+		line.SenderUserID = ""
+	}
+	return line
 }
 
 func (s *DiscussionStore) AuthorizeDiscussionParticipation(ctx context.Context, viewer, id string) error {
@@ -1300,10 +1427,20 @@ func (s *DiscussionStore) ReplaceTranscript(ctx context.Context, id string, line
 		if text == "" {
 			continue
 		}
+		// Preserve each line's real speak time as created_at. This batch deletes
+		// and re-inserts every agent line on each call, so stamping time.Now()
+		// here collapsed all agent lines to the moment of the last rewrite —
+		// which then sorted them after any user message sent during generation
+		// (they interleave by created_at). Carrying l.At keeps the transcript in
+		// true chronological order across reloads; fall back to now if unset.
+		createdAt := l.At.UnixMilli()
+		if l.At.IsZero() {
+			createdAt = time.Now().UnixMilli()
+		}
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
 			(discussion_id, speaker, role, side, text, start_ms, is_user, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0, time.Now().UnixMilli())
+			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0, createdAt)
 		if err != nil {
 			return err
 		}
@@ -1339,8 +1476,13 @@ func (s *DiscussionStore) LinesByJob(ctx context.Context, jobID string) ([]Discu
 }
 
 func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLine, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user
-		FROM native_discussion_lines WHERE discussion_id = ? ORDER BY id`, id)
+	// Order by created_at so user messages and agent lines interleave in true
+	// chronological order. id alone was unreliable: ReplaceTranscript deletes and
+	// re-inserts every agent line, giving them fresh (higher) ids than user
+	// messages appended earlier, so id-order clumped all user messages ahead of
+	// the agent transcript on reload. id is the stable tiebreak for equal stamps.
+	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key
+		FROM native_discussion_lines WHERE discussion_id = ? ORDER BY created_at, id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1349,7 +1491,7 @@ func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLin
 	for rows.Next() {
 		var line DiscussionLine
 		var isUser int
-		if err := rows.Scan(&line.Speaker, &line.Role, &line.Side, &line.Text, &line.StartMS, &isUser); err != nil {
+		if err := rows.Scan(&line.Speaker, &line.Role, &line.Side, &line.Text, &line.StartMS, &isUser, &line.SenderUserID, &line.AudioURL, &line.AudioKey); err != nil {
 			return nil, err
 		}
 		line.IsUser = isUser != 0
@@ -1444,10 +1586,12 @@ func (s *DiscussionStore) appendLine(ctx context.Context, id string, line Discus
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
-		(discussion_id, speaker, role, side, text, start_ms, is_user, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, strings.TrimSpace(line.Speaker), strings.TrimSpace(line.Role), strings.TrimSpace(line.Side),
-		text, line.StartMS, boolInt(line.IsUser), time.Now().UnixMilli())
+		text, line.StartMS, boolInt(line.IsUser), strings.TrimSpace(line.SenderUserID),
+		strings.TrimSpace(line.AudioURL), strings.TrimSpace(line.AudioKey),
+		time.Now().UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -1460,19 +1604,21 @@ type discussionScanner interface {
 }
 
 func prefixedDiscussionSelectColumns(prefix string) string {
-	return prefixedDiscussionColumns(prefix, discussionSelectColumns)
+	return prefixedDiscussionColumns(prefix, discussionSelectColumns, false)
 }
 
-func prefixedDiscussionListSelectColumns(prefix string) string {
-	return prefixedDiscussionColumns(prefix, discussionListSelectColumns)
+func prefixedDiscussionListSelectColumns(prefix string, joinVideoJobs bool) string {
+	return prefixedDiscussionColumns(prefix, discussionListSelectColumns, joinVideoJobs)
 }
 
-func prefixedDiscussionColumns(prefix, columns string) string {
+func prefixedDiscussionColumns(prefix, columns string, joinVideoJobs bool) string {
 	cols := strings.Split(columns, ",")
 	for i, col := range cols {
 		col = strings.TrimSpace(col)
 		if strings.HasPrefix(col, "'' AS ") || strings.HasPrefix(col, "'[]' AS ") {
 			cols[i] = col
+		} else if joinVideoJobs && col == "status" {
+			cols[i] = "CASE WHEN j.status = 'done' THEN 'ready' WHEN j.status = 'error' THEN 'failed' ELSE " + prefix + ".status END AS status"
 		} else {
 			cols[i] = prefix + "." + col
 		}

@@ -86,8 +86,10 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid visibility", http.StatusBadRequest)
 		return
 	}
+	timer := newStationTimer()
 	var items []Discussion
 	var err error
+	qStart := time.Now()
 	if query != "" && visibility != "" {
 		items, err = s.d.Discussions.SearchByVisibility(r.Context(), user.ID, query, visibility, limit, offset)
 	} else if query != "" {
@@ -97,17 +99,14 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 	} else {
 		items, err = s.d.Discussions.List(r.Context(), user.ID, limit, offset)
 	}
+	timer.mark("query", qStart)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for i := range items {
-		s.applyDiscussionJobStatus(r, &items[i])
-		s.refreshDiscussionCoverURL(r.Context(), &items[i])
-		s.sanitizeDiscussionUsage(&items[i])
-	}
-	s.applyDiscussionProgresses(r.Context(), items)
+	s.prepareDiscussionListRows(r, items, timer)
 	writeJSON(w, items)
+	s.logStationTiming("discussions.list", len(items), timer)
 }
 
 func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
@@ -124,9 +123,10 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		s.applyDiscussionJobStatus(r, d)
+		s.applyDiscussionJobStatus(r, d, true)
 		s.applyDiscussionProgress(r.Context(), d)
 		s.refreshDiscussionCoverURL(r.Context(), d)
+		s.refreshDiscussionLineAudioURLs(r.Context(), d)
 		s.sanitizeDiscussionUsage(d)
 		writeJSON(w, d)
 		return
@@ -135,9 +135,10 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 	if d == nil {
 		return
 	}
-	s.applyDiscussionJobStatus(r, d)
+	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
+	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
@@ -225,7 +226,7 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	s.applyDiscussionJobStatus(r, updated)
+	s.applyDiscussionJobStatus(r, updated, true)
 	s.applyDiscussionProgress(r.Context(), updated)
 	s.refreshDiscussionCoverURL(r.Context(), updated)
 	s.sanitizeDiscussionUsage(updated)
@@ -256,7 +257,7 @@ func (s *Server) handleUpdateSpeakerModel(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	s.applyDiscussionJobStatus(r, updated)
+	s.applyDiscussionJobStatus(r, updated, true)
 	s.applyDiscussionProgress(r.Context(), updated)
 	s.refreshDiscussionCoverURL(r.Context(), updated)
 	s.sanitizeDiscussionUsage(updated)
@@ -1074,13 +1075,37 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 	writeJSON(w, updated)
 }
 
+// discussionAppendLineRequest is the body of POST /api/discussions/{id}/lines.
+// audio_key is accepted from the client but validated against the sender before
+// persistence; audio_url is intentionally not accepted (the server derives the
+// playback URL from the validated key on read).
+type discussionAppendLineRequest struct {
+	Speaker  string `json:"speaker"`
+	Role     string `json:"role"`
+	Side     string `json:"side"`
+	Text     string `json:"text"`
+	StartMS  int64  `json:"start_ms"`
+	IsUser   bool   `json:"is_user"`
+	AudioKey string `json:"audio_key"`
+}
+
 func (s *Server) handleDiscussionAppendLine(w http.ResponseWriter, r *http.Request) {
-	var line DiscussionLine
-	if !decodeJSONBody(w, r, &line) {
+	var req discussionAppendLineRequest
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	user := s.requestUser(r)
+	line := DiscussionLine{
+		Speaker:  req.Speaker,
+		Role:     req.Role,
+		Side:     req.Side,
+		Text:     req.Text,
+		StartMS:  req.StartMS,
+		IsUser:   req.IsUser,
+		AudioKey: s.validatedAudioKey(user.ID, req.AudioKey),
+	}
 	token := strings.TrimSpace(r.Header.Get("X-Share-Token"))
-	if err := s.d.Discussions.AppendLineVisibleWithToken(r.Context(), s.requestUser(r).ID, r.PathValue("id"), token, line); err != nil {
+	if err := s.d.Discussions.AppendLineVisibleWithToken(r.Context(), user.ID, r.PathValue("id"), token, line); err != nil {
 		writeDiscussionAccessError(w, err)
 		return
 	}
@@ -1124,7 +1149,27 @@ func (s *Server) getOwnedDiscussion(w http.ResponseWriter, r *http.Request) *Dis
 	return d
 }
 
-func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
+func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, timer *stationTimer) {
+	var coverDur, usageDur time.Duration
+	for i := range items {
+		// List rows skip resolving the presigned audio download URL — it is
+		// only needed on the detail screen and re-signing it per item is slow.
+		t0 := time.Now()
+		s.refreshDiscussionCoverURL(r.Context(), &items[i])
+		t1 := time.Now()
+		s.sanitizeDiscussionUsage(&items[i])
+		items[i].DownloadURL = ""
+		coverDur += t1.Sub(t0)
+		usageDur += time.Since(t1)
+	}
+	timer.add("cover", coverDur)
+	timer.add("usage", usageDur)
+}
+
+// applyDiscussionJobStatus reconciles a discussion's status against its job and
+// settles usage/points. resolveDownloadURL controls whether the (expensive,
+// presigned) audio download URL is resolved.
+func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion, resolveDownloadURL bool) {
 	if d == nil {
 		return
 	}
@@ -1143,13 +1188,23 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion) {
 			return
 		}
 	}
+	s.applyDiscussionJob(r, d, j, resolveDownloadURL)
+}
+
+func (s *Server) applyDiscussionJob(r *http.Request, d *Discussion, j *Job, resolveDownloadURL bool) {
+	if d == nil || j == nil {
+		return
+	}
+	defer d.refreshComputedFields()
 	switch {
 	case j.Status == JobDone:
 		d.Status = DiscussionReady
-		if url := s.jobDownloadURL(r.Context(), j); url != "" {
-			d.DownloadURL = url
-		} else if d.DownloadURL == "" && j.DownloadURL != "" {
-			d.DownloadURL = j.DownloadURL
+		if resolveDownloadURL {
+			if url := s.jobDownloadURL(r.Context(), j); url != "" {
+				d.DownloadURL = url
+			} else if d.DownloadURL == "" && j.DownloadURL != "" {
+				d.DownloadURL = j.DownloadURL
+			}
 		}
 		_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionReady, d.DownloadURL)
 		if jobHasBillableUsage(j) {

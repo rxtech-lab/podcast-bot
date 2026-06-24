@@ -217,8 +217,9 @@ func (s *Server) handleShareJoin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "share link expired", http.StatusGone)
 		return
 	}
-	s.applyDiscussionJobStatus(r, d)
+	s.applyDiscussionJobStatus(r, d, true)
 	s.refreshDiscussionCoverURL(r.Context(), d)
+	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }

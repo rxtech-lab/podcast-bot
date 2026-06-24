@@ -30,52 +30,46 @@ struct MarketplaceView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            TabView(selection: $selectedTab) {
-                Tab("Market", systemImage: "music.note.list", value: MarketTab.market) {
+        TabView(selection: $selectedTab) {
+            Tab("Market", systemImage: "music.note.list", value: MarketTab.market) {
+                marketNavigationStack {
                     marketContent(tab: .market,
                                   stations: marketStations,
                                   emptyTitle: "No Public \(AppStringLiteral.stationsNameRaw)",
                                   emptyMessage: "Public \(AppStringLiteral.stationsNameRaw) will appear here.")
                 }
+            }
 
-                Tab("Liked", systemImage: "heart.fill", value: MarketTab.liked) {
+            Tab("Liked", systemImage: "heart.fill", value: MarketTab.liked) {
+                marketNavigationStack {
                     marketContent(tab: .liked,
                                   stations: likedStations,
                                   emptyTitle: "No Liked \(AppStringLiteral.stationsNameRaw)",
                                   emptyMessage: "Saved \(AppStringLiteral.stationsNameRaw) appear here.")
                 }
+            }
 
-                Tab("Profile", systemImage: "person.crop.circle", value: MarketTab.profile) {
+            Tab("Profile", systemImage: "person.crop.circle", value: MarketTab.profile) {
+                marketNavigationStack {
                     profileContent
                 }
+            }
 
-                Tab(value: MarketTab.search, role: .search) {
+            Tab(value: MarketTab.search, role: .search) {
+                marketNavigationStack(title: "Search") {
                     marketContent(tab: .search,
                                   stations: searchResults,
                                   emptyTitle: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Search Market" : "No Results",
                                   emptyMessage: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Search public \(AppStringLiteral.stationsNameRaw)." : "No public \(AppStringLiteral.stationsNameRaw) match your search.")
-                        .searchable(text: $searchText,
-                                    prompt: "Search public \(AppStringLiteral.stationsNameRaw)")
-                        .autocorrectionDisabled(true)
-                        .textInputAutocapitalization(.never)
-                        .onSubmit(of: .search) {
-                            searchTask?.cancel()
-                            Task { await load(reset: true) }
-                        }
                 }
-            }
-            .navigationTitle("Market")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close")
+                .searchable(text: $searchText,
+                            prompt: "Search public \(AppStringLiteral.stationsNameRaw)")
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.never)
+                .onSubmit(of: .search) {
+                    searchTask?.cancel()
+                    Task { await load(reset: true) }
                 }
-            }
-            .background(Theme.background.ignoresSafeArea())
-            .navigationDestination(for: Discussion.self) { discussion in
-                PodcastPlayerView(discussion: discussion, onCreatedFromPlan: onCreateFromPlan)
             }
         }
         .sheet(item: $presentedCreator, onDismiss: {
@@ -100,6 +94,27 @@ struct MarketplaceView: View {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    private func marketNavigationStack<Content: View>(
+        title: String = "Market",
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        NavigationStack(path: $path) {
+            content()
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { dismiss() } label: { Image(systemName: "xmark") }
+                            .accessibilityLabel("Close")
+                    }
+                }
+                .background(Theme.background.ignoresSafeArea())
+                .navigationDestination(for: Discussion.self) { discussion in
+                    PodcastPlayerView(discussion: discussion, onCreatedFromPlan: onCreateFromPlan)
+                }
         }
     }
 
@@ -327,17 +342,22 @@ struct MarketplaceView: View {
             let api = APIClient(tokens: auth)
             if selectedTab == .market {
                 let items = try await api.marketStations(limit: pageSize, offset: reset ? 0 : marketStations.count, query: query)
-                if reset { marketStations = items } else { append(items, to: .market) }
+                let merged = preservingKnownCovers(in: items)
+                if reset { marketStations = merged } else { append(merged, to: .market) }
                 canLoadMoreMarket = items.count == pageSize
             } else if selectedTab == .liked {
                 let items = try await api.likedMarketStations(limit: pageSize, offset: reset ? 0 : likedStations.count, query: query)
-                if reset { likedStations = items } else { append(items, to: .liked) }
+                let merged = preservingKnownCovers(in: items)
+                if reset { likedStations = merged } else { append(merged, to: .liked) }
                 canLoadMoreLiked = items.count == pageSize
             } else if selectedTab == .profile {
-                marketProfile = try await api.marketProfile()
+                var profile = try await api.marketProfile()
+                profile.stations = preservingKnownCovers(in: profile.stations)
+                marketProfile = profile
             } else {
                 let items = try await api.marketStations(limit: pageSize, offset: reset ? 0 : searchResults.count, query: query)
-                if reset { searchResults = items } else { append(items, to: .search) }
+                let merged = preservingKnownCovers(in: items)
+                if reset { searchResults = merged } else { append(merged, to: .search) }
                 canLoadMoreSearch = items.count == pageSize
             }
         } catch {
@@ -400,7 +420,7 @@ struct MarketplaceView: View {
                 let updated = (station.isLiked == true)
                     ? try await api.unlikeMarketStation(id: station.id)
                     : try await api.likeMarketStation(id: station.id)
-                upsert(updated)
+                upsert(updated.preservingRenderableCover(from: station))
             } catch {
                 report(error)
             }
@@ -409,18 +429,19 @@ struct MarketplaceView: View {
 
     @MainActor
     private func upsert(_ station: Discussion) {
-        replace(station, in: &marketStations)
-        replace(station, in: &searchResults)
-        if station.isLiked == true {
-            replace(station, in: &likedStations)
+        let merged = preservingKnownCover(for: station)
+        replace(merged, in: &marketStations)
+        replace(merged, in: &searchResults)
+        if merged.isLiked == true {
+            replace(merged, in: &likedStations)
             if !likedStations.contains(where: { $0.id == station.id }) {
-                likedStations.insert(station, at: 0)
+                likedStations.insert(merged, at: 0)
             }
         } else {
-            likedStations.removeAll { $0.id == station.id }
+            likedStations.removeAll { $0.id == merged.id }
         }
         if var profile = marketProfile {
-            replace(station, in: &profile.stations)
+            replace(merged, in: &profile.stations)
             marketProfile = profile
         }
     }
@@ -429,6 +450,21 @@ struct MarketplaceView: View {
         if let index = list.firstIndex(where: { $0.id == station.id }) {
             list[index] = station
         }
+    }
+
+    private func preservingKnownCovers(in items: [Discussion]) -> [Discussion] {
+        items.map(preservingKnownCover(for:))
+    }
+
+    private func preservingKnownCover(for station: Discussion) -> Discussion {
+        for existing in knownStations where existing.id == station.id {
+            return station.preservingRenderableCover(from: existing)
+        }
+        return station
+    }
+
+    private var knownStations: [Discussion] {
+        marketStations + likedStations + searchResults + (marketProfile?.stations ?? [])
     }
 
     @MainActor
@@ -815,7 +851,7 @@ struct CreatorProfileView: View {
                     ? try await api.unlikeMarketStation(id: station.id)
                     : try await api.likeMarketStation(id: station.id)
                 if let index = stations.firstIndex(where: { $0.id == updated.id }) {
-                    stations[index] = updated
+                    stations[index] = updated.preservingRenderableCover(from: station)
                 }
             } catch {
                 report(error)
@@ -836,8 +872,7 @@ struct StationCoverArt: View {
 
     var body: some View {
         ZStack {
-            if let urlString = cover?.imageURL,
-               let url = URL(string: urlString) {
+            if let url = cover?.renderableImageURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
@@ -870,7 +905,7 @@ struct StationCoverArt: View {
     }
 
     private var showsTitleOverlay: Bool {
-        cover?.hasImage != true
+        cover?.renderableImageURL == nil
     }
 
     private var gradient: some View {

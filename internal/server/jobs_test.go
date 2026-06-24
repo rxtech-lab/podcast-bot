@@ -488,7 +488,7 @@ func TestApplyDiscussionJobStatusMarksMissingGeneratingJobFailed(t *testing.T) {
 		UploadRoot:  filepath.Join(t.TempDir(), "uploads"),
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/api/discussions", nil)
-	s.applyDiscussionJobStatus(req, generating)
+	s.applyDiscussionJobStatus(req, generating, true)
 	if generating.Status != DiscussionFailed {
 		t.Fatalf("status = %q, want failed", generating.Status)
 	}
@@ -559,7 +559,7 @@ func TestApplyDiscussionJobStatusChargesFromStoredDiscussionUsage(t *testing.T) 
 		UploadRoot:  filepath.Join(t.TempDir(), "uploads"),
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/api/discussions", nil)
-	s.applyDiscussionJobStatus(req, generating)
+	s.applyDiscussionJobStatus(req, generating, true)
 	if generating.Status != DiscussionReady {
 		t.Fatalf("status = %q, want ready", generating.Status)
 	}
@@ -626,7 +626,7 @@ func TestApplyDiscussionJobStatusDoesNotChargeStoredUsageWithoutReservation(t *t
 		UploadRoot:  filepath.Join(t.TempDir(), "uploads"),
 	}}
 	req := httptest.NewRequest(http.MethodPatch, "/api/discussions/"+created.ID+"/visibility", nil)
-	s.applyDiscussionJobStatus(req, discussion)
+	s.applyDiscussionJobStatus(req, discussion, true)
 	if discussion.Status != DiscussionReady {
 		t.Fatalf("status = %q, want ready", discussion.Status)
 	}

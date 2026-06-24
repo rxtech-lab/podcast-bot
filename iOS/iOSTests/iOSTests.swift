@@ -375,6 +375,29 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(merged.lines?.map(\.text), ["Local final line"])
     }
 
+    func testLikedStationPreservesKnownRenderableCoverURL() throws {
+        var marketStation = try decodeDiscussion(status: "ready", pointsCharged: 0)
+        marketStation.cover = DiscussionCover(type: "image",
+                                               imageURL: "https://cdn.example/cover.webp?signature=abc",
+                                               imageKey: "covers/discussion-1.webp",
+                                               gradientStart: nil,
+                                               gradientEnd: nil,
+                                               prompt: nil)
+        var likeResponse = try decodeDiscussion(status: "ready", pointsCharged: 0)
+        likeResponse.cover = DiscussionCover(type: "image",
+                                             imageURL: nil,
+                                             imageKey: "covers/discussion-1.webp",
+                                             gradientStart: nil,
+                                             gradientEnd: nil,
+                                             prompt: nil)
+
+        let merged = likeResponse.preservingRenderableCover(from: marketStation)
+
+        XCTAssertEqual(merged.cover?.imageURL, marketStation.cover?.imageURL)
+        XCTAssertNotNil(merged.cover?.renderableImageURL)
+        XCTAssertNil(likeResponse.cover?.renderableImageURL)
+    }
+
     func testSpeakerInitialsIgnoreParenthesizedRomanization() {
         XCTAssertEqual(SpeakerPalette.initials(for: "陆严 (LU YAN)"), "陆")
         XCTAssertEqual(SpeakerPalette.initials(for: "陆严（LU YAN）"), "陆")

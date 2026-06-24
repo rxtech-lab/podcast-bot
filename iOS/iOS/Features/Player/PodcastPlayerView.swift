@@ -16,6 +16,7 @@ struct PodcastPlayerView: View {
     /// Non-nil when this discussion was opened via a private share link; passed
     /// to the player model so a non-owner participant's comments are authorized.
     var shareToken: String? = nil
+    var onSignOut: (() -> Void)?
 
     @State private var model: PlayerModel?
     @State private var message = ""
@@ -29,6 +30,7 @@ struct PodcastPlayerView: View {
     @State private var showingShareSheet = false
     @State private var showingCreatorProfile = false
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var showingRecorder = false
     @State private var isUploadingAttachment = false
     @State private var isCreatingFromPlan = false
     @State private var createFromPlanError: String?
@@ -123,6 +125,7 @@ struct PodcastPlayerView: View {
                 let m = PlayerModel(discussion: discussion,
                                     api: APIClient(tokens: auth),
                                     username: auth.currentUser?.name ?? "You",
+                                    userID: auth.currentUser?.id ?? "",
                                     shareToken: shareToken)
                 m.start()
                 model = m
@@ -176,7 +179,8 @@ struct PodcastPlayerView: View {
                         onMakePrivate: { makePrivate(model) },
                         onShare: { showingShareSheet = true },
                         isCreatingFromPlan: isCreatingFromPlan,
-                        onCreateFromPlan: createFromPlanAction
+                        onCreateFromPlan: createFromPlanAction,
+                        onSignOut: onSignOut
                     )
                 } else {
                     PodcastLoadingMenu(
@@ -184,7 +188,8 @@ struct PodcastPlayerView: View {
                         pointsMenuLabel: pointsMenuLabel,
                         onShowPoints: { showingPointsHistory = true },
                         isCreatingFromPlan: isCreatingFromPlan,
-                        onCreateFromPlan: createFromPlanAction
+                        onCreateFromPlan: createFromPlanAction,
+                        onSignOut: onSignOut
                     )
                 }
             }
@@ -196,7 +201,10 @@ struct PodcastPlayerView: View {
     }
 
     private var showsActionsMenu: Bool {
-        purchases.isConfigured || model?.showsPodcastActions == true || onCreatedFromPlan != nil
+        purchases.isConfigured
+            || model?.showsPodcastActions == true
+            || onCreatedFromPlan != nil
+            || onSignOut != nil
     }
 
     private var createFromPlanAction: (() -> Void)? {
@@ -245,18 +253,39 @@ struct PodcastPlayerView: View {
     @ViewBuilder
     private func transcriptRow(_ item: TranscriptListItem) -> some View {
         switch item {
-        case .line(let line):
-            TranscriptBubble(line: line)
+        case .line(let line, let isMine):
+            TranscriptBubble(line: line, isMine: isMine)
         case .usage(_, let points):
             PointsSummaryBubble(points: points)
         }
+    }
+
+    /// Whether a transcript line was authored by *this* participant. Only
+    /// user-authored lines qualify (panelists never). Ownership is decided by the
+    /// server-owned `senderUserID` so another human participant — who also arrives
+    /// with `isUser == true` — never renders in my accent bubble. Display-name
+    /// matching is used only as a fallback for legacy rows that predate the sender
+    /// id (no id on either side to compare).
+    private func isMyLine(_ line: LiveLine) -> Bool {
+        guard line.isUser else { return false }
+        if let sender = line.senderUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sender.isEmpty {
+            let myID = (model?.currentUserID ?? auth.currentUser?.id ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return !myID.isEmpty && sender == myID
+        }
+        // Legacy fallback: rows persisted before senderUserID existed.
+        let me = (model?.currentUsername ?? auth.currentUser?.name ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !me.isEmpty else { return false }
+        return line.speaker.caseInsensitiveCompare(me) == .orderedSame
     }
 
     /// Transcript lines, plus the points summary as a trailing accessory row.
     private func transcriptItems(for model: PlayerModel) -> [TranscriptListItem] {
         var items = model.lines
             .filter { PlayerModel.isVisibleTranscriptLine($0) }
-            .map { TranscriptListItem.line($0) }
+            .map { TranscriptListItem.line($0, isMine: isMyLine($0)) }
         // Show only the points this podcast consumed (planning + generation),
         // never the underlying token/cost detail. Points are known once the
         // discussion is charged (after generation completes).
@@ -303,6 +332,11 @@ struct PodcastPlayerView: View {
         return HStack(spacing: 10) {
             Menu {
                 Button {
+                    showingRecorder = true
+                } label: {
+                    Label("Record Audio", systemImage: "mic.fill")
+                }
+                Button {
                     showingPhotos = true
                 } label: {
                     Label("Photo Library", systemImage: "photo.on.rectangle")
@@ -316,7 +350,7 @@ struct PodcastPlayerView: View {
                 if isUploadingAttachment {
                     ProgressView().controlSize(.small).tint(attachmentColor)
                 } else {
-                    Image(systemName: "paperclip").font(.title3).foregroundStyle(attachmentColor)
+                    Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(attachmentColor)
                 }
             }
             .disabled(isUploadingAttachment || !canSend)
@@ -345,6 +379,44 @@ struct PodcastPlayerView: View {
         .photosPicker(isPresented: $showingPhotos, selection: $selectedPhoto, matching: .images)
         .onChange(of: selectedPhoto) { _, item in
             if let item { sharePhoto(item, model: model) }
+        }
+        .sheet(isPresented: $showingRecorder) {
+            VoiceRecorderSheet(defaultLanguage: model.discussion.language) { recording in
+                sendVoiceMessage(recording, model: model)
+            }
+        }
+    }
+
+    /// Uploads a recorded voice message to S3, then sends it: the transcript is the
+    /// message text the agent reads, the audio URL/key let others replay it.
+    private func sendVoiceMessage(_ recording: VoiceMessageRecorder.Recording, model: PlayerModel) {
+        let access = recording.fileURL.startAccessingSecurityScopedResource()
+        let data = try? Data(contentsOf: recording.fileURL)
+        if access { recording.fileURL.stopAccessingSecurityScopedResource() }
+        try? FileManager.default.removeItem(at: recording.fileURL)
+        guard let data else { return }
+        let filename = "Voice-\(UUID().uuidString.prefix(6)).m4a"
+        isUploadingAttachment = true
+        let api = APIClient(tokens: auth)
+        Task { @MainActor in
+            defer { isUploadingAttachment = false }
+            do {
+                let resp = try await api.uploadFile(data: data, filename: filename, mimeType: recording.mimeType)
+                // Prefer the on-device transcript. When the device couldn't produce
+                // one, fall back to a server-side (gateway whisper) transcription so
+                // the agent still reads the message — but never block sending.
+                var text = recording.transcript
+                if text.isEmpty, let key = resp.key {
+                    text = (try? await api.transcribeAudio(key: key)) ?? ""
+                }
+                model.send(text, audioURL: resp.url, audioKey: resp.key)
+            } catch {
+                // Best-effort: fall back to sending the transcript as plain text so
+                // the user's message still reaches the discussion.
+                if !recording.transcript.isEmpty {
+                    model.send(recording.transcript)
+                }
+            }
         }
     }
 
@@ -460,6 +532,7 @@ struct PodcastActionsMenu: View {
     var onShare: () -> Void = {}
     let isCreatingFromPlan: Bool
     let onCreateFromPlan: (() -> Void)?
+    var onSignOut: (() -> Void)?
 
     /// The plain, permanent public deep link for a published discussion.
     private var publicShareURL: URL {
@@ -527,10 +600,27 @@ struct PodcastActionsMenu: View {
                 }
                 .disabled(!model.canForceStop)
             }
+            if let onSignOut {
+                if hasNonSignOutActions {
+                    Divider()
+                }
+                Button(role: .destructive, action: onSignOut) {
+                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+            }
         } label: {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("\(AppStringLiteral.stationNameRaw) actions")
+    }
+
+    private var hasNonSignOutActions: Bool {
+        showsPoints
+            || onCreateFromPlan != nil
+            || model.discussion.isOwner != false
+            || model.discussion.isPublic
+            || model.canDownloadPodcast
+            || model.showsForceStopAction
     }
 }
 
@@ -540,6 +630,7 @@ struct PodcastLoadingMenu: View {
     let onShowPoints: () -> Void
     let isCreatingFromPlan: Bool
     let onCreateFromPlan: (() -> Void)?
+    var onSignOut: (() -> Void)?
 
     var body: some View {
         Menu {
@@ -559,6 +650,14 @@ struct PodcastLoadingMenu: View {
                           systemImage: isCreatingFromPlan ? "hourglass" : "plus.circle")
                 }
                 .disabled(isCreatingFromPlan)
+            }
+            if let onSignOut {
+                if showsPoints || onCreateFromPlan != nil {
+                    Divider()
+                }
+                Button(role: .destructive, action: onSignOut) {
+                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                }
             }
         } label: {
             Image(systemName: "ellipsis.circle")
@@ -700,18 +799,22 @@ private struct PlanSheetView: View {
 /// A row in the transcript `MessageList`: either a live transcript line or the
 /// trailing points-summary accessory.
 private enum TranscriptListItem: Identifiable, MessageListItem {
-    case line(LiveLine)
+    /// `isMine` is the current user's ownership of the line (server-owned identity,
+    /// not the broad `LiveLine.isUser` "human-authored" flag). It drives both the
+    /// bubble styling and `isUserMessage` pinning, so another participant's message
+    /// is never pinned/scrolled as if it were my outgoing turn.
+    case line(LiveLine, isMine: Bool)
     case usage(id: UUID, points: String)
 
     var id: UUID {
         switch self {
-        case .line(let line): return line.id
+        case .line(let line, _): return line.id
         case .usage(let id, _): return id
         }
     }
 
     var isUserMessage: Bool {
-        if case .line(let line) = self { return line.isUser }
+        if case .line(_, let isMine) = self { return isMine }
         return false
     }
 
@@ -805,44 +908,69 @@ private struct SpeakerAvatar: View {
     }
 }
 
-/// One transcript message: agents left with an avatar + name header, the user
-/// right in an accent bubble (mockup image 4).
+/// One transcript message: the current user's own turns sit right in an accent
+/// bubble (mockup image 4); everyone else — AI panelists *and* other human
+/// participants — render left with an avatar + name header in their own color,
+/// so a co-listener's comment reads as a distinct speaker rather than as my own
+/// message. `isMine` (not `line.isUser`) drives this: other users also persist
+/// with `isUser == true`, so the flag alone can't tell them apart from me.
 private struct TranscriptBubble: View {
     let line: LiveLine
+    /// True only when this line was authored by the current participant.
+    let isMine: Bool
 
     private var speakerColor: Color { SpeakerPalette.color(for: line.speaker) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if line.isUser { Spacer(minLength: 40) }
-            if !line.isUser {
+            if isMine { Spacer(minLength: 40) }
+            if !isMine {
                 SpeakerAvatar(speaker: line.speaker)
             }
-            VStack(alignment: line.isUser ? .trailing : .leading, spacing: 4) {
-                if !line.isUser {
-                    Text(line.speaker.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(speakerColor)
-                }
-                bubbleText
-                    .font(.body)
-                    .padding(12)
-                    .background(bubbleStyle, in: .rect(cornerRadius: 18))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18)
-                            .strokeBorder(line.isUser ? .clear : speakerColor.opacity(0.28),
-                                          lineWidth: 0.5)
+            VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
+                if !isMine {
+                    HStack(spacing: 6) {
+                        Text(line.speaker.uppercased())
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(speakerColor)
+                        // Tag a human participant's turn so a co-listener's comment
+                        // is not mistaken for an AI panelist's line.
+                        if line.isUser {
+                            Text("USER", comment: "Badge marking a transcript line as written by a human participant, not an AI panelist")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(speakerColor)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .overlay {
+                                    Capsule().strokeBorder(speakerColor.opacity(0.5), lineWidth: 0.5)
+                                }
+                        }
                     }
-                    .foregroundStyle(line.isUser ? .white : .primary)
+                }
+                VStack(alignment: isMine ? .trailing : .leading, spacing: 8) {
+                    if let audioURL = line.audioURL, !audioURL.isEmpty {
+                        VoiceMessageControl(urlString: audioURL, isUser: isMine)
+                    }
+                    bubbleText
+                }
+                .font(.body)
+                .padding(12)
+                .background(bubbleStyle, in: .rect(cornerRadius: 18))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18)
+                        .strokeBorder(isMine ? .clear : speakerColor.opacity(0.28),
+                                      lineWidth: 0.5)
+                }
+                .foregroundStyle(isMine ? .white : .primary)
             }
-            if !line.isUser { Spacer(minLength: 40) }
+            if !isMine { Spacer(minLength: 40) }
         }
     }
 
-    /// User bubbles get an accent gradient for depth; agent bubbles take a soft
-    /// tint of their speaker color so each panelist's turns are recognizable.
+    /// My bubbles get an accent gradient for depth; everyone else takes a soft
+    /// tint of their speaker color so each speaker's turns are recognizable.
     private var bubbleStyle: AnyShapeStyle {
-        if line.isUser {
+        if isMine {
             AnyShapeStyle(LinearGradient(
                 colors: [Theme.accent, Theme.accent.opacity(0.82)],
                 startPoint: .topLeading,
@@ -853,6 +981,10 @@ private struct TranscriptBubble: View {
         }
     }
 
+    /// Human messages (mine or another participant's) are plain typed text, so we
+    /// render them with `Text`, which hugs its content — otherwise `MarkdownText`'s
+    /// block layout greedily fills the row and leaves the bubble far wider than the
+    /// message. Only agent lines actually contain markdown.
     @ViewBuilder
     private var bubbleText: some View {
         if line.isUser {
@@ -871,17 +1003,47 @@ private struct PointsSummaryBubble: View {
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("This \(AppStringLiteral.stationNameRaw)", systemImage: "sparkles")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(Theme.accent)
-                Text("Used \(points)")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent.opacity(0.14))
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.accent)
+                }
+                .frame(width: 38, height: 38)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Points used")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.secondaryText)
+                    Text(points)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .monospacedDigit()
+                }
             }
-            .padding(14)
-            .background(Theme.agentBubble, in: .rect(cornerRadius: 14))
+            .padding(.leading, 10)
+            .padding(.trailing, 16)
+            .padding(.vertical, 10)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: [
+                            Theme.accent.opacity(0.13),
+                            Color(uiColor: .secondarySystemBackground)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Theme.accent.opacity(0.18), lineWidth: 0.75)
+            }
+            .shadow(color: Theme.accent.opacity(0.08), radius: 10, x: 0, y: 5)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Points used: \(points)")
             Spacer(minLength: 40)
         }
     }
@@ -996,7 +1158,7 @@ private struct PodcastPinPreview: View {
 
     private var isStreaming: Bool { !(lines.last?.done ?? true) }
 
-    private func items() -> [TranscriptListItem] { lines.map { .line($0) } }
+    private func items() -> [TranscriptListItem] { lines.map { .line($0, isMine: $0.isUser) } }
 
     var body: some View {
         ZStack {
@@ -1007,8 +1169,8 @@ private struct PodcastPinPreview: View {
                 shouldScrollToBottom: shouldScrollToBottom,
                 isAtBottom: $isAtBottom
             ) { item in
-                if case .line(let line) = item {
-                    TranscriptBubble(line: line)
+                if case .line(let line, let isMine) = item {
+                    TranscriptBubble(line: line, isMine: isMine)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
                 }

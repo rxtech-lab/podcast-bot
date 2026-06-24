@@ -23,5 +23,11 @@
 	<array>
 		<string>webcredentials:rxlab.app</string>
 	</array>
+
+	<!-- App Clip association: parent app must declare the Clip's app identifier. -->
+	<key>com.apple.developer.associated-appclip-app-identifiers</key>
+	<array>
+		<string>$(AppIdentifierPrefix)app.rxlab.debate-bot.Clip</string>
+	</array>
 </dict>
 </plist>

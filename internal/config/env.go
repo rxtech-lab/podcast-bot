@@ -29,6 +29,14 @@ type Env struct {
 	CompressionKey     string
 	CompressionModel   string
 
+	// TranscribeModel is the Gemini model used to transcribe a voice message
+	// server-side when the sender's device can't do it on-device (no on-device
+	// model for the language, or Speech recognition unauthorized). Transcription
+	// runs through Google's generateContent (reusing GeminiAPIKey) because the
+	// Vercel AI Gateway does not proxy an OpenAI /audio/transcriptions endpoint.
+	// Defaults to "gemini-2.5-flash"; override with GEMINI_TRANSCRIBE_MODEL.
+	TranscribeModel string
+
 	// Optional pricing override for OpenAI-compatible chat calls. Values are
 	// dollars per million tokens and are used only when the provider response
 	// does not include a cost field in the usage payload.
@@ -218,6 +226,7 @@ func LoadEnv() (*Env, error) {
 		CompressionBaseURL: strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
 		CompressionKey:     strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
 		CompressionModel:   strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
+		TranscribeModel:    strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL")),
 		LLMInputCostPerMillion: parseFloatEnv(
 			"LLM_INPUT_COST_PER_MILLION",
 		),
@@ -278,6 +287,9 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.ScenePlannerModel == "" {
 		e.ScenePlannerModel = e.HostModel
+	}
+	if e.TranscribeModel == "" {
+		e.TranscribeModel = "gemini-2.5-flash"
 	}
 	if e.OutDir == "" {
 		e.OutDir = "./out"
