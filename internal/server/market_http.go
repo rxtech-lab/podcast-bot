@@ -576,7 +576,13 @@ func (s *Server) generateStationCover(ctx context.Context, userID, discID, promp
 	if err := tmp.Close(); err != nil {
 		return DiscussionCover{}, err
 	}
-	key := s.d.Uploader.Key("covers/" + safeKeySegment(userID) + "/" + discID + filepath.Ext(tmpPath))
+	key := s.d.Uploader.Key(fmt.Sprintf(
+		"covers/%s/%s-%s%s",
+		safeKeySegment(userID),
+		safeKeySegment(discID),
+		newJobID(),
+		filepath.Ext(tmpPath),
+	))
 	if err := s.d.Uploader.Upload(ctx, tmpPath, key); err != nil {
 		return DiscussionCover{}, err
 	}

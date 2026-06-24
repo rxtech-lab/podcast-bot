@@ -3,6 +3,7 @@ import Observation
 import AVFoundation
 import MediaPlayer
 import SwiftUI
+import UIKit
 import os
 
 private let playerLog = Logger(subsystem: "com.debatebot.ios", category: "PlayerModel")
@@ -22,6 +23,14 @@ struct LiveLine: Identifiable, Equatable {
     var senderUserID: String? = nil
     /// Playback URL when this line is a voice message; nil for text-only lines.
     var audioURL: String? = nil
+
+    var hasAudio: Bool {
+        !(audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    var hasDisplayText: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     @discardableResult
     static func applyTranscriptEvent(to lines: inout [LiveLine],
@@ -183,6 +192,11 @@ final class PlayerModel {
     private var playbackJobID: String?
     private var playbackRetryCount = 0
     private var remoteCommandTargets: [Any] = []
+    private nonisolated(unsafe) var audioInterruptionObserver: NSObjectProtocol?
+    private var isAudioSessionInterrupted = false
+    private var shouldResumeAfterAudioInterruption = false
+    private var nowPlayingArtwork: MPMediaItemArtwork?
+    private var nowPlayingArtworkSourceKey: String?
     private var usesLiveCaptionTiming = false
     private var autoplayRequested = false
     /// Whether playback should auto-start once the item is ready. Captured at
@@ -335,6 +349,7 @@ final class PlayerModel {
         tasks.removeAll()
         player.pause()
         removeRemoteCommands()
+        removeAudioSessionObservers()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         MPNowPlayingInfoCenter.default().playbackState = .stopped
     }
@@ -352,12 +367,17 @@ final class PlayerModel {
     /// that got wedged in `.waitingToPlayAtSpecifiedRate` — previously the only
     /// recovery was to leave and re-open the discussion.
     private func resumePlayback() {
+        guard activateAudioSessionForManualPlayback() else {
+            isPlaying = false
+            updateNowPlayingInfo()
+            return
+        }
         guard let item = player.currentItem else {
             playerLog.debug("resumePlayback: no current item, falling back to play()")
             play()
             return
         }
-        playerLog.debug("resumePlayback: status=\(item.status.rawValue, privacy: .public) timeControl=\(self.player.timeControlStatus.rawValue, privacy: .public)")
+        playerLog.debug("resumePlayback: status=\(item.status.rawValue, privacy: .public) timeControl=\(self.player.timeControlStatus.rawValue, privacy: .public) interrupted=\(self.isAudioSessionInterrupted, privacy: .public)")
         beginPlayback(item: item)
     }
 
@@ -480,7 +500,91 @@ final class PlayerModel {
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
         try? AVAudioSession.sharedInstance().setActive(true)
+        configureAudioSessionObservers()
         #endif
+    }
+
+    private func activateAudioSessionForManualPlayback() -> Bool {
+        #if os(iOS)
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            if isAudioSessionInterrupted {
+                playerLog.debug("resumePlayback: clearing stale audio interruption suppression")
+            }
+            isAudioSessionInterrupted = false
+            shouldResumeAfterAudioInterruption = false
+            return true
+        } catch {
+            playerLog.error("resumePlayback: failed to activate audio session: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        #else
+        return true
+        #endif
+    }
+
+    private func configureAudioSessionObservers() {
+        guard audioInterruptionObserver == nil else { return }
+        audioInterruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                self?.handleAudioSessionInterruption(notification)
+            }
+        }
+    }
+
+    private func removeAudioSessionObservers() {
+        if let audioInterruptionObserver {
+            NotificationCenter.default.removeObserver(audioInterruptionObserver)
+            self.audioInterruptionObserver = nil
+        }
+        isAudioSessionInterrupted = false
+        shouldResumeAfterAudioInterruption = false
+    }
+
+    private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+        switch type {
+        case .began:
+            suppressPlaybackForAudioInterruption()
+        case .ended:
+            let shouldResume = Self.audioInterruptionShouldResume(notification.userInfo)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            isAudioSessionInterrupted = false
+            guard shouldResumeAfterAudioInterruption, shouldResume else {
+                shouldResumeAfterAudioInterruption = false
+                updateNowPlayingInfo()
+                return
+            }
+            shouldResumeAfterAudioInterruption = false
+            if let item = player.currentItem {
+                beginPlayback(item: item)
+            } else {
+                play()
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    private func suppressPlaybackForAudioInterruption() {
+        shouldResumeAfterAudioInterruption = isPlaying || autoplayRequested
+        isAudioSessionInterrupted = true
+        autoplayRequested = false
+        isPlaying = false
+        playbackRetryTask?.cancel()
+        playbackRetryTask = nil
+        player.pause()
+        updateNowPlayingInfo()
+    }
+
+    nonisolated static func audioInterruptionShouldResume(_ userInfo: [AnyHashable: Any]?) -> Bool {
+        guard let rawOptions = userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt else { return false }
+        return AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
     }
 
     private func configureRemoteCommands() {
@@ -527,6 +631,11 @@ final class PlayerModel {
     }
 
     private func play() {
+        guard !isAudioSessionInterrupted else {
+            isPlaying = false
+            updateNowPlayingInfo()
+            return
+        }
         autoplayRequested = true
         player.play()
         isPlaying = true
@@ -631,6 +740,13 @@ final class PlayerModel {
     private func beginPlayback(item: AVPlayerItem, autoplay: Bool = true) {
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
+        guard !isAudioSessionInterrupted else {
+            autoplayRequested = false
+            isPlaying = false
+            player.pause()
+            updateNowPlayingInfo()
+            return
+        }
         autoplayRequested = autoplay
 
         if item.status == .readyToPlay {
@@ -678,6 +794,7 @@ final class PlayerModel {
 
     private func schedulePlaybackRetry() {
         guard autoplayRequested, let jobID = playbackJobID else { return }
+        guard !isAudioSessionInterrupted else { return }
         guard playbackRetryTask == nil else { return }
         guard playbackRetryCount < 8 else {
             statusText = String(localized: "Audio stream is still warming up. Try again in a moment.",
@@ -727,9 +844,9 @@ final class PlayerModel {
     /// so we cycle it. Bounded so a genuinely failed stream eventually gives up.
     private func confirmPlayback() async {
         for attempt in 0..<8 {
-            guard !Task.isCancelled, autoplayRequested else { return }
+            guard !Task.isCancelled, autoplayRequested, !isAudioSessionInterrupted else { return }
             try? await Task.sleep(for: .seconds(attempt == 0 ? 0.4 : 1.0))
-            guard !Task.isCancelled, autoplayRequested else { return }
+            guard !Task.isCancelled, autoplayRequested, !isAudioSessionInterrupted else { return }
             if player.timeControlStatus == .playing {
                 playerLog.debug("confirmPlayback: playing after \(attempt, privacy: .public) attempt(s)")
                 isPlaying = true
@@ -1329,17 +1446,24 @@ final class PlayerModel {
         }
         discussion.status = .ready
         discussion.allowSendingMessage = false
+        await refreshCoverAssets()
         updateNowPlayingInfo()
     }
 
     /// Fetches the latest discussion solely to pick up cover art generated in
     /// the background, without disturbing live transcript/playback state.
     private func refreshCover() async {
-        guard let fresh = try? await api.discussion(id: discussion.id) else { return }
-        if let cover = fresh.cover, cover.hasImage || cover.hasGradient {
+        if let fresh = try? await api.discussion(id: discussion.id),
+           let cover = fresh.cover,
+           cover.hasImage || cover.hasGradient {
             discussion.cover = cover
         }
+        await refreshCoverAssets()
+    }
+
+    private func refreshCoverAssets() async {
         await loadCoverColors()
+        await loadNowPlayingArtwork()
     }
 
     /// Resolves the two background colors for the current cover: gradient covers
@@ -1365,6 +1489,72 @@ final class PlayerModel {
         guard colors.count >= 2 else { return }
         coverColorsSourceKey = key
         coverColors = colors
+    }
+
+    private func loadNowPlayingArtwork() async {
+        guard let cover = discussion.cover,
+              let key = Self.nowPlayingArtworkSourceKey(for: cover),
+              key != nowPlayingArtworkSourceKey else { return }
+
+        if cover.hasImage,
+           let urlString = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let url = URL(string: urlString),
+           let (data, _) = try? await URLSession.shared.data(from: url),
+           let image = UIImage(data: data) {
+            nowPlayingArtworkSourceKey = key
+            nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            updateNowPlayingInfo()
+            return
+        }
+
+        guard cover.hasGradient else { return }
+        let image = Self.gradientArtworkImage(
+            startHex: cover.gradientStart ?? "#8E5CF7",
+            endHex: cover.gradientEnd ?? "#00A3FF"
+        )
+        nowPlayingArtworkSourceKey = key
+        nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        updateNowPlayingInfo()
+    }
+
+    nonisolated static func nowPlayingArtworkSourceKey(for cover: DiscussionCover?) -> String? {
+        guard let cover else { return nil }
+        if cover.hasImage,
+           let url = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !url.isEmpty {
+            return "image:\(url)"
+        }
+        if cover.hasGradient,
+           let start = cover.gradientStart?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let end = cover.gradientEnd?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !start.isEmpty,
+           !end.isEmpty {
+            return "gradient:\(start):\(end)"
+        }
+        return nil
+    }
+
+    private nonisolated static func gradientArtworkImage(startHex: String, endHex: String) -> UIImage {
+        let size = CGSize(width: 512, height: 512)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let cgContext = context.cgContext
+            let colors = [
+                UIColor(hex: startHex).cgColor,
+                UIColor(hex: endHex).cgColor,
+            ] as CFArray
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1]) else {
+                UIColor(hex: startHex).setFill()
+                cgContext.fill(CGRect(origin: .zero, size: size))
+                return
+            }
+            cgContext.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: 0, y: 0),
+                end: CGPoint(x: size.width, y: size.height),
+                options: []
+            )
+        }
     }
 
     nonisolated static func mergingLocalDiscussionState(current: Discussion, fresh: Discussion) -> Discussion {
@@ -1464,6 +1654,9 @@ final class PlayerModel {
             info[MPNowPlayingInfoPropertyIsLiveStream] = true
             MPRemoteCommandCenter.shared().changePlaybackPositionCommand.isEnabled = false
         }
+        if let nowPlayingArtwork {
+            info[MPMediaItemPropertyArtwork] = nowPlayingArtwork
+        }
 
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
@@ -1517,5 +1710,17 @@ final class PlayerModel {
         var seconds = 0.0
         for part in comps { seconds = seconds * 60 + (Double(part.replacingOccurrences(of: ",", with: ".")) ?? 0) }
         return seconds
+    }
+}
+
+private extension UIColor {
+    convenience init(hex: String) {
+        let clean = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased()
+        var value: UInt64 = 0
+        Scanner(string: clean).scanHexInt64(&value)
+        let red = CGFloat((value >> 16) & 0xFF) / 255.0
+        let green = CGFloat((value >> 8) & 0xFF) / 255.0
+        let blue = CGFloat(value & 0xFF) / 255.0
+        self.init(red: red, green: green, blue: blue, alpha: 1)
     }
 }

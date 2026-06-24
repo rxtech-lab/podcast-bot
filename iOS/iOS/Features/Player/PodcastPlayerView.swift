@@ -989,7 +989,13 @@ private struct TranscriptBubble: View {
                     if let audioURL = line.audioURL, !audioURL.isEmpty {
                         VoiceMessageControl(urlString: audioURL, isUser: isMine)
                     }
-                    bubbleText
+                    if line.hasDisplayText {
+                        bubbleText
+                    } else if line.hasAudio {
+                        Text("Audio message", comment: "Fallback label for a voice message whose transcript is unavailable")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle((isMine ? Color.white : speakerColor).opacity(0.78))
+                    }
                 }
                 .font(.body)
                 .padding(12)
