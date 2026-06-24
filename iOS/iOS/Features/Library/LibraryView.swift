@@ -1,5 +1,6 @@
 import RxAuthSwift
 import SwiftUI
+import TipKit
 import UIKit
 
 /// Home: the user's server-owned discussions, newest first.
@@ -182,6 +183,7 @@ struct LibraryView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingMarketplace = true } label: { Image(systemName: "square.grid.2x2.fill") }
                 .accessibilityLabel("Open market")
+                .popoverTip(OpenMarketTip(), arrowEdge: .top)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingNew = true } label: { Image(systemName: "plus") }

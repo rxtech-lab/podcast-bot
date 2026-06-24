@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Non-full-height bottom sheet for sharing a PRIVATE discussion: pick how long
 /// the link should stay valid (1h … 72h), create it, and manage (share / revoke)
@@ -36,6 +37,7 @@ struct ShareSheet: View {
                         }
                     }
                     .disabled(isCreating)
+                    .popoverTip(ShareStationTip(), arrowEdge: .top)
                 } header: {
                     Text("New link")
                 } footer: {

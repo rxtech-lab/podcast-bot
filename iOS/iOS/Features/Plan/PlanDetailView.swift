@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Step 2: review/edit the plan. Shows the topic, background, panelists, and
 /// researched sources; edits via a chat box ("Edit using chat") that calls
@@ -111,6 +112,7 @@ struct PlanDetailView: View {
                 .labelStyle(.iconOnly)
                 .disabled(isGenerating || isImproving || isEditStreaming || discussion.script == nil)
                 .accessibilityLabel("Generate \(AppStringLiteral.stationNameRaw)")
+                .popoverTip(PlanGenerateTip(), arrowEdge: .top)
             }
         }
         .confirmationDialog(

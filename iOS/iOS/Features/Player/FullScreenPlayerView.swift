@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 import UIKit
 
 /// Full-screen "now playing" experience presented over `PodcastPlayerView`.
@@ -320,6 +321,7 @@ struct FullScreenPlayerView: View {
                     .glassEffect(in: .circle)
             }
             .accessibilityLabel(showingTranscript ? "Show cover" : "Show transcript")
+            .popoverTip(FullScreenCaptionTip(), arrowEdge: .bottom)
             Spacer()
         }
     }

@@ -591,11 +591,19 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 			"detail":     m.Detail,
 		}}, true
 	case contentcreator.TranscriptMsg:
-		return eventEnvelope{"transcript", map[string]any{
+		payload := map[string]any{
 			"channel_id": m.ChannelID,
 			"speaker":    m.Speaker, "role": string(m.Role), "side": m.Side,
 			"text": m.Text, "done": m.Done,
-		}}, true
+			"isUserMessage": m.IsUserMessage,
+		}
+		if m.SenderUserID != "" {
+			payload["sender_user_id"] = m.SenderUserID
+		}
+		if m.AudioURL != "" {
+			payload["audio_url"] = m.AudioURL
+		}
+		return eventEnvelope{"transcript", payload}, true
 	case contentcreator.TickMsg:
 		return eventEnvelope{"tick", map[string]any{
 			"channel_id":   m.ChannelID,

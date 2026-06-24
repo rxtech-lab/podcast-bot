@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Step 1 of planning: enter a topic + panelist count, then ask the engine to
 /// draft a plan (title, background, people, researched sources). On success the
@@ -48,6 +49,7 @@ struct NewDiscussionView: View {
                         }
                     }
                     .disabled(topic.trimmingCharacters(in: .whitespaces).isEmpty || isPlanning || attachments.isUploading)
+                    .popoverTip(NewDiscussionPlanTip(), arrowEdge: .top)
                 }
             }
         }

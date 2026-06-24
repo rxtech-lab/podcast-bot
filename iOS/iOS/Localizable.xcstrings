@@ -358,6 +358,12 @@
         }
       }
     },
+    "Auto" : {
+      "comment" : "Voice message language option that uses backend transcription"
+    },
+    "Auto uses backend transcription after you send." : {
+
+    },
     "Balance" : {
       "comment" : "User menu label when the points balance is unknown",
       "localizations" : {
@@ -418,6 +424,9 @@
       "comment" : "User menu label when the points balance is unknown"
     },
     "Browse" : {
+
+    },
+    "Browse Market" : {
 
     },
     "Cancel" : {
@@ -487,6 +496,9 @@
           }
         }
       }
+    },
+    "Choose AI, write a prompt, and generate cover art on the server." : {
+
     },
     "Choose File" : {
 
@@ -667,6 +679,9 @@
     "Create share link" : {
 
     },
+    "Create the outline first, then edit speakers, sources, and language before generating audio." : {
+
+    },
     "Creating" : {
 
     },
@@ -795,6 +810,12 @@
           }
         }
       }
+    },
+    "Discard" : {
+      "comment" : "Discards a recorded voice message before sending"
+    },
+    "Discover public podcasts, listen, like, and save stations from other creators." : {
+
     },
     "Discussion" : {
       "comment" : "Round-table discussion type option"
@@ -1236,6 +1257,9 @@
     "Generate %@" : {
 
     },
+    "Generate a cover" : {
+
+    },
     "Generate cover" : {
 
     },
@@ -1264,6 +1288,9 @@
           }
         }
       }
+    },
+    "Generate the audio" : {
+
     },
     "Generate this %@?" : {
 
@@ -1679,6 +1706,9 @@
     "Loading…" : {
 
     },
+    "Make it public" : {
+
+    },
     "Make Private" : {
 
     },
@@ -1926,6 +1956,9 @@
         }
       }
     },
+    "No transcript yet. You can type one, or send the audio for transcription." : {
+      "comment" : "Placeholder shown when a reviewed voice message has no transcript"
+    },
     "No usage yet" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1971,6 +2004,12 @@
       }
     },
     "Open market" : {
+
+    },
+    "Open the original discussion plan, sources, and speaker details for this podcast." : {
+
+    },
+    "Open this menu to record a voice message, review the transcript, then send it to the discussion." : {
 
     },
     "Panelists" : {
@@ -2228,6 +2267,9 @@
           }
         }
       }
+    },
+    "Plan the discussion" : {
+
     },
     "Planning and generating %@ will show up here." : {
 
@@ -2628,6 +2670,9 @@
     "Public %@ you created appear here." : {
 
     },
+    "Public podcasts share directly. Private podcasts can use expiring links that you can revoke." : {
+
+    },
     "Publish" : {
 
     },
@@ -2985,6 +3030,9 @@
         }
       }
     },
+    "Send audio" : {
+
+    },
     "Send message" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3007,6 +3055,9 @@
         }
       }
     },
+    "Send Voice Message" : {
+      "comment" : "Confirms and sends the reviewed voice message"
+    },
     "Settings" : {
 
     },
@@ -3014,6 +3065,12 @@
 
     },
     "Share Link" : {
+
+    },
+    "Share with others" : {
+
+    },
+    "Show captions" : {
 
     },
     "Show cover" : {
@@ -3198,6 +3255,9 @@
     "Subscription" : {
 
     },
+    "Switch between the cover art and synced captions while listening full screen." : {
+
+    },
     "Syncing your library" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3220,7 +3280,7 @@
         }
       }
     },
-    "Tap to send" : {
+    "Tap to review" : {
       "comment" : "Hint under the stop button in the voice recorder"
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
@@ -3528,6 +3588,12 @@
         }
       }
     },
+    "Transcript" : {
+      "comment" : "Label above the reviewed voice-message transcript"
+    },
+    "Turn this plan into a live podcast when the outline is ready." : {
+
+    },
     "Type" : {
 
     },
@@ -3609,6 +3675,9 @@
     "Upload" : {
 
     },
+    "Use the actions menu to publish this podcast to Market or make a public podcast private again." : {
+
+    },
     "Used %@" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3642,6 +3711,9 @@
 
     },
     "View creator" : {
+
+    },
+    "View the plan" : {
 
     },
     "Welcome to %@" : {

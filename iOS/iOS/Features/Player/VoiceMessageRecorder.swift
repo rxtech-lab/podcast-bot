@@ -58,6 +58,8 @@ final class VoiceMessageRecorder {
     private(set) var transcribesOnDevice = false
     /// Locale driving the on-device model. Settable while idle.
     var locale: Locale
+    /// When true, skip on-device Speech and let the backend transcribe the uploaded audio.
+    var usesCloudTranscription: Bool
 
     var isRecording: Bool { phase == .recording }
     var isBusy: Bool { phase == .preparing || phase == .finishing }
@@ -81,8 +83,9 @@ final class VoiceMessageRecorder {
     /// record; Speech is best-effort — without it we record audio-only.
     private var speechAuthorized = false
 
-    init(locale: Locale) {
+    init(locale: Locale, usesCloudTranscription: Bool = false) {
         self.locale = locale
+        self.usesCloudTranscription = usesCloudTranscription
     }
 
     // MARK: - Locale discovery
@@ -199,11 +202,12 @@ final class VoiceMessageRecorder {
 
     private func beginRecording() async throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .spokenAudio,
-                                options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                options: [.allowBluetooth])
         try session.setActive(true, options: [])
 
         let inputNode = engine.inputNode
+        try? inputNode.setVoiceProcessingEnabled(true)
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         // The audio file is always written, so a voice message can be sent (and
@@ -224,7 +228,7 @@ final class VoiceMessageRecorder {
         // authorized or this language has no on-device model, and fall back to
         // audio-only (the server transcribes after upload) on any setup failure.
         transcribesOnDevice = false
-        if speechAuthorized, await Self.isSupported(locale) {
+        if !usesCloudTranscription, speechAuthorized, await Self.isSupported(locale) {
             do {
                 try await startOnDeviceTranscription(inputFormat: inputFormat)
                 transcribesOnDevice = true

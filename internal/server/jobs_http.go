@@ -193,20 +193,39 @@ func (s *Server) handleJobMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message rate limit: wait before sending another message", http.StatusTooManyRequests)
 		return
 	}
-	orch.PushUserMessage(req.Text, username)
+	audioKey := s.validatedAudioKey(user.ID, req.AudioKey)
+	audioURL := s.voiceMessageAudioURL(r.Context(), audioKey)
 	if s.d.Discussions != nil && strings.TrimSpace(req.DiscussionID) != "" {
 		if err := s.d.Discussions.AppendLineVisibleWithToken(r.Context(), user.ID, req.DiscussionID, strings.TrimSpace(req.ShareToken), DiscussionLine{
 			Speaker:  username,
 			Role:     "user",
 			Text:     req.Text,
 			IsUser:   true,
-			AudioKey: s.validatedAudioKey(user.ID, req.AudioKey),
+			AudioURL: audioURL,
+			AudioKey: audioKey,
 		}); err != nil {
 			writeDiscussionAccessError(w, err)
 			return
 		}
 	}
+	orch.PushUserMessageWithMetadata(req.Text, username, contentcreator.UserMessageMetadata{
+		SenderUserID: user.ID,
+		AudioURL:     audioURL,
+	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) voiceMessageAudioURL(ctx context.Context, audioKey string) string {
+	audioKey = strings.TrimSpace(audioKey)
+	if audioKey == "" || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return ""
+	}
+	url, err := s.d.Uploader.DownloadURL(ctx, audioKey, time.Hour)
+	if err != nil {
+		s.logger().Warn("voice message audio url failed", "key", audioKey, "err", err)
+		return ""
+	}
+	return url
 }
 
 func (s *Server) allowJobMessage(jobID string, user requestUser, username string) (time.Duration, bool) {

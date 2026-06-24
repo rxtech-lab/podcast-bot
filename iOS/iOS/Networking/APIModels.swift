@@ -451,6 +451,9 @@ struct JobEventData: Decodable, Sendable {
     var role: String?
     var text: String?
     var done: Bool?
+    var isUserMessage: Bool?
+    var sender_user_id: String?
+    var audio_url: String?
     var agent: String?
     var activity: String?
     var detail: String?

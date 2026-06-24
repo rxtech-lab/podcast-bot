@@ -835,6 +835,46 @@ final class PlayerModel {
         return r == "user" || r == "viewer"
     }
 
+    nonisolated static func isLineAuthoredByCurrentUser(_ line: LiveLine,
+                                                        currentUserID: String,
+                                                        currentUsername: String) -> Bool {
+        guard line.isUser else { return false }
+        if let sender = line.senderUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sender.isEmpty {
+            return userIDAliases(currentUserID).contains(sender)
+        }
+        let username = currentUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty else { return false }
+        return line.speaker.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(username) == .orderedSame
+    }
+
+    private nonisolated static func userIDAliases(_ id: String) -> Set<String> {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        if trimmed.hasPrefix("oauth:") {
+            return [trimmed, String(trimmed.dropFirst("oauth:".count))]
+        }
+        return [trimmed, "oauth:\(trimmed)"]
+    }
+
+    nonisolated static func applyPersistedMetadata(to line: inout LiveLine, from dto: DiscussionLineDTO) {
+        guard line.speaker == dto.speaker,
+              line.role == dto.role,
+              line.text == dto.text,
+              line.isUser == dto.isUser else { return }
+        if let sender = dto.senderUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sender.isEmpty,
+           line.senderUserID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            line.senderUserID = sender
+        }
+        if let audio = dto.audioURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !audio.isEmpty,
+           line.audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            line.audioURL = audio
+        }
+    }
+
     /// User-authored rows are visible once they are part of local discussion
     /// state. Role-only user echoes are still hidden so the WebSocket cannot
     /// duplicate an optimistic send as a second transcript row.
@@ -887,6 +927,16 @@ final class PlayerModel {
         case "transcript":
             guard let speaker = data.speaker, let text = data.text else { return }
             let role = data.role ?? ""
+            if data.isUserMessage == true {
+                mergeUserMessageEvent(speaker: speaker,
+                                      role: role,
+                                      text: text,
+                                      done: data.done == true,
+                                      senderUserID: data.sender_user_id,
+                                      audioURL: data.audio_url)
+                hideTranscriptLoadingIfReady()
+                return
+            }
             // The backend echoes the listener's own messages back here. We already
             // recorded that line optimistically in `send(_:)`, so drop the echo
             // rather than re-adding it as a non-user line (`applyTranscriptEvent`
@@ -913,6 +963,55 @@ final class PlayerModel {
             }
         default:
             break
+        }
+    }
+
+    private func mergeUserMessageEvent(speaker: String,
+                                       role: String,
+                                       text: String,
+                                       done: Bool,
+                                       senderUserID: String?,
+                                       audioURL: String?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sender = senderUserID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let audio = audioURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existingIndex = lines.firstIndex {
+            $0.speaker == speaker && $0.role == role && $0.text == trimmed && $0.isUser
+        }
+        if let existingIndex {
+            lines[existingIndex].done = done
+            if let sender, !sender.isEmpty {
+                lines[existingIndex].senderUserID = sender
+            }
+            if let audio, !audio.isEmpty {
+                lines[existingIndex].audioURL = audio
+            }
+        } else {
+            lines.append(LiveLine(speaker: speaker,
+                                  role: role,
+                                  text: trimmed,
+                                  isUser: true,
+                                  done: done,
+                                  senderUserID: sender,
+                                  audioURL: audio))
+        }
+        if let cachedIndex = discussion.lines?.firstIndex(where: {
+            $0.speaker == speaker && $0.role == role && $0.text == trimmed && $0.isUser
+        }) {
+            if let sender, !sender.isEmpty {
+                discussion.lines?[cachedIndex].senderUserID = sender
+            }
+            if let audio, !audio.isEmpty {
+                discussion.lines?[cachedIndex].audioURL = audio
+            }
+        } else {
+            persistIfNeeded(speaker: speaker,
+                            role: role,
+                            text: trimmed,
+                            isUser: true,
+                            senderUserID: sender,
+                            syncRemote: false,
+                            audioURL: audio)
         }
     }
 
@@ -1012,9 +1111,7 @@ final class PlayerModel {
             if let idx = lines.firstIndex(where: {
                 $0.speaker == dto.speaker && $0.role == dto.role && $0.text == dto.text && $0.isUser == dto.isUser
             }) {
-                if lines[idx].audioURL == nil, let audio = dto.audioURL, !audio.isEmpty {
-                    lines[idx].audioURL = audio
-                }
+                Self.applyPersistedMetadata(to: &lines[idx], from: dto)
             } else {
                 lines.append(LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
                                       isUser: dto.isUser, done: true,
@@ -1066,9 +1163,17 @@ final class PlayerModel {
             guard !text.isEmpty else { continue }
             let role = item.role
             let isUser = role == "user" || role == "viewer"
-            let existing = lines.first { $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser }
-            if existing == nil {
-                lines.append(LiveLine(speaker: item.speaker, role: role, text: text, isUser: isUser, done: true))
+            let persisted = discussion.sortedLines.first {
+                $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser
+            }
+            let existingIndex = lines.firstIndex { $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser }
+            if let existingIndex {
+                if let persisted {
+                    Self.applyPersistedMetadata(to: &lines[existingIndex], from: persisted)
+                }
+            } else {
+                lines.append(LiveLine(speaker: item.speaker, role: role, text: text, isUser: isUser, done: true,
+                                      senderUserID: persisted?.senderUserID, audioURL: persisted?.audioURL))
                 didChange = true
             }
             // The job transcript has no audio metadata, so a voice message comes
@@ -1076,7 +1181,7 @@ final class PlayerModel {
             // already persisted (with its audio) — re-persisting would add a
             // duplicate text-only row that survives reload. A genuine user text
             // message (no audioURL) still backfills normally.
-            if let existing, existing.isUser, existing.audioURL?.isEmpty == false {
+            if let existingIndex, lines[existingIndex].isUser, lines[existingIndex].audioURL?.isEmpty == false {
                 continue
             }
             persistIfNeeded(speaker: item.speaker, role: role, text: text, isUser: isUser)
