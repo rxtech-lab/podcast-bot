@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // sseWriter wraps an http.ResponseWriter for Server-Sent Events.
@@ -28,7 +29,15 @@ func (s *sseWriter) send(event string, payload any) error {
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+	if _, err := fmt.Fprintf(s.w, "event: %s\n", event); err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if _, err := fmt.Fprintf(s.w, "data: %s\n", line); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprint(s.w, "\n"); err != nil {
 		return err
 	}
 	return s.rc.Flush()

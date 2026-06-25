@@ -25,8 +25,11 @@ struct PlanConversationView: View {
     @State private var isLoadingHistory = false
     @State private var historyLoadingPulse = false
     @State private var editIsAtBottom = true
+    @State private var shouldScrollToInitialBottom = false
+    @State private var didRequestInitialBottomScroll = false
     @State private var selectedLanguage: String
     @State private var streamTask: Task<Void, Never>?
+    @State private var initialScrollTask: Task<Void, Never>?
 
     init(discussion: Discussion,
          onGenerated: @escaping (Discussion) -> Void = { _ in }) {
@@ -46,6 +49,8 @@ struct PlanConversationView: View {
                 MessageList(
                     messages: rows,
                     isStreaming: isStreaming,
+                    shouldScrollToBottom: shouldScrollToInitialBottom,
+                    scrollToBottomAnimated: false,
                     isAtBottom: $editIsAtBottom
                 ) { row in
                     rowView(row)
@@ -75,7 +80,7 @@ struct PlanConversationView: View {
         }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingSpeakerModels) {
-            SpeakerModelsSheet(discussion: $discussion)
+            SpeakerModelsSheet(discussion: speakerModelsDiscussionBinding)
         }
         .confirmationDialog(
             "Generate this podcast?",
@@ -89,7 +94,10 @@ struct PlanConversationView: View {
         }
         .task { await purchases.refreshBalance() }
         .onAppear(perform: start)
-        .onDisappear { streamTask?.cancel() }
+        .onDisappear {
+            streamTask?.cancel()
+            initialScrollTask?.cancel()
+        }
     }
 
     // MARK: - Rows
@@ -161,7 +169,7 @@ struct PlanConversationView: View {
         HStack {
             PlanSnapshotCard(label: String(localized: "Plan", comment: "Label for a plan card in the conversation"),
                              snapshot: PlanSnapshot(turn: turn, topic: discussion.topic),
-                             onEditModels: discussion.script == nil ? nil : { showingSpeakerModels = true })
+                             onEditModels: part.script == nil ? nil : { openSpeakerModels(for: part) })
                 .padding(14)
                 .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             Spacer(minLength: 34)
@@ -419,6 +427,35 @@ struct PlanConversationView: View {
         discussion.script != nil || parts.contains { $0.isPlanCard }
     }
 
+    private var speakerModelsDiscussionBinding: Binding<Discussion> {
+        Binding(
+            get: { discussion },
+            set: { updated in
+                discussion = updated
+                syncVisiblePlanCards(from: updated)
+            }
+        )
+    }
+
+    private func openSpeakerModels(for part: PlanningPart) {
+        if discussion.script == nil, let script = part.script {
+            discussion.script = script
+            discussion.title = script.title
+            discussion.markdown = part.markdown
+            discussion.sources = part.sources
+        }
+        showingSpeakerModels = true
+    }
+
+    private func syncVisiblePlanCards(from updated: Discussion) {
+        guard let script = updated.script else { return }
+        for idx in parts.indices where parts[idx].isPlanCard {
+            parts[idx].script = script
+            parts[idx].sources = updated.sources
+            parts[idx].markdown = updated.markdown
+        }
+    }
+
     // MARK: - Lifecycle
 
     private func start() {
@@ -431,6 +468,7 @@ struct PlanConversationView: View {
                 defer { isLoadingHistory = false }
                 if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
                     parts = view.parts
+                    requestInitialBottomScrollIfNeeded()
                     if view.needsRun == true {
                         beginStream {
                             APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
@@ -452,7 +490,20 @@ struct PlanConversationView: View {
                     sources: discussion.sources,
                     markdown: discussion.markdown
                 )]
+                requestInitialBottomScrollIfNeeded()
             }
+        }
+    }
+
+    private func requestInitialBottomScrollIfNeeded() {
+        guard !didRequestInitialBottomScroll, !rows.isEmpty else { return }
+        didRequestInitialBottomScroll = true
+        initialScrollTask?.cancel()
+        shouldScrollToInitialBottom = false
+        initialScrollTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(10))
+            guard !Task.isCancelled else { return }
+            shouldScrollToInitialBottom = true
         }
     }
 
@@ -539,8 +590,18 @@ struct PlanConversationView: View {
                 p.text = (p.text ?? "") + delta
                 return p
             }
-        case let .toolInputStart(name):
-            progressText = friendlyToolStatus(name)
+        case let .toolInputStart(payload):
+            progressText = friendlyToolStatus(payload.toolName)
+            if let id = payload.toolCallId, !id.isEmpty {
+                upsertPart(id: "tc-\(id)") { existing in
+                    var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(id)")
+                    p.kind = "tool"
+                    p.toolCallID = id
+                    p.toolName = payload.toolName
+                    p.status = "running"
+                    return p
+                }
+            }
         case let .toolInputDelta(payload):
             guard let id = payload.toolCallId, !id.isEmpty else { return }
             upsertPart(id: "tc-\(id)") { existing in
@@ -576,6 +637,7 @@ struct PlanConversationView: View {
                 discussion.markdown = payload.markdown
                 discussion.sources = payload.sources
             }
+            parts.removeAll { $0.id == "tc-\(payload.toolCallId)" }
             removeVisiblePlanCards(except: "current-plan")
             upsertPart(id: "current-plan") { existing in
                 var p = existing ?? PlanningPart(kind: "tool", id: "current-plan", toolCallID: payload.toolCallId)
@@ -672,7 +734,9 @@ private struct PlanningRow: Identifiable, MessageListItem {
     let content: Content
 
     var isUserMessage: Bool {
-        if case let .part(p) = content { return p.kind == "text" && p.role == "user" }
+        // Planning rows keep user text visually right-aligned in `textBubble`,
+        // but should not opt into MessageList's chat turn-pinning spacer. That
+        // spacer can leave the finished plan above an empty bottom region.
         return false
     }
 

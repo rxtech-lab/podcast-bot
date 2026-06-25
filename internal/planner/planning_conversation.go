@@ -166,7 +166,10 @@ func (p *Planner) RunConversationTurn(ctx context.Context, history []llm.Message
 				}
 				if d.ToolCall.Name != "" && d.ToolCall.Name != activeTool {
 					activeTool = d.ToolCall.Name
-					activeToolID = d.ToolCall.ID
+					activeToolID = toolIDs[d.ToolCall.Index]
+					if activeToolID == "" {
+						activeToolID = d.ToolCall.ID
+					}
 					streamedArgs, nextTick = 0, planningHeartbeatBytes
 					emit(ConvEvent{Kind: ConvToolStart, ToolName: activeTool, ToolCallID: activeToolID})
 					p.emitToolStart(conversationStatusName(activeTool))

@@ -241,7 +241,7 @@ struct PlanningPlanPayload: Codable, Sendable {
 /// Events streamed by the conversational planning endpoints.
 enum PlanningStreamEvent: Sendable {
     case textDelta(String)
-    case toolInputStart(String)
+    case toolInputStart(PlanningToolInputStartPayload)
     case toolInputDelta(PlanningToolInputDeltaPayload)
     case toolCall(PlanningToolCallPayload)
     case toolResult(PlanningToolResultPayload)

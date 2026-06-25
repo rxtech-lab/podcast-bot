@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/planner"
@@ -70,6 +71,7 @@ func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Re
 // handlePlanningStream starts/continues the conversation with a user message and
 // streams the agent's turn over SSE.
 func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	user := s.requestUser(r)
 	id := r.PathValue("id")
 	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
@@ -90,6 +92,12 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	s.logger().Info("planning stream request",
+		"discussion", id,
+		"resume", req.Resume,
+		"prompt_chars", len(req.Prompt),
+		"attachments", len(req.Attachments),
+	)
 	conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, id)
 	if err != nil || conv == nil {
 		http.Error(w, "could not start planning conversation", http.StatusInternalServerError)
@@ -107,17 +115,32 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if !planningConversationNeedsRun(turns) {
+		needsRun := planningConversationNeedsRun(turns)
+		s.logger().Info("planning stream resume state",
+			"discussion", id,
+			"conversation", conv.ID,
+			"turns", len(turns),
+			"last_role", planningLastTurnRole(turns),
+			"needs_run", needsRun,
+		)
+		if !needsRun {
 			sse := newSSEWriter(w)
 			_ = sse.comment("ok")
+			parts := planningConversationParts(turns)
 			_ = sse.send("done", planningDonePayload{
 				Discussion: d,
 				Conversation: PlanningConversationView{
 					Conversation: conv,
-					Parts:        planningConversationParts(turns),
+					Parts:        parts,
 					NeedsRun:     false,
 				},
 			})
+			s.logger().Info("planning stream resume short-circuited",
+				"discussion", id,
+				"conversation", conv.ID,
+				"parts", len(parts),
+				"elapsed_ms", time.Since(started).Milliseconds(),
+			)
 			return
 		}
 	} else {
@@ -219,6 +242,7 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 // settles billing, and sends the terminal done/error frame. Shared by the
 // stream (new message) and answer (resume) endpoints.
 func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID string, d *Discussion, conv *PlanningConversation, p *planner.Planner, languageOverride string) {
+	started := time.Now()
 	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, userID, d.ID)
 	if !ok {
 		return
@@ -244,6 +268,13 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 		return
 	}
 	history := planningMessagesForLLM(turns)
+	s.logger().Info("planning turn started",
+		"discussion", d.ID,
+		"conversation", conv.ID,
+		"turns", len(turns),
+		"history", len(history),
+		"last_role", planningLastTurnRole(turns),
+	)
 	opts := planner.ConversationOptions{
 		Language:         planningLanguage(d, languageOverride),
 		Channel:          planningChannel(d),
@@ -284,6 +315,13 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 		Discussion:   updated,
 		Conversation: PlanningConversationView{Conversation: convFresh, Parts: planningConversationParts(finalTurns), NeedsRun: planningConversationNeedsRun(finalTurns)},
 	})
+	s.logger().Info("planning turn finished",
+		"discussion", d.ID,
+		"conversation", conv.ID,
+		"paused", paused,
+		"turns", len(finalTurns),
+		"elapsed_ms", time.Since(started).Milliseconds(),
+	)
 }
 
 // handlePlanningConvEvent persists each conversational event and forwards it to
@@ -499,4 +537,11 @@ func rawJSONOrNull(s string) json.RawMessage {
 		return json.RawMessage("null")
 	}
 	return json.RawMessage(s)
+}
+
+func planningLastTurnRole(turns []planningTurnRow) string {
+	if len(turns) == 0 {
+		return ""
+	}
+	return turns[len(turns)-1].Role
 }

@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let apiLog = Logger(subsystem: "com.debatebot.ios", category: "APIClient")
 
 /// Supplies bearer tokens to the API client. AuthManager conforms to this.
 protocol TokenProviding: Sendable {
@@ -230,7 +233,9 @@ final class APIClient: Sendable {
 
     /// Loads the persisted conversational planning thread for history rebuild.
     func planningConversation(id: String) async throws -> PlanningConversationView {
-        try await get("/api/discussions/\(id)/planning")
+        let view: PlanningConversationView = try await get("/api/discussions/\(id)/planning")
+        apiLog.debug("planning conversation loaded id=\(id, privacy: .public) parts=\(view.parts.count, privacy: .public) needsRun=\((view.needsRun ?? false), privacy: .public)")
+        return view
     }
 
     /// Starts or continues the conversational planning thread with a user
@@ -238,7 +243,8 @@ final class APIClient: Sendable {
     func planningConversationStream(id: String, prompt: String,
                                     language: String? = nil,
                                     attachments: [Attachment] = []) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
-        streamPlanning(
+        apiLog.debug("planning SSE start kind=user id=\(id, privacy: .public) promptChars=\(prompt.count, privacy: .public) attachments=\(attachments.count, privacy: .public)")
+        return streamPlanning(
             path: "/api/discussions/\(id)/planning/stream",
             body: PlanningStreamRequest(prompt: prompt, language: language, attachments: attachments.isEmpty ? nil : attachments)
         )
@@ -247,7 +253,8 @@ final class APIClient: Sendable {
     /// Resumes a server-seeded planning turn without appending another user
     /// message. Used when opening a freshly-created planning discussion.
     func resumePlanningConversation(id: String) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
-        streamPlanning(
+        apiLog.debug("planning SSE start kind=resume id=\(id, privacy: .public)")
+        return streamPlanning(
             path: "/api/discussions/\(id)/planning/stream",
             body: PlanningStreamRequest(prompt: "", attachments: nil, resume: true)
         )
@@ -257,7 +264,8 @@ final class APIClient: Sendable {
     func answerPlanningQuestion(id: String, questionId: String, action: String,
                                 language: String? = nil,
                                 answers: [[String: AnyCodable]]) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
-        streamPlanning(
+        apiLog.debug("planning SSE start kind=answer id=\(id, privacy: .public) question=\(questionId, privacy: .public) action=\(action, privacy: .public) answers=\(answers.count, privacy: .public)")
+        return streamPlanning(
             path: "/api/discussions/\(id)/planning/answer",
             body: PlanningAnswerRequest(questionId: questionId, action: action, language: language, answers: answers)
         )
@@ -276,6 +284,7 @@ final class APIClient: Sendable {
                         guard let fresh = await tokens.refreshedToken() else { throw APIError.notAuthenticated }
                         (bytes, http) = try await openSSE(path: path, body: payload, token: fresh)
                     }
+                    apiLog.debug("planning SSE opened path=\(path, privacy: .public) status=\(http.statusCode, privacy: .public)")
                     guard (200..<300).contains(http.statusCode) else {
                         var message = ""
                         for try await line in bytes.lines { message += line }
@@ -283,15 +292,14 @@ final class APIClient: Sendable {
                     }
                     var event = "message"
                     var data = ""
-                    for try await line in bytes.lines {
+                    try await Self.consumeSSELines(bytes) { line in
                         if line.isEmpty {
                             Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
                             event = "message"
                             data = ""
-                            continue
-                        }
-                        if line.hasPrefix(":") { continue }
-                        if line.hasPrefix("event:") {
+                        } else if line.hasPrefix(":") {
+                            return
+                        } else if line.hasPrefix("event:") {
                             event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
                         } else if line.hasPrefix("data:") {
                             let chunk = String(line.dropFirst(5))
@@ -300,8 +308,10 @@ final class APIClient: Sendable {
                         }
                     }
                     Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
+                    apiLog.debug("planning SSE finished path=\(path, privacy: .public)")
                     continuation.finish()
                 } catch {
+                    apiLog.error("planning SSE failed path=\(path, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: error)
                 }
             }
@@ -312,28 +322,76 @@ final class APIClient: Sendable {
     private static func dispatchPlanningSSE(event: String, data: String,
                                             to continuation: AsyncThrowingStream<PlanningStreamEvent, Error>.Continuation) {
         guard !data.isEmpty else { return }
+        apiLog.debug("planning SSE received event=\(event, privacy: .public) bytes=\(data.utf8.count, privacy: .public)")
         switch event {
         case "text-delta":
-            if let p = decodeSSE(PlanningTextDeltaPayload.self, data) { continuation.yield(.textDelta(p.text)) }
+            if let p = decodeSSE(PlanningTextDeltaPayload.self, data) {
+                apiLog.debug("planning SSE text-delta chars=\(p.text.count, privacy: .public)")
+                continuation.yield(.textDelta(p.text))
+            } else {
+                apiLog.error("planning SSE decode failed event=text-delta bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "tool-input-start":
-            if let p = decodeSSE(PlanningToolInputStartPayload.self, data) { continuation.yield(.toolInputStart(p.toolName)) }
+            if let p = decodeSSE(PlanningToolInputStartPayload.self, data) {
+                apiLog.debug("planning SSE tool-input-start tool=\(p.toolName, privacy: .public) id=\(p.toolCallId ?? "", privacy: .public)")
+                continuation.yield(.toolInputStart(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=tool-input-start bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "tool-input-delta":
-            if let p = decodeSSE(PlanningToolInputDeltaPayload.self, data) { continuation.yield(.toolInputDelta(p)) }
+            if let p = decodeSSE(PlanningToolInputDeltaPayload.self, data) {
+                apiLog.debug("planning SSE tool-input-delta tool=\(p.toolName ?? "", privacy: .public) id=\(p.toolCallId ?? "", privacy: .public) chars=\(p.delta.count, privacy: .public)")
+                continuation.yield(.toolInputDelta(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=tool-input-delta bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "tool-call":
-            if let p = decodeSSE(PlanningToolCallPayload.self, data) { continuation.yield(.toolCall(p)) }
+            if let p = decodeSSE(PlanningToolCallPayload.self, data) {
+                apiLog.debug("planning SSE tool-call tool=\(p.toolName, privacy: .public) id=\(p.toolCallId, privacy: .public)")
+                continuation.yield(.toolCall(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=tool-call bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "tool-result":
-            if let p = decodeSSE(PlanningToolResultPayload.self, data) { continuation.yield(.toolResult(p)) }
+            if let p = decodeSSE(PlanningToolResultPayload.self, data) {
+                apiLog.debug("planning SSE tool-result tool=\(p.toolName, privacy: .public) id=\(p.toolCallId, privacy: .public) isError=\(p.isError ?? false, privacy: .public)")
+                continuation.yield(.toolResult(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=tool-result bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "plan":
-            if let p = decodeSSE(PlanningPlanPayload.self, data) { continuation.yield(.plan(p)) }
+            if let p = decodeSSE(PlanningPlanPayload.self, data) {
+                apiLog.debug("planning SSE plan tool=\(p.toolName ?? "", privacy: .public) id=\(p.toolCallId, privacy: .public) hasScript=\((p.script != nil), privacy: .public)")
+                continuation.yield(.plan(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=plan bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "question_required":
-            if let p = decodeSSE(QuestionPayload.self, data) { continuation.yield(.question(p)) }
+            if let p = decodeSSE(QuestionPayload.self, data) {
+                apiLog.debug("planning SSE question_required tool=\(p.toolName, privacy: .public) id=\(p.toolCallId, privacy: .public) questions=\(p.questions.count, privacy: .public)")
+                continuation.yield(.question(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=question_required bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "progress":
-            if let p = decodeSSE(PlanProgressEvent.self, data) { continuation.yield(.progress(p)) }
+            if let p = decodeSSE(PlanProgressEvent.self, data) {
+                apiLog.debug("planning SSE progress phase=\(p.phase, privacy: .public)")
+                continuation.yield(.progress(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=progress bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "done":
-            if let p = decodeSSE(PlanningDonePayload.self, data) { continuation.yield(.done(p)) }
+            if let p = decodeSSE(PlanningDonePayload.self, data) {
+                apiLog.debug("planning SSE done parts=\(p.conversation.parts.count, privacy: .public)")
+                continuation.yield(.done(p))
+            } else {
+                apiLog.error("planning SSE decode failed event=done bytes=\(data.utf8.count, privacy: .public)")
+            }
         case "error":
+            apiLog.error("planning SSE error event bytes=\(data.utf8.count, privacy: .public)")
             continuation.yield(.failed(sseErrorMessage(data)))
         default:
+            apiLog.debug("planning SSE ignored event=\(event, privacy: .public)")
             break
         }
     }
@@ -883,15 +941,14 @@ final class APIClient: Sendable {
 
                     var event = "message"
                     var data = ""
-                    for try await line in bytes.lines {
+                    try await Self.consumeSSELines(bytes) { line in
                         if line.isEmpty {
                             Self.dispatchSSE(event: event, data: data, to: continuation)
                             event = "message"
                             data = ""
-                            continue
-                        }
-                        if line.hasPrefix(":") { continue } // comment / heartbeat
-                        if line.hasPrefix("event:") {
+                        } else if line.hasPrefix(":") {
+                            return
+                        } else if line.hasPrefix("event:") {
                             event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
                         } else if line.hasPrefix("data:") {
                             let chunk = String(line.dropFirst(5))
@@ -925,6 +982,29 @@ final class APIClient: Sendable {
         return (bytes, http)
     }
 
+    private static func consumeSSELines(_ bytes: URLSession.AsyncBytes,
+                                        _ handle: (String) -> Void) async throws {
+        var lineBytes: [UInt8] = []
+        lineBytes.reserveCapacity(256)
+        for try await byte in bytes {
+            if byte == 10 {
+                if lineBytes.last == 13 {
+                    lineBytes.removeLast()
+                }
+                handle(String(decoding: lineBytes, as: UTF8.self))
+                lineBytes.removeAll(keepingCapacity: true)
+            } else {
+                lineBytes.append(byte)
+            }
+        }
+        if !lineBytes.isEmpty {
+            if lineBytes.last == 13 {
+                lineBytes.removeLast()
+            }
+            handle(String(decoding: lineBytes, as: UTF8.self))
+        }
+    }
+
     private static func dispatchSSE(event: String, data: String,
                                     to continuation: AsyncThrowingStream<PlanStreamEvent, Error>.Continuation) {
         guard !data.isEmpty else { return }
@@ -942,7 +1022,12 @@ final class APIClient: Sendable {
 
     private static func decodeSSE<T: Decodable>(_ type: T.Type, _ data: String) -> T? {
         guard let raw = data.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: raw)
+        do {
+            return try JSONDecoder().decode(T.self, from: raw)
+        } catch {
+            apiLog.error("SSE JSON decode error type=\(String(describing: type), privacy: .public) bytes=\(data.utf8.count, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            return nil
+        }
     }
 
     private static func sseErrorMessage(_ data: String) -> String {
