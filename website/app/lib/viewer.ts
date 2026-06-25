@@ -33,6 +33,11 @@ export type ViewerDiscussion = {
   lines: TranscriptLine[];
 };
 
+export type ViewerDiscussionLookup = {
+  discussion: ViewerDiscussion | null;
+  authFailed: boolean;
+};
+
 function normalize(d: Record<string, unknown>): ViewerDiscussion {
   const rawLines = Array.isArray(d.lines) ? (d.lines as Record<string, unknown>[]) : [];
   return {
@@ -60,24 +65,27 @@ function normalize(d: Record<string, unknown>): ViewerDiscussion {
   };
 }
 
-// getViewerDiscussion resolves a discussion for the player. It first tries the
-// authenticated owner endpoint with the user's rxlab access token (returns the
-// user's own discussions, including private ones, with transcript + audio), then
-// falls back to the public market endpoint with the service token. Returns null
-// when the discussion is neither owned nor public (or the backend is unset).
-export async function getViewerDiscussion(
+// getViewerDiscussionLookup resolves a discussion for the player. It first tries
+// the authenticated owner endpoint with the user's rxlab access token (returns
+// the user's own discussions, including private ones, with transcript + audio),
+// then falls back to the public market endpoint with the service token.
+// authFailed tells callers when the user-token path returned 401, so the page can
+// send the visitor through login again instead of showing an invalid-link state.
+export async function getViewerDiscussionLookup(
   id: string,
   accessToken: string | undefined
-): Promise<ViewerDiscussion | null> {
-  if (!BASE) return null;
+): Promise<ViewerDiscussionLookup> {
+  if (!BASE) return { discussion: null, authFailed: false };
   const path = encodeURIComponent(id);
+  let authFailed = false;
 
   if (accessToken) {
     const res = await fetch(`${BASE}/api/discussions/${path}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
     });
-    if (res.ok) return normalize(await res.json());
+    if (res.ok) return { discussion: normalize(await res.json()), authFailed: false };
+    authFailed = res.status === 401;
   }
 
   if (SERVICE_TOKEN) {
@@ -85,8 +93,17 @@ export async function getViewerDiscussion(
       headers: { Authorization: `Bearer ${SERVICE_TOKEN}` },
       cache: "no-store",
     });
-    if (res.ok) return normalize(await res.json());
+    if (res.ok) return { discussion: normalize(await res.json()), authFailed: false };
   }
 
-  return null;
+  return { discussion: null, authFailed };
+}
+
+// getViewerDiscussion is the metadata-friendly form: callers that only need the
+// discussion can ignore why a private lookup failed.
+export async function getViewerDiscussion(
+  id: string,
+  accessToken: string | undefined
+): Promise<ViewerDiscussion | null> {
+  return (await getViewerDiscussionLookup(id, accessToken)).discussion;
 }

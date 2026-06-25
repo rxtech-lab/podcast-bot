@@ -80,8 +80,8 @@ enum DeepLink: Equatable, Sendable {
     case publicDiscussion(id: String)
     case sharedDiscussion(token: String)
 
-    /// Parses `https://podcast.rxlab.app/d/{id}` and `…/s/{token}` (and the
-    /// matching `debatepod://` custom-scheme forms) into a DeepLink.
+    /// Parses `https://podcast.rxlab.app/p/{id}`, `/d/{id}`, and `/s/{token}`
+    /// (plus the matching `debatepod://` custom-scheme forms) into a DeepLink.
     init?(url: URL) {
         let comps = url.pathComponents.filter { $0 != "/" }
         // Custom scheme like debatepod://d/{id} puts the kind in host.
@@ -91,7 +91,7 @@ enum DeepLink: Equatable, Sendable {
         }
         guard comps.count >= 2 else { return nil }
         switch comps[0] {
-        case "d": self = .publicDiscussion(id: comps[1])
+        case "d", "p": self = .publicDiscussion(id: comps[1])
         case "s": self = .sharedDiscussion(token: comps[1])
         default: return nil
         }

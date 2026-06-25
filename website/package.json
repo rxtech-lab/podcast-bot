@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "e2e:mock-backend": "bun e2e/mock-backend.mjs",
+    "e2e:web": "E2E_AUTH=1 BACKEND_BASE_URL=http://127.0.0.1:${E2E_BACKEND_PORT:-4555} BACKEND_SERVICE_TOKEN=e2e-service-token AUTH_SECRET=e2e-auth-secret AUTH_ISSUER=http://127.0.0.1:${E2E_BACKEND_PORT:-4555} AUTH_CLIENT_ID=e2e-client AUTH_CLIENT_SECRET=e2e-client-secret NEXT_PUBLIC_SITE_BASE_URL=http://127.0.0.1:${E2E_WEB_PORT:-3000} next dev --hostname 127.0.0.1 --port ${E2E_WEB_PORT:-3000}",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "next": "16.2.9",
@@ -15,6 +18,7 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

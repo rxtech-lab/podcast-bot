@@ -113,6 +113,19 @@ final class APIClient: Sendable {
         return try await get("/api/discussions/\(id)", query: query)
     }
 
+    /// Opens a web-player/deep-link discussion ID. Private owner podcasts are
+    /// only visible through the authenticated detail endpoint; public podcasts
+    /// remain available through the market endpoint.
+    func playerDiscussion(id: String) async throws -> Discussion {
+        do {
+            return try await discussion(id: id)
+        } catch APIError.http(404, _) {
+            let discussion = try await marketStation(id: id)
+            try? await joinDiscussion(id: id, token: nil)
+            return discussion
+        }
+    }
+
     func parentPodcasts(limit: Int = 50, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
         var queryItems = [
             URLQueryItem(name: "limit", value: String(limit)),
