@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/planner"
 )
@@ -33,6 +35,22 @@ type planningAnswerRequest struct {
 type planningDonePayload struct {
 	Discussion   *Discussion              `json:"discussion"`
 	Conversation PlanningConversationView `json:"conversation"`
+}
+
+type planningEventWriter interface {
+	send(event string, payload any) error
+}
+
+type planningStreamSink struct {
+	ctx            context.Context
+	store          *PlanningStreamStore
+	runID          string
+	conversationID string
+}
+
+func (s planningStreamSink) send(event string, payload any) error {
+	_, err := s.store.Append(s.ctx, s.conversationID, s.runID, event, payload)
+	return err
 }
 
 // handlePlanningConversationGet returns the persisted conversation for history
@@ -64,8 +82,41 @@ func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Re
 		}
 		view.Parts = planningConversationParts(turns)
 		view.NeedsRun = planningConversationNeedsRun(turns)
+		if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
+			view.IsRunning = true
+			view.ActiveStream = active.RunID
+		}
 	}
 	writeJSON(w, view)
+}
+
+func (s *Server) handlePlanningStreamResume(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	conv, err := s.d.Planning.ConversationByDiscussion(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID)
+	if !ok {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.streamPlanningActiveRun(w, r, active.RunID)
 }
 
 // handlePlanningStream starts/continues the conversation with a user message and
@@ -103,11 +154,10 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start planning conversation", http.StatusInternalServerError)
 		return
 	}
-	if !s.claimPlanningRun(conv.ID) {
-		http.Error(w, "a planning turn is already in progress", http.StatusConflict)
+	if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
+		s.streamPlanningActiveRun(w, r, active.RunID)
 		return
 	}
-	defer s.releasePlanningRun(conv.ID)
 
 	if req.Resume {
 		turns, err := s.d.Planning.Turns(r.Context(), conv.ID)
@@ -162,6 +212,28 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.d.PlanningStreams.Enabled() {
+		if !s.claimPlanningRun(conv.ID) {
+			if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
+				s.streamPlanningActiveRun(w, r, active.RunID)
+				return
+			}
+			http.Error(w, "a planning turn is already in progress", http.StatusConflict)
+			return
+		}
+		active, ok := s.startStoredPlanningRun(w, r, user.ID, d, conv, p, req.Language)
+		if !ok {
+			s.releasePlanningRun(conv.ID)
+			return
+		}
+		s.streamPlanningActiveRun(w, r, active.RunID)
+		return
+	}
+	if !s.claimPlanningRun(conv.ID) {
+		http.Error(w, "a planning turn is already in progress", http.StatusConflict)
+		return
+	}
+	defer s.releasePlanningRun(conv.ID)
 	s.runPlanningTurn(w, r, user.ID, d, conv, p, req.Language)
 }
 
@@ -192,16 +264,15 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
+		s.streamPlanningActiveRun(w, r, active.RunID)
+		return
+	}
 	p, err := planner.New(s.d.Env)
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if !s.claimPlanningRun(conv.ID) {
-		http.Error(w, "a planning turn is already in progress", http.StatusConflict)
-		return
-	}
-	defer s.releasePlanningRun(conv.ID)
 
 	pending, err := s.d.Planning.PendingQuestion(r.Context(), conv.ID, strings.TrimSpace(req.QuestionID))
 	if err != nil {
@@ -238,6 +309,28 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if s.d.PlanningStreams.Enabled() {
+		if !s.claimPlanningRun(conv.ID) {
+			if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
+				s.streamPlanningActiveRun(w, r, active.RunID)
+				return
+			}
+			http.Error(w, "a planning turn is already in progress", http.StatusConflict)
+			return
+		}
+		active, ok := s.startStoredPlanningRun(w, r, user.ID, d, conv, p, req.Language)
+		if !ok {
+			s.releasePlanningRun(conv.ID)
+			return
+		}
+		s.streamPlanningActiveRun(w, r, active.RunID)
+		return
+	}
+	if !s.claimPlanningRun(conv.ID) {
+		http.Error(w, "a planning turn is already in progress", http.StatusConflict)
+		return
+	}
+	defer s.releasePlanningRun(conv.ID)
 	s.runPlanningTurn(w, r, user.ID, d, conv, p, req.Language)
 }
 
@@ -328,16 +421,166 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 	)
 }
 
+func (s *Server) startStoredPlanningRun(w http.ResponseWriter, r *http.Request, userID string, d *Discussion, conv *PlanningConversation, p *planner.Planner, languageOverride string) (*PlanningActiveStream, bool) {
+	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, userID, d.ID)
+	if !ok {
+		return nil, false
+	}
+	active := PlanningActiveStream{
+		RunID:          newJobID(),
+		ConversationID: conv.ID,
+		DiscussionID:   d.ID,
+		OwnerUserID:    userID,
+		StartedAt:      time.Now(),
+	}
+	if err := s.d.PlanningStreams.SetActive(r.Context(), active); err != nil {
+		s.refundPlanning(context.Background(), userID, d.ID, reserved, reserveLedgerID)
+		http.Error(w, "planning stream recovery is unavailable", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	go s.runStoredPlanningTurn(active, userID, d, conv, p, languageOverride, reserved, reserveLedgerID)
+	return &active, true
+}
+
+func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID string, d *Discussion, conv *PlanningConversation, p *planner.Planner, languageOverride string, reserved, reserveLedgerID int64) {
+	started := time.Now()
+	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
+	defer cancel()
+	defer s.releasePlanningRun(conv.ID)
+	defer s.d.PlanningStreams.ClearActive(context.Background(), conv.ID, active.RunID)
+
+	meter := &usageAccumulator{}
+	p.WithUsageRecorder(meter.record)
+	sink := planningStreamSink{
+		ctx:            workCtx,
+		store:          s.d.PlanningStreams,
+		runID:          active.RunID,
+		conversationID: conv.ID,
+	}
+	_ = sink.send("progress", planner.ProgressEvent{Phase: "thinking", Text: "Thinking…"})
+	s.recordDiscussionProgress(workCtx, d.ID, "planning", planner.ProgressEvent{Phase: "thinking", Text: "Thinking…"})
+	p.WithProgress(func(ev planner.ProgressEvent) {
+		s.recordDiscussionProgress(workCtx, d.ID, "planning", ev)
+		_ = sink.send("progress", ev)
+	})
+
+	turns, err := s.d.Planning.Turns(workCtx, conv.ID)
+	if err != nil {
+		s.refundPlanning(workCtx, userID, d.ID, reserved, reserveLedgerID)
+		s.clearDiscussionProgress(workCtx, d.ID)
+		_ = sink.send("error", map[string]string{"message": err.Error()})
+		return
+	}
+	history := planningMessagesForLLM(turns)
+	s.logger().Info("stored planning turn started",
+		"discussion", d.ID,
+		"conversation", conv.ID,
+		"run", active.RunID,
+		"turns", len(turns),
+		"history", len(history),
+		"last_role", planningLastTurnRole(turns),
+	)
+	opts := planner.ConversationOptions{
+		Language:         planningLanguage(d, languageOverride),
+		Channel:          planningChannel(d),
+		Discussants:      planningDiscussants(d),
+		AgentModel:       planningAgentModel(d),
+		ExistingSources:  d.Sources,
+		ExistingPlan:     d.Script,
+		ExistingMarkdown: d.Markdown,
+	}
+	emit := func(ev planner.ConvEvent) { s.handlePlanningConvEvent(workCtx, sink, userID, d.ID, conv.ID, ev) }
+	paused, runErr := p.RunConversationTurn(workCtx, history, opts, emit)
+
+	if runErr != nil {
+		s.refundPlanning(workCtx, userID, d.ID, reserved, reserveLedgerID)
+		_ = s.d.Planning.SetStatus(workCtx, conv.ID, PlanningConversationFailed)
+		s.clearDiscussionProgress(workCtx, d.ID)
+		_ = sink.send("error", map[string]string{"message": runErr.Error()})
+		return
+	}
+	s.settlePlanningConversation(workCtx, userID, d.ID, conv, reserved, reserveLedgerID, meter)
+	if paused {
+		_ = s.d.Planning.SetStatus(workCtx, conv.ID, PlanningConversationAwaitingAnswer)
+	} else {
+		_ = s.d.Planning.SetStatus(workCtx, conv.ID, PlanningConversationActive)
+	}
+	s.clearDiscussionProgress(workCtx, d.ID)
+
+	updated, _ := s.d.Discussions.Get(workCtx, userID, d.ID)
+	if updated != nil {
+		if total, err := s.pointsCharged(workCtx, d.ID); err == nil {
+			updated.PointsCharged = total
+		}
+		s.sanitizeDiscussionUsage(updated)
+	}
+	convFresh, _ := s.d.Planning.ConversationByDiscussion(workCtx, userID, d.ID)
+	finalTurns, _ := s.d.Planning.Turns(workCtx, conv.ID)
+	_ = sink.send("done", planningDonePayload{
+		Discussion: updated,
+		Conversation: PlanningConversationView{
+			Conversation: convFresh,
+			Parts:        planningConversationParts(finalTurns),
+			NeedsRun:     planningConversationNeedsRun(finalTurns),
+		},
+	})
+	s.logger().Info("stored planning turn finished",
+		"discussion", d.ID,
+		"conversation", conv.ID,
+		"run", active.RunID,
+		"paused", paused,
+		"turns", len(finalTurns),
+		"elapsed_ms", time.Since(started).Milliseconds(),
+	)
+}
+
+func (s *Server) streamPlanningActiveRun(w http.ResponseWriter, r *http.Request, runID string) {
+	if !s.d.PlanningStreams.Enabled() || strings.TrimSpace(runID) == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	sse := newSSEWriter(w)
+	_ = sse.comment("ok")
+	lastID := "0"
+	for {
+		frames, err := s.d.PlanningStreams.Read(r.Context(), runID, lastID, 2*time.Second, 32)
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				_ = sse.comment("ok")
+				continue
+			}
+			if r.Context().Err() != nil {
+				return
+			}
+			_ = sse.send("error", map[string]string{"message": err.Error()})
+			return
+		}
+		if len(frames) == 0 {
+			_ = sse.comment("ok")
+			continue
+		}
+		for _, frame := range frames {
+			lastID = frame.ID
+			if err := sse.sendRaw(frame.Event, frame.Payload); err != nil {
+				return
+			}
+			if frame.Event == "done" || frame.Event == "error" {
+				return
+			}
+		}
+	}
+}
+
 // handlePlanningConvEvent persists each conversational event and forwards it to
 // the client over SSE, mapping onto the linda-style event names.
-func (s *Server) handlePlanningConvEvent(ctx context.Context, sse *sseWriter, userID, discID, convID string, ev planner.ConvEvent) {
+func (s *Server) handlePlanningConvEvent(ctx context.Context, sink planningEventWriter, userID, discID, convID string, ev planner.ConvEvent) {
 	switch ev.Kind {
 	case planner.ConvText:
-		_ = sse.send("text-delta", map[string]string{"text": ev.Text})
+		_ = sink.send("text-delta", map[string]string{"text": ev.Text})
 	case planner.ConvToolStart:
-		_ = sse.send("tool-input-start", map[string]string{"toolCallId": ev.ToolCallID, "toolName": ev.ToolName})
+		_ = sink.send("tool-input-start", map[string]string{"toolCallId": ev.ToolCallID, "toolName": ev.ToolName})
 	case planner.ConvToolDelta:
-		_ = sse.send("tool-input-delta", map[string]string{
+		_ = sink.send("tool-input-delta", map[string]string{
 			"toolCallId": ev.ToolCallID,
 			"toolName":   ev.ToolName,
 			"delta":      ev.Text,
@@ -345,7 +588,7 @@ func (s *Server) handlePlanningConvEvent(ctx context.Context, sse *sseWriter, us
 	case planner.ConvAssistant:
 		_ = s.d.Planning.AppendTurn(ctx, convID, planningTurnInput{Role: "assistant", Text: ev.Text, ToolCalls: ev.Calls})
 	case planner.ConvToolCall:
-		_ = sse.send("tool-call", map[string]any{
+		_ = sink.send("tool-call", map[string]any{
 			"toolCallId": ev.Call.ID,
 			"toolName":   ev.Call.Name,
 			"input":      rawJSONOrNull(ev.Call.Arguments),
@@ -365,7 +608,7 @@ func (s *Server) handlePlanningConvEvent(ctx context.Context, sse *sseWriter, us
 			Sources:    planSources(ev.Plan),
 			Markdown:   planMarkdown(ev.Plan),
 		})
-		_ = sse.send("tool-result", map[string]any{
+		_ = sink.send("tool-result", map[string]any{
 			"toolCallId": ev.Call.ID,
 			"toolName":   ev.Call.Name,
 			"output":     ev.Output,
@@ -384,7 +627,7 @@ func (s *Server) handlePlanningConvEvent(ctx context.Context, sse *sseWriter, us
 				Sources:    ev.Plan.Sources,
 				Markdown:   ev.Plan.Markdown,
 			})
-			_ = sse.send("plan", map[string]any{
+			_ = sink.send("plan", map[string]any{
 				"toolCallId": ev.Call.ID,
 				"toolName":   ev.Call.Name,
 				"script":     ev.Plan.Script,
@@ -402,7 +645,7 @@ func (s *Server) handlePlanningConvEvent(ctx context.Context, sse *sseWriter, us
 			QuestionsJSON:  ev.QuestionsJSON,
 			QuestionStatus: "pending",
 		})
-		_ = sse.send("question_required", map[string]any{
+		_ = sink.send("question_required", map[string]any{
 			"questionId": questionID,
 			"toolCallId": ev.Call.ID,
 			"toolName":   ev.Call.Name,

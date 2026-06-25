@@ -129,6 +129,10 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var pointsCharged: Int?
     var showUsageSummary: Bool?
     var visibility: DiscussionVisibility?
+    /// Server-built canonical public web link (`/p/{id}`) for sharing — the same
+    /// URL embedded as the summary Markdown's "listen again" link. The client
+    /// never constructs share links itself; it shares this verbatim.
+    var shareURL: String?
     var cover: DiscussionCover?
     var creator: CreatorProfile?
     var likeCount: Int?
@@ -172,6 +176,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case pointsCharged = "points_charged"
         case showUsageSummary
         case visibility
+        case shareURL = "share_url"
         case cover
         case creator
         case likeCount = "like_count"

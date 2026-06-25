@@ -29,6 +29,10 @@ func (s *sseWriter) send(event string, payload any) error {
 	if err != nil {
 		return err
 	}
+	return s.sendRaw(event, data)
+}
+
+func (s *sseWriter) sendRaw(event string, data json.RawMessage) error {
 	if _, err := fmt.Fprintf(s.w, "event: %s\n", event); err != nil {
 		return err
 	}

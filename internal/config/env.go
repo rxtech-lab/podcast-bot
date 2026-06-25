@@ -166,15 +166,16 @@ type Env struct {
 	AuthIssuer string
 
 	// WebsiteBaseURL (WEBSITE_BASE_URL, e.g. https://podcast.rxlab.app) is the
-	// public base of the deep-link website. It is used to mint share-link URLs
-	// (…/s/{token}). Empty falls back to https://podcast.rxlab.app.
+	// fallback public base for every shareable link (/p/, /s/, /d/) when
+	// FrontendPublicURL is unset. Empty falls back to https://podcast.rxlab.app.
 	WebsiteBaseURL string
 
-	// FrontendPublicURL (FRONTEND_PUBLIC_URL) is the public base of the web
-	// frontend used for "listen again" links embedded in exported summaries
-	// (Markdown, PDF, Notion) — e.g. http://localhost:3000 in development or
-	// https://podcast.rxlab.app in production. Empty falls back to
-	// WebsiteBaseURL, then to https://podcast.rxlab.app.
+	// FrontendPublicURL (FRONTEND_PUBLIC_URL) is the preferred public base for
+	// every shareable link — the /p/ web player ("listen again" links in exported
+	// summaries), the /s/ private share link, and the /d/ deep link — e.g.
+	// http://localhost:3000 in development or https://podcast.rxlab.app in
+	// production. Empty falls back to WebsiteBaseURL, then to
+	// https://podcast.rxlab.app. Resolved via server.FrontendBaseURL.
 	FrontendPublicURL string
 
 	// APNs token-auth configuration for native push notifications. APNS_KEY_BASE64

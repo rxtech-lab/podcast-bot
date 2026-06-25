@@ -5,7 +5,8 @@ import UIKit
 /// Non-full-height bottom sheet for sharing a PRIVATE discussion: pick how long
 /// the link should stay valid (1h … 72h), create it, and manage (share / revoke)
 /// the active links. Public discussions don't use this — they share a plain
-/// permanent `/d/{id}` link via the system share sheet directly from the menu.
+/// permanent `/p/{id}` web-player link (matching the summary Markdown's "listen
+/// again" link) via the system share sheet directly from the menu.
 struct ShareSheet: View {
     let discussionID: String
     let api: APIClient

@@ -145,6 +145,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
+	s.applyDiscussionShareURL(d)
 	s.logDiscussionSummaryReturn("discussions.get", d)
 	writeJSON(w, d)
 }
@@ -1422,6 +1423,7 @@ func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, 
 		s.applyDiscussionSummaryMeta(r.Context(), &items[i])
 		t2 := time.Now()
 		s.sanitizeDiscussionUsage(&items[i])
+		s.applyDiscussionShareURL(&items[i])
 		items[i].DownloadURL = ""
 		coverDur += t1.Sub(t0)
 		summaryDur += t2.Sub(t1)

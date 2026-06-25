@@ -220,10 +220,14 @@ struct PlanningConversationView: Codable, Sendable {
     var conversation: PlanningConversationMeta?
     var parts: [PlanningPart]
     var needsRun: Bool?
+    var isRunning: Bool?
+    var activeStreamID: String?
 
     enum CodingKeys: String, CodingKey {
         case conversation, parts
         case needsRun = "needs_run"
+        case isRunning = "is_running"
+        case activeStreamID = "active_stream_id"
     }
 }
 

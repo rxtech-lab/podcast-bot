@@ -669,6 +669,118 @@ func TestSettleCapsChargedToDebited(t *testing.T) {
 	}
 }
 
+func TestRepairLegacyGenerationOverchargesCapsHistoryToDiscussionPoints(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 12000, "purchase:TEST", "legacy-credit"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `INSERT INTO points_ledger
+		(user_id, discussion_id, delta, reason, balance_after, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		owner, d.ID, int64(-11037), pointsReasonGeneration, int64(963), int64(2000)); err != nil {
+		t.Fatalf("insert legacy generation row: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `UPDATE user_points_balance SET balance = ? WHERE user_id = ?`, int64(963), owner); err != nil {
+		t.Fatalf("set legacy balance: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `UPDATE native_discussions SET points_charged = ? WHERE id = ?`, int64(1925), d.ID); err != nil {
+		t.Fatalf("set discussion points: %v", err)
+	}
+
+	count, points, err := ps.RepairLegacyGenerationOvercharges(ctx)
+	if err != nil {
+		t.Fatalf("RepairLegacyGenerationOvercharges: %v", err)
+	}
+	if count != 1 || points != 9112 {
+		t.Fatalf("repair = (%d discussions, %d points), want (1, 9112)", count, points)
+	}
+	page, err := ps.History(ctx, owner, 10, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatalf("History returned no entries")
+	}
+	if page.Entries[0].Reason != pointsReasonGeneration || page.Entries[0].Delta != -1925 || page.Entries[0].BalanceAfter != 10075 {
+		t.Fatalf("latest history entry = (%q, %d, balance %d), want generation -1925 balance 10075",
+			page.Entries[0].Reason, page.Entries[0].Delta, page.Entries[0].BalanceAfter)
+	}
+	bal, err := ps.Balance(ctx, owner)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 10075 {
+		t.Fatalf("balance = %d, want 10075", bal)
+	}
+	count, points, err = ps.RepairLegacyGenerationOvercharges(ctx)
+	if err != nil {
+		t.Fatalf("RepairLegacyGenerationOvercharges replay: %v", err)
+	}
+	if count != 0 || points != 0 {
+		t.Fatalf("repair replay = (%d discussions, %d points), want no-op", count, points)
+	}
+}
+
+func TestRepairLegacyGenerationOverchargesShiftsLaterBalances(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	const owner = "u1"
+	d, err := ds.Create(ctx, owner, "topic", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 12000, "purchase:TEST", "legacy-shift-credit"); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `INSERT INTO points_ledger
+		(user_id, discussion_id, delta, reason, balance_after, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		owner, d.ID, int64(-11037), pointsReasonGeneration, int64(963), int64(2000)); err != nil {
+		t.Fatalf("insert legacy generation row: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `UPDATE user_points_balance SET balance = ? WHERE user_id = ?`, int64(963), owner); err != nil {
+		t.Fatalf("set legacy balance: %v", err)
+	}
+	if _, err := ps.db.ExecContext(ctx, `UPDATE native_discussions SET points_charged = ? WHERE id = ?`, int64(1925), d.ID); err != nil {
+		t.Fatalf("set discussion points: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 1000, "purchase:TEST", "legacy-later-credit"); err != nil {
+		t.Fatalf("later Credit: %v", err)
+	}
+
+	if _, _, err := ps.RepairLegacyGenerationOvercharges(ctx); err != nil {
+		t.Fatalf("RepairLegacyGenerationOvercharges: %v", err)
+	}
+	page, err := ps.History(ctx, owner, 10, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) < 2 {
+		t.Fatalf("History returned %d entries, want at least 2: %#v", len(page.Entries), page.Entries)
+	}
+	if page.Entries[0].Reason != "purchase:TEST" || page.Entries[0].Delta != 1000 || page.Entries[0].BalanceAfter != 11075 {
+		t.Fatalf("latest history entry = (%q, %d, balance %d), want later purchase +1000 balance 11075",
+			page.Entries[0].Reason, page.Entries[0].Delta, page.Entries[0].BalanceAfter)
+	}
+	if page.Entries[1].Reason != pointsReasonGeneration || page.Entries[1].Delta != -1925 || page.Entries[1].BalanceAfter != 10075 {
+		t.Fatalf("generation history entry = (%q, %d, balance %d), want generation -1925 balance 10075",
+			page.Entries[1].Reason, page.Entries[1].Delta, page.Entries[1].BalanceAfter)
+	}
+	bal, err := ps.Balance(ctx, owner)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 11075 {
+		t.Fatalf("balance = %d, want 11075", bal)
+	}
+}
+
 func TestRefundGenerationReleasesHold(t *testing.T) {
 	ps, ds := newTestPointsStore(t)
 	ctx := context.Background()

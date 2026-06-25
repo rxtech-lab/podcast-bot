@@ -729,7 +729,7 @@ func notifyPodcastReady(ctx context.Context, deps Deps, log *slog.Logger) {
 		DiscussionID: d.ID,
 		Title:        "Podcast finished",
 		Body:         pushDiscussionTitle(d, "Your podcast is ready to play."),
-		URL:          server.DiscussionDeepLink(deps.Env.WebsiteBaseURL, d.ID),
+		URL:          server.DiscussionDeepLink(server.FrontendBaseURL(deps.Env), d.ID),
 	}, log)
 }
 
