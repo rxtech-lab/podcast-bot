@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000002 /* BeautifulMermaid */; };
+		AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000012 /* BeautifulMermaid */; };
 		DF0DA35D2FE8459500A02339 /* SwiftStreamingMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */; };
 		DF6AD85C2FE9E5530045484F /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85B2FE9E5530045484F /* ReceiptParser */; };
 		DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85D2FE9E5530045484F /* RevenueCat */; };
@@ -20,8 +22,6 @@
 		DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
 		DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9CE2FEC0E850045484F /* MarkdownUI */; };
 		DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9D02FEC0EB50045484F /* MarkdownUI */; };
-		AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000002 /* BeautifulMermaid */; };
-		AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000012 /* BeautifulMermaid */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -123,8 +123,12 @@
 				Features/Library/PublishStationSheet.swift,
 				Features/Plan/AttachmentSupport.swift,
 				Features/Plan/NewDiscussionView.swift,
+				Features/Plan/PlanConversationView.swift,
 				Features/Plan/PlanDetailView.swift,
 				Features/Plan/PlanSnapshotView.swift,
+				Features/Plan/PlanningModels.swift,
+				Features/Plan/PlanningToolCard.swift,
+				Features/Plan/QuestionSheetView.swift,
 				Features/Plan/SourcesView.swift,
 				Features/Plan/SpeakerModelsSheet.swift,
 				Features/Player/AudioMessagePlayer.swift,
@@ -1198,6 +1202,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/lukilabs/beautiful-mermaid-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 		DF0DA35B2FE8459500A02339 /* XCRemoteSwiftPackageReference "SwiftStreamingMarkdown" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sirily11/SwiftStreamingMarkdown";
@@ -1222,14 +1234,6 @@
 				minimumVersion = 2.4.1;
 			};
 		};
-		AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/lukilabs/beautiful-mermaid-swift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
-			};
-		};
 		DFF5269C2FE8529A007BEF2A /* XCRemoteSwiftPackageReference "RxAuthSwift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/rxtech-lab/RxAuthSwift";
@@ -1241,6 +1245,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AABBCCDD0000000000000002 /* BeautifulMermaid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
+			productName = BeautifulMermaid;
+		};
+		AABBCCDD0000000000000012 /* BeautifulMermaid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
+			productName = BeautifulMermaid;
+		};
 		DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = DF0DA35B2FE8459500A02339 /* XCRemoteSwiftPackageReference "SwiftStreamingMarkdown" */;
@@ -1290,16 +1304,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
 			productName = MarkdownUI;
-		};
-		AABBCCDD0000000000000002 /* BeautifulMermaid */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
-			productName = BeautifulMermaid;
-		};
-		AABBCCDD0000000000000012 /* BeautifulMermaid */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
-			productName = BeautifulMermaid;
 		};
 		DFF5269D2FE8529A007BEF2A /* RxAuthSwift */ = {
 			isa = XCSwiftPackageProductDependency;

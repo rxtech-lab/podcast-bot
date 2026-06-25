@@ -28,10 +28,6 @@ struct LibraryView: View {
     @State private var loadedVisibilityFilter: LibraryVisibilityFilter = .all
     @State private var isSearchLoading = false
     @State private var searchTask: Task<Void, Never>?
-    /// Plan requests for freshly-created discussions, keyed by id, so the plan
-    /// page knows to auto-stream the plan once the user navigates to it.
-    @State private var pendingPlans: [String: PlanRequest] = [:]
-
     private let pageSize = 20
 
     private var isRegular: Bool { hSize == .regular }
@@ -44,9 +40,8 @@ struct LibraryView: View {
             syncNavigation(toRegular: newValue == .regular)
         }
         .sheet(isPresented: $showingNew) {
-            NewDiscussionView { discussion, request in
+            NewDiscussionView { discussion in
                 showingNew = false
-                pendingPlans[discussion.id] = request
                 upsert(discussion)
                 navigate(to: discussion)
             }
@@ -525,8 +520,9 @@ struct LibraryView: View {
     private func destination(for discussion: Discussion) -> some View {
         switch discussion.status {
         case .planning, .failed:
-            PlanDetailView(discussion: discussion, initialPlan: pendingPlans[discussion.id]) { generated in
-                pendingPlans[generated.id] = nil
+            // New discussions plan conversationally; legacy plans are seeded into
+            // the same view from their saved script (see PlanConversationView.start).
+            PlanConversationView(discussion: discussion) { generated in
                 upsert(generated)
                 replaceCurrent(with: generated)
             }

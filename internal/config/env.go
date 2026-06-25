@@ -101,6 +101,12 @@ type Env struct {
 	// Override with POINTS_MIN_PER_PODCAST.
 	PointsMinPerPodcast int64
 
+	// PointsMinPerPlanningConversation is the one-time floor charged for a
+	// conversational planning thread, applied on its first turn so planning a
+	// podcast is never free even when the metered LLM cost rounds to zero.
+	// Default 1. Override with POINTS_MIN_PER_PLANNING_CONVERSATION.
+	PointsMinPerPlanningConversation int64
+
 	// PointsSignupGrant is an optional free starter balance credited the first
 	// time a user's balance is read. Default 0 (disabled). Override with
 	// POINTS_SIGNUP_GRANT.
@@ -279,22 +285,23 @@ func LoadEnv() (*Env, error) {
 		LyriaCostPerGeneration: parseFloatEnvDefault(
 			"LYRIA_COST_PER_GENERATION", 0.08,
 		),
-		PointsCostLeverage:        pointsCostLeverage,
-		PointsPerUSDCost:          pointsPerUSDCost,
-		PointsEstCostPerMinuteUSD: parseFloatEnvDefault("POINTS_EST_COST_PER_MINUTE_USD", 0.02),
-		PointsPlanGateUSD:         parseFloatEnvDefault("POINTS_PLAN_GATE_USD", 0.05),
-		PointsSummaryEstUSD:       parseFloatEnvDefault("POINTS_SUMMARY_EST_USD", 0.05),
-		PointsMinPerPodcast:       parseIntEnvDefault("POINTS_MIN_PER_PODCAST", 1),
-		PointsSignupGrant:         parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
-		RevenueCatWebhookAuth:     strings.TrimSpace(os.Getenv("REVENUECAT_WEBHOOK_AUTH")),
-		AzureSpeechKey:            strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
-		AzureSpeechRegion:         strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
-		ElevenLabsAPIKey:          strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
-		GeminiAPIKey:              strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		CloudflareAccountID:       strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")),
-		CloudflareAPIToken:        strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")),
-		OutDir:                    strings.TrimSpace(os.Getenv("OUT_DIR")),
-		PersistentRoot:            strings.TrimSpace(os.Getenv("SERIES_ROOT")),
+		PointsCostLeverage:               pointsCostLeverage,
+		PointsPerUSDCost:                 pointsPerUSDCost,
+		PointsEstCostPerMinuteUSD:        parseFloatEnvDefault("POINTS_EST_COST_PER_MINUTE_USD", 0.02),
+		PointsPlanGateUSD:                parseFloatEnvDefault("POINTS_PLAN_GATE_USD", 0.05),
+		PointsSummaryEstUSD:              parseFloatEnvDefault("POINTS_SUMMARY_EST_USD", 0.05),
+		PointsMinPerPodcast:              parseIntEnvDefault("POINTS_MIN_PER_PODCAST", 1),
+		PointsMinPerPlanningConversation: parseIntEnvDefault("POINTS_MIN_PER_PLANNING_CONVERSATION", 1),
+		PointsSignupGrant:                parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
+		RevenueCatWebhookAuth:            strings.TrimSpace(os.Getenv("REVENUECAT_WEBHOOK_AUTH")),
+		AzureSpeechKey:                   strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
+		AzureSpeechRegion:                strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
+		ElevenLabsAPIKey:                 strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
+		GeminiAPIKey:                     strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		CloudflareAccountID:              strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")),
+		CloudflareAPIToken:               strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")),
+		OutDir:                           strings.TrimSpace(os.Getenv("OUT_DIR")),
+		PersistentRoot:                   strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 
 		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),

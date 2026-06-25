@@ -187,6 +187,9 @@
         }
       }
     },
+    "%lld questions" : {
+      "comment" : "Question card header; value is the question count"
+    },
     "%lld source" : {
       "comment" : "Sources section header, singular",
       "localizations" : {
@@ -233,6 +236,16 @@
         }
       }
     },
+    "%lld/%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld/%2$lld"
+          }
+        }
+      }
+    },
     "%lld%%" : {
       "localizations" : {
         "zh-Hans" : {
@@ -254,6 +267,9 @@
           }
         }
       }
+    },
+    "+%lld more pending" : {
+
     },
     "1 day" : {
       "comment" : "Share-link duration option",
@@ -323,6 +339,9 @@
           }
         }
       }
+    },
+    "1 question" : {
+      "comment" : "Question card header for a single question"
     },
     "2 days" : {
       "comment" : "Share-link duration option",
@@ -663,6 +682,9 @@
         }
       }
     },
+    "Answered" : {
+      "comment" : "Question card status when answered"
+    },
     "Anyone with the link can join and comment until it expires (max 3 days). You can revoke a link any time." : {
       "localizations" : {
         "zh-Hans" : {
@@ -684,6 +706,9 @@
           }
         }
       }
+    },
+    "Assistant has a question" : {
+
     },
     "Attach files" : {
       "localizations" : {
@@ -1878,6 +1903,7 @@
       }
     },
     "Done" : {
+      "comment" : "Dismiss the tool detail sheet",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2212,7 +2238,7 @@
       }
     },
     "Failed" : {
-      "comment" : "Discussion row status: generation failed",
+      "comment" : "Discussion row status: generation failed\nTool card status when a tool failed",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2745,7 +2771,6 @@
       }
     },
     "Generate this podcast?" : {
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2989,6 +3014,9 @@
           }
         }
       }
+    },
+    "Input" : {
+      "comment" : "Tool detail sheet section for the tool's input"
     },
     "Invalid streaming response." : {
       "comment" : "Shown when the streaming plan response is not a valid HTTP response",
@@ -3416,6 +3444,9 @@
           }
         }
       }
+    },
+    "Message the planner" : {
+
     },
     "Microphone and speech recognition access are needed to record a voice message." : {
       "comment" : "Shown when mic/speech permission is denied",
@@ -3995,6 +4026,9 @@
         }
       }
     },
+    "Open this menu to download the summary as a PDF or Markdown file." : {
+
+    },
     "Open this menu to record a voice message, review the transcript, then send it to the discussion." : {
       "localizations" : {
         "zh-Hans" : {
@@ -4151,7 +4185,7 @@
       }
     },
     "Plan" : {
-      "comment" : "Default label for a plan history card with no stored label\nDiscussion row status: planning without loaded plan details",
+      "comment" : "Default label for a plan history card with no stored label\nDiscussion row status: planning without loaded plan details\nLabel for a plan card in the conversation",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -4493,7 +4527,6 @@
     },
     "Podcast language" : {
       "comment" : "Label for the podcast language picker",
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -4732,6 +4765,9 @@
           }
         }
       }
+    },
+    "Preparing a question…" : {
+      "comment" : "Progress while preparing a question"
     },
     "Preparing language…" : {
       "comment" : "Shown while the on-device transcription model loads",
@@ -5133,6 +5169,9 @@
         }
       }
     },
+    "Read links" : {
+      "comment" : "Tool card title for a URL read step"
+    },
     "Reading added sources..." : {
       "comment" : "Progress text while newly added sources are being read",
       "localizations" : {
@@ -5155,6 +5194,9 @@
           }
         }
       }
+    },
+    "Reading links…" : {
+      "comment" : "Progress while reading URLs"
     },
     "Ready" : {
       "localizations" : {
@@ -5364,6 +5406,9 @@
         }
       }
     },
+    "Result" : {
+      "comment" : "Tool detail sheet section for the tool's result"
+    },
     "Retry" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5408,6 +5453,9 @@
         }
       }
     },
+    "Running…" : {
+      "comment" : "Tool card status while a tool is running"
+    },
     "Save" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5429,6 +5477,9 @@
           }
         }
       }
+    },
+    "Save the summary" : {
+
     },
     "Search %@" : {
       "localizations" : {
@@ -5519,6 +5570,9 @@
         }
       }
     },
+    "Searched the web" : {
+      "comment" : "Tool card title for a web search step"
+    },
     "Searching sources" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5540,6 +5594,9 @@
           }
         }
       }
+    },
+    "Searching the web…" : {
+      "comment" : "Progress while searching sources"
     },
     "Searching..." : {
       "localizations" : {
@@ -5873,6 +5930,9 @@
         }
       }
     },
+    "Showing the plan…" : {
+      "comment" : "Progress while showing the plan"
+    },
     "Sign in with rxlab to plan and generate AI %@." : {
       "localizations" : {
         "zh-Hans" : {
@@ -5961,6 +6021,12 @@
           }
         }
       }
+    },
+    "Skip All Questions" : {
+
+    },
+    "Skipped" : {
+      "comment" : "Question card status when the user skipped"
     },
     "Slides (coming soon)" : {
       "localizations" : {
@@ -6273,6 +6339,9 @@
         }
       }
     },
+    "Tap to answer" : {
+      "comment" : "Question card hint when awaiting an answer"
+    },
     "Tap to review" : {
       "comment" : "Hint under the stop button in the voice recorder",
       "localizations" : {
@@ -6295,6 +6364,9 @@
           }
         }
       }
+    },
+    "Tap to view details" : {
+      "comment" : "Tool card hint to open the detail sheet"
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {
@@ -6477,6 +6549,9 @@
           }
         }
       }
+    },
+    "Thinking…" : {
+      "comment" : "Default progress text while the planning agent works\nProgress text while the planning agent works"
     },
     "This creator profile is not available." : {
       "localizations" : {
@@ -6666,7 +6741,6 @@
       }
     },
     "This turns the current plan into an audio podcast in %@. It can take a few minutes and uses generation credits." : {
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -6731,6 +6805,9 @@
           }
         }
       }
+    },
+    "Tool" : {
+      "comment" : "Generic tool card title"
     },
     "Topic" : {
       "localizations" : {
@@ -7225,6 +7302,12 @@
         }
       }
     },
+    "Working…" : {
+      "comment" : "Generic progress text"
+    },
+    "Writing the plan…" : {
+      "comment" : "Progress while writing the plan"
+    },
     "You need %@ points but have %@." : {
       "comment" : "Shown when the user lacks enough points to add sources; values are formatted point amounts\nShown when the user lacks enough points; values are formatted point amounts",
       "localizations" : {
@@ -7250,6 +7333,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你需要 %1$@ 積分，但只有 %2$@。"
+          }
+        }
+      }
+    },
+    "You need %lld points but have %lld." : {
+      "comment" : "Shown when the user lacks enough points; values are point amounts",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You need %1$lld points but have %2$lld."
           }
         }
       }

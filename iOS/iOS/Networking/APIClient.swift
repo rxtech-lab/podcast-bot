@@ -184,13 +184,15 @@ final class APIClient: Sendable {
                           language: String,
                           type: String = "discussion",
                           generateCover: Bool = false,
-                          coverPrompt: String? = nil) async throws -> Discussion {
+                          coverPrompt: String? = nil,
+                          plan: PlanRequest? = nil) async throws -> Discussion {
         try await send("POST", "/api/discussions",
                        body: DiscussionCreateRequest(topic: topic,
                                                      type: type,
                                                      language: language,
                                                      generateCover: generateCover,
-                                                     coverPrompt: coverPrompt))
+                                                     coverPrompt: coverPrompt,
+                                                     plan: plan))
     }
 
     /// Creates a private planning discussion by copying the current plan from a
@@ -222,6 +224,118 @@ final class APIClient: Sendable {
     /// and emits the updated discussion as a terminal `.done` event.
     func addDiscussionSourcesStream(id: String, urls: [String]) -> AsyncThrowingStream<PlanStreamEvent, Error> {
         streamPlan(path: "/api/discussions/\(id)/sources/stream", body: AddSourcesRequest(urls: urls))
+    }
+
+    // MARK: - Conversational planning
+
+    /// Loads the persisted conversational planning thread for history rebuild.
+    func planningConversation(id: String) async throws -> PlanningConversationView {
+        try await get("/api/discussions/\(id)/planning")
+    }
+
+    /// Starts or continues the conversational planning thread with a user
+    /// message, streaming the agent's turn (text, tool cards, questions).
+    func planningConversationStream(id: String, prompt: String,
+                                    language: String? = nil,
+                                    attachments: [Attachment] = []) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
+        streamPlanning(
+            path: "/api/discussions/\(id)/planning/stream",
+            body: PlanningStreamRequest(prompt: prompt, language: language, attachments: attachments.isEmpty ? nil : attachments)
+        )
+    }
+
+    /// Resumes a server-seeded planning turn without appending another user
+    /// message. Used when opening a freshly-created planning discussion.
+    func resumePlanningConversation(id: String) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
+        streamPlanning(
+            path: "/api/discussions/\(id)/planning/stream",
+            body: PlanningStreamRequest(prompt: "", attachments: nil, resume: true)
+        )
+    }
+
+    /// Answers (or skips) a pending question, resuming the agent loop over SSE.
+    func answerPlanningQuestion(id: String, questionId: String, action: String,
+                                language: String? = nil,
+                                answers: [[String: AnyCodable]]) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
+        streamPlanning(
+            path: "/api/discussions/\(id)/planning/answer",
+            body: PlanningAnswerRequest(questionId: questionId, action: action, language: language, answers: answers)
+        )
+    }
+
+    /// Runs a conversational-planning SSE request and re-emits its frames as
+    /// `PlanningStreamEvent`s. Mirrors `streamPlan` but with the richer event set.
+    private func streamPlanning<B: Encodable>(path: String, body: B) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let payload = try JSONEncoder().encode(body)
+                    guard let token = await tokens.token() else { throw APIError.notAuthenticated }
+                    var (bytes, http) = try await openSSE(path: path, body: payload, token: token)
+                    if http.statusCode == 401 {
+                        guard let fresh = await tokens.refreshedToken() else { throw APIError.notAuthenticated }
+                        (bytes, http) = try await openSSE(path: path, body: payload, token: fresh)
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        var message = ""
+                        for try await line in bytes.lines { message += line }
+                        throw mapHTTPError(http.statusCode, Data(message.utf8))
+                    }
+                    var event = "message"
+                    var data = ""
+                    for try await line in bytes.lines {
+                        if line.isEmpty {
+                            Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
+                            event = "message"
+                            data = ""
+                            continue
+                        }
+                        if line.hasPrefix(":") { continue }
+                        if line.hasPrefix("event:") {
+                            event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        } else if line.hasPrefix("data:") {
+                            let chunk = String(line.dropFirst(5))
+                            let piece = chunk.hasPrefix(" ") ? String(chunk.dropFirst()) : chunk
+                            data += data.isEmpty ? piece : "\n" + piece
+                        }
+                    }
+                    Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private static func dispatchPlanningSSE(event: String, data: String,
+                                            to continuation: AsyncThrowingStream<PlanningStreamEvent, Error>.Continuation) {
+        guard !data.isEmpty else { return }
+        switch event {
+        case "text-delta":
+            if let p = decodeSSE(PlanningTextDeltaPayload.self, data) { continuation.yield(.textDelta(p.text)) }
+        case "tool-input-start":
+            if let p = decodeSSE(PlanningToolInputStartPayload.self, data) { continuation.yield(.toolInputStart(p.toolName)) }
+        case "tool-input-delta":
+            if let p = decodeSSE(PlanningToolInputDeltaPayload.self, data) { continuation.yield(.toolInputDelta(p)) }
+        case "tool-call":
+            if let p = decodeSSE(PlanningToolCallPayload.self, data) { continuation.yield(.toolCall(p)) }
+        case "tool-result":
+            if let p = decodeSSE(PlanningToolResultPayload.self, data) { continuation.yield(.toolResult(p)) }
+        case "plan":
+            if let p = decodeSSE(PlanningPlanPayload.self, data) { continuation.yield(.plan(p)) }
+        case "question_required":
+            if let p = decodeSSE(QuestionPayload.self, data) { continuation.yield(.question(p)) }
+        case "progress":
+            if let p = decodeSSE(PlanProgressEvent.self, data) { continuation.yield(.progress(p)) }
+        case "done":
+            if let p = decodeSSE(PlanningDonePayload.self, data) { continuation.yield(.done(p)) }
+        case "error":
+            continuation.yield(.failed(sseErrorMessage(data)))
+        default:
+            break
+        }
     }
 
     /// Re-research: starts a background server update for the given links, then

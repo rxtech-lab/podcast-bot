@@ -7,9 +7,9 @@ import TipKit
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
-    /// Called once the placeholder discussion is created. The plan itself is then
-    /// streamed on the plan page, so the request is handed along to drive it.
-    var onPlanned: (Discussion, PlanRequest) -> Void = { _, _ in }
+    /// Called once the placeholder discussion and its first planning turn are
+    /// created. The plan page resumes that server-seeded turn.
+    var onPlanned: (Discussion) -> Void = { _ in }
 
     @State private var topic = ""
     @AppStorage("newDiscussion.type") private var discussionType = "discussion"
@@ -239,10 +239,11 @@ struct NewDiscussionView: View {
                 let created = try await api.createDiscussion(topic: trimmed,
                                                              language: language,
                                                              type: discussionType,
-                                                             generateCover: generateCover)
+                                                             generateCover: generateCover,
+                                                             plan: request)
                 isPlanning = false
                 dismiss()
-                onPlanned(created, request)
+                onPlanned(created)
             } catch {
                 isPlanning = false
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
