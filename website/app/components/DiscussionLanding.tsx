@@ -6,9 +6,12 @@ import { coverImageURL, type DiscussionMeta } from "@/app/lib/backend";
 export function DiscussionLanding({
   meta,
   deepLink,
+  listenURL,
 }: {
   meta: DiscussionMeta;
   deepLink: string;
+  // When set, offers a view-only in-browser player (for users without the app).
+  listenURL?: string;
 }) {
   const cover = coverImageURL(meta);
   const gradient = meta.cover?.gradient_start && meta.cover?.gradient_end
@@ -38,6 +41,11 @@ export function DiscussionLanding({
       >
         Open in app
       </a>
+      {listenURL ? (
+        <a href={listenURL} className="text-sm font-medium underline underline-offset-4 opacity-80">
+          Listen in browser
+        </a>
+      ) : null}
       <p className="max-w-xs text-xs opacity-50">
         Tap to open this discussion in the app. Don&apos;t have it? The App Clip
         opens automatically on supported devices.

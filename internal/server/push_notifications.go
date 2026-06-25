@@ -358,3 +358,43 @@ func DiscussionDeepLink(websiteBaseURL, id string) string {
 	}
 	return base + "/d/" + strings.TrimSpace(id)
 }
+
+// frontendBaseURL is the public base of the web frontend used for "listen again"
+// links. It prefers FRONTEND_PUBLIC_URL (which may point at localhost in dev),
+// then falls back to WEBSITE_BASE_URL, then the production default.
+func (s *Server) frontendBaseURL() string {
+	if s.d.Env != nil {
+		if v := strings.TrimRight(strings.TrimSpace(s.d.Env.FrontendPublicURL), "/"); v != "" {
+			return v
+		}
+	}
+	base := strings.TrimRight(strings.TrimSpace(s.d.WebsiteBaseURL), "/")
+	if base == "" {
+		base = "https://podcast.rxlab.app"
+	}
+	return base
+}
+
+// podcastPlayerURL is the public, view-only web player page for a discussion —
+// the target of the "listen again" link embedded in exported summaries.
+func (s *Server) podcastPlayerURL(id string) string {
+	return s.frontendBaseURL() + "/p/" + strings.TrimSpace(id)
+}
+
+// summaryMarkdownWithLink appends a "listen again" link to a summary's Markdown
+// body so every export surface (Markdown download, PDF, Notion) carries a way
+// back to the original podcast. It is injected on read — never stored — so the
+// link always reflects the current frontend URL. Idempotent: re-injecting is a
+// no-op once the link is present.
+func (s *Server) summaryMarkdownWithLink(discussionID, markdown string) string {
+	playerURL := s.podcastPlayerURL(discussionID)
+	if strings.Contains(markdown, playerURL) {
+		return markdown
+	}
+	link := fmt.Sprintf("🎧 [Listen to the original podcast](%s)", playerURL)
+	body := strings.TrimRight(markdown, "\n")
+	if body == "" {
+		return link + "\n"
+	}
+	return body + "\n\n---\n\n" + link + "\n"
+}

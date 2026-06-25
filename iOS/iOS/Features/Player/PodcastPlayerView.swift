@@ -157,6 +157,7 @@ struct PodcastPlayerView: View {
             // immediately to recover anything that streamed in the background.
             if phase == .active { model?.foregroundRefresh() }
         }
+        .preventsIdleSleep()
     }
 
     @ToolbarContentBuilder

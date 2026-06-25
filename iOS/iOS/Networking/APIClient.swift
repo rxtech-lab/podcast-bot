@@ -502,6 +502,20 @@ final class APIClient: Sendable {
         )
     }
 
+    /// Exports a podcast's generated summary to the user's Notion workspace as a
+    /// sub-page under `parentPageID`, returning the created page (URL + id) so the
+    /// UI can offer an "Open in Notion" action. Throws 401 when Notion isn't
+    /// connected, 404 when no summary exists.
+    func exportSummaryToNotion(id: String, parentPageID: String,
+                               docType: String = "summary") async throws -> NotionExportResponse {
+        try await send(
+            "POST",
+            "/api/discussions/\(id)/summary/notion",
+            body: NotionExportRequest(parentPageID: parentPageID,
+                                      docType: docType == "summary" ? nil : docType)
+        )
+    }
+
     /// Transcribes an already-uploaded voice message server-side (gateway whisper)
     /// when the device can't transcribe it on-device. Returns the recognized text,
     /// which may be empty if the audio held no speech.

@@ -26,5 +26,5 @@ export default async function PublicDiscussionPage({ params }: Props) {
   const { id } = await params;
   const meta = await getPublicDiscussion(id);
   if (!meta) return <ExpiredView />;
-  return <DiscussionLanding meta={meta} deepLink={publicLink(id)} />;
+  return <DiscussionLanding meta={meta} deepLink={publicLink(id)} listenURL={`/p/${id}`} />;
 }
