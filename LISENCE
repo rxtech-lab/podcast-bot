@@ -1,0 +1,46 @@
+# License
+
+This project is licensed under the **Business Source License 1.1**.
+
+This is a **source-available license**, not an open-source license.
+
+## Summary
+
+You may:
+
+- View the source code
+- Copy and modify the source code
+- Use the software for development, testing, research, and non-production purposes
+
+You may not:
+
+- Use the software in production unless allowed by the Additional Use Grant below
+- Offer the software as a competing hosted service
+- Sell, rent, or provide the software as a managed service that competes with the original project
+- Remove copyright, trademark, or license notices
+
+## License Parameters
+
+**Licensor:** YOUR_NAME / YOUR_COMPANY_NAME
+
+**Licensed Work:** podcast-bot
+
+**Additional Use Grant:**
+
+You may use the Licensed Work for internal business purposes, development, testing, evaluation, research, and personal use.
+
+You may not use the Licensed Work to provide a commercial hosted service, managed service, SaaS product, or other offering that competes with PROJECT_NAME or substitutes for PROJECT_NAME as a product or service.
+
+For uses outside this grant, you must obtain a commercial license from the Licensor.
+
+## Commercial License
+
+Commercial licenses are available for production use, hosted services, managed services, enterprise use, or other uses not permitted by this license.
+
+Contact: qiwei@rxlab.app
+
+## Full License Text
+
+The full text of the Business Source License 1.1 applies to this project.
+
+See: https://mariadb.com/bsl11/
