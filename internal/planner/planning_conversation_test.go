@@ -86,6 +86,34 @@ func TestConversationDispatchUpdatePlanReassembles(t *testing.T) {
 	}
 }
 
+func TestConversationDispatchEnforcesExactDiscussantCount(t *testing.T) {
+	s := testConversationSession()
+	s.opts.Discussants = 3
+	draft := `{"title":"Revised","background":"Para one here. Para two here.","host":{"name":"Mod"},"discussants":[{"name":"X","aspect":"tech"},{"name":"Y","aspect":"policy"}]}`
+	output, _, res, _, isErr := s.dispatch(context.Background(), llm.ToolCall{ID: "c3", Name: "update_plan", Arguments: draft})
+	if !isErr {
+		t.Fatalf("expected exact discussant count error, got res=%+v", res)
+	}
+	if !strings.Contains(output, "exactly 3 discussants") {
+		t.Fatalf("expected exact count error, got %q", output)
+	}
+}
+
+func TestConversationToolsAvoidGatewayUnsupportedSchemaKeywords(t *testing.T) {
+	for _, tool := range conversationTools(3) {
+		raw, err := json.Marshal(tool.Function.Parameters)
+		if err != nil {
+			t.Fatalf("marshal %s parameters: %v", tool.Function.Name, err)
+		}
+		text := string(raw)
+		for _, keyword := range []string{"minItems", "maxItems"} {
+			if strings.Contains(text, keyword) {
+				t.Fatalf("%s schema contains %s: %s", tool.Function.Name, keyword, text)
+			}
+		}
+	}
+}
+
 func TestConversationDispatchBadDraftErrors(t *testing.T) {
 	s := testConversationSession()
 	// Only one discussant — decodeDraft requires at least two.

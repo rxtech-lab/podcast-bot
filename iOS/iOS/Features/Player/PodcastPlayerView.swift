@@ -14,6 +14,7 @@ struct PodcastPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
     let discussion: Discussion
     var onCreatedFromPlan: ((Discussion) -> Void)?
+    var onCreatedFollowUp: ((Discussion) -> Void)?
     /// Non-nil when this discussion was opened via a private share link; passed
     /// to the player model so a non-owner participant's comments are authorized.
     var shareToken: String? = nil
@@ -31,8 +32,10 @@ struct PodcastPlayerView: View {
     @State private var showingCoverEditor = false
     @State private var showingShareSheet = false
     @State private var showingCreatorProfile = false
+    @State private var showingFollowUpForm = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingRecorder = false
+    @State private var selectedTranscriptSources: TranscriptSourcesSelection?
     @State private var resumePlaybackAfterRecorder = false
     @State private var isUploadingAttachment = false
     @State private var isCreatingFromPlan = false
@@ -82,6 +85,12 @@ struct PodcastPlayerView: View {
         .sheet(isPresented: $showingSummary) {
             summarySheet
         }
+        .sheet(item: $selectedTranscriptSources) { selection in
+            SourcesSheet(
+                discussion: discussionForTranscriptSources(selection.sources),
+                allowsAddingSources: false
+            )
+        }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
         }
@@ -110,6 +119,12 @@ struct PodcastPlayerView: View {
                 CreatorProfileView(creatorID: creator.id,
                                    initialProfile: creator,
                                    onCreateFromPlan: onCreatedFromPlan)
+            }
+        }
+        .sheet(isPresented: $showingFollowUpForm) {
+            NewDiscussionView(reference: currentDiscussion.podcastReference) { created in
+                showingFollowUpForm = false
+                onCreatedFollowUp?(created)
             }
         }
         .sheet(isPresented: Binding(
@@ -222,6 +237,7 @@ struct PodcastPlayerView: View {
                         onEditCover: { showingCoverEditor = true },
                         onMakePrivate: { makePrivate(model) },
                         onShare: { showingShareSheet = true },
+                        onCreateFollowUp: createFollowUpAction,
                         isCreatingFromPlan: isCreatingFromPlan,
                         onCreateFromPlan: createFromPlanAction,
                         onSignOut: onSignOut
@@ -277,7 +293,13 @@ struct PodcastPlayerView: View {
         purchases.isConfigured
             || model?.showsPodcastActions == true
             || onCreatedFromPlan != nil
+            || onCreatedFollowUp != nil
             || onSignOut != nil
+    }
+
+    private var createFollowUpAction: (() -> Void)? {
+        guard onCreatedFollowUp != nil else { return nil }
+        return { showingFollowUpForm = true }
     }
 
     private var createFromPlanAction: (() -> Void)? {
@@ -334,7 +356,9 @@ struct PodcastPlayerView: View {
     private func transcriptRow(_ item: TranscriptListItem) -> some View {
         switch item {
         case .line(let line, let isMine):
-            TranscriptBubble(line: line, isMine: isMine)
+            TranscriptBubble(line: line, isMine: isMine) { sources in
+                selectedTranscriptSources = TranscriptSourcesSelection(sources: sources)
+            }
         case .usage(_, let points):
             PointsSummaryBubble(points: points)
         }
@@ -366,6 +390,12 @@ struct PodcastPlayerView: View {
             items.append(.usage(id: Self.usageItemID, points: points))
         }
         return items
+    }
+
+    private func discussionForTranscriptSources(_ sources: [SourceDTO]) -> Discussion {
+        var copy = currentDiscussion
+        copy.sources = sources
+        return copy
     }
 
     /// Streaming is in effect while the most recent line is still being written.
@@ -643,6 +673,7 @@ struct PodcastActionsMenu: View {
     /// Opens the private share sheet (duration picker + manage links). Only
     /// invoked for private discussions; public ones share a plain link inline.
     var onShare: () -> Void = {}
+    let onCreateFollowUp: (() -> Void)?
     let isCreatingFromPlan: Bool
     let onCreateFromPlan: (() -> Void)?
     var onSignOut: (() -> Void)?
@@ -679,8 +710,13 @@ struct PodcastActionsMenu: View {
                     Label(pointsMenuLabel, systemImage: "sparkles")
                 }
             }
-            if showsPoints && (model.showsPodcastActions || onCreateFromPlan != nil) {
+            if showsPoints && (model.showsPodcastActions || onCreateFollowUp != nil || onCreateFromPlan != nil) {
                 Divider()
+            }
+            if let onCreateFollowUp {
+                Button(action: onCreateFollowUp) {
+                    Label("Create Follow-up", systemImage: "arrow.triangle.branch")
+                }
             }
             if let onCreateFromPlan {
                 Button(action: onCreateFromPlan) {
@@ -760,6 +796,7 @@ struct PodcastActionsMenu: View {
 
     private var hasNonSignOutActions: Bool {
         showsPoints
+            || onCreateFollowUp != nil
             || onCreateFromPlan != nil
             || model.discussion.isOwner != false
             || model.discussion.isPublic
@@ -958,6 +995,11 @@ private enum TranscriptListItem: Identifiable, MessageListItem {
     }
 }
 
+private struct TranscriptSourcesSelection: Identifiable {
+    let id = UUID()
+    var sources: [SourceDTO]
+}
+
 /// Deterministic per-speaker identity: each panelist gets a stable color and an
 /// initials avatar so the transcript reads as a conversation between distinct
 /// people instead of a wall of identical grey bubbles.
@@ -1050,8 +1092,13 @@ private struct TranscriptBubble: View {
     let line: LiveLine
     /// True only when this line was authored by the current participant.
     let isMine: Bool
+    var onSourcesTapped: ([SourceDTO]) -> Void = { _ in }
 
     private var speakerColor: Color { SpeakerPalette.color(for: line.speaker) }
+    private var sources: [SourceDTO] { line.sources ?? [] }
+    private var judgementComment: String {
+        line.judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -1089,6 +1136,32 @@ private struct TranscriptBubble: View {
                         Text("Audio message", comment: "Fallback label for a voice message whose transcript is unavailable")
                             .font(.caption.weight(.medium))
                             .foregroundStyle((isMine ? Color.white : speakerColor).opacity(0.78))
+                    }
+                    if !sources.isEmpty {
+                        Button {
+                            onSourcesTapped(sources)
+                        } label: {
+                            Label("Sources", systemImage: "link")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(isMine ? .white.opacity(0.9) : speakerColor)
+                    }
+                    if !judgementComment.isEmpty {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2.weight(.bold))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Judgement")
+                                    .font(.caption2.weight(.bold))
+                                    .textCase(.uppercase)
+                                Text(judgementComment)
+                                    .font(.caption)
+                            }
+                        }
+                        .foregroundStyle(isMine ? Color.white.opacity(0.82) : Color.orange)
+                        .padding(.top, 2)
                     }
                 }
                 .font(.body)

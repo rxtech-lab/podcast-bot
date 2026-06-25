@@ -233,7 +233,14 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 		p.stopMu.Unlock()
 	}()
 
-	turnCh := make(chan *Turn, 2)
+	turnBuffer := 2
+	if p.d.ContentType == config.ContentTypeDiscussion {
+		// Keep a shallow look-ahead for smoothness while limiting audience
+		// question latency. A deeper queue can leave multiple ordinary
+		// discussant turns ahead of the host's address-user turn.
+		turnBuffer = 1
+	}
+	turnCh := make(chan *Turn, turnBuffer)
 	producedCh := make(chan *Turn, 1)
 
 	// Session-wide music mixer. If a music file is configured, all turns
@@ -556,6 +563,7 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		TopicLanguage: p.d.Language,
 		Instructions:  t.Directive,
 		Side:          t.Speaker.Side(),
+		ToolResult:    t.RecordToolResult,
 	}
 	if mr, ok := t.Speaker.(interface{ MemoryRead() string }); ok {
 		prompt.Memory = mr.MemoryRead()
@@ -1078,6 +1086,7 @@ func (p *Pipeline) phaseFrameCount(t *Turn) int {
 // phrasing. Other agents keep the original behaviour (their own past turns
 // only show up via the recent-transcript window in the prompt body).
 func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
+	p.maybeJudgeTurn(ctx, t)
 	full := p.d.Transcript.AppendFromTurn(t)
 	for _, a := range p.d.Registry.All() {
 		if a == t.Speaker {
@@ -1096,7 +1105,88 @@ func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 	p.d.Send(TranscriptMsg{
 		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
 		Side: t.Speaker.Side(), Text: "", Done: true,
+		Sources: t.Sources(), JudgementComment: t.JudgementComment(),
 	})
+}
+
+func (p *Pipeline) maybeJudgeTurn(ctx context.Context, t *Turn) {
+	if p == nil || p.d.ContentType != config.ContentTypeDiscussion {
+		return
+	}
+	if t == nil || t.Speaker == nil || t.Speaker.Role() != agent.RoleDiscussant {
+		return
+	}
+	j, ok := p.d.Registry.Judgement.(*agent.Judgement)
+	if !ok || j == nil {
+		return
+	}
+	text := strings.TrimSpace(t.FullText())
+	if text == "" {
+		return
+	}
+	line := agent.TranscriptLine{
+		Speaker: t.Speaker.Name(),
+		Role:    t.Speaker.Role(),
+		Side:    t.Speaker.Side(),
+		Text:    text,
+		Sources: t.Sources(),
+	}
+	j.EmitActivity(string(ActivitySearching), "judgement")
+	judgeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	res, err := j.Analyze(judgeCtx, p.d.Topic, line, p.d.Transcript.RecentN(40))
+	j.EmitActivity(string(ActivityIdle), "")
+	if err != nil {
+		p.d.Log.Warn("judgement analyze failed", "turn", t.ID, "err", err)
+		if comment := fallbackJudgementComment(line); comment != "" {
+			t.SetJudgementComment(comment)
+		}
+		return
+	}
+	for _, src := range res.Sources {
+		t.addSource(src)
+	}
+	line.Sources = t.Sources()
+	if res.ShouldComment {
+		t.SetJudgementComment(res.Comment)
+	} else if comment := fallbackJudgementComment(line); comment != "" {
+		t.SetJudgementComment(comment)
+	}
+}
+
+func fallbackJudgementComment(line agent.TranscriptLine) string {
+	if strings.TrimSpace(line.Text) == "" || len(line.Sources) > 0 {
+		return ""
+	}
+	text := strings.ToLower(line.Text)
+	markers := []string{
+		"fastest", "best", "must", "only way", "guarantee", "proves",
+		"current", "now", "already", "standard", "data", "percent", "%",
+		"最快", "最佳", "必须", "唯一", "保证", "证明", "目前", "现在",
+		"已经", "标准", "数据", "量化", "结果", "机会",
+	}
+	hits := 0
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			hits++
+		}
+	}
+	if hits < 2 {
+		return ""
+	}
+	if containsCJK(line.Text) {
+		return "这点需要更强的证据支撑，先不要把它当成定论。"
+	}
+	return "That point needs stronger evidence before treating it as settled."
+}
+
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
 }
 
 // Keep the llm package referenced even when no inline use exists.

@@ -1,9 +1,11 @@
 package contentcreator
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,12 +21,14 @@ import (
 // `at` timestamp resolution alone wasn't enough — sub-millisecond turns
 // from the same agent could land out of order).
 type MessageRow struct {
-	ID      uint   `gorm:"primaryKey;autoIncrement"`
-	Speaker string `gorm:"index;size:64;not null"`
-	Role    string `gorm:"index;size:32;not null"`
-	Side    string `gorm:"size:32"`
-	Text    string `gorm:"type:text;not null"`
-	At      time.Time
+	ID               uint   `gorm:"primaryKey;autoIncrement"`
+	Speaker          string `gorm:"index;size:64;not null"`
+	Role             string `gorm:"index;size:32;not null"`
+	Side             string `gorm:"size:32"`
+	Text             string `gorm:"type:text;not null"`
+	At               time.Time
+	SourcesJSON      string `gorm:"type:text"`
+	JudgementComment string `gorm:"type:text"`
 }
 
 // TableName pins the table to "messages" so future rename of the Go type
@@ -82,12 +86,20 @@ func (s *Store) Append(line agent.TranscriptLine) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var sourcesJSON string
+	if len(line.Sources) > 0 {
+		if b, err := json.Marshal(line.Sources); err == nil {
+			sourcesJSON = string(b)
+		}
+	}
 	row := MessageRow{
-		Speaker: line.Speaker,
-		Role:    string(line.Role),
-		Side:    line.Side,
-		Text:    line.Text,
-		At:      line.At,
+		Speaker:          line.Speaker,
+		Role:             string(line.Role),
+		Side:             line.Side,
+		Text:             line.Text,
+		At:               line.At,
+		SourcesJSON:      sourcesJSON,
+		JudgementComment: line.JudgementComment,
 	}
 	if err := s.db.Create(&row).Error; err != nil {
 		s.log.Warn("sqlite append failed", "speaker", line.Speaker, "err", err)
@@ -108,12 +120,18 @@ func (s *Store) Snapshot() ([]agent.TranscriptLine, error) {
 	}
 	out := make([]agent.TranscriptLine, len(rows))
 	for i, r := range rows {
+		var sources []agent.TranscriptSource
+		if strings.TrimSpace(r.SourcesJSON) != "" {
+			_ = json.Unmarshal([]byte(r.SourcesJSON), &sources)
+		}
 		out[i] = agent.TranscriptLine{
-			Speaker: r.Speaker,
-			Role:    agent.Role(r.Role),
-			Side:    r.Side,
-			Text:    r.Text,
-			At:      r.At,
+			Speaker:          r.Speaker,
+			Role:             agent.Role(r.Role),
+			Side:             r.Side,
+			Text:             r.Text,
+			At:               r.At,
+			Sources:          sources,
+			JudgementComment: r.JudgementComment,
 		}
 	}
 	return out, nil

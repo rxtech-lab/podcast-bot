@@ -29,6 +29,10 @@ type Env struct {
 	// that writes the Markdown summary document for a finished podcast. Falls back
 	// to HostModel when unset. Set via PODCAST_SUMMARY_MODEL.
 	PodcastSummaryModel string
+	// JudgementModel is the silent fact-checker used during discussion
+	// podcasts. Falls back to HostModel when unset. Set via
+	// JUDGEMENT_MODEL_NAME.
+	JudgementModel string
 
 	// PodcastSummaryPPTModel is reserved for the future slide-deck ("PPT") summary
 	// document type. Falls back to PodcastSummaryModel when unset. Set via
@@ -286,6 +290,7 @@ func LoadEnv() (*Env, error) {
 		HostModel:              strings.TrimSpace(os.Getenv("HOST_MODEL")),
 		ScenePlannerModel:      strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
 		PodcastSummaryModel:    strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_MODEL")),
+		JudgementModel:         strings.TrimSpace(os.Getenv("JUDGEMENT_MODEL_NAME")),
 		PodcastSummaryPPTModel: strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
 		CompressionBaseURL:     strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
 		CompressionKey:         strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
@@ -369,6 +374,9 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.PodcastSummaryModel == "" {
 		e.PodcastSummaryModel = e.HostModel
+	}
+	if e.JudgementModel == "" {
+		e.JudgementModel = e.HostModel
 	}
 	if e.PodcastSummaryPPTModel == "" {
 		e.PodcastSummaryPPTModel = e.PodcastSummaryModel

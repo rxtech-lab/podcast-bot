@@ -17,6 +17,7 @@ struct PlanConversationView: View {
     @State private var pendingQuestion: QuestionPayload?
     @State private var selectedToolPart: PlanningPart?
     @State private var selectedAttachment: AttachmentPreviewItem?
+    @State private var selectedReference: PodcastReference?
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
@@ -86,9 +87,17 @@ struct PlanConversationView: View {
         .sheet(item: $selectedAttachment) { item in
             AttachmentPreviewSheet(attachment: item.attachment)
         }
+        .sheet(item: $selectedReference) { reference in
+            PodcastReferencePreviewSheet(reference: reference)
+        }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingSpeakerModels) {
             SpeakerModelsSheet(discussion: speakerModelsDiscussionBinding)
+        }
+        .alert("Could not update the plan", isPresented: errorBinding) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
         .confirmationDialog(
             "Generate this podcast?",
@@ -131,6 +140,10 @@ struct PlanConversationView: View {
         rows.map(\.id)
     }
 
+    private var latestPlanPartID: String? {
+        visibleParts.last(where: { $0.isPlanCard })?.id
+    }
+
     @ViewBuilder
     private func rowView(_ row: PlanningRow) -> some View {
         switch row.content {
@@ -158,8 +171,9 @@ struct PlanConversationView: View {
         let text = part.displayText
         let displayText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let messageAttachments = part.attachments ?? []
+        let messageReferences = part.references ?? []
         if part.role == "user" {
-            if !displayText.isEmpty || !messageAttachments.isEmpty {
+            if !displayText.isEmpty || !messageAttachments.isEmpty || !messageReferences.isEmpty {
                 HStack {
                     Spacer(minLength: 46)
                     VStack(alignment: .leading, spacing: 8) {
@@ -170,6 +184,9 @@ struct PlanConversationView: View {
                         }
                         if !messageAttachments.isEmpty {
                             userAttachmentChips(messageAttachments)
+                        }
+                        if !messageReferences.isEmpty {
+                            userReferenceChips(messageReferences)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -215,6 +232,32 @@ struct PlanConversationView: View {
         }
     }
 
+    private func userReferenceChips(_ references: [PodcastReference]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(references) { reference in
+                Button {
+                    selectedReference = reference
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "waveform.circle.fill")
+                            .font(.caption.weight(.semibold))
+                        Text(reference.displayTitle)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .opacity(0.72)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.16), in: .capsule)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     @ViewBuilder
     private func assistantContent(_ text: String) -> some View {
         MarkdownText(text)
@@ -225,12 +268,35 @@ struct PlanConversationView: View {
         let turn = DiscussionEditTurnDTO(id: nil, role: "plan", text: nil,
                                          script: part.script, sources: part.sources,
                                          markdown: part.markdown, createdAt: nil)
+        let showsGenerateButton = part.id == latestPlanPartID
         HStack {
-            PlanSnapshotCard(label: String(localized: "Plan", comment: "Label for a plan card in the conversation"),
-                             snapshot: PlanSnapshot(turn: turn, topic: discussion.topic),
-                             onEditModels: part.script == nil ? nil : { openSpeakerModels(for: part) })
-                .padding(14)
-                .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
+            VStack(spacing: 0) {
+                PlanSnapshotCard(label: String(localized: "Plan", comment: "Label for a plan card in the conversation"),
+                                 snapshot: PlanSnapshot(turn: turn, topic: discussion.topic),
+                                 onEditModels: part.script == nil ? nil : { openSpeakerModels(for: part) })
+                    .padding(14)
+
+                if showsGenerateButton {
+                    Divider().overlay(Theme.secondaryText.opacity(0.18))
+
+                    Button {
+                        showingGenerateConfirm = true
+                    } label: {
+                        HStack {
+                            Text("Start generation")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(canGenerate ? Theme.accent : Theme.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 13)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isGenerating || isStreaming || !canGenerate)
+                }
+            }
+            .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             Spacer(minLength: 34)
         }
         .planningCardAppear(delay: 0.04)
@@ -435,12 +501,6 @@ struct PlanConversationView: View {
 
     private var editBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 4)
-            }
             if !attachments.isEmpty {
                 AttachmentsRow(attachments: $attachments, showsButton: false)
             }
@@ -462,6 +522,13 @@ struct PlanConversationView: View {
         }
         .padding(16)
         .disabled(isGenerating)
+    }
+
+    private var errorBinding: Binding<Bool> {
+        Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )
     }
 
     @ToolbarContentBuilder
@@ -543,13 +610,14 @@ struct PlanConversationView: View {
                 if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
                     parts = view.parts
                     requestInitialBottomScrollIfNeeded()
-                    if view.isRunning == true {
+                    let conversationFailed = view.conversation?.status == "failed"
+                    if !conversationFailed, view.isRunning == true {
                         beginStream {
                             APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
                         }
                         return
                     }
-                    if view.needsRun == true {
+                    if !conversationFailed, view.needsRun == true {
                         beginStream {
                             APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
                         }
@@ -861,6 +929,66 @@ private struct PlanningTypingDots: View {
         // bubble's padding centers them. A taller frame leaves vertical slack the
         // dots ride to the top of, making them spill out of the bubble.
         .onAppear { isAnimating = true }
+    }
+}
+
+private struct PodcastReferencePreviewSheet: View {
+    @Environment(AuthManager.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+    let reference: PodcastReference
+    @State private var discussion: Discussion?
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let discussion {
+                    PodcastPlayerView(discussion: discussion)
+                } else if isLoading {
+                    ProgressView()
+                        .tint(Theme.accent)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Theme.background.ignoresSafeArea())
+                } else {
+                    ContentUnavailableView(reference.displayTitle,
+                                           systemImage: "waveform.circle",
+                                           description: Text(errorMessage ?? reference.subtitle))
+                        .background(Theme.background.ignoresSafeArea())
+                }
+            }
+            .navigationTitle(reference.displayTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .task(id: reference.id) {
+            await load()
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        let api = APIClient(tokens: auth)
+        do {
+            discussion = try await api.discussion(id: reference.id)
+            errorMessage = nil
+        } catch {
+            do {
+                discussion = try await api.marketStation(id: reference.id)
+                errorMessage = nil
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 }
 

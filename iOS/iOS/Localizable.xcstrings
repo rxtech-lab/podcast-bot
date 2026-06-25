@@ -1347,6 +1347,9 @@
         }
       }
     },
+    "Clear parent discussion" : {
+
+    },
     "Close" : {
       "comment" : "Dismiss the voice recorder after an error",
       "localizations" : {
@@ -1568,6 +1571,9 @@
         }
       }
     },
+    "Could not load discussions" : {
+
+    },
     "Could not load market" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1612,6 +1618,9 @@
           }
         }
       }
+    },
+    "Could not update the plan" : {
+
     },
     "Couldn’t export" : {
       "localizations" : {
@@ -1792,6 +1801,9 @@
         }
       }
     },
+    "Create Follow-up" : {
+
+    },
     "Create from Plan" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1813,6 +1825,9 @@
           }
         }
       }
+    },
+    "Create or search for a podcast to use as follow-up context." : {
+
     },
     "Create share link" : {
       "localizations" : {
@@ -4112,6 +4127,9 @@
         }
       }
     },
+    "No Discussions" : {
+
+    },
     "No Followed Creators" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4402,6 +4420,9 @@
         }
       }
     },
+    "None" : {
+
+    },
     "Notion Pages" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4577,6 +4598,12 @@
           }
         }
       }
+    },
+    "Parent Discussion" : {
+
+    },
+    "Parent Station" : {
+
     },
     "PDF, Word, slides, images" : {
       "localizations" : {
@@ -5027,8 +5054,7 @@
       }
     },
     "Podcast" : {
-      "comment" : "Fallback now-playing title when the discussion has no title or topic",
-      "extractionState" : "stale",
+      "comment" : "Fallback reference podcast title",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -6194,6 +6220,9 @@
         }
       }
     },
+    "Search discussions" : {
+
+    },
     "Search pages" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6994,6 +7023,9 @@
           }
         }
       }
+    },
+    "Start generation" : {
+
     },
     "Station Visibility" : {
       "localizations" : {

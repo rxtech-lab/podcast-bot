@@ -32,6 +32,10 @@ const (
 	// never takes a spoken turn; a background loop calls its Direct method to
 	// decide background-image / music changes. See agent/commander.go.
 	RoleCommander Role = "commander"
+	// RoleJudgement is a silent fact-checker for discussion turns. It never
+	// speaks in the schedule; the pipeline calls it after a discussant turn to
+	// decide whether a short evidence warning should be attached.
+	RoleJudgement Role = "judgement"
 )
 
 // Side returns "affirmative" or "negative" for candidate roles, otherwise "".
@@ -88,13 +92,23 @@ func (p Phase) String() string {
 // player kept opening with "since the audience asked..." for the rest of
 // the round.
 type TranscriptLine struct {
-	Speaker   string
-	Role      Role
-	Side      string
-	Text      string
-	At        time.Time
-	Pending   bool
-	Addressed bool
+	Speaker          string
+	Role             Role
+	Side             string
+	Text             string
+	At               time.Time
+	Pending          bool
+	Addressed        bool
+	Sources          []TranscriptSource
+	JudgementComment string
+}
+
+// TranscriptSource is a compact public reference attached to one transcript
+// turn when a speaker used web/research tools while composing it.
+type TranscriptSource struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet,omitempty"`
 }
 
 // SpeakPrompt is the orchestrator's request to an Agent for one segment.
@@ -108,6 +122,7 @@ type SpeakPrompt struct {
 	TopicTitle    string
 	TopicLanguage string
 	Side          string // for candidates only; convenience copy of agent's side
+	ToolResult    func(name, jsonArgs, result string)
 }
 
 // Agent is the OOP contract every participant satisfies.
@@ -147,6 +162,7 @@ type Registry struct {
 	// can reach it to drive the background loop).
 	Discussants []Agent
 	Commander   Agent
+	Judgement   Agent
 
 	Viewers []Agent
 }
@@ -159,6 +175,9 @@ func (r *Registry) All() []Agent {
 	}
 	if r.Commander != nil {
 		out = append(out, r.Commander)
+	}
+	if r.Judgement != nil {
+		out = append(out, r.Judgement)
 	}
 	if r.Judge != nil {
 		out = append(out, r.Judge)

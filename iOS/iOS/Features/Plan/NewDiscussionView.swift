@@ -10,8 +10,8 @@ struct NewDiscussionView: View {
     /// Called once the placeholder discussion and its first planning turn are
     /// created. The plan page resumes that server-seeded turn.
     var onPlanned: (Discussion) -> Void = { _ in }
-
     @State private var topic = ""
+    @State private var selectedReference: PodcastReference?
     @AppStorage("newDiscussion.type") private var discussionType = "discussion"
     @AppStorage("newDiscussion.discussants") private var discussants = 3
     @AppStorage("newDiscussion.language") private var language = "en-US"
@@ -20,11 +20,17 @@ struct NewDiscussionView: View {
     @AppStorage("newDiscussion.generateCover") private var generateCover = false
     @State private var isPlanning = false
     @State private var errorMessage: String?
+    @State private var showingReferencePicker = false
 
     private static let defaultDiscussionTypes = [
         DiscussionTypeDTO(id: "discussion",
                           label: String(localized: "Discussion", comment: "Round-table discussion type option"))
     ]
+
+    init(reference: PodcastReference? = nil, onPlanned: @escaping (Discussion) -> Void = { _ in }) {
+        _selectedReference = State(initialValue: reference)
+        self.onPlanned = onPlanned
+    }
 
     var body: some View {
         NavigationStack {
@@ -55,6 +61,9 @@ struct NewDiscussionView: View {
         }
         .interactiveDismissDisabled(true)
         .onAppear(perform: normalizeStoredSettings)
+        .sheet(isPresented: $showingReferencePicker) {
+            ReferencePodcastPickerSheet(selection: $selectedReference)
+        }
         .task {
             await loadDiscussionTypes()
         }
@@ -75,6 +84,8 @@ struct NewDiscussionView: View {
                         .foregroundStyle(Theme.secondaryText)
                 }
 
+                referenceRow
+
                 optionsCard
 
                 if let errorMessage {
@@ -94,6 +105,47 @@ struct NewDiscussionView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .disabled(isPlanning)
+    }
+
+    private var referenceRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "rectangle.stack.badge.play")
+                .foregroundStyle(Theme.accent)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Parent Discussion")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                if let selectedReference {
+                    Text(selectedReference.displayTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                } else {
+                    Text("None")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+            }
+            Spacer()
+            if selectedReference != nil {
+                Button {
+                    self.selectedReference = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear parent discussion")
+            }
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.secondaryText)
+        }
+        .padding(12)
+        .glassEffect(in: .rect(cornerRadius: 16))
+        .contentShape(.rect)
+        .onTapGesture { showingReferencePicker = true }
     }
 
     /// One liquid-glass card grouping attach files, panelists, and language.
@@ -232,14 +284,16 @@ struct NewDiscussionView: View {
         errorMessage = nil
         let api = APIClient(tokens: auth)
         let ready = attachments.apiAttachments
+        let reference = selectedReference
         let request = PlanRequest(type: discussionType, topic: trimmed, language: language, discussants: discussants,
-                                  research: true, attachments: ready.isEmpty ? nil : ready)
+                                  research: true, attachments: ready.isEmpty ? nil : ready, reference: reference)
         Task {
             do {
                 let created = try await api.createDiscussion(topic: trimmed,
                                                              language: language,
                                                              type: discussionType,
                                                              generateCover: generateCover,
+                                                             referenceDiscussionID: reference?.id,
                                                              plan: request)
                 isPlanning = false
                 dismiss()
@@ -249,6 +303,170 @@ struct NewDiscussionView: View {
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+}
+
+private struct ReferencePodcastPickerSheet: View {
+    @Environment(AuthManager.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: PodcastReference?
+    @State private var discussions: [Discussion] = []
+    @State private var query = ""
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var searchTask: Task<Void, Never>?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                List {
+                    if isLoading && discussions.isEmpty {
+                        HStack {
+                            Spacer()
+                            ProgressView().tint(Theme.accent)
+                            Spacer()
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+                    ForEach(discussions) { discussion in
+                        Button {
+                            selection = discussion.podcastReference
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                DiscussionCoverThumbnail(discussion: discussion, size: 44)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(discussion.displayTitle)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Text(discussion.topic)
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.secondaryText)
+                                        .lineLimit(2)
+                                }
+                                Spacer()
+                                if selection?.id == discussion.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                if let errorMessage, discussions.isEmpty {
+                    ContentUnavailableView("Could not load stations",
+                                           systemImage: "exclamationmark.triangle",
+                                           description: Text(errorMessage))
+                } else if !isLoading && discussions.isEmpty {
+                    ContentUnavailableView("No Station",
+                                           systemImage: "waveform",
+                                           description: Text("Create or search for a podcast to use as follow-up context."))
+                }
+            }
+            .navigationTitle("Parent Station")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search stations")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .task {
+                await load()
+            }
+            .onChange(of: query) { _, value in
+                searchTask?.cancel()
+                searchTask = Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                    await load(search: value)
+                }
+            }
+            .onDisappear {
+                searchTask?.cancel()
+            }
+        }
+    }
+
+    @MainActor
+    private func load(search: String? = nil) async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            discussions = try await APIClient(tokens: auth).parentPodcasts(limit: 50, query: search ?? query)
+            errorMessage = nil
+        } catch {
+            guard !APIClient.isCancellation(error) else { return }
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
+private struct DiscussionCoverThumbnail: View {
+    let discussion: Discussion
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let url = discussion.cover?.renderableImageURL {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    default:
+                        fallback
+                    }
+                }
+            } else if let cover = discussion.cover, cover.hasGradient {
+                LinearGradient(colors: [color(cover.gradientStart), color(cover.gradientEnd)],
+                               startPoint: .topLeading,
+                               endPoint: .bottomTrailing)
+            } else {
+                fallback
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(.rect(cornerRadius: 8))
+    }
+
+    private var fallback: some View {
+        ZStack {
+            LinearGradient(colors: [Theme.accent.opacity(0.75), Color.orange.opacity(0.72)],
+                           startPoint: .topLeading,
+                           endPoint: .bottomTrailing)
+            Image(systemName: "waveform")
+                .font(.system(size: size * 0.38, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+    }
+
+    private func color(_ hex: String?) -> Color {
+        guard let hex else { return Theme.accent }
+        let trimmed = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard trimmed.count == 6, let value = Int(trimmed, radix: 16) else {
+            return Theme.accent
+        }
+        let red = Double((value >> 16) & 0xff) / 255.0
+        let green = Double((value >> 8) & 0xff) / 255.0
+        let blue = Double(value & 0xff) / 255.0
+        return Color(red: red, green: green, blue: blue)
+    }
+}
+
+extension Discussion {
+    var podcastReference: PodcastReference {
+        PodcastReference(id: id, title: displayTitle, topic: topic)
     }
 }
 

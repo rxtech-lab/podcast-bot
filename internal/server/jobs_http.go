@@ -513,10 +513,12 @@ func (s *Server) nativeDiscussionTranscript(r *http.Request, jobID string) []age
 	out := make([]agent.TranscriptLine, 0, len(lines))
 	for _, line := range lines {
 		out = append(out, agent.TranscriptLine{
-			Speaker: strings.TrimSpace(line.Speaker),
-			Role:    agent.Role(strings.TrimSpace(line.Role)),
-			Side:    strings.TrimSpace(line.Side),
-			Text:    line.Text,
+			Speaker:          strings.TrimSpace(line.Speaker),
+			Role:             agent.Role(strings.TrimSpace(line.Role)),
+			Side:             strings.TrimSpace(line.Side),
+			Text:             line.Text,
+			Sources:          line.Sources,
+			JudgementComment: line.JudgementComment,
 		})
 	}
 	return normalizedTranscriptLines(out)

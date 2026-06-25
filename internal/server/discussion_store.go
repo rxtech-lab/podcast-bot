@@ -81,13 +81,13 @@ const discussionSelectColumns = `id, owner_user_id, topic, title, status, langua
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, script_json, markdown, sources_json, researched,
-	created_at, updated_at`
+	reference_discussion_id, created_at, updated_at`
 
 const discussionListSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, '' AS script_json, '' AS markdown, '[]' AS sources_json, researched,
-	created_at, updated_at`
+	reference_discussion_id, created_at, updated_at`
 
 var (
 	errDiscussionNotVisible = errors.New("discussion is not visible")
@@ -111,7 +111,9 @@ type DiscussionLine struct {
 	// AudioURL is a (re-signed, ephemeral) playback URL for a voice message; the
 	// agent only ever sees Text, but other participants can replay the audio. It is
 	// always derived server-side from AudioKey on read — never trusted from clients.
-	AudioURL string `json:"audio_url,omitempty"`
+	AudioURL         string                   `json:"audio_url,omitempty"`
+	Sources          []agent.TranscriptSource `json:"sources,omitempty"`
+	JudgementComment string                   `json:"judgement_comment,omitempty"`
 	// AudioKey is the durable storage key behind AudioURL. It is server-internal
 	// (never serialized to clients) and is validated against the sender before
 	// being persisted, so it can be safely re-signed on read.
@@ -160,22 +162,23 @@ type Discussion struct {
 	// server builds it (clients never construct share links themselves) so the
 	// shared link and the markdown link always stay in lockstep. Populated by
 	// applyDiscussionShareURL on the read paths.
-	ShareURL         string               `json:"share_url,omitempty"`
-	Cover            DiscussionCover      `json:"cover,omitempty"`
-	Creator          *CreatorProfile      `json:"creator,omitempty"`
-	LikeCount        int64                `json:"like_count"`
-	IsLiked          bool                 `json:"is_liked"`
-	IsOwner          bool                 `json:"is_owner"`
-	PublishedAt      *time.Time           `json:"published_at,omitempty"`
-	Script           *config.DebateTopic  `json:"script,omitempty"`
-	Markdown         string               `json:"markdown,omitempty"`
-	Sources          []config.Source      `json:"sources,omitempty"`
-	Researched       bool                 `json:"researched"`
-	Lines            []DiscussionLine     `json:"lines,omitempty"`
-	EditTurns        []DiscussionEditTurn `json:"edit_turns,omitempty"`
-	EditTurnsHasMore bool                 `json:"edit_turns_has_more,omitempty"`
-	EditTurnsBefore  int64                `json:"edit_turns_before,omitempty"`
-	Progress         *DiscussionProgress  `json:"progress,omitempty"`
+	ShareURL              string               `json:"share_url,omitempty"`
+	Cover                 DiscussionCover      `json:"cover,omitempty"`
+	Creator               *CreatorProfile      `json:"creator,omitempty"`
+	LikeCount             int64                `json:"like_count"`
+	IsLiked               bool                 `json:"is_liked"`
+	IsOwner               bool                 `json:"is_owner"`
+	PublishedAt           *time.Time           `json:"published_at,omitempty"`
+	Script                *config.DebateTopic  `json:"script,omitempty"`
+	Markdown              string               `json:"markdown,omitempty"`
+	Sources               []config.Source      `json:"sources,omitempty"`
+	Researched            bool                 `json:"researched"`
+	ReferenceDiscussionID string               `json:"reference_discussion_id,omitempty"`
+	Lines                 []DiscussionLine     `json:"lines,omitempty"`
+	EditTurns             []DiscussionEditTurn `json:"edit_turns,omitempty"`
+	EditTurnsHasMore      bool                 `json:"edit_turns_has_more,omitempty"`
+	EditTurnsBefore       int64                `json:"edit_turns_before,omitempty"`
+	Progress              *DiscussionProgress  `json:"progress,omitempty"`
 	// Summary is the content-free descriptor of the podcast's generated summary
 	// document. nil when no summary exists yet (e.g. the podcast hasn't finished).
 	// The Markdown body is never included here — it is fetched separately from the
@@ -307,6 +310,8 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			sender_user_id TEXT NOT NULL DEFAULT '',
 			audio_url TEXT NOT NULL DEFAULT '',
 			audio_key TEXT NOT NULL DEFAULT '',
+			sources_json TEXT NOT NULL DEFAULT '',
+			judgement_comment TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			UNIQUE(discussion_id, speaker, role, text, is_user, audio_key),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
@@ -451,6 +456,7 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"cover_gradient_start", "cover_gradient_start TEXT NOT NULL DEFAULT ''"},
 		{"cover_gradient_end", "cover_gradient_end TEXT NOT NULL DEFAULT ''"},
 		{"cover_prompt", "cover_prompt TEXT NOT NULL DEFAULT ''"},
+		{"reference_discussion_id", "reference_discussion_id TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
@@ -493,6 +499,8 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"audio_url", "audio_url TEXT NOT NULL DEFAULT ''"},
 		{"audio_key", "audio_key TEXT NOT NULL DEFAULT ''"},
 		{"sender_user_id", "sender_user_id TEXT NOT NULL DEFAULT ''"},
+		{"sources_json", "sources_json TEXT NOT NULL DEFAULT ''"},
+		{"judgement_comment", "judgement_comment TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussion_lines", col.name, col.def); err != nil {
 			return err
@@ -545,13 +553,15 @@ func (s *DiscussionStore) migrateLineUniqueness(ctx context.Context) error {
 			sender_user_id TEXT NOT NULL DEFAULT '',
 			audio_url TEXT NOT NULL DEFAULT '',
 			audio_key TEXT NOT NULL DEFAULT '',
+			sources_json TEXT NOT NULL DEFAULT '',
+			judgement_comment TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			UNIQUE(discussion_id, speaker, role, text, is_user, audio_key),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
 		`INSERT OR IGNORE INTO native_discussion_lines_new
-			(id, discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at)
-			SELECT id, discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at
+			(id, discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, sources_json, judgement_comment, created_at)
+			SELECT id, discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, sources_json, judgement_comment, created_at
 			FROM native_discussion_lines`,
 		`DROP TABLE native_discussion_lines`,
 		`ALTER TABLE native_discussion_lines_new RENAME TO native_discussion_lines`,
@@ -655,6 +665,26 @@ func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, l
 	return s.Get(ctx, owner, id)
 }
 
+// SetReference records that id is a follow-up to referenceID. The caller must
+// have already validated reference visibility.
+func (s *DiscussionStore) SetReference(ctx context.Context, owner, id, referenceID string) (*Discussion, error) {
+	referenceID = strings.TrimSpace(referenceID)
+	if referenceID == "" {
+		return s.Get(ctx, owner, id)
+	}
+	res, err := s.exec(ctx, `UPDATE native_discussions SET reference_discussion_id = ?, updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`,
+		referenceID, time.Now().UnixMilli(), owner, id)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
 // List returns discussions for an owner sorted by creation time, newest first.
 // limit/offset paginate the result; a non-positive limit falls back to the
 // default page size and offsets below zero are clamped to zero.
@@ -714,6 +744,47 @@ func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit
 // SearchByVisibility returns matching owner discussions filtered to public or private visibility.
 func (s *DiscussionStore) SearchByVisibility(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
 	return s.search(ctx, owner, query, visibility, limit, offset)
+}
+
+// ListParentPodcasts returns owned podcasts that are finished and can be used as
+// parent context for a follow-up discussion.
+func (s *DiscussionStore) ListParentPodcasts(ctx context.Context, owner, query string, limit, offset int) ([]Discussion, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query = strings.TrimSpace(query)
+	args := []any{owner, string(DiscussionReady)}
+	where := "d.owner_user_id = ? AND d.status = ?"
+	if query != "" {
+		pattern := "%" + escapeLike(query) + "%"
+		where += ` AND (d.topic LIKE ? ESCAPE '\' OR d.title LIKE ? ESCAPE '\' OR d.markdown LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern)
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
+			FROM native_discussions d`+s.videoJobsJoin()+`
+			WHERE `+where+`
+			ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussion(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, owner)
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 func (s *DiscussionStore) search(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
@@ -1829,10 +1900,15 @@ func (s *DiscussionStore) replaceTranscriptOnce(ctx context.Context, id string, 
 		if l.At.IsZero() {
 			createdAt = time.Now().UnixMilli()
 		}
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
-			(discussion_id, speaker, role, side, text, start_ms, is_user, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0, createdAt)
+		sourcesJSON, err := marshalString(l.Sources)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
+			(discussion_id, speaker, role, side, text, start_ms, is_user, sources_json, judgement_comment, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0,
+			sourcesJSON, strings.TrimSpace(l.JudgementComment), createdAt)
 		if err != nil {
 			return err
 		}
@@ -1873,7 +1949,7 @@ func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLin
 	// re-inserts every agent line, giving them fresh (higher) ids than user
 	// messages appended earlier, so id-order clumped all user messages ahead of
 	// the agent transcript on reload. id is the stable tiebreak for equal stamps.
-	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key
+	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, sources_json, judgement_comment
 		FROM native_discussion_lines WHERE discussion_id = ? ORDER BY created_at, id`, id)
 	if err != nil {
 		return nil, err
@@ -1883,8 +1959,12 @@ func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLin
 	for rows.Next() {
 		var line DiscussionLine
 		var isUser int
-		if err := rows.Scan(&line.Speaker, &line.Role, &line.Side, &line.Text, &line.StartMS, &isUser, &line.SenderUserID, &line.AudioURL, &line.AudioKey); err != nil {
+		var sourcesJSON string
+		if err := rows.Scan(&line.Speaker, &line.Role, &line.Side, &line.Text, &line.StartMS, &isUser, &line.SenderUserID, &line.AudioURL, &line.AudioKey, &sourcesJSON, &line.JudgementComment); err != nil {
 			return nil, err
+		}
+		if strings.TrimSpace(sourcesJSON) != "" {
+			_ = json.Unmarshal([]byte(sourcesJSON), &line.Sources)
 		}
 		line.IsUser = isUser != 0
 		out = append(out, line)
@@ -1978,11 +2058,11 @@ func (s *DiscussionStore) appendLine(ctx context.Context, id string, line Discus
 		return nil
 	}
 	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_lines
-		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, sources_json, judgement_comment, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, strings.TrimSpace(line.Speaker), strings.TrimSpace(line.Role), strings.TrimSpace(line.Side),
 		text, line.StartMS, boolInt(line.IsUser), strings.TrimSpace(line.SenderUserID),
-		strings.TrimSpace(line.AudioURL), strings.TrimSpace(line.AudioKey),
+		strings.TrimSpace(line.AudioURL), strings.TrimSpace(line.AudioKey), "", "",
 		time.Now().UnixMilli())
 	if err != nil {
 		return err
@@ -2029,7 +2109,7 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&created, &updated)
+		&d.ReferenceDiscussionID, &created, &updated)
 	if err != nil {
 		return d, err
 	}
@@ -2048,7 +2128,7 @@ func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&created, &updated, &d.LikeCount, &liked, &owner)
+		&d.ReferenceDiscussionID, &created, &updated, &d.LikeCount, &liked, &owner)
 	if err != nil {
 		return d, err
 	}

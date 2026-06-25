@@ -253,6 +253,9 @@ func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*ll
 			// agent's prevailing "speaking" state once it completes.
 			b.EmitActivity(classifyToolActivity(name), name)
 			res, err := b.reg.Dispatch(ctx, name, jsonArgs, b)
+			if err == nil && p.ToolResult != nil {
+				p.ToolResult(name, jsonArgs, res)
+			}
 			b.EmitActivity("speaking", "")
 			return res, err
 		})

@@ -527,7 +527,10 @@ struct LibraryView: View {
                 replaceCurrent(with: generated)
             }
         case .generating, .ready:
-            PodcastPlayerView(discussion: discussion)
+            PodcastPlayerView(discussion: discussion, onCreatedFollowUp: { created in
+                upsert(created)
+                navigate(to: created)
+            })
         }
     }
 }

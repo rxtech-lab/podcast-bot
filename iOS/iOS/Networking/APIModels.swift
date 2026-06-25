@@ -98,6 +98,24 @@ struct Attachment: Codable, Hashable, Sendable {
     }
 }
 
+/// A podcast selected as context for a follow-up discussion.
+struct PodcastReference: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var topic: String
+
+    var displayTitle: String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty { return trimmedTitle }
+        let trimmedTopic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTopic.isEmpty ? String(localized: "Podcast", comment: "Fallback reference podcast title") : trimmedTopic
+    }
+
+    var subtitle: String {
+        topic.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// POST /api/discussions request body: creates an empty placeholder discussion
 /// (status "planning") so the client gets an id before streaming the plan.
 struct DiscussionCreateRequest: Codable, Sendable {
@@ -110,6 +128,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
     var generateCover: Bool = false
     var coverPrompt: String?
     var plan: PlanRequest?
+    var referenceDiscussionID: String?
 
     enum CodingKeys: String, CodingKey {
         case topic
@@ -118,6 +137,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
         case generateCover = "generate_cover"
         case coverPrompt = "cover_prompt"
         case plan
+        case referenceDiscussionID = "reference_discussion_id"
     }
 }
 
@@ -129,6 +149,7 @@ struct PlanRequest: Codable, Sendable {
     var discussants: Int = 3
     var research: Bool = true
     var attachments: [Attachment]?
+    var reference: PodcastReference?
 }
 
 /// POST /api/discussions/{id}/planning/stream request body: the user's message
@@ -554,6 +575,18 @@ struct TranscriptDTO: Codable, Hashable, Sendable {
     var side: String?
     var text: String
     var at: String?
+    var sources: [SourceDTO]? = nil
+    var judgementComment: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case speaker
+        case role
+        case side
+        case text
+        case at
+        case sources
+        case judgementComment = "judgement_comment"
+    }
 }
 
 /// One event from GET /api/jobs/{id}/ws: `{ "event": ..., "data": {...} }`.
@@ -571,6 +604,8 @@ struct JobEventData: Decodable, Sendable {
     var isUserMessage: Bool?
     var sender_user_id: String?
     var audio_url: String?
+    var sources: [SourceDTO]?
+    var judgement_comment: String?
     var agent: String?
     var activity: String?
     var detail: String?

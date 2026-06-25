@@ -143,6 +143,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var markdown: String?
     var sources: [SourceDTO]?
     var researched: Bool?
+    var referenceDiscussionID: String?
     var lines: [DiscussionLineDTO]?
     var editTurns: [DiscussionEditTurnDTO]?
     var editTurnsHasMore: Bool?
@@ -187,6 +188,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case markdown
         case sources
         case researched
+        case referenceDiscussionID = "reference_discussion_id"
         case lines
         case editTurns = "edit_turns"
         case editTurnsHasMore = "edit_turns_has_more"
@@ -368,6 +370,8 @@ struct DiscussionLineDTO: Codable, Hashable, Sendable {
     /// Ephemeral playback URL for a voice message, re-signed by the server on each
     /// read. Nil for normal text lines.
     var audioURL: String? = nil
+    var sources: [SourceDTO]? = nil
+    var judgementComment: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case speaker
@@ -378,5 +382,7 @@ struct DiscussionLineDTO: Codable, Hashable, Sendable {
         case isUser = "is_user"
         case senderUserID = "sender_user_id"
         case audioURL = "audio_url"
+        case sources
+        case judgementComment = "judgement_comment"
     }
 }

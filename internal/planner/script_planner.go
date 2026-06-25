@@ -70,6 +70,16 @@ type Attachment struct {
 	MIMEType string `json:"mime_type,omitempty"`
 }
 
+// PodcastReference is a previously generated podcast the user wants the planner
+// to use as context for a follow-up episode. Context is server-populated and not
+// accepted from clients.
+type PodcastReference struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Topic   string `json:"topic"`
+	Context string `json:"-"`
+}
+
 // PlanRequest is the input to Generate.
 type PlanRequest struct {
 	Type        string `json:"type"`
@@ -83,6 +93,9 @@ type PlanRequest struct {
 	Research bool `json:"research"`
 	// Attachments are user-uploaded files to ground the plan.
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Reference is an existing podcast to build on. The server fills Context
+	// after validating the referenced podcast is visible to the requester.
+	Reference *PodcastReference `json:"reference,omitempty"`
 }
 
 // Result is what Generate / Improve return: the structured script, its
@@ -141,8 +154,8 @@ Return STRICT JSON with this exact shape:
   "host": { "name": "moderator's display name" },
   "discussants": [ { "name": "display name", "aspect": "the distinct angle/perspective this person argues from" } ]
 }
-Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.%s%s`,
-		req.Topic, lang, n, n, planningRequirementsPrompt(req.Research, extractURLs(req.Topic)), attachmentsPrompt(req.Attachments))
+Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.%s%s%s`,
+		req.Topic, lang, n, n, referencePrompt(req.Reference), planningRequirementsPrompt(req.Research, extractURLs(req.Topic)), attachmentsPrompt(req.Attachments))
 
 	d, sources, err := p.draftJSON(ctx, user, req.Attachments, planningAgentOptions{
 		ResearchRequired: req.Research,
@@ -278,6 +291,30 @@ func attachmentsPrompt(attachments []Attachment) string {
 			name = fmt.Sprintf("document %d", i+1)
 		}
 		fmt.Fprintf(&sb, "\n--- %s ---\n%s\n", name, truncate(strings.TrimSpace(a.Markdown), 6000))
+	}
+	return sb.String()
+}
+
+func referencePrompt(ref *PodcastReference) string {
+	if ref == nil {
+		return ""
+	}
+	title := strings.TrimSpace(ref.Title)
+	if title == "" {
+		title = strings.TrimSpace(ref.Topic)
+	}
+	if title == "" {
+		title = "Referenced podcast"
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\nReferenced podcast context:\n")
+	sb.WriteString("The new discussion must be a follow-up to this existing podcast. Build on the old topic and arguments, avoid repeating the same episode, and focus the new plan on fresh developments, unresolved questions, or deeper next steps.\n")
+	fmt.Fprintf(&sb, "\nTitle: %s\n", title)
+	if topic := strings.TrimSpace(ref.Topic); topic != "" && topic != title {
+		fmt.Fprintf(&sb, "Original topic: %s\n", topic)
+	}
+	if ctx := strings.TrimSpace(ref.Context); ctx != "" {
+		fmt.Fprintf(&sb, "\nPrior podcast material:\n%s\n", truncate(ctx, 12000))
 	}
 	return sb.String()
 }

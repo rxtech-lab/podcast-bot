@@ -194,6 +194,107 @@ func TestDiscussionCreateFromPlanAPICopiesVisiblePlan(t *testing.T) {
 	}
 }
 
+func TestDiscussionParentPodcastEndpointsRequireReady(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	srv := New(Deps{Discussions: store})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	owner := "anonymous"
+	pending, err := store.Create(ctx, owner, "Pending parent", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Pending Parent",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+		},
+		Markdown: "not ready yet",
+	})
+	if err != nil {
+		t.Fatalf("Create pending: %v", err)
+	}
+	ready, err := store.Create(ctx, owner, "Ready parent", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Ready Parent",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+		},
+		Markdown: "ready now",
+	})
+	if err != nil {
+		t.Fatalf("Create ready: %v", err)
+	}
+	if err := store.SetJobResult(ctx, ready.ID, DiscussionReady, "https://audio.example/ready.mp3"); err != nil {
+		t.Fatalf("SetJobResult: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/discussions/parent-podcasts")
+	if err != nil {
+		t.Fatalf("list parent podcasts: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("list status = %d body=%s", resp.StatusCode, raw)
+	}
+	var items []Discussion
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("decode parent podcasts: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != ready.ID {
+		t.Fatalf("parent podcasts = %+v, want only ready parent", items)
+	}
+
+	resp, err = http.Get(ts.URL + "/api/discussions/" + pending.ID + "/parent-podcast")
+	if err != nil {
+		t.Fatalf("get pending parent podcast: %v", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("pending parent status = %d body=%s, want 409", resp.StatusCode, raw)
+	}
+
+	resp, err = http.Get(ts.URL + "/api/discussions/" + ready.ID + "/parent-podcast")
+	if err != nil {
+		t.Fatalf("get ready parent podcast: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("ready parent status = %d body=%s", resp.StatusCode, raw)
+	}
+	var ref struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+		Topic string `json:"topic"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ref); err != nil {
+		t.Fatalf("decode ready parent: %v", err)
+	}
+	if ref.ID != ready.ID || ref.Title != "Ready Parent" {
+		t.Fatalf("ready parent reference = %+v", ref)
+	}
+
+	body := strings.NewReader(fmt.Sprintf(
+		`{"topic":"Follow up","language":"en-US","reference_discussion_id":%q}`,
+		pending.ID,
+	))
+	resp, err = http.Post(ts.URL+"/api/discussions", "application/json", body)
+	if err != nil {
+		t.Fatalf("create with pending reference: %v", err)
+	}
+	raw, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("create with pending reference status = %d body=%s, want 409", resp.StatusCode, raw)
+	}
+}
+
 func TestDiscussionImproveStreamPersistsUserTurnBeforePlanFinishes(t *testing.T) {
 	env := newDiscussionAPITestEnv(t)
 	env.openai.Enqueue(mockOpenAIResponse{Title: "Original Plan"})

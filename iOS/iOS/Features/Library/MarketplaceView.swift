@@ -113,7 +113,9 @@ struct MarketplaceView: View {
                 }
                 .background(Theme.background.ignoresSafeArea())
                 .navigationDestination(for: Discussion.self) { discussion in
-                    PodcastPlayerView(discussion: discussion, onCreatedFromPlan: onCreateFromPlan)
+                    PodcastPlayerView(discussion: discussion,
+                                      onCreatedFromPlan: onCreateFromPlan,
+                                      onCreatedFollowUp: onCreateFromPlan)
                 }
         }
     }
@@ -714,7 +716,9 @@ struct CreatorProfileView: View {
                 }
             }
             .navigationDestination(for: Discussion.self) { discussion in
-                PodcastPlayerView(discussion: discussion, onCreatedFromPlan: onCreateFromPlan)
+                PodcastPlayerView(discussion: discussion,
+                                  onCreatedFromPlan: onCreateFromPlan,
+                                  onCreatedFollowUp: onCreateFromPlan)
             }
         }
         .task { await load() }

@@ -127,6 +127,7 @@ struct PlanningPart: Codable, Sendable, Hashable, Identifiable {
     var role: String? = nil   // text parts: "user" | "assistant"
     var text: String? = nil
     var attachments: [Attachment]? = nil
+    var references: [PodcastReference]? = nil
 
     var toolCallID: String? = nil
     var toolName: String? = nil
@@ -144,7 +145,7 @@ struct PlanningPart: Codable, Sendable, Hashable, Identifiable {
     var answers: AnyCodable? = nil
 
     enum CodingKeys: String, CodingKey {
-        case kind, id, role, text, attachments
+        case kind, id, role, text, attachments, references
         case toolCallID = "tool_call_id"
         case toolName = "tool_name"
         case status, input
@@ -190,6 +191,9 @@ extension PlanningPart {
             return String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if let range = trimmed.range(of: "\n\nThe user uploaded these reference documents;") {
+            trimmed = String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let range = trimmed.range(of: "\n\nReferenced podcast context:") {
             trimmed = String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         guard trimmed.contains("Plan settings:") else {
