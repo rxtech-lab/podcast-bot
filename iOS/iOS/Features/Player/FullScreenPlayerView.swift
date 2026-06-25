@@ -70,7 +70,7 @@ struct FullScreenPlayerView: View {
             get: { model.downloadedPodcastFile },
             set: { model.downloadedPodcastFile = $0 }
         )) { file in
-            PodcastDocumentExporter(url: file.url)
+            FileShareSheet(url: file.url)
         }
         .sheet(isPresented: $showingCoverEditor) {
             CoverEditorSheet(discussion: Binding(

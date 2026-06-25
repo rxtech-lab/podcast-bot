@@ -6417,6 +6417,28 @@
         }
       }
     },
+    "Select a page to export inside it, or leave it empty to export at the root." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择一个页面以导出到其中，或不选择页面以导出到根目录。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇一個頁面以匯出到其中，或不選擇頁面以匯出到根目錄。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇一個頁面以匯出到其中，或不選擇頁面以匯出到根目錄。"
+          }
+        }
+      }
+    },
     "Select a podcast" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -7447,6 +7469,7 @@
       }
     },
     "The summary is added as a new page inside the page you select." : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

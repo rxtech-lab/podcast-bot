@@ -502,11 +502,11 @@ final class APIClient: Sendable {
         )
     }
 
-    /// Exports a podcast's generated summary to the user's Notion workspace as a
-    /// sub-page under `parentPageID`, returning the created page (URL + id) so the
-    /// UI can offer an "Open in Notion" action. Throws 401 when Notion isn't
-    /// connected, 404 when no summary exists.
-    func exportSummaryToNotion(id: String, parentPageID: String,
+    /// Exports a podcast's generated summary to the user's Notion workspace,
+    /// returning the created page (URL + id) so the UI can offer an "Open in
+    /// Notion" action. A nil `parentPageID` creates a private root-level page.
+    /// Throws 401 when Notion isn't connected, 404 when no summary exists.
+    func exportSummaryToNotion(id: String, parentPageID: String?,
                                docType: String = "summary") async throws -> NotionExportResponse {
         try await send(
             "POST",

@@ -87,3 +87,15 @@ func TestNotionRichTextChunks2000(t *testing.T) {
 		}
 	}
 }
+
+func TestNotionPageParent(t *testing.T) {
+	root := notionPageParent(" ")
+	if root["type"] != "workspace" || root["workspace"] != true {
+		t.Fatalf("root parent = %#v, want workspace parent", root)
+	}
+
+	page := notionPageParent("page-123")
+	if page["type"] != "page_id" || page["page_id"] != "page-123" {
+		t.Fatalf("page parent = %#v, want page_id parent", page)
+	}
+}

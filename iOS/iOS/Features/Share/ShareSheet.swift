@@ -1,5 +1,6 @@
 import SwiftUI
 import TipKit
+import UIKit
 
 /// Non-full-height bottom sheet for sharing a PRIVATE discussion: pick how long
 /// the link should stay valid (1h … 72h), create it, and manage (share / revoke)
@@ -139,4 +140,16 @@ private struct ShareLinkRow: View {
             }
         }
     }
+}
+
+/// Presents iOS's system share sheet for a local file URL, including "Save to
+/// Files" and app-to-app share destinations.
+struct FileShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
