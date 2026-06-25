@@ -268,6 +268,30 @@ struct NotionPageAttachmentRequest: Codable, Sendable {
     }
 }
 
+/// POST /api/discussions/{id}/summary/notion request — exports a podcast's
+/// generated summary into the user's Notion workspace as a sub-page of the
+/// chosen parent page.
+struct NotionExportRequest: Codable, Sendable {
+    var parentPageID: String
+    var docType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case parentPageID = "parent_page_id"
+        case docType = "doc_type"
+    }
+}
+
+/// Response carrying the URL of the newly-created Notion page.
+struct NotionExportResponse: Codable, Sendable {
+    var url: String
+    var pageID: String
+
+    enum CodingKeys: String, CodingKey {
+        case url
+        case pageID = "page_id"
+    }
+}
+
 /// POST /api/transcribe request body — asks the server to transcribe an
 /// already-uploaded voice message (gateway whisper) when the device couldn't do
 /// it on-device.

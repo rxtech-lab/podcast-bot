@@ -907,6 +907,10 @@ func (s *Server) handleDiscussionSummary(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	// Embed a "listen again" link on read so the Markdown download (and the
+	// in-app summary view, which renders this body) always link back to the
+	// original podcast with the current frontend URL.
+	doc.Markdown = s.summaryMarkdownWithLink(id, doc.Markdown)
 	writeJSON(w, doc)
 }
 
@@ -957,7 +961,7 @@ func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	pdf, err := summaryPDFFromMarkdown(r.Context(), s.d.Env, title, doc.Markdown)
+	pdf, err := summaryPDFFromMarkdown(r.Context(), s.d.Env, title, s.summaryMarkdownWithLink(id, doc.Markdown))
 	if errors.Is(err, errCloudflareNotConfigured) {
 		http.Error(w, "summary PDF export is not configured", http.StatusServiceUnavailable)
 		return

@@ -33,5 +33,17 @@ struct WhatsNewFeature: Identifiable, Equatable {
             subtitle: "The app now speaks Simplified and Traditional Chinese, end to end.",
             icon: "globe.asia.australia.fill"
         ),
+        WhatsNewFeature(
+            id: "notion-planning-conversation",
+            title: "Plan with Notion",
+            subtitle: "Shape your next \(AppStringLiteral.stationNameRaw) in a planning conversation, with Notion pages and uploads as sources.",
+            icon: "bubble.left.and.bubble.right.fill"
+        ),
+        WhatsNewFeature(
+            id: "notion-summary-export",
+            title: "Export summaries to Notion",
+            subtitle: "You can now export your summary to Notion directly with live podcast playback.",
+            icon: "square.and.arrow.up.on.square"
+        ),
     ]
 }

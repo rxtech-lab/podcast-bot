@@ -84,6 +84,7 @@ struct FullScreenPlayerView: View {
         .task(id: coverColorKey) {
             await model.loadCoverColors()
         }
+        .preventsIdleSleep()
     }
 
     /// Changes whenever the cover's source changes, so the background palette is
@@ -324,6 +325,60 @@ struct FullScreenPlayerView: View {
             .popoverTip(FullScreenCaptionTip(), arrowEdge: .bottom)
             Spacer()
         }
+    }
+}
+
+@MainActor
+private final class IdleSleepPrevention {
+    static let shared = IdleSleepPrevention()
+
+    private var activeTokens: Set<UUID> = []
+    private var previousIdleTimerState: Bool?
+
+    func begin(token: UUID) {
+        guard !activeTokens.contains(token) else { return }
+        if activeTokens.isEmpty {
+            previousIdleTimerState = UIApplication.shared.isIdleTimerDisabled
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        activeTokens.insert(token)
+    }
+
+    func end(token: UUID) {
+        guard activeTokens.remove(token) != nil else { return }
+        if activeTokens.isEmpty {
+            UIApplication.shared.isIdleTimerDisabled = previousIdleTimerState ?? false
+            previousIdleTimerState = nil
+        }
+    }
+}
+
+private struct IdleSleepPreventionModifier: ViewModifier {
+    @State private var token = UUID()
+    @State private var isActive = false
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear(perform: begin)
+            .onDisappear(perform: end)
+    }
+
+    private func begin() {
+        guard !isActive else { return }
+        isActive = true
+        IdleSleepPrevention.shared.begin(token: token)
+    }
+
+    private func end() {
+        guard isActive else { return }
+        isActive = false
+        IdleSleepPrevention.shared.end(token: token)
+    }
+}
+
+extension View {
+    func preventsIdleSleep() -> some View {
+        modifier(IdleSleepPreventionModifier())
     }
 }
 

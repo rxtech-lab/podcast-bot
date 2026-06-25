@@ -2,7 +2,7 @@ import { APPLE_TEAM_ID, APP_BUNDLE_ID, CLIP_BUNDLE_ID } from "@/app/lib/config";
 
 // Apple App Site Association. Served as application/json over HTTPS with no
 // redirect so iOS can validate universal links (applinks) into the full app and
-// App Clip invocations (appclips) for /d/* and /s/* deep links.
+// App Clip invocations (appclips) for /d/*, /s/*, and /p/* deep links.
 //
 // Served via a Route Handler (not public/) to guarantee the JSON content-type;
 // a public/ file with no extension would be served as octet-stream.
@@ -16,7 +16,7 @@ export async function GET() {
       details: [
         {
           appIDs: [appID],
-          components: [{ "/": "/d/*" }, { "/": "/s/*" }],
+          components: [{ "/": "/d/*" }, { "/": "/s/*" }, { "/": "/p/*" }],
         },
       ],
     },

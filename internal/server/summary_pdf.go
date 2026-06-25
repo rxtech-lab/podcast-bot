@@ -26,7 +26,7 @@ const cloudflarePDFTimeout = 60 * time.Second
 // HTML/CSS template (e.g. page margins) invalidate previously-rendered PDFs.
 // Bump this whenever summaryPDFCSS / summaryPDFScript / summaryPDFHTML change in
 // a way that should re-render cached documents.
-const summaryPDFTemplateVersion = "2"
+const summaryPDFTemplateVersion = "3"
 
 // summaryPDFFromMarkdown renders a summary's Markdown body to a PDF via
 // Cloudflare Browser Rendering. The Markdown — including any ```mermaid fenced

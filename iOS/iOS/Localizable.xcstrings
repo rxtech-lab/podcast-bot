@@ -188,7 +188,27 @@
       }
     },
     "%lld questions" : {
-      "comment" : "Question card header; value is the question count"
+      "comment" : "Question card header; value is the question count",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个问题"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個問題"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個問題"
+          }
+        }
+      }
     },
     "%lld source" : {
       "comment" : "Sources section header, singular",
@@ -243,6 +263,24 @@
             "state" : "new",
             "value" : "%1$lld/%2$lld"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld/%2$lld"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld/%2$lld"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld/%2$lld"
+          }
         }
       }
     },
@@ -269,7 +307,26 @@
       }
     },
     "+%lld more pending" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 个待处理"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還有 %lld 個待處理"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還有 %lld 個待處理"
+          }
+        }
+      }
     },
     "1 day" : {
       "comment" : "Share-link duration option",
@@ -341,7 +398,27 @@
       }
     },
     "1 question" : {
-      "comment" : "Question card header for a single question"
+      "comment" : "Question card header for a single question",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个问题"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 個問題"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 個問題"
+          }
+        }
+      }
     },
     "2 days" : {
       "comment" : "Share-link duration option",
@@ -525,7 +602,26 @@
       }
     },
     "Add" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增"
+          }
+        }
+      }
     },
     "Add link or search" : {
       "localizations" : {
@@ -686,10 +782,49 @@
       }
     },
     "Allow Access to More Pages" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许访问更多页面"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許存取更多頁面"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許存取更多頁面"
+          }
+        }
+      }
     },
     "Answered" : {
-      "comment" : "Question card status when answered"
+      "comment" : "Question card status when answered",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已回答"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已回答"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已回答"
+          }
+        }
+      }
     },
     "Anyone with the link can join and comment until it expires (max 3 days). You can revoke a link any time." : {
       "localizations" : {
@@ -714,7 +849,26 @@
       }
     },
     "Assistant has a question" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "助手有一个问题"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "助手有一個問題"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "助手有一個問題"
+          }
+        }
+      }
     },
     "Attach files" : {
       "localizations" : {
@@ -739,7 +893,27 @@
       }
     },
     "Attachment" : {
-      "comment" : "Fallback name for an attached file"
+      "comment" : "Fallback name for an attached file",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附件"
+          }
+        }
+      }
     },
     "Audio message" : {
       "comment" : "Fallback label for a voice message whose transcript is unavailable",
@@ -996,7 +1170,26 @@
       }
     },
     "Checking Notion" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在检查 Notion"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在檢查 Notion"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在檢查 Notion"
+          }
+        }
+      }
     },
     "Chinese (Simplified)" : {
       "comment" : "Podcast language option",
@@ -1040,6 +1233,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "繁體中文"
+          }
+        }
+      }
+    },
+    "Choose a parent page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择父页面"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇父頁面"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇父頁面"
           }
         }
       }
@@ -1155,8 +1370,71 @@
         }
       }
     },
+    "Connect Notion" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接 Notion"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接 Notion"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接 Notion"
+          }
+        }
+      }
+    },
     "Connect to Notion" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接到 Notion"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接到 Notion"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接到 Notion"
+          }
+        }
+      }
+    },
+    "Connect your Notion workspace to export this summary." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接你的 Notion 工作区以导出此摘要。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接你的 Notion 工作區以匯出此摘要。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接你的 Notion 工作區以匯出此摘要。"
+          }
+        }
+      }
     },
     "Copied User ID" : {
       "localizations" : {
@@ -2252,6 +2530,94 @@
         }
       }
     },
+    "Export" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出"
+          }
+        }
+      }
+    },
+    "Export summaries to Notion" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出摘要到 Notion"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出摘要到 Notion"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出摘要到 Notion"
+          }
+        }
+      }
+    },
+    "Export to Notion" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出到 Notion"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出到 Notion"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出到 Notion"
+          }
+        }
+      }
+    },
+    "Exporting…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在导出…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在匯出…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在匯出…"
+          }
+        }
+      }
+    },
     "Failed" : {
       "comment" : "Discussion row status: generation failed\nTool card status when a tool failed",
       "localizations" : {
@@ -3031,7 +3397,27 @@
       }
     },
     "Input" : {
-      "comment" : "Tool detail sheet section for the tool's input"
+      "comment" : "Tool detail sheet section for the tool's input",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入"
+          }
+        }
+      }
     },
     "Invalid streaming response." : {
       "comment" : "Shown when the streaming plan response is not a valid HTTP response",
@@ -3461,7 +3847,26 @@
       }
     },
     "Message the planner" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向规划助手发送消息"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向規劃助手傳送訊息"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向規劃助手傳送訊息"
+          }
+        }
+      }
     },
     "Microphone and speech recognition access are needed to record a voice message." : {
       "comment" : "Shown when mic/speech permission is denied",
@@ -3797,7 +4202,26 @@
       }
     },
     "No preview is available for this attachment." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此附件没有可用预览。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此附件沒有可用的預覽。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此附件沒有可用的預覽。"
+          }
+        }
+      }
     },
     "No Private %@" : {
       "localizations" : {
@@ -3979,7 +4403,26 @@
       }
     },
     "Notion Pages" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notion 页面"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notion 頁面"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notion 頁面"
+          }
+        }
+      }
     },
     "OK" : {
       "localizations" : {
@@ -3999,6 +4442,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "好"
+          }
+        }
+      }
+    },
+    "Open in Notion" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Notion 中打开"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Notion 開啟"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Notion 中開啟"
           }
         }
       }
@@ -4048,7 +4513,26 @@
       }
     },
     "Open this menu to download the summary as a PDF or Markdown file." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开此菜单，将摘要下载为 PDF 或 Markdown 文件。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟此選單，將摘要下載為 PDF 或 Markdown 檔案。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟此選單，將摘要下載為 PDF 或 Markdown 檔案。"
+          }
+        }
+      }
     },
     "Open this menu to record a voice message, review the transcript, then send it to the discussion." : {
       "localizations" : {
@@ -4184,7 +4668,26 @@
       }
     },
     "Pick Notion Page" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 Notion 页面"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇 Notion 頁面"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇 Notion 頁面"
+          }
+        }
+      }
     },
     "Pick your speakers" : {
       "localizations" : {
@@ -4410,6 +4913,28 @@
         }
       }
     },
+    "Plan with Notion" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 Notion 规划"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 Notion 規劃"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 Notion 規劃"
+          }
+        }
+      }
+    },
     "Planning and generating %@ will show up here." : {
       "localizations" : {
         "zh-Hans" : {
@@ -4479,7 +5004,27 @@
       }
     },
     "Please use the attached files." : {
-      "comment" : "Fallback chat message when sending attachments without text"
+      "comment" : "Fallback chat message when sending attachments without text",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请使用附加文件。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請使用附加檔案。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請使用附加檔案。"
+          }
+        }
+      }
     },
     "Podcast" : {
       "comment" : "Fallback now-playing title when the discussion has no title or topic",
@@ -4794,7 +5339,27 @@
       }
     },
     "Preparing a question…" : {
-      "comment" : "Progress while preparing a question"
+      "comment" : "Progress while preparing a question",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备问题…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備問題…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備問題…"
+          }
+        }
+      }
     },
     "Preparing language…" : {
       "comment" : "Shown while the on-device transcription model loads",
@@ -5197,7 +5762,27 @@
       }
     },
     "Read links" : {
-      "comment" : "Tool card title for a URL read step"
+      "comment" : "Tool card title for a URL read step",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取链接"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取連結"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取連結"
+          }
+        }
+      }
     },
     "Reading added sources..." : {
       "comment" : "Progress text while newly added sources are being read",
@@ -5223,7 +5808,27 @@
       }
     },
     "Reading links…" : {
-      "comment" : "Progress while reading URLs"
+      "comment" : "Progress while reading URLs",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取链接…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在讀取連結…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在讀取連結…"
+          }
+        }
+      }
     },
     "Ready" : {
       "localizations" : {
@@ -5434,7 +6039,27 @@
       }
     },
     "Result" : {
-      "comment" : "Tool detail sheet section for the tool's result"
+      "comment" : "Tool detail sheet section for the tool's result",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结果"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果"
+          }
+        }
+      }
     },
     "Retry" : {
       "localizations" : {
@@ -5481,7 +6106,27 @@
       }
     },
     "Running…" : {
-      "comment" : "Tool card status while a tool is running"
+      "comment" : "Tool card status while a tool is running",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "執行中…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "執行中…"
+          }
+        }
+      }
     },
     "Save" : {
       "localizations" : {
@@ -5506,7 +6151,26 @@
       }
     },
     "Save the summary" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存摘要"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存摘要"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存摘要"
+          }
+        }
+      }
     },
     "Search %@" : {
       "localizations" : {
@@ -5531,7 +6195,26 @@
       }
     },
     "Search pages" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索页面"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋頁面"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋頁面"
+          }
+        }
+      }
     },
     "Search public %@" : {
       "localizations" : {
@@ -5601,7 +6284,27 @@
       }
     },
     "Searched the web" : {
-      "comment" : "Tool card title for a web search step"
+      "comment" : "Tool card title for a web search step",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搜索网页"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搜尋網頁"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搜尋網頁"
+          }
+        }
+      }
     },
     "Searching sources" : {
       "localizations" : {
@@ -5626,7 +6329,27 @@
       }
     },
     "Searching the web…" : {
-      "comment" : "Progress while searching sources"
+      "comment" : "Progress while searching sources",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜索网页…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋網頁…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋網頁…"
+          }
+        }
+      }
     },
     "Searching..." : {
       "localizations" : {
@@ -5828,6 +6551,28 @@
         }
       }
     },
+    "Shape your next %@ in a planning conversation, with Notion pages and uploads as sources." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过规划对话塑造你的下一个 %@，并将 Notion 页面和上传内容作为来源。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "透過規劃對話塑造你的下一個 %@，並將 Notion 頁面和上載內容作為來源。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "透過規劃對話塑造你的下一個 %@，並將 Notion 頁面和上傳內容作為來源。"
+          }
+        }
+      }
+    },
     "Share" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5961,7 +6706,27 @@
       }
     },
     "Showing the plan…" : {
-      "comment" : "Progress while showing the plan"
+      "comment" : "Progress while showing the plan",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在显示计划…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在顯示計劃…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在顯示計劃…"
+          }
+        }
+      }
     },
     "Sign in with rxlab to plan and generate AI %@." : {
       "localizations" : {
@@ -6053,10 +6818,49 @@
       }
     },
     "Skip All Questions" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过所有问题"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "略過所有問題"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "略過所有問題"
+          }
+        }
+      }
     },
     "Skipped" : {
-      "comment" : "Question card status when the user skipped"
+      "comment" : "Question card status when the user skipped",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已跳过"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已略過"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已略過"
+          }
+        }
+      }
     },
     "Slides (coming soon)" : {
       "localizations" : {
@@ -6325,6 +7129,28 @@
         }
       }
     },
+    "Summary exported to Notion." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要已导出到 Notion。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要已匯出到 Notion。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要已匯出到 Notion。"
+          }
+        }
+      }
+    },
     "Switch between the cover art and synced captions while listening full screen." : {
       "localizations" : {
         "zh-Hans" : {
@@ -6370,7 +7196,27 @@
       }
     },
     "Tap to answer" : {
-      "comment" : "Question card hint when awaiting an answer"
+      "comment" : "Question card hint when awaiting an answer",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点以回答"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點一下以回答"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點一下以回答"
+          }
+        }
+      }
     },
     "Tap to review" : {
       "comment" : "Hint under the stop button in the voice recorder",
@@ -6396,7 +7242,27 @@
       }
     },
     "Tap to view details" : {
-      "comment" : "Tool card hint to open the detail sheet"
+      "comment" : "Tool card hint to open the detail sheet",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点以查看详情"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點一下以查看詳細資料"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點一下以查看詳細資料"
+          }
+        }
+      }
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {
@@ -6580,8 +7446,50 @@
         }
       }
     },
+    "The summary is added as a new page inside the page you select." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要会作为新页面添加到你选择的页面中。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要會以新頁面加入你選擇的頁面中。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要會以新頁面加入你選擇的頁面中。"
+          }
+        }
+      }
+    },
     "Thinking…" : {
-      "comment" : "Default progress text while the planning agent works\nProgress text while the planning agent works"
+      "comment" : "Default progress text while the planning agent works\nProgress text while the planning agent works",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在思考…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在思考…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在思考…"
+          }
+        }
+      }
     },
     "This creator profile is not available." : {
       "localizations" : {
@@ -6837,7 +7745,27 @@
       }
     },
     "Tool" : {
-      "comment" : "Generic tool card title"
+      "comment" : "Generic tool card title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具"
+          }
+        }
+      }
     },
     "Topic" : {
       "localizations" : {
@@ -7333,10 +8261,72 @@
       }
     },
     "Working…" : {
-      "comment" : "Generic progress text"
+      "comment" : "Generic progress text",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在处理…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在處理…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在處理…"
+          }
+        }
+      }
     },
     "Writing the plan…" : {
-      "comment" : "Progress while writing the plan"
+      "comment" : "Progress while writing the plan",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在编写计划…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰寫計劃…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰寫計劃…"
+          }
+        }
+      }
+    },
+    "You can now export your summary to Notion directly with live podcast playback." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你现在可以将摘要直接导出到 Notion，并附上实时播客播放。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你而家可以將摘要直接匯出到 Notion，並附上即時 Podcast 播放。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你現在可以將摘要直接匯出到 Notion，並附上即時 Podcast 播放。"
+          }
+        }
+      }
     },
     "You need %@ points but have %@." : {
       "comment" : "Shown when the user lacks enough points to add sources; values are formatted point amounts\nShown when the user lacks enough points; values are formatted point amounts",
@@ -7374,6 +8364,24 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "You need %1$lld points but have %2$lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要 %1$lld 积分，但只有 %2$lld。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要 %1$lld 積分，但只有 %2$lld。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要 %1$lld 積分，但只有 %2$lld。"
           }
         }
       }

@@ -170,6 +170,13 @@ type Env struct {
 	// (…/s/{token}). Empty falls back to https://podcast.rxlab.app.
 	WebsiteBaseURL string
 
+	// FrontendPublicURL (FRONTEND_PUBLIC_URL) is the public base of the web
+	// frontend used for "listen again" links embedded in exported summaries
+	// (Markdown, PDF, Notion) — e.g. http://localhost:3000 in development or
+	// https://podcast.rxlab.app in production. Empty falls back to
+	// WebsiteBaseURL, then to https://podcast.rxlab.app.
+	FrontendPublicURL string
+
 	// APNs token-auth configuration for native push notifications. APNS_KEY_BASE64
 	// accepts a base64-encoded .p8 private key or the raw PEM .p8 contents.
 	// APNS_ENVIRONMENT is "sandbox" or "production". Empty APNs fields disable
@@ -317,6 +324,7 @@ func LoadEnv() (*Env, error) {
 		DashboardServiceToken:   strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
 		AuthIssuer:              strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
 		WebsiteBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("WEBSITE_BASE_URL")), "/"),
+		FrontendPublicURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("FRONTEND_PUBLIC_URL")), "/"),
 		APNSKeyID:               strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
 		APNSTeamID:              strings.TrimSpace(os.Getenv("APNS_TEAM_ID")),
 		APNSBundleID:            strings.TrimSpace(os.Getenv("APNS_BUNDLE_ID")),
