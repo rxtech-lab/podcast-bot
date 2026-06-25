@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -882,6 +883,129 @@ func (s *Server) handleDiscussionSummary(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, doc)
+}
+
+// handleDiscussionSummaryPDF renders the summary document to a PDF (via
+// Cloudflare Browser Rendering) and streams it back as an attachment. Same
+// visibility gate as handleDiscussionSummary; 404 when no summary exists, 503
+// when PDF export isn't configured.
+func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	docType := strings.TrimSpace(r.URL.Query().Get("doc_type"))
+	visible, err := s.d.Discussions.GetVisible(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if visible == nil {
+		http.NotFound(w, r)
+		return
+	}
+	doc, err := s.d.Discussions.SummaryDocumentFor(r.Context(), id, docType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if doc == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	title := strings.TrimSpace(visible.Title)
+	if title == "" {
+		title = strings.TrimSpace(visible.Topic)
+	}
+
+	cacheKey := s.summaryPDFCacheKey(id, doc)
+
+	// Serve a previously-rendered PDF from object storage when available. The
+	// Cloudflare render is the expensive step, so we pay it only once per summary
+	// version — the key embeds the summary's generated-at, so a regenerated
+	// summary renders fresh rather than serving a stale PDF.
+	if cacheKey != "" {
+		if info, err := s.d.Uploader.Head(r.Context(), cacheKey); err == nil && info.ContentLength > 0 {
+			if data, err := s.d.Uploader.Download(r.Context(), cacheKey); err == nil && len(data) > 0 {
+				s.writeSummaryPDF(w, title, data)
+				return
+			}
+		}
+	}
+
+	pdf, err := summaryPDFFromMarkdown(r.Context(), s.d.Env, title, doc.Markdown)
+	if errors.Is(err, errCloudflareNotConfigured) {
+		http.Error(w, "summary PDF export is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil {
+		s.logger().Error("summary pdf render failed", "discussion", id, "err", err)
+		http.Error(w, "failed to render summary PDF", http.StatusBadGateway)
+		return
+	}
+
+	// Cache for next time — best-effort; a storage failure must not fail the
+	// download the user is waiting on.
+	if cacheKey != "" {
+		if err := s.d.Uploader.UploadBytes(r.Context(), cacheKey, "application/pdf", pdf); err != nil {
+			s.logger().Warn("summary pdf cache upload failed", "discussion", id, "err", err)
+		}
+	}
+
+	s.writeSummaryPDF(w, title, pdf)
+}
+
+// summaryPDFCacheKey returns the object-storage key for a summary's rendered PDF,
+// or "" when uploads are disabled. The key embeds the summary's generated-at so a
+// regenerated summary produces a new key (old PDFs are orphaned, never stale).
+func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument) string {
+	if s.d.Uploader == nil || !s.d.Uploader.Enabled() || doc == nil {
+		return ""
+	}
+	docType := strings.TrimSpace(doc.DocType)
+	if docType == "" {
+		docType = SummaryDocTypeSummary
+	}
+	var gen int64
+	if doc.GeneratedAt != nil {
+		gen = doc.GeneratedAt.Unix()
+	}
+	return s.d.Uploader.Key(fmt.Sprintf("summary-pdf/%s/%s-v%s-%d.pdf",
+		discussionID, docType, summaryPDFTemplateVersion, gen))
+}
+
+// writeSummaryPDF streams the PDF bytes as a download attachment.
+func (s *Server) writeSummaryPDF(w http.ResponseWriter, title string, pdf []byte) {
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", summaryPDFFilename(title)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(pdf)))
+	_, _ = w.Write(pdf)
+}
+
+// summaryPDFFilename derives a safe, human-friendly download filename from the
+// discussion title.
+func summaryPDFFilename(title string) string {
+	name := strings.TrimSpace(title)
+	if name == "" {
+		name = "Summary"
+	}
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == ' ' || r == '-' || r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+	name = strings.TrimSpace(name)
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	if name == "" {
+		name = "Summary"
+	}
+	return name + ".pdf"
 }
 
 func (s *Server) applyDiscussionProgress(ctx context.Context, d *Discussion) {

@@ -268,6 +268,7 @@ struct PodcastPlayerView: View {
     /// it pushes the SwiftUI type-checker past its time budget.
     private var summarySheet: some View {
         SummaryView(discussionID: currentDiscussion.id,
+                    title: currentDiscussion.displayTitle,
                     api: APIClient(tokens: auth))
     }
 

@@ -93,6 +93,7 @@ Required vars (validated at startup — the process refuses to boot if any are m
 | `LLM_OUTPUT_COST_PER_MILLION` | — | optional output-token price used when the provider does not return cost usage |
 | `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` | when `tts_provider: azure` | Azure Speech credentials |
 | `ELEVENLABS_API_KEY` | when `tts_provider: eleven` | ElevenLabs credentials |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | for summary PDF export | Cloudflare Browser Rendering credentials (token needs "Browser Rendering - Edit") used to render a podcast summary into a downloadable PDF; empty returns 503 from `GET /api/discussions/{id}/summary/pdf` |
 | `OUT_DIR` | — | output root for audio/video/transcripts (default `./out`) |
 | `SERIES_ROOT` | — | cross-run archive root for `series` episodes (default `OUT_DIR`) |
 | `APP_PASSWORD` | — | if set, gate the web UI + API behind this password (same as `--password`) |

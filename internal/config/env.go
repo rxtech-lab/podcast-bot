@@ -129,6 +129,17 @@ type Env struct {
 	// still need it set even though they won't call the endpoint.
 	GeminiAPIKey string
 
+	// CloudflareAccountID / CloudflareAPIToken configure Cloudflare Browser
+	// Rendering, used to (1) render a podcast summary's Markdown into a
+	// downloadable PDF (the summary's ```mermaid blocks are rendered to real
+	// diagrams in Cloudflare's headless Chromium) and (2) read links the user
+	// pastes or adds to a plan, via the /markdown endpoint. Set via
+	// CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (token needs the "Browser
+	// Rendering - Edit" permission). When either is empty, the summary-PDF
+	// endpoint returns 503 and link-reading is disabled.
+	CloudflareAccountID string
+	CloudflareAPIToken  string
+
 	OutDir string
 
 	// DashboardOrigins lists the browser origins permitted to call the API
@@ -163,8 +174,9 @@ type Env struct {
 
 	// FirecrawlAPIKey (FIRECRAWL_API_KEY) authenticates against Firecrawl's
 	// REST API. When set, the planner uses Firecrawl `/v2/search` to ground a
-	// plan in live web sources and `/v2/scrape` to read links the user pastes
-	// or adds. Empty disables web research (planning still works ungrounded).
+	// plan in live web sources. (Reading individual links the user pastes or
+	// adds is handled by Cloudflare Browser Rendering — see CloudflareAPIToken.)
+	// Empty disables web search (planning still works ungrounded).
 	FirecrawlAPIKey string
 
 	// MarkitdownServerURL / MarkitdownAPIKey configure the deployed markitdown
@@ -269,6 +281,8 @@ func LoadEnv() (*Env, error) {
 		AzureSpeechRegion:         strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
 		ElevenLabsAPIKey:          strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
 		GeminiAPIKey:              strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		CloudflareAccountID:       strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")),
+		CloudflareAPIToken:        strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")),
 		OutDir:                    strings.TrimSpace(os.Getenv("OUT_DIR")),
 		PersistentRoot:            strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 

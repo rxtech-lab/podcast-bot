@@ -13,12 +13,15 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 )
 
-// Firecrawl REST endpoints. Search grounds a plan in live web results; crawl
-// reads a single URL the user pasted or added. Both return clean markdown.
-const (
-	firecrawlSearchURL = "https://api.firecrawl.dev/v2/search"
-	firecrawlCrawlURL  = "https://api.firecrawl.dev/v2/crawl"
-)
+// firecrawlSearchURL grounds a plan in live web results. Reading a single URL
+// the user pasted or added is handled separately by Cloudflare Browser
+// Rendering (see cloudflareMarkdownURL) — both return clean markdown.
+const firecrawlSearchURL = "https://api.firecrawl.dev/v2/search"
+
+// cloudflareMarkdownURL is Cloudflare Browser Rendering's /markdown endpoint
+// (account id is the %s). It renders a URL in headless Chromium and returns the
+// page as markdown in a single synchronous call — no async crawl job to poll.
+const cloudflareMarkdownURL = "https://api.cloudflare.com/client/v4/accounts/%s/browser-rendering/markdown"
 
 // firecrawlSearchLimit bounds a single Firecrawl search request. Persisted plan
 // sources are not capped; user-added links should remain attached to the plan.
@@ -54,33 +57,18 @@ type firecrawlDoc struct {
 	Markdown    string `json:"markdown"`
 }
 
-type firecrawlCrawlRequest struct {
-	URL               string                 `json:"url"`
-	Limit             int                    `json:"limit"`
-	MaxDiscoveryDepth int                    `json:"maxDiscoveryDepth"`
-	Sitemap           string                 `json:"sitemap"`
-	ScrapeOptions     firecrawlScrapeOptions `json:"scrapeOptions"`
+// cloudflareMarkdownRequest mirrors Cloudflare Browser Rendering's POST
+// /markdown body. Only the URL is required; the service handles the headless
+// render and markdown conversion.
+type cloudflareMarkdownRequest struct {
+	URL string `json:"url"`
 }
 
-type firecrawlCrawlStartResponse struct {
+// cloudflareMarkdownResponse is the /markdown envelope: the rendered page lives
+// in result as a markdown string when success is true.
+type cloudflareMarkdownResponse struct {
 	Success bool   `json:"success"`
-	ID      string `json:"id"`
-	URL     string `json:"url"`
-}
-
-type firecrawlCrawlStatusResponse struct {
-	Status string              `json:"status"`
-	Data   []firecrawlCrawlDoc `json:"data"`
-}
-
-type firecrawlCrawlDoc struct {
-	Markdown string `json:"markdown"`
-	Metadata struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		SourceURL   string `json:"sourceURL"`
-		URL         string `json:"url"`
-	} `json:"metadata"`
+	Result  string `json:"result"`
 }
 
 // urlPattern finds bare http(s) URLs the user pasted into a topic so the
@@ -169,18 +157,19 @@ func (p *Planner) SearchSources(ctx context.Context, query string) ([]config.Sou
 	return sources, nil
 }
 
-// crawlURLs reads each URL via Firecrawl crawl and returns one source per URL
-// that succeeds. Best-effort: unreachable links are skipped. Empty when no key
-// is configured.
+// crawlURLs reads each URL via Cloudflare Browser Rendering and returns one
+// source per URL that succeeds. Best-effort: unreachable links are skipped.
+// Empty when Cloudflare credentials are not configured.
 func (p *Planner) crawlURLs(ctx context.Context, urls []string) []config.Source {
-	key := strings.TrimSpace(p.env.FirecrawlAPIKey)
-	if key == "" || len(urls) == 0 {
+	account := strings.TrimSpace(p.env.CloudflareAccountID)
+	token := strings.TrimSpace(p.env.CloudflareAPIToken)
+	if account == "" || token == "" || len(urls) == 0 {
 		return nil
 	}
 	out := make([]config.Source, 0, len(urls))
 	for i, u := range urls {
 		p.emit("read", fmt.Sprintf("Reading source %d of %d: %s", i+1, len(urls), shortURLForStatus(u)))
-		if s, ok := p.crawlURL(ctx, key, u); ok {
+		if s, ok := p.crawlURL(ctx, account, token, u); ok {
 			out = append(out, s)
 			p.emit("sources", fmt.Sprintf("Read %d of %d source%s", len(out), len(urls), plural(len(out))))
 		}
@@ -188,22 +177,20 @@ func (p *Planner) crawlURLs(ctx context.Context, urls []string) []config.Source 
 	return out
 }
 
-func (p *Planner) crawlURL(ctx context.Context, key, url string) (config.Source, bool) {
-	body, _ := json.Marshal(firecrawlCrawlRequest{
-		URL:               url,
-		Limit:             1,
-		MaxDiscoveryDepth: 0,
-		Sitemap:           "skip",
-		ScrapeOptions:     firecrawlScrapeOptions{Formats: []string{"markdown"}},
-	})
+// crawlURL renders a single URL to markdown via Cloudflare Browser Rendering.
+// Unlike Firecrawl's async crawl, /markdown is synchronous — one POST returns
+// the rendered markdown, so there is no job id to poll.
+func (p *Planner) crawlURL(ctx context.Context, account, token, url string) (config.Source, bool) {
+	body, _ := json.Marshal(cloudflareMarkdownRequest{URL: url})
 	reqCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, firecrawlCrawlURL, bytes.NewReader(body))
+	endpoint := fmt.Sprintf(cloudflareMarkdownURL, account)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return config.Source{}, false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -213,62 +200,14 @@ func (p *Planner) crawlURL(ctx context.Context, key, url string) (config.Source,
 	if resp.StatusCode != http.StatusOK {
 		return config.Source{}, false
 	}
-	var started firecrawlCrawlStartResponse
-	if err := json.NewDecoder(resp.Body).Decode(&started); err != nil {
+	var parsed cloudflareMarkdownResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return config.Source{}, false
 	}
-	if strings.TrimSpace(started.ID) == "" {
+	if !parsed.Success {
 		return config.Source{}, false
 	}
-	return p.pollCrawl(reqCtx, key, started.ID, url)
-}
-
-func (p *Planner) pollCrawl(ctx context.Context, key, id, fallbackURL string) (config.Source, bool) {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	nextStatus := time.Now().Add(4 * time.Second)
-	for {
-		source, status, ok := p.getCrawlStatus(ctx, key, id, fallbackURL)
-		if ok {
-			return source, true
-		}
-		if status == "failed" || status == "cancelled" {
-			return config.Source{}, false
-		}
-		if time.Now().After(nextStatus) {
-			p.emit("read", "Still reading "+shortURLForStatus(fallbackURL))
-			nextStatus = time.Now().Add(8 * time.Second)
-		}
-		select {
-		case <-ctx.Done():
-			return config.Source{}, false
-		case <-ticker.C:
-		}
-	}
-}
-
-func (p *Planner) getCrawlStatus(ctx context.Context, key, id, fallbackURL string) (config.Source, string, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, firecrawlCrawlURL+"/"+id, nil)
-	if err != nil {
-		return config.Source{}, "", false
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return config.Source{}, "", false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return config.Source{}, "", false
-	}
-	var status firecrawlCrawlStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return config.Source{}, "", false
-	}
-	if status.Status != "completed" || len(status.Data) == 0 {
-		return config.Source{}, status.Status, false
-	}
-	return crawlDocToSource(status.Data[0], fallbackURL)
+	return markdownToSource(parsed.Result, url)
 }
 
 func shortURLForStatus(raw string) string {
@@ -282,25 +221,38 @@ func shortURLForStatus(raw string) string {
 	return raw[:61] + "..."
 }
 
-func crawlDocToSource(d firecrawlCrawlDoc, fallbackURL string) (config.Source, string, bool) {
-	url := strings.TrimSpace(d.Metadata.SourceURL)
-	if url == "" {
-		url = strings.TrimSpace(d.Metadata.URL)
+// markdownToSource builds a config.Source from Cloudflare-rendered markdown.
+// Cloudflare returns only the markdown body (no separate title/description), so
+// the title is taken from the first markdown heading, falling back to the URL.
+func markdownToSource(markdown, url string) (config.Source, bool) {
+	markdown = strings.TrimSpace(markdown)
+	if strings.TrimSpace(url) == "" || markdown == "" {
+		return config.Source{}, false
 	}
-	if url == "" {
-		url = fallbackURL
-	}
-	markdown := strings.TrimSpace(d.Markdown)
-	snippet := markdown
-	if snippet == "" {
-		snippet = strings.TrimSpace(d.Metadata.Description)
-		markdown = snippet
-	}
-	title := strings.TrimSpace(d.Metadata.Title)
+	title := firstMarkdownHeading(markdown)
 	if title == "" {
 		title = url
 	}
-	return config.Source{Title: title, URL: url, Snippet: truncate(snippet, 400), Markdown: markdown}, "completed", strings.TrimSpace(url) != ""
+	return config.Source{
+		Title:    title,
+		URL:      url,
+		Snippet:  truncate(markdown, 400),
+		Markdown: markdown,
+	}, true
+}
+
+// firstMarkdownHeading returns the text of the first ATX heading ("# ...") in
+// the markdown, stripped of leading hashes, or "" when there is none.
+func firstMarkdownHeading(markdown string) string {
+	for _, line := range strings.Split(markdown, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			if h := strings.TrimSpace(strings.TrimLeft(line, "#")); h != "" {
+				return h
+			}
+		}
+	}
+	return ""
 }
 
 // docToSource maps a Firecrawl web result into a config.Source, preferring the

@@ -598,6 +598,9 @@
         }
       }
     },
+    "Couldn’t export" : {
+
+    },
     "Couldn't open link" : {
 
     },
@@ -882,6 +885,12 @@
           }
         }
       }
+    },
+    "Download Markdown" : {
+
+    },
+    "Download PDF" : {
+
     },
     "Download Podcast" : {
       "extractionState" : "stale",
@@ -2641,6 +2650,9 @@
           }
         }
       }
+    },
+    "Preparing PDF…" : {
+
     },
     "Preparing Transcript" : {
       "localizations" : {
