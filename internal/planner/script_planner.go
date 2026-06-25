@@ -352,7 +352,13 @@ func (p *Planner) draftJSON(ctx context.Context, user string, attachments []Atta
 // assemble turns a creative draft into a full, validated DebateTopic, filling
 // the non-creative scaffolding (type, language, channel, models, defaults).
 func (p *Planner) assemble(d *draft, lang, channel string, sources []config.Source) (*Result, error) {
-	model := p.agentModel()
+	return p.assembleWithModel(d, lang, channel, sources, p.agentModel())
+}
+
+func (p *Planner) assembleWithModel(d *draft, lang, channel string, sources []config.Source, model string) (*Result, error) {
+	if strings.TrimSpace(model) == "" {
+		model = p.agentModel()
+	}
 	host := config.AgentSpec{Name: d.Host.Name, Model: model}
 	if host.Name == "" {
 		host.Name = "Host"

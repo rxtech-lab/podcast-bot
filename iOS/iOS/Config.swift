@@ -190,3 +190,21 @@ struct ShareStationTip: Tip {
         Tips.MaxDisplayCount(1)
     }
 }
+
+struct SummaryPDFDownloadTip: Tip {
+    var title: Text {
+        Text("Save the summary")
+    }
+
+    var message: Text? {
+        Text("Open this menu to download the summary as a PDF or Markdown file.")
+    }
+
+    var image: Image? {
+        Image(systemName: "arrow.down.doc")
+    }
+
+    var options: [any TipOption] {
+        Tips.MaxDisplayCount(1)
+    }
+}

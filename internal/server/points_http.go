@@ -3,8 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
@@ -247,24 +251,142 @@ func (s *Server) handlePointsBalance(w http.ResponseWriter, r *http.Request) {
 // handlePointsHistory returns the current balance plus the user's recent ledger
 // entries (newest first) for the points-usage history view.
 func (s *Server) handlePointsHistory(w http.ResponseWriter, r *http.Request) {
+	timer := newPointsHistoryTimer()
+	status := http.StatusOK
+	resultCount := 0
+	hasMore := false
+	defer func() {
+		s.logPointsHistoryTiming(status, resultCount, hasMore, timer)
+	}()
+
+	authStart := time.Now()
 	user := s.requestUser(r)
+	timer.mark("requestUser", authStart)
+
+	balanceStart := time.Now()
 	bal, err := s.userBalance(r.Context(), user.ID)
+	timer.mark("balance", balanceStart)
 	if err != nil {
+		status = http.StatusInternalServerError
+		timer.err = "balance"
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	entries := []PointsLedgerEntry{}
-	hasMore := false
+	parseStart := time.Now()
+	limit := atoiDefault(r.URL.Query().Get("limit"), 0)
+	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
+	timer.limit = limit
+	timer.offset = offset
+	timer.pointsEnabled = s.pointsEnabled()
+	timer.mark("parseQuery", parseStart)
 	if s.pointsEnabled() {
-		limit := atoiDefault(r.URL.Query().Get("limit"), 0)
-		offset := atoiDefault(r.URL.Query().Get("offset"), 0)
-		page, err := s.d.Points.History(r.Context(), user.ID, limit, offset)
+		historyStart := time.Now()
+		page, err := s.d.Points.history(r.Context(), user.ID, limit, offset, timer)
+		timer.mark("history", historyStart)
 		if err != nil {
+			status = http.StatusInternalServerError
+			timer.err = "history"
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		entries = page.Entries
+		resultCount = len(entries)
 		hasMore = page.HasMore
 	}
+	writeStart := time.Now()
 	writeJSON(w, map[string]any{"balance": bal, "entries": entries, "has_more": hasMore})
+	timer.mark("writeJSON", writeStart)
+}
+
+type pointsHistoryTimer struct {
+	start          time.Time
+	steps          []pointsHistoryStep
+	limit          int
+	offset         int
+	normalizedLim  int
+	normalizedOff  int
+	target         int
+	batchSize      int
+	rawBatches     int
+	rawFetched     int
+	rawUnique      int
+	projected      int
+	reserveLookups int
+	reserveMatches int
+	pointsEnabled  bool
+	err            string
+}
+
+type pointsHistoryStep struct {
+	name string
+	d    time.Duration
+}
+
+func newPointsHistoryTimer() *pointsHistoryTimer {
+	return &pointsHistoryTimer{start: time.Now()}
+}
+
+func (t *pointsHistoryTimer) mark(name string, since time.Time) {
+	if t == nil {
+		return
+	}
+	t.add(name, time.Since(since))
+}
+
+func (t *pointsHistoryTimer) add(name string, d time.Duration) {
+	if t == nil {
+		return
+	}
+	for i := range t.steps {
+		if t.steps[i].name == name {
+			t.steps[i].d += d
+			return
+		}
+	}
+	t.steps = append(t.steps, pointsHistoryStep{name: name, d: d})
+}
+
+func (s *Server) logPointsHistoryTiming(status, count int, hasMore bool, t *pointsHistoryTimer) {
+	if t == nil {
+		return
+	}
+	total := time.Since(t.start)
+	var b strings.Builder
+	attrs := []any{
+		"status", status,
+		"limit", t.limit,
+		"offset", t.offset,
+		"normalized_limit", t.normalizedLim,
+		"normalized_offset", t.normalizedOff,
+		"count", count,
+		"has_more", hasMore,
+		"points_enabled", t.pointsEnabled,
+		"total_ms", durMS(total),
+		"raw_batches", t.rawBatches,
+		"raw_fetched", t.rawFetched,
+		"raw_unique", t.rawUnique,
+		"projected", t.projected,
+		"reserve_lookups", t.reserveLookups,
+		"reserve_matches", t.reserveMatches,
+		"batch_size", t.batchSize,
+		"target", t.target,
+	}
+	if t.err != "" {
+		attrs = append(attrs, "error_stage", t.err)
+	}
+	for _, st := range t.steps {
+		fmt.Fprintf(&b, " %s=%.1fms", st.name, durMS(st.d))
+		attrs = append(attrs, st.name+"_ms", durMS(st.d))
+	}
+	errPart := ""
+	if t.err != "" {
+		errPart = " error_stage=" + t.err
+	}
+	fmt.Fprintf(os.Stdout,
+		"[points-history-timing] status=%d limit=%d offset=%d normalized_limit=%d normalized_offset=%d count=%d has_more=%t points_enabled=%t total=%.1fms raw_batches=%d raw_fetched=%d raw_unique=%d projected=%d reserve_lookups=%d reserve_matches=%d batch_size=%d target=%d%s%s\n",
+		status, t.limit, t.offset, t.normalizedLim, t.normalizedOff, count, hasMore, t.pointsEnabled,
+		durMS(total), t.rawBatches, t.rawFetched, t.rawUnique, t.projected, t.reserveLookups,
+		t.reserveMatches, t.batchSize, t.target, errPart, b.String())
+	s.logger().Info("points history timing", attrs...)
 }

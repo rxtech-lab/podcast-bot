@@ -1128,6 +1128,174 @@ func TestDiscussionStoreLineUniquenessMigration(t *testing.T) {
 	}
 }
 
+func TestDiscussionSpeakerModelOverridesSurvivePlanRegeneration(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "AI Safety Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host", Model: "model-a"},
+			Discussants: []config.AgentSpec{
+				{Name: "Alice", Model: "model-a", Aspect: "technical"},
+				{Name: "Bob", Model: "model-a", Aspect: "policy"},
+			},
+			Commander: config.AgentSpec{Model: "model-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated, err := store.SetSpeakerModel(ctx, owner, created.ID, "Alice", "model-x")
+	if err != nil {
+		t.Fatalf("SetSpeakerModel: %v", err)
+	}
+	if got := discussantModel(t, updated.Script, "Alice"); got != "model-x" {
+		t.Fatalf("Alice model after update = %q, want model-x", got)
+	}
+	if got := discussantModel(t, updated.Script, "Bob"); got != "model-a" {
+		t.Fatalf("Bob model after Alice update = %q, want model-a", got)
+	}
+
+	updated, err = store.UpdatePlan(ctx, owner, created.ID, planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Expanded AI Safety Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host", Model: "model-b"},
+			Discussants: []config.AgentSpec{
+				{Name: "Alice", Model: "model-b", Aspect: "technical"},
+				{Name: "Charlie", Model: "model-b", Aspect: "economic"},
+			},
+			Commander: config.AgentSpec{Model: "model-b"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan with new speaker: %v", err)
+	}
+	if got := discussantModel(t, updated.Script, "Alice"); got != "model-x" {
+		t.Fatalf("Alice model after regenerated plan = %q, want model-x", got)
+	}
+	if got := discussantModel(t, updated.Script, "Charlie"); got != "model-b" {
+		t.Fatalf("Charlie model after regenerated plan = %q, want model-b", got)
+	}
+	rowsAfterAdd := speakerModelRows(t, store, created.ID)
+	if got := rowsAfterAdd["Alice"]; got != "model-x" {
+		t.Fatalf("speaker model row Alice after add = %q, want model-x; rows=%+v", got, rowsAfterAdd)
+	}
+	if got := rowsAfterAdd["Bob"]; got != "model-a" {
+		t.Fatalf("speaker model row Bob after add = %q, want model-a; rows=%+v", got, rowsAfterAdd)
+	}
+	if got := rowsAfterAdd["Charlie"]; got != "model-b" {
+		t.Fatalf("speaker model row Charlie after add = %q, want model-b; rows=%+v", got, rowsAfterAdd)
+	}
+
+	if _, err := store.UpdatePlan(ctx, owner, created.ID, planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Reduced AI Safety Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host", Model: "model-c"},
+			Discussants: []config.AgentSpec{
+				{Name: "Charlie", Model: "model-c", Aspect: "economic"},
+			},
+			Commander: config.AgentSpec{Model: "model-c"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdatePlan removing Alice: %v", err)
+	}
+	rowsAfterRemove := speakerModelRows(t, store, created.ID)
+	if !sameStringMap(rowsAfterRemove, rowsAfterAdd) {
+		t.Fatalf("speaker model rows changed after removing a speaker: got %+v, want %+v", rowsAfterRemove, rowsAfterAdd)
+	}
+	updated, err = store.UpdatePlan(ctx, owner, created.ID, planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Readded AI Safety Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host", Model: "model-d"},
+			Discussants: []config.AgentSpec{
+				{Name: "Alice", Model: "model-d", Aspect: "technical"},
+				{Name: "Charlie", Model: "model-d", Aspect: "economic"},
+			},
+			Commander: config.AgentSpec{Model: "model-d"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan readding Alice: %v", err)
+	}
+	if got := discussantModel(t, updated.Script, "Alice"); got != "model-x" {
+		t.Fatalf("Alice model after readd = %q, want model-x", got)
+	}
+
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-speaker-models"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	byJob, err := store.GetByJobID(ctx, "job-speaker-models")
+	if err != nil {
+		t.Fatalf("GetByJobID: %v", err)
+	}
+	if got := discussantModel(t, byJob.Script, "Alice"); got != "model-x" {
+		t.Fatalf("Alice model by job id = %q, want model-x", got)
+	}
+}
+
+func discussantModel(t *testing.T, script *config.DebateTopic, name string) string {
+	t.Helper()
+	if script == nil {
+		t.Fatal("script is nil")
+	}
+	for _, d := range script.Discussants {
+		if d.Name == name {
+			return d.Model
+		}
+	}
+	t.Fatalf("discussant %q not found in %+v", name, script.Discussants)
+	return ""
+}
+
+func speakerModelRows(t *testing.T, store *DiscussionStore, discussionID string) map[string]string {
+	t.Helper()
+	rows, err := store.db.Query(`SELECT speaker_name, model
+		FROM native_discussion_speaker_models WHERE discussion_id = ?`, discussionID)
+	if err != nil {
+		t.Fatalf("query speaker model rows: %v", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var speaker, model string
+		if err := rows.Scan(&speaker, &model); err != nil {
+			t.Fatalf("scan speaker model row: %v", err)
+		}
+		out[speaker] = model
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("speaker model row iteration: %v", err)
+	}
+	return out
+}
+
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		if b[k] != av {
+			return false
+		}
+	}
+	return true
+}
+
 // TestDiscussionLineSenderAndOrdering covers two guarantees the player relies on:
 // (1) sender_user_id is server-owned — stamped from the authenticated principal on
 // user lines and cleared on agent lines, never trusted from the caller's payload;

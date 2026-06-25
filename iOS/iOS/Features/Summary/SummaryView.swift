@@ -1,6 +1,7 @@
 import BeautifulMermaid
 import MarkdownUI
 import SwiftUI
+import TipKit
 
 /// Displays a finished podcast's generated summary document. The Markdown body
 /// is fetched only when this view mounts (the podcast detail never carries it),
@@ -105,8 +106,9 @@ struct SummaryView: View {
     /// Document-type picker plus the download actions. Only "Summary document"
     /// is selectable today; the slide-deck option is shown disabled to signal
     /// future support. Downloads are enabled once the Markdown body has loaded.
+    @ViewBuilder
     private var documentTypeMenu: some View {
-        Menu {
+        let menu = Menu {
             Picker("Document type", selection: $docType) {
                 Label("Summary document", systemImage: "doc.richtext").tag("summary")
             }
@@ -131,6 +133,12 @@ struct SummaryView: View {
             .disabled(!canExport)
         } label: {
             Image(systemName: "ellipsis.circle")
+        }
+
+        if canExport {
+            menu.popoverTip(SummaryPDFDownloadTip(), arrowEdge: .top)
+        } else {
+            menu
         }
     }
 

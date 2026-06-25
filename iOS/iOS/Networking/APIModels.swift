@@ -109,6 +109,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
     /// next time the discussion is fetched (e.g. when the player opens).
     var generateCover: Bool = false
     var coverPrompt: String?
+    var plan: PlanRequest?
 
     enum CodingKeys: String, CodingKey {
         case topic
@@ -116,6 +117,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
         case language
         case generateCover = "generate_cover"
         case coverPrompt = "cover_prompt"
+        case plan
     }
 }
 
@@ -127,6 +129,31 @@ struct PlanRequest: Codable, Sendable {
     var discussants: Int = 3
     var research: Bool = true
     var attachments: [Attachment]?
+}
+
+/// POST /api/discussions/{id}/planning/stream request body: the user's message
+/// plus any document attachments to ground the conversational plan.
+struct PlanningStreamRequest: Codable, Sendable {
+    var prompt: String = ""
+    var language: String?
+    var attachments: [Attachment]?
+    var resume: Bool?
+}
+
+/// POST /api/discussions/{id}/planning/answer request body: answers a pending
+/// question (or skips it with action "rejected"), resuming the agent loop.
+struct PlanningAnswerRequest: Codable, Sendable {
+    var questionId: String
+    var action: String
+    var language: String?
+    var answers: [[String: AnyCodable]]
+
+    enum CodingKeys: String, CodingKey {
+        case questionId = "question_id"
+        case action
+        case language
+        case answers
+    }
 }
 
 /// POST /api/uploads response body: the original filename, either parsed

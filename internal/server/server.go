@@ -79,6 +79,11 @@ type Deps struct {
 	// before. Wired from the same database as Discussions.
 	Points   *PointsStore
 	Progress *DiscussionProgressStore
+	// Planning backs the conversational planning phase (agent loop with tools,
+	// persisted conversation, per-conversation billing). nil disables the
+	// /api/discussions/{id}/planning* routes. Wired from the same database as
+	// Discussions.
+	Planning *PlanningStore
 	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
 	// in Redis for 24h. nil disables caching — the handler fetches live each time.
 	ModelCatalog *ModelCatalogStore
@@ -165,6 +170,12 @@ type Server struct {
 	discussionPlanMu   sync.Mutex
 	discussionPlanRuns map[string]*discussionPlanRun
 
+	// planningRunMu guards planningRuns, a set of in-flight conversational
+	// planning turns keyed by conversation id, so two concurrent stream/answer
+	// requests for one conversation can't run the agent loop twice at once.
+	planningRunMu sync.Mutex
+	planningRuns  map[string]bool
+
 	pushMu           sync.Mutex
 	podcastStartSent map[string]bool
 }
@@ -182,6 +193,7 @@ func New(d Deps) *Server {
 		jobMessageRateLast: make(map[string]time.Time),
 		jobMessageRateNow:  time.Now,
 		discussionPlanRuns: make(map[string]*discussionPlanRun),
+		planningRuns:       make(map[string]bool),
 		podcastStartSent:   make(map[string]bool),
 	}
 	if d.Password != "" {
@@ -270,6 +282,11 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
+		if d.Planning != nil {
+			s.mux.HandleFunc("GET /api/discussions/{id}/planning", s.handlePlanningConversationGet)
+			s.mux.HandleFunc("POST /api/discussions/{id}/planning/stream", s.handlePlanningStream)
+			s.mux.HandleFunc("POST /api/discussions/{id}/planning/answer", s.handlePlanningAnswer)
+		}
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources", s.handleDiscussionAddSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/stream", s.handleDiscussionAddSourcesStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)

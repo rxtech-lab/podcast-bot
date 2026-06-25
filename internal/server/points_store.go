@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -104,6 +105,8 @@ func (s *PointsStore) ensureSchema(ctx context.Context) error {
 			created_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS points_ledger_user_idx ON points_ledger(user_id, id)`,
+		`CREATE INDEX IF NOT EXISTS points_ledger_history_match_idx
+			ON points_ledger(user_id, reason, discussion_id, id)`,
 		// One generation charge per discussion: the completion handler is
 		// lazy-on-GET and may fire repeatedly, so the debit must apply once.
 		`CREATE UNIQUE INDEX IF NOT EXISTS points_ledger_generation_uniq
@@ -229,6 +232,10 @@ type PointsHistoryPage struct {
 // accounting; this projection collapses a settled planning hold into one
 // "planning" usage row. An unsettled hold is still shown as "reserve:planning".
 func (s *PointsStore) History(ctx context.Context, userID string, limit, offset int) (PointsHistoryPage, error) {
+	return s.history(ctx, userID, limit, offset, nil)
+}
+
+func (s *PointsStore) history(ctx context.Context, userID string, limit, offset int, timer *pointsHistoryTimer) (PointsHistoryPage, error) {
 	if s == nil {
 		return PointsHistoryPage{}, errors.New("points store is not configured")
 	}
@@ -238,13 +245,27 @@ func (s *PointsStore) History(ctx context.Context, userID string, limit, offset 
 	if offset < 0 {
 		offset = 0
 	}
+	if timer != nil {
+		timer.normalizedLim = limit
+		timer.normalizedOff = offset
+	}
 	target := offset + limit + 1
 	batchSize := pointsHistoryRawBatchSize(limit)
+	if timer != nil {
+		timer.target = target
+		timer.batchSize = batchSize
+	}
 	rawOffset := 0
 	raw := []PointsLedgerEntry{}
 	rawIDs := map[int64]bool{}
 	for {
+		batchStart := time.Now()
 		batch, err := s.pointsLedgerBatch(ctx, userID, batchSize, rawOffset)
+		timer.mark("ledgerBatch", batchStart)
+		if timer != nil {
+			timer.rawBatches++
+			timer.rawFetched += len(batch)
+		}
 		if err != nil {
 			return PointsHistoryPage{}, err
 		}
@@ -255,13 +276,29 @@ func (s *PointsStore) History(ctx context.Context, userID string, limit, offset 
 			raw = append(raw, entry)
 			rawIDs[entry.ID] = true
 		}
-		raw, err = s.resolvePointsHistoryWindow(ctx, userID, raw, rawIDs)
+		if timer != nil {
+			timer.rawUnique = len(raw)
+		}
+		resolveStart := time.Now()
+		raw, err = s.resolvePointsHistoryWindow(ctx, userID, raw, rawIDs, timer)
+		timer.mark("resolveWindow", resolveStart)
 		if err != nil {
 			return PointsHistoryPage{}, err
 		}
+		if timer != nil {
+			timer.rawUnique = len(raw)
+		}
+		projectStart := time.Now()
 		projected := projectPointsHistory(raw)
+		timer.mark("project", projectStart)
+		if timer != nil {
+			timer.projected = len(projected)
+		}
 		if len(projected) >= target || len(batch) < batchSize {
-			return paginatePointsHistory(projected, limit, offset), nil
+			pageStart := time.Now()
+			page := paginatePointsHistory(projected, limit, offset)
+			timer.mark("paginate", pageStart)
+			return page, nil
 		}
 		rawOffset += len(batch)
 	}
@@ -299,18 +336,24 @@ func (s *PointsStore) pointsLedgerBatch(ctx context.Context, userID string, limi
 	return out, nil
 }
 
-func (s *PointsStore) resolvePointsHistoryWindow(ctx context.Context, userID string, raw []PointsLedgerEntry, seen map[int64]bool) ([]PointsLedgerEntry, error) {
+func (s *PointsStore) resolvePointsHistoryWindow(ctx context.Context, userID string, raw []PointsLedgerEntry, seen map[int64]bool, timer *pointsHistoryTimer) ([]PointsLedgerEntry, error) {
 	added := false
+	lookupStart := time.Now()
+	reserves, lookups, err := s.matchingReserves(ctx, userID, raw)
+	timer.mark("reserveLookup", lookupStart)
+	if err != nil {
+		return nil, err
+	}
+	if timer != nil {
+		timer.reserveLookups += lookups
+	}
 	for _, entry := range raw {
-		if !collapsibleSettlementReason(entry.Reason) || entry.DiscussionID == "" {
-			continue
-		}
-		reserve, ok, err := s.matchingReserve(ctx, userID, entry)
-		if err != nil {
-			return nil, err
-		}
+		reserve, ok := reserves[entry.ID]
 		if !ok || seen[reserve.ID] {
 			continue
+		}
+		if timer != nil {
+			timer.reserveMatches++
 		}
 		raw = append(raw, reserve)
 		seen[reserve.ID] = true
@@ -322,53 +365,110 @@ func (s *PointsStore) resolvePointsHistoryWindow(ctx context.Context, userID str
 	return raw, nil
 }
 
-func (s *PointsStore) matchingReserve(ctx context.Context, userID string, settlement PointsLedgerEntry) (PointsLedgerEntry, bool, error) {
-	reserve, ok, err := s.matchingReserveByDiscussion(ctx, userID, settlement, settlement.DiscussionID)
-	if err != nil || ok {
-		return reserve, ok, err
-	}
-	if settlement.Reason == pointsReasonPlanning {
-		return s.matchingReserveByDiscussion(ctx, userID, settlement, "")
-	}
-	return PointsLedgerEntry{}, false, nil
+type pointsHistoryReserveKey struct {
+	settlementID        int64
+	settlementReason    string
+	reserveDiscussionID string
+	priority            int
 }
 
-func (s *PointsStore) matchingReserveByDiscussion(ctx context.Context, userID string, settlement PointsLedgerEntry, reserveDiscussionID string) (PointsLedgerEntry, bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT r.id, r.discussion_id, r.delta, r.reason, r.balance_after, r.created_at
-		FROM points_ledger r
-		WHERE r.user_id = ?
-			AND r.reason = ?
-			AND r.discussion_id = ?
-			AND r.id < ?
-			AND NOT EXISTS (
+func (s *PointsStore) matchingReserves(ctx context.Context, userID string, raw []PointsLedgerEntry) (map[int64]PointsLedgerEntry, int, error) {
+	keys := make([]pointsHistoryReserveKey, 0)
+	settlements := 0
+	for _, entry := range raw {
+		if !collapsibleSettlementReason(entry.Reason) || entry.DiscussionID == "" {
+			continue
+		}
+		settlements++
+		keys = append(keys, pointsHistoryReserveKey{
+			settlementID:        entry.ID,
+			settlementReason:    entry.Reason,
+			reserveDiscussionID: entry.DiscussionID,
+			priority:            0,
+		})
+		if entry.Reason == pointsReasonPlanning {
+			keys = append(keys, pointsHistoryReserveKey{
+				settlementID:        entry.ID,
+				settlementReason:    entry.Reason,
+				reserveDiscussionID: "",
+				priority:            1,
+			})
+		}
+	}
+	if len(keys) == 0 {
+		return map[int64]PointsLedgerEntry{}, 0, nil
+	}
+
+	var values strings.Builder
+	args := make([]any, 0, len(keys)*4+1)
+	for i, key := range keys {
+		if i > 0 {
+			values.WriteString(", ")
+		}
+		values.WriteString("(?, ?, ?, ?)")
+		args = append(args, key.settlementID, key.settlementReason, key.reserveDiscussionID, key.priority)
+	}
+	args = append(args, userID)
+
+	rows, err := s.db.QueryContext(ctx, `WITH settlement_keys(settlement_id, settlement_reason, reserve_discussion_id, priority) AS (
+			VALUES `+values.String()+`
+		), ranked AS (
+			SELECT
+				sk.settlement_id,
+				r.id,
+				r.discussion_id,
+				r.delta,
+				r.reason,
+				r.balance_after,
+				r.created_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY sk.settlement_id
+					ORDER BY sk.priority ASC, r.id DESC
+				) AS rn
+			FROM settlement_keys sk
+			JOIN points_ledger r
+				ON r.user_id = ?
+				AND r.reason = 'reserve:' || sk.settlement_reason
+				AND r.discussion_id = sk.reserve_discussion_id
+				AND r.id < sk.settlement_id
+			WHERE NOT EXISTS (
 				SELECT 1 FROM points_ledger p
 				WHERE p.user_id = r.user_id
-					AND p.reason = ?
+					AND p.reason = sk.settlement_reason
 					AND p.discussion_id = r.discussion_id
 					AND p.id > r.id
-					AND p.id < ?
+					AND p.id < sk.settlement_id
 			)
-		ORDER BY r.id DESC
-		LIMIT 1`,
-		userID, "reserve:"+settlement.Reason, reserveDiscussionID, settlement.ID,
-		settlement.Reason, settlement.ID)
-
-	var reserve PointsLedgerEntry
-	err := row.Scan(
-		&reserve.ID,
-		&reserve.DiscussionID,
-		&reserve.Delta,
-		&reserve.Reason,
-		&reserve.BalanceAfter,
-		&reserve.CreatedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return PointsLedgerEntry{}, false, nil
-	}
+		)
+		SELECT settlement_id, id, discussion_id, delta, reason, balance_after, created_at
+		FROM ranked
+		WHERE rn = 1`, args...)
 	if err != nil {
-		return PointsLedgerEntry{}, false, err
+		return nil, settlements, err
 	}
-	return reserve, true, nil
+	defer rows.Close()
+
+	out := make(map[int64]PointsLedgerEntry)
+	for rows.Next() {
+		var settlementID int64
+		var reserve PointsLedgerEntry
+		if err := rows.Scan(
+			&settlementID,
+			&reserve.ID,
+			&reserve.DiscussionID,
+			&reserve.Delta,
+			&reserve.Reason,
+			&reserve.BalanceAfter,
+			&reserve.CreatedAt,
+		); err != nil {
+			return nil, settlements, err
+		}
+		out[settlementID] = reserve
+	}
+	if err := rows.Err(); err != nil {
+		return nil, settlements, err
+	}
+	return out, settlements, nil
 }
 
 func collapsibleSettlementReason(reason string) bool {

@@ -37,8 +37,9 @@ type discussionCreateRequest struct {
 	// filled in asynchronously and picked up the next time the discussion is
 	// fetched (e.g. when the player opens). CoverPrompt overrides the default
 	// prompt derived from the topic.
-	GenerateCover bool   `json:"generate_cover"`
-	CoverPrompt   string `json:"cover_prompt"`
+	GenerateCover bool                 `json:"generate_cover"`
+	CoverPrompt   string               `json:"cover_prompt"`
+	Plan          *planner.PlanRequest `json:"plan,omitempty"`
 }
 
 type discussionImproveRequest struct {
@@ -175,6 +176,25 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.GenerateCover {
 		s.startBackgroundCoverGeneration(s.requestUser(r).ID, d.ID, strings.TrimSpace(req.CoverPrompt), topic)
+	}
+	if req.Plan != nil && s.d.Planning != nil {
+		req.Plan.Topic = topic
+		if strings.TrimSpace(req.Plan.Language) == "" {
+			req.Plan.Language = strings.TrimSpace(req.Language)
+		}
+		conv, err := s.d.Planning.EnsureConversation(r.Context(), s.requestUser(r).ID, d.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
+			Role: "user",
+			Text: planner.ConversationInitialText(*req.Plan),
+			OpID: "initial:" + d.ID,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	writeJSON(w, d)
 }
