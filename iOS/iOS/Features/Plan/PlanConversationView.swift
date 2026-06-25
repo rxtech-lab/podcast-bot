@@ -16,6 +16,7 @@ struct PlanConversationView: View {
     @State private var errorMessage: String?
     @State private var pendingQuestion: QuestionPayload?
     @State private var selectedToolPart: PlanningPart?
+    @State private var selectedAttachment: AttachmentPreviewItem?
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
@@ -25,6 +26,7 @@ struct PlanConversationView: View {
     @State private var isLoadingHistory = false
     @State private var historyLoadingPulse = false
     @State private var editIsAtBottom = true
+    @State private var attachments: [PendingAttachment] = []
     @State private var shouldScrollToInitialBottom = false
     @State private var didRequestInitialBottomScroll = false
     @State private var selectedLanguage: String
@@ -80,6 +82,9 @@ struct PlanConversationView: View {
         }
         .sheet(item: $selectedToolPart) { part in
             PlanningToolDetailSheet(part: part)
+        }
+        .sheet(item: $selectedAttachment) { item in
+            AttachmentPreviewSheet(attachment: item.attachment)
         }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingSpeakerModels) {
@@ -150,25 +155,62 @@ struct PlanConversationView: View {
 
     @ViewBuilder
     private func textBubble(_ part: PlanningPart) -> some View {
-        let text = part.text ?? ""
-        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if part.role == "user" {
+        let text = part.displayText
+        let displayText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let messageAttachments = part.attachments ?? []
+        if part.role == "user" {
+            if !displayText.isEmpty || !messageAttachments.isEmpty {
                 HStack {
                     Spacer(minLength: 46)
-                    Text(text)
-                        .font(.body)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .background(Theme.accent, in: .rect(cornerRadius: 20))
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !displayText.isEmpty {
+                            Text(text)
+                                .font(.body)
+                                .foregroundStyle(.white)
+                        }
+                        if !messageAttachments.isEmpty {
+                            userAttachmentChips(messageAttachments)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(Theme.accent, in: .rect(cornerRadius: 20))
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
-            } else {
+            }
+        } else {
+            if !displayText.isEmpty {
                 assistantContent(text)
                     .font(.body)
                     .foregroundStyle(.primary)
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func userAttachmentChips(_ attachments: [Attachment]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
+                Button {
+                    selectedAttachment = AttachmentPreviewItem(attachment: attachment)
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: attachment.iconName)
+                            .font(.caption.weight(.semibold))
+                        Text(attachment.displayName)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .opacity(0.72)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.16), in: .capsule)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -399,7 +441,11 @@ struct PlanConversationView: View {
                     .foregroundStyle(.red)
                     .padding(.horizontal, 4)
             }
+            if !attachments.isEmpty {
+                AttachmentsRow(attachments: $attachments, showsButton: false)
+            }
             HStack(spacing: 10) {
+                AttachmentsRow(attachments: $attachments, compact: true, showsChips: false)
                 TextField("Message the planner", text: $input, axis: .vertical)
                     .lineLimit(1 ... 4)
                     .textFieldStyle(.plain)
@@ -446,7 +492,8 @@ struct PlanConversationView: View {
     // MARK: - Derived state
 
     private var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespaces).isEmpty
+        (!input.trimmingCharacters(in: .whitespaces).isEmpty || !attachments.apiAttachments.isEmpty)
+            && !attachments.isUploading
             && !isStreaming && !isGenerating && pendingQuestion == nil
     }
 
@@ -538,20 +585,27 @@ struct PlanConversationView: View {
 
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let ready = attachments.apiAttachments
+        guard !text.isEmpty || !ready.isEmpty else { return }
         input = ""
+        attachments = []
         // A vertical-axis TextField that is the first responder doesn't always
         // refresh its displayed text when the binding is reset synchronously inside
         // the send action. Re-assert the empty value on the next runloop so the
         // field visibly clears without dismissing the keyboard.
         DispatchQueue.main.async { input = "" }
-        send(prompt: text, attachments: [])
+        send(prompt: text.isEmpty ? String(localized: "Please use the attached files.", comment: "Fallback chat message when sending attachments without text") : text,
+             attachments: ready)
     }
 
     private func send(prompt: String, attachments: [Attachment]) {
         errorMessage = nil
         // Optimistic user bubble; the server echoes it back in the final parts.
-        parts.append(PlanningPart(kind: "text", id: "local-user-\(UUID().uuidString)", role: "user", text: prompt))
+        parts.append(PlanningPart(kind: "text",
+                                  id: "local-user-\(UUID().uuidString)",
+                                  role: "user",
+                                  text: prompt,
+                                  attachments: attachments.isEmpty ? nil : attachments))
         beginStream {
             APIClient(tokens: auth).planningConversationStream(id: discussion.id, prompt: prompt,
                                                                language: selectedLanguage,

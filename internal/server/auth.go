@@ -56,6 +56,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/login" || r.URL.Path == "/api/config" ||
 			r.URL.Path == "/api/revenuecat/webhook" ||
+			r.URL.Path == "/api/notion/oauth/callback" ||
 			isPublicShareResolve(r) ||
 			!strings.HasPrefix(r.URL.Path, "/api/") {
 			// The RevenueCat webhook carries no user/service credential; it is

@@ -524,6 +524,9 @@
         }
       }
     },
+    "Add" : {
+
+    },
     "Add link or search" : {
       "localizations" : {
         "zh-Hans" : {
@@ -682,6 +685,9 @@
         }
       }
     },
+    "Allow Access to More Pages" : {
+
+    },
     "Answered" : {
       "comment" : "Question card status when answered"
     },
@@ -731,6 +737,9 @@
           }
         }
       }
+    },
+    "Attachment" : {
+      "comment" : "Fallback name for an attached file"
     },
     "Audio message" : {
       "comment" : "Fallback label for a voice message whose transcript is unavailable",
@@ -986,6 +995,9 @@
         }
       }
     },
+    "Checking Notion" : {
+
+    },
     "Chinese (Simplified)" : {
       "comment" : "Podcast language option",
       "localizations" : {
@@ -1142,6 +1154,9 @@
           }
         }
       }
+    },
+    "Connect to Notion" : {
+
     },
     "Copied User ID" : {
       "localizations" : {
@@ -3781,6 +3796,9 @@
         }
       }
     },
+    "No preview is available for this attachment." : {
+
+    },
     "No Private %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3959,6 +3977,9 @@
           }
         }
       }
+    },
+    "Notion Pages" : {
+
     },
     "OK" : {
       "localizations" : {
@@ -4161,6 +4182,9 @@
           }
         }
       }
+    },
+    "Pick Notion Page" : {
+
     },
     "Pick your speakers" : {
       "localizations" : {
@@ -4453,6 +4477,9 @@
           }
         }
       }
+    },
+    "Please use the attached files." : {
+      "comment" : "Fallback chat message when sending attachments without text"
     },
     "Podcast" : {
       "comment" : "Fallback now-playing title when the discussion has no title or topic",
@@ -5502,6 +5529,9 @@
           }
         }
       }
+    },
+    "Search pages" : {
+
     },
     "Search public %@" : {
       "localizations" : {

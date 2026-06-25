@@ -473,6 +473,35 @@ final class APIClient: Sendable {
         )
     }
 
+    func notionStatus() async throws -> NotionStatusResponse {
+        try await get("/api/notion/status")
+    }
+
+    func notionAuthURL() async throws -> URL {
+        let response: NotionAuthURLResponse = try await get("/api/notion/oauth/url")
+        guard let url = URL(string: response.authURL) else {
+            throw APIError.decoding("invalid Notion OAuth URL")
+        }
+        return url
+    }
+
+    func searchNotionPages(query: String) async throws -> [NotionPageDTO] {
+        let response: NotionPageSearchResponse = try await send(
+            "POST",
+            "/api/notion/pages/search",
+            body: NotionPageSearchRequest(query: query)
+        )
+        return response.pages
+    }
+
+    func notionPageAttachment(pageID: String) async throws -> UploadResponse {
+        try await send(
+            "POST",
+            "/api/notion/pages/attachment",
+            body: NotionPageAttachmentRequest(pageID: pageID)
+        )
+    }
+
     /// Transcribes an already-uploaded voice message server-side (gateway whisper)
     /// when the device can't transcribe it on-device. Returns the recognized text,
     /// which may be empty if the audio held no speech.

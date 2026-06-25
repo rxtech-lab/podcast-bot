@@ -204,6 +204,16 @@ type Env struct {
 	MarkitdownServerURL string
 	MarkitdownAPIKey    string
 
+	// Notion OAuth configuration. NOTION_OAUTH_REDIRECT_URI must match the
+	// redirect URI registered in Notion (typically the API callback endpoint).
+	// NOTION_APP_CALLBACK_URL is where the API sends the browser after storing
+	// the workspace token, so the native app can resume the picker.
+	NotionOAuthClientID     string
+	NotionOAuthClientSecret string
+	NotionOAuthRedirectURI  string
+	NotionAppCallbackURL    string
+	NotionAPIBaseURL        string
+
 	// S3 settings for uploading finished media. When S3Bucket is empty the
 	// engine keeps serving media from local disk (no upload). S3Endpoint is
 	// for S3-compatible APIs such as R2; S3DownloadBaseURL is an optional
@@ -303,20 +313,25 @@ func LoadEnv() (*Env, error) {
 		OutDir:                           strings.TrimSpace(os.Getenv("OUT_DIR")),
 		PersistentRoot:                   strings.TrimSpace(os.Getenv("SERIES_ROOT")),
 
-		DashboardOrigins:      splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
-		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
-		AuthIssuer:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
-		WebsiteBaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("WEBSITE_BASE_URL")), "/"),
-		APNSKeyID:             strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
-		APNSTeamID:            strings.TrimSpace(os.Getenv("APNS_TEAM_ID")),
-		APNSBundleID:          strings.TrimSpace(os.Getenv("APNS_BUNDLE_ID")),
-		APNSKeyBase64:         strings.TrimSpace(os.Getenv("APNS_KEY_BASE64")),
-		APNSEnvironment:       strings.TrimSpace(os.Getenv("APNS_ENVIRONMENT")),
-		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
-		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
-		FirecrawlAPIKey:       strings.TrimSpace(os.Getenv("FIRECRAWL_API_KEY")),
-		MarkitdownServerURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("MARKITDOWN_SERVER_URL")), "/"),
-		MarkitdownAPIKey:      strings.TrimSpace(os.Getenv("MARKITDOWN_API_KEY")),
+		DashboardOrigins:        splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
+		DashboardServiceToken:   strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
+		AuthIssuer:              strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
+		WebsiteBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("WEBSITE_BASE_URL")), "/"),
+		APNSKeyID:               strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
+		APNSTeamID:              strings.TrimSpace(os.Getenv("APNS_TEAM_ID")),
+		APNSBundleID:            strings.TrimSpace(os.Getenv("APNS_BUNDLE_ID")),
+		APNSKeyBase64:           strings.TrimSpace(os.Getenv("APNS_KEY_BASE64")),
+		APNSEnvironment:         strings.TrimSpace(os.Getenv("APNS_ENVIRONMENT")),
+		SearchAPIKey:            strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
+		SearchAPIURL:            strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
+		FirecrawlAPIKey:         strings.TrimSpace(os.Getenv("FIRECRAWL_API_KEY")),
+		MarkitdownServerURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("MARKITDOWN_SERVER_URL")), "/"),
+		MarkitdownAPIKey:        strings.TrimSpace(os.Getenv("MARKITDOWN_API_KEY")),
+		NotionOAuthClientID:     strings.TrimSpace(os.Getenv("NOTION_OAUTH_CLIENT_ID")),
+		NotionOAuthClientSecret: strings.TrimSpace(os.Getenv("NOTION_OAUTH_CLIENT_SECRET")),
+		NotionOAuthRedirectURI:  strings.TrimSpace(os.Getenv("NOTION_OAUTH_REDIRECT_URI")),
+		NotionAppCallbackURL:    strings.TrimSpace(os.Getenv("NOTION_APP_CALLBACK_URL")),
+		NotionAPIBaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("NOTION_API_BASE_URL")), "/"),
 
 		S3Bucket:          strings.TrimSpace(os.Getenv("S3_BUCKET")),
 		S3Region:          strings.TrimSpace(os.Getenv("S3_REGION")),
@@ -354,6 +369,12 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.OutDir == "" {
 		e.OutDir = "./out"
+	}
+	if e.NotionAppCallbackURL == "" {
+		e.NotionAppCallbackURL = "debatepod://notion-callback"
+	}
+	if e.NotionAPIBaseURL == "" {
+		e.NotionAPIBaseURL = "https://api.notion.com"
 	}
 	e.PointsProductGrants = parseProductGrants()
 	if e.PersistentRoot == "" {

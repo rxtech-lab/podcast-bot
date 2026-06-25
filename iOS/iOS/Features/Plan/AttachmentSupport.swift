@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import AuthenticationServices
 
 /// A file the user picked to attach, tracked through upload and server
 /// finalization. Documents carry markdown; images carry a direct URL.
@@ -35,6 +36,125 @@ extension Array where Element == PendingAttachment {
     var apiAttachments: [Attachment] { compactMap(\.apiAttachment) }
     /// True while any attachment is still uploading/parsing.
     var isUploading: Bool { contains { $0.status == .uploading } }
+}
+
+struct AttachmentPreviewItem: Identifiable, Hashable {
+    var attachment: Attachment
+
+    var id: String {
+        [
+            attachment.filename,
+            attachment.url ?? "",
+            attachment.mimeType ?? "",
+            String(attachment.markdown?.hashValue ?? 0),
+        ].joined(separator: "|")
+    }
+}
+
+struct AttachmentPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let attachment: Attachment
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if attachment.isImageAttachment, let url = attachment.previewURL {
+                    imagePreview(url)
+                } else if let markdown = attachment.markdown?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !markdown.isEmpty {
+                    ScrollView {
+                        MarkdownText(markdown)
+                            .font(.body)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(20)
+                    }
+                } else {
+                    fallbackPreview
+                }
+            }
+            .navigationTitle(attachment.displayName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func imagePreview(_ url: URL) -> some View {
+        GeometryReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
+                    case .failure:
+                        fallbackPreview
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    default:
+                        ProgressView()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    }
+                }
+            }
+            .background(Theme.background)
+        }
+    }
+
+    private var fallbackPreview: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(attachment.displayName, systemImage: attachment.iconName)
+                .font(.headline)
+            if let mimeType = attachment.mimeType, !mimeType.isEmpty {
+                Text(mimeType)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            if let url = attachment.previewURL {
+                Link(url.absoluteString, destination: url)
+                    .font(.callout)
+                    .lineLimit(3)
+            } else {
+                Text("No preview is available for this attachment.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Theme.background)
+    }
+}
+
+extension Attachment {
+    var displayName: String {
+        let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? String(localized: "Attachment", comment: "Fallback name for an attached file") : trimmed
+    }
+
+    var previewURL: URL? {
+        guard let url, !url.isEmpty else { return nil }
+        return URL(string: url)
+    }
+
+    var isImageAttachment: Bool {
+        if mimeType?.lowercased().hasPrefix("image/") == true {
+            return true
+        }
+        let name = filename.lowercased()
+        return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif"].contains { name.hasSuffix($0) }
+    }
+
+    var iconName: String {
+        if isImageAttachment { return "photo.fill" }
+        if mimeType?.contains("notion") == true { return "doc.text.magnifyingglass" }
+        return "doc.text.fill"
+    }
 }
 
 /// File types markitdown can parse. `.item` is included as a permissive
@@ -72,6 +192,12 @@ struct AttachmentsRow: View {
 
     @State private var showingImporter = false
     @State private var showingPhotos = false
+    @State private var showingNotionPicker = false
+    @State private var notionConnected = false
+    @State private var notionStatusLoaded = false
+    @State private var notionStatusLoading = false
+    @State private var notionAuthSession: ASWebAuthenticationSession?
+    @State private var presentationProvider = AttachmentWebAuthPresentationContextProvider()
     @State private var selectedPhotos: [PhotosPickerItem] = []
 
     var body: some View {
@@ -90,6 +216,22 @@ struct AttachmentsRow: View {
             }
             if showsButton {
                 Menu {
+                    Button {
+                        guard notionStatusLoaded else { return }
+                        if notionConnected {
+                            showingNotionPicker = true
+                        } else {
+                            connectNotion()
+                        }
+                    } label: {
+                        if notionStatusLoaded {
+                            Label(notionConnected ? "Pick Notion Page" : "Connect to Notion",
+                                  systemImage: notionConnected ? "doc.text.magnifyingglass" : "link.badge.plus")
+                        } else {
+                            Label("Checking Notion", systemImage: "hourglass")
+                        }
+                    }
+                    .disabled(!notionStatusLoaded)
                     Button {
                         showingPhotos = true
                     } label: {
@@ -122,6 +264,14 @@ struct AttachmentsRow: View {
         .photosPicker(isPresented: $showingPhotos, selection: $selectedPhotos, matching: .images)
         .onChange(of: selectedPhotos) { _, items in
             importPhotos(items)
+        }
+        .sheet(isPresented: $showingNotionPicker) {
+            NotionPagePickerSheet { pages in
+                importNotionPages(pages)
+            }
+        }
+        .task {
+            await loadNotionStatus()
         }
     }
 
@@ -241,12 +391,232 @@ struct AttachmentsRow: View {
         selectedPhotos = []
     }
 
+    private func importNotionPages(_ pages: [NotionPageDTO]) {
+        guard !pages.isEmpty else { return }
+        let api = APIClient(tokens: auth)
+        for page in pages {
+            let filename = "\(page.title.isEmpty ? "Notion page" : page.title).md"
+            let pending = PendingAttachment(filename: filename, status: .uploading, markdown: nil, url: page.url, mimeType: "text/markdown+notion")
+            attachments.append(pending)
+            let id = pending.id
+            Task {
+                do {
+                    let resp = try await api.notionPageAttachment(pageID: page.id)
+                    updateStatus(id, status: .ready, response: resp)
+                } catch {
+                    let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                    updateStatus(id, status: .failed(message), response: nil)
+                }
+            }
+        }
+    }
+
     private func updateStatus(_ id: UUID, status: PendingAttachment.Status, response: UploadResponse?) {
         guard let idx = attachments.firstIndex(where: { $0.id == id }) else { return }
         attachments[idx].status = status
         attachments[idx].markdown = response?.markdown
         attachments[idx].url = response?.url
         attachments[idx].mimeType = response?.mimeType
+    }
+
+    private func loadNotionStatus() async {
+        guard !notionStatusLoaded, !notionStatusLoading else { return }
+        notionStatusLoading = true
+        defer {
+            notionStatusLoading = false
+            notionStatusLoaded = true
+        }
+        do {
+            let status = try await APIClient(tokens: auth).notionStatus()
+            notionConnected = status.connected
+        } catch {
+            notionConnected = false
+        }
+    }
+
+    private func connectNotion() {
+        let api = APIClient(tokens: auth)
+        Task {
+            do {
+                let url = try await api.notionAuthURL()
+                let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "debatepod") { _, error in
+                    Task { @MainActor in
+                        notionAuthSession = nil
+                        guard error == nil else { return }
+                        do {
+                            let status = try await api.notionStatus()
+                            notionConnected = status.connected
+                            notionStatusLoaded = true
+                            if status.connected {
+                                showingNotionPicker = true
+                            }
+                        } catch {
+                            notionConnected = false
+                            notionStatusLoaded = true
+                        }
+                    }
+                }
+                session.presentationContextProvider = presentationProvider
+                session.prefersEphemeralWebBrowserSession = false
+                notionAuthSession = session
+                session.start()
+            } catch {
+                let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                attachments.append(PendingAttachment(filename: "Notion", status: .failed(message), markdown: nil))
+            }
+        }
+    }
+}
+
+private struct NotionPagePickerSheet: View {
+    @Environment(AuthManager.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+
+    var onAdd: ([NotionPageDTO]) -> Void
+
+    @State private var query = ""
+    @State private var pages: [NotionPageDTO] = []
+    @State private var selectedIDs = Set<String>()
+    @State private var selectedPagesByID: [String: NotionPageDTO] = [:]
+    @State private var isLoading = false
+    @State private var isConnecting = false
+    @State private var errorMessage: String?
+    @State private var notionAuthSession: ASWebAuthenticationSession?
+    @State private var presentationProvider = AttachmentWebAuthPresentationContextProvider()
+
+    var selectedPages: [NotionPageDTO] {
+        selectedIDs.compactMap { selectedPagesByID[$0] }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+                if isLoading && pages.isEmpty {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                }
+                ForEach(pages) { page in
+                    Button {
+                        toggle(page)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: selectedIDs.contains(page.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selectedIDs.contains(page.id) ? Theme.accent : Theme.secondaryText)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(page.title.isEmpty ? "Untitled" : page.title)
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                if let url = page.url, !url.isEmpty {
+                                    Text(url)
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.secondaryText)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Notion Pages")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Search pages")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        allowMorePages()
+                    } label: {
+                        Label("Allow Access to More Pages", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(isConnecting)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        onAdd(selectedPages)
+                        dismiss()
+                    }
+                    .disabled(selectedIDs.isEmpty)
+                }
+            }
+            .task(id: query) {
+                await search()
+            }
+        }
+    }
+
+    private func toggle(_ page: NotionPageDTO) {
+        if selectedIDs.contains(page.id) {
+            selectedIDs.remove(page.id)
+            selectedPagesByID.removeValue(forKey: page.id)
+        } else {
+            selectedIDs.insert(page.id)
+            selectedPagesByID[page.id] = page
+        }
+    }
+
+    private func search() async {
+        let currentQuery = query
+        isLoading = true
+        errorMessage = nil
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled else { return }
+        do {
+            let result = try await APIClient(tokens: auth).searchNotionPages(query: currentQuery)
+            guard !Task.isCancelled, currentQuery == query else { return }
+            pages = result
+        } catch {
+            guard !Task.isCancelled, currentQuery == query else { return }
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    private func allowMorePages() {
+        guard !isConnecting else { return }
+        isConnecting = true
+        errorMessage = nil
+        let api = APIClient(tokens: auth)
+        Task {
+            do {
+                let url = try await api.notionAuthURL()
+                let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "debatepod") { _, error in
+                    Task { @MainActor in
+                        notionAuthSession = nil
+                        isConnecting = false
+                        guard error == nil else { return }
+                        await search()
+                    }
+                }
+                session.presentationContextProvider = presentationProvider
+                session.prefersEphemeralWebBrowserSession = false
+                notionAuthSession = session
+                session.start()
+            } catch {
+                isConnecting = false
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+}
+
+@MainActor
+private final class AttachmentWebAuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
     }
 }
 

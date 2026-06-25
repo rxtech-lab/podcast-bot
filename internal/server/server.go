@@ -317,6 +317,11 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("DELETE /api/market/stations/{id}/like", s.handleMarketUnlike)
 		s.mux.HandleFunc("GET /api/points/balance", s.handlePointsBalance)
 		s.mux.HandleFunc("GET /api/points/history", s.handlePointsHistory)
+		s.mux.HandleFunc("GET /api/notion/status", s.handleNotionStatus)
+		s.mux.HandleFunc("GET /api/notion/oauth/url", s.handleNotionAuthURL)
+		s.mux.HandleFunc("GET /api/notion/oauth/callback", s.handleNotionOAuthCallback)
+		s.mux.HandleFunc("POST /api/notion/pages/search", s.handleNotionSearchPages)
+		s.mux.HandleFunc("POST /api/notion/pages/attachment", s.handleNotionPageAttachment)
 	}
 	if s.apns != nil && d.Bus != nil && d.Discussions != nil {
 		go s.watchPushEvents()

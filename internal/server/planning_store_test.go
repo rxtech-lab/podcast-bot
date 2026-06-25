@@ -7,6 +7,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/planner"
 )
 
 func newTestPlanningStore(t *testing.T) (*DiscussionStore, *PlanningStore, string) {
@@ -250,5 +251,64 @@ Current plan settings:
 	parts = planningConversationParts([]planningTurnRow{{ID: 3, Role: "user", Text: withLanguage}})
 	if len(parts) != 1 || parts[0].Text != "Please make it more technical" {
 		t.Fatalf("language settings display text = %+v, want only visible message", parts)
+	}
+	withAttachmentBlock := `Please use this file
+
+The user uploaded these reference documents; ground the discussion in their content:
+
+--- notes.md ---
+# Notes`
+	parts = planningConversationParts([]planningTurnRow{{ID: 4, Role: "user", Text: withAttachmentBlock}})
+	if len(parts) != 1 || parts[0].Text != "Please use this file" {
+		t.Fatalf("attachment display text = %+v, want only visible message", parts)
+	}
+}
+
+func TestPlanningConversationIncludesUserAttachments(t *testing.T) {
+	ctx := context.Background()
+	ds, err := NewDiscussionStore(filepath.Join(t.TempDir(), "planning.db"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := NewPlanningStore(ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := ps.EnsureConversation(ctx, "owner", "discussion-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments := []planner.Attachment{{
+		Filename: "notes.md",
+		Markdown: "# Notes",
+		MIMEType: "text/markdown",
+	}}
+	req := planner.PlanRequest{
+		Topic:       "Business model for Web3 x Smart watch",
+		Language:    "zh-CN",
+		Discussants: 2,
+		Research:    true,
+		Attachments: attachments,
+	}
+	if err := ps.AppendTurn(ctx, conv.ID, planningTurnInput{
+		Role:        "user",
+		Text:        planner.ConversationInitialText(req),
+		Attachments: attachments,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := ps.Turns(ctx, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := planningConversationParts(turns)
+	if len(parts) != 1 || len(parts[0].Attachments) != 1 {
+		t.Fatalf("parts attachments = %+v, want one attachment", parts)
+	}
+	if parts[0].Text != "Business model for Web3 x Smart watch" {
+		t.Fatalf("part text = %q, want only topic", parts[0].Text)
+	}
+	if parts[0].Attachments[0].Filename != "notes.md" || parts[0].Attachments[0].Markdown != "# Notes" {
+		t.Fatalf("attachment = %+v, want persisted metadata", parts[0].Attachments[0])
 	}
 }

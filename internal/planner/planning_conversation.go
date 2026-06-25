@@ -85,7 +85,8 @@ Guidelines:
 - Afterwards you may keep refining with update_plan in response to the user, then call show_plan again only when the revised plan should replace the visible plan.
 - Keep the plan balanced, production-ready, and written in the requested language.
 - Do not output the plan as prose or JSON outside the write_plan / update_plan tool calls.
-- After show_plan succeeds, do not summarize or restate the plan. Reply with one short sentence in the requested language, meaning: "The plan is ready above. Ask me any questions or tell me what you'd like to change."`
+- After show_plan succeeds, do not summarize or restate the plan. Reply with one short plain-text sentence in the requested language, meaning: "The plan is ready above. Ask me any questions or tell me what you'd like to change."
+- That reply must be normal user-facing text only: no JSON, no object/dictionary, no key/value pairs, no code block, and no bilingual translation map.`
 
 // convDispatchKind classifies a tool result so the loop knows how to record it.
 type convDispatchKind int
@@ -293,7 +294,7 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 		if s.currentPlan == nil || s.currentPlan.Script == nil {
 			return "no plan has been written yet; call write_plan or update_plan first", dispatchTool, nil, "", true
 		}
-		return `Plan shown to the user above. Do not summarize or restate it. Reply with one short sentence in the requested language, meaning: "The plan is ready above. Ask me any questions or tell me what you'd like to change."`, dispatchPlan, s.currentPlan, "", false
+		return `Plan shown to the user above. Do not summarize or restate it. Reply with one short plain-text sentence in the requested language, meaning: "The plan is ready above. Ask me any questions or tell me what you'd like to change." The reply must be normal user-facing text only: no JSON, no object/dictionary, no key/value pairs, no code block, and no bilingual translation map.`, dispatchPlan, s.currentPlan, "", false
 	case "ask_question":
 		questionsJSON, err := questionsArg(tc.Arguments)
 		if err != nil {
