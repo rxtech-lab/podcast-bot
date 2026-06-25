@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { auth } from "@/app/lib/auth";
-import { getViewerDiscussion } from "@/app/lib/viewer";
+import { getViewerDiscussion, getViewerDiscussionLookup } from "@/app/lib/viewer";
 import { ExpiredView } from "@/app/components/DiscussionLanding";
 import { AccountMenu } from "@/app/components/AccountMenu";
 import { SignOutButton } from "@/app/components/SignOutButton";
@@ -58,7 +58,8 @@ export default async function PodcastViewerPage({ params }: Props) {
   // reaches only the public market endpoint (service token), so it succeeds for
   // public podcasts and returns null for private ones; a signed-in request can
   // also see the user's own private podcasts.
-  const signedIn = !!session?.user?.id;
+  const sessionAuthFailed = session?.error === "RefreshTokenError";
+  const signedIn = !!session?.user?.id && !!session?.accessToken && !sessionAuthFailed;
   // Trailing header control. Signed in → account dropdown with sign-out; viewing
   // a public podcast anonymously → a sign-in button. Both keep the viewer on this
   // page afterwards. The player aligns the dropdown panel left (it sits next to
@@ -79,12 +80,13 @@ export default async function PodcastViewerPage({ params }: Props) {
     <SignInButton redirectTo={`/p/${id}`} />
   );
 
-  const discussion = await getViewerDiscussion(id, session?.accessToken);
+  const lookup = await getViewerDiscussionLookup(id, signedIn ? session.accessToken : undefined);
+  const discussion = lookup.discussion;
   if (!discussion) {
-    // Couldn't see it anonymously: send a fresh visitor to sign in (they may own
-    // it, or it may be private), but a signed-in user simply can't see it (not
-    // theirs, not public, or expired).
-    if (!signedIn) {
+    // Couldn't see it anonymously, or the signed-in backend token was rejected:
+    // send the visitor through login. A valid signed-in user who still can't see
+    // it gets the unavailable state (not theirs, not public, or expired).
+    if (!signedIn || lookup.authFailed || sessionAuthFailed) {
       redirect(`/login?next=${encodeURIComponent(`/p/${id}`)}`);
     }
     return <ExpiredView />;

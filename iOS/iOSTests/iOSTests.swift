@@ -158,6 +158,89 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
     }
 
+    func testPodcastPlayerUniversalLinkParsesAsDiscussionDeepLink() throws {
+        let link = try XCTUnwrap(DeepLink(url: URL(string: "https://podcast.rxlab.app/p/discussion-1")!))
+
+        XCTAssertEqual(link, .publicDiscussion(id: "discussion-1"))
+    }
+
+    func testPlayerDiscussionUsesOwnedDetailBeforeMarketFallback() async throws {
+        var paths: [String] = []
+        URLProtocolStub.handler = { request in
+            paths.append(request.url?.path ?? "")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data("""
+            {"id":"discussion-1","topic":"Private topic","title":"Private title","status":"ready","language":"en","visibility":"private"}
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        let discussion = try await api.playerDiscussion(id: "discussion-1")
+
+        XCTAssertEqual(discussion.id, "discussion-1")
+        XCTAssertEqual(discussion.visibility, .private)
+        XCTAssertEqual(paths, ["/api/discussions/discussion-1"])
+    }
+
+    func testPlayerDiscussionFallsBackToMarketAndJoinsWhenOwnedDetailMissing() async throws {
+        var paths: [String] = []
+        URLProtocolStub.handler = { request in
+            paths.append(request.url?.path ?? "")
+            switch request.url?.path {
+            case "/api/discussions/discussion-1":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 404,
+                                               httpVersion: nil,
+                                               headerFields: nil)!
+                return (response, Data("not found".utf8))
+            case "/api/market/stations/discussion-1":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: nil)!
+                return (response, Data("""
+                {"id":"discussion-1","topic":"Public topic","title":"Public title","status":"ready","language":"en","visibility":"public"}
+                """.utf8))
+            case "/api/discussions/discussion-1/join":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 204,
+                                               httpVersion: nil,
+                                               headerFields: nil)!
+                return (response, Data())
+            default:
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 500,
+                                               httpVersion: nil,
+                                               headerFields: nil)!
+                return (response, Data("unexpected path".utf8))
+            }
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        let discussion = try await api.playerDiscussion(id: "discussion-1")
+
+        XCTAssertEqual(discussion.id, "discussion-1")
+        XCTAssertEqual(discussion.visibility, .public)
+        XCTAssertEqual(paths, [
+            "/api/discussions/discussion-1",
+            "/api/market/stations/discussion-1",
+            "/api/discussions/discussion-1/join",
+        ])
+    }
+
     func testMarketProfileDecodesCreatorAndStationsWithoutEmail() async throws {
         URLProtocolStub.handler = { request in
             XCTAssertEqual(request.url?.path, "/api/market/profile")

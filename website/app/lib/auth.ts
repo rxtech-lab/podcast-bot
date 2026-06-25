@@ -1,4 +1,6 @@
-import NextAuth from "next-auth";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import NextAuth, { type Session } from "next-auth";
 
 // rxlab-auth (auth.js / NextAuth) for the public podcast viewer. Mirrors the
 // dashboard's setup: the "rxlab" OIDC provider with refresh-token rotation, and
@@ -36,6 +38,36 @@ async function refreshAccessToken(refreshToken: string) {
     refreshToken: (tokens.refresh_token ?? refreshToken) as string,
     expiresAt: Math.floor(Date.now() / 1000) + tokens.expires_in,
   };
+}
+
+const E2E_AUTH_COOKIE = "podcast-viewer.e2e-user";
+
+function e2eAuthEnabled() {
+  return process.env.E2E_AUTH === "1";
+}
+
+async function e2eSession(): Promise<Session | null> {
+  const userID = (await cookies()).get(E2E_AUTH_COOKIE)?.value;
+  if (!userID) return null;
+  return {
+    user: {
+      id: userID,
+      name: "E2E Viewer",
+      email: "viewer@example.test",
+      image: null,
+    },
+    accessToken: `e2e-access-token:${userID}`,
+    expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  };
+}
+
+function redirectToFromOptions(options: unknown) {
+  if (options && typeof options === "object" && "redirectTo" in options) {
+    const redirectTo = (options as { redirectTo?: unknown }).redirectTo;
+    if (typeof redirectTo === "string" && redirectTo.length > 0) return redirectTo;
+    if (redirectTo != null) return String(redirectTo);
+  }
+  return "/";
 }
 
 const nextAuth = NextAuth({
@@ -114,4 +146,36 @@ const nextAuth = NextAuth({
   },
 });
 
-export const { handlers, signIn, signOut, auth } = nextAuth;
+export const { handlers } = nextAuth;
+
+export async function auth(): Promise<Session | null> {
+  if (e2eAuthEnabled()) return e2eSession();
+  return nextAuth.auth();
+}
+
+export async function signIn(
+  provider?: Parameters<typeof nextAuth.signIn>[0],
+  options?: Parameters<typeof nextAuth.signIn>[1],
+  authorizationParams?: Parameters<typeof nextAuth.signIn>[2]
+) {
+  if (e2eAuthEnabled()) {
+    const redirectTo = redirectToFromOptions(options);
+    (await cookies()).set(E2E_AUTH_COOKIE, "user-private", {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60,
+    });
+    redirect(redirectTo);
+  }
+  return nextAuth.signIn(provider, options, authorizationParams);
+}
+
+export async function signOut(options?: Parameters<typeof nextAuth.signOut>[0]) {
+  if (e2eAuthEnabled()) {
+    const redirectTo = redirectToFromOptions(options);
+    (await cookies()).delete(E2E_AUTH_COOKIE);
+    redirect(redirectTo);
+  }
+  return nextAuth.signOut(options);
+}

@@ -35,9 +35,11 @@ final class DeepLinkRouter {
         }
     }
 
-    /// Resolves the pending deep link into an open discussion. For a public
-    /// link, fetches the market station and records a participant. For a private
-    /// share link, joins via the token (which also returns the discussion).
+    /// Resolves the pending deep link into an open discussion. Player/public
+    /// links first try the signed-in user's own detail endpoint, so private
+    /// summary `/p/{id}` links can reopen the owner's podcast; public links fall
+    /// back to the market endpoint and record a participant. Private share links
+    /// join via the token, which also returns the discussion.
     func resolvePending(api: APIClient) async {
         guard let link = pending, !isResolving else { return }
         isResolving = true
@@ -45,8 +47,7 @@ final class DeepLinkRouter {
         do {
             switch link {
             case let .publicDiscussion(id):
-                let discussion = try await api.marketStation(id: id)
-                try? await api.joinDiscussion(id: id, token: nil)
+                let discussion = try await api.playerDiscussion(id: id)
                 opened = OpenedDiscussion(discussion: discussion, shareToken: nil)
             case let .sharedDiscussion(token):
                 let discussion = try await api.joinViaShare(token: token)
