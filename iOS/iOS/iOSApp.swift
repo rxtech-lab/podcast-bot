@@ -9,14 +9,18 @@
 import SwiftUI
 import TipKit
 import UIKit
+import UserNotifications
 import RevenueCat
+import Observation
 
 @main
 struct iOSApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var auth = AuthManager()
     @State private var purchases: PurchaseManager
     @State private var launchFlow = LaunchFlowStore()
     @State private var deepLinks = DeepLinkRouter()
+    @State private var push = PushNotificationManager()
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
@@ -44,14 +48,109 @@ struct iOSApp: App {
                 .environment(purchases)
                 .environment(launchFlow)
                 .environment(deepLinks)
+                .environment(push)
                 .tint(Theme.accent)
                 .scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    appDelegate.configure(deepLinks: deepLinks, push: push)
+                }
                 // Universal links (https://podcast.rxlab.app/d|s/...) arrive as a
                 // browsing user activity; custom-scheme links via onOpenURL.
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                     if let url = activity.webpageURL { deepLinks.handle(url: url) }
                 }
                 .onOpenURL { url in deepLinks.handle(url: url) }
+        }
+    }
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    private weak var deepLinks: DeepLinkRouter?
+    private weak var push: PushNotificationManager?
+    private var pendingNotificationURL: URL?
+
+    func configure(deepLinks: DeepLinkRouter, push: PushNotificationManager) {
+        self.deepLinks = deepLinks
+        self.push = push
+        UNUserNotificationCenter.current().delegate = self
+        if let pendingNotificationURL {
+            self.pendingNotificationURL = nil
+            deepLinks.handle(url: pendingNotificationURL)
+        }
+    }
+
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor [weak self] in
+            self?.push?.updateDeviceToken(deviceToken)
+        }
+    }
+
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Task { @MainActor [weak self] in
+            self?.push?.registrationError = error.localizedDescription
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        guard let raw = response.notification.request.content.userInfo["url"] as? String,
+              let url = URL(string: raw) else { return }
+        await MainActor.run {
+            if let deepLinks {
+                deepLinks.handle(url: url)
+            } else {
+                pendingNotificationURL = url
+            }
+        }
+    }
+}
+
+@Observable
+@MainActor
+final class PushNotificationManager {
+    var deviceToken: String?
+    var registrationError: String?
+
+    private var didRequestAuthorization = false
+    private var lastRegisteredKey: String?
+
+    var registrationKey: String {
+        [AppConfig.apnsEnvironment, deviceToken ?? ""].joined(separator: ":")
+    }
+
+    func requestAuthorizationIfNeeded() async {
+        guard !didRequestAuthorization else { return }
+        didRequestAuthorization = true
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+            guard granted else { return }
+            UIApplication.shared.registerForRemoteNotifications()
+        } catch {
+            registrationError = error.localizedDescription
+        }
+    }
+
+    func updateDeviceToken(_ tokenData: Data) {
+        deviceToken = tokenData.map { String(format: "%02x", $0) }.joined()
+    }
+
+    func syncRegisteredToken(api: APIClient, userID: String?) async {
+        guard let userID, let deviceToken, !deviceToken.isEmpty else { return }
+        let key = "\(userID):\(registrationKey)"
+        guard lastRegisteredKey != key else { return }
+        do {
+            try await api.registerPushToken(deviceToken, environment: AppConfig.apnsEnvironment)
+            lastRegisteredKey = key
+            registrationError = nil
+        } catch {
+            registrationError = error.localizedDescription
         }
     }
 }

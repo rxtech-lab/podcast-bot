@@ -16,11 +16,12 @@
 
 	<!-- Silent-push channel CloudKit uses to sync between devices. -->
 	<key>aps-environment</key>
-	<string>development</string>
+	<string>$(APS_ENVIRONMENT)</string>
 
 	<!-- Passkey / associated web credentials for rxlab auth. -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
+		<string>applinks:podcast.rxlab.app</string>
 		<string>webcredentials:rxlab.app</string>
 	</array>
 

@@ -54,6 +54,7 @@ type Deps struct {
 	// usage at job completion so a finished podcast is charged immediately (not
 	// lazily on a later discussion fetch). nil disables points charging.
 	Points       *server.PointsStore
+	APNS         *server.APNSClient
 	Queue        Queue
 	Log          *slog.Logger
 	DiscussionID string
@@ -503,6 +504,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			j.DownloadURL = downloadURL
 		})
 		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
+		notifyPodcastReady(ctx, deps, logger)
 		return
 	}
 
@@ -678,6 +680,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 		}
 	})
 	persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
+	notifyPodcastReady(ctx, deps, logger)
 }
 
 func fail(deps Deps, jobID string, log *slog.Logger, err error) {
@@ -707,6 +710,40 @@ func persistDiscussionResult(ctx context.Context, deps Deps, status server.Discu
 		return
 	}
 	_ = deps.Discussions.SetJobResult(ctx, deps.DiscussionID, status, downloadURL)
+}
+
+func notifyPodcastReady(ctx context.Context, deps Deps, log *slog.Logger) {
+	if deps.APNS == nil || deps.Discussions == nil || deps.DiscussionID == "" {
+		return
+	}
+	d, err := deps.Discussions.GetForNotification(ctx, deps.DiscussionID)
+	if err != nil {
+		log.Warn("podcast ready push discussion lookup failed", "discussion_id", deps.DiscussionID, "err", err)
+		return
+	}
+	if d == nil {
+		return
+	}
+	server.SendPushNotification(ctx, deps.Discussions, deps.APNS, d.OwnerUserID, server.PushNotification{
+		Kind:         server.PushKindPodcastReady,
+		DiscussionID: d.ID,
+		Title:        "Podcast finished",
+		Body:         pushDiscussionTitle(d, "Your podcast is ready to play."),
+		URL:          server.DiscussionDeepLink(deps.Env.WebsiteBaseURL, d.ID),
+	}, log)
+}
+
+func pushDiscussionTitle(d *server.Discussion, fallback string) string {
+	if d == nil {
+		return fallback
+	}
+	if title := strings.TrimSpace(d.Title); title != "" {
+		return title
+	}
+	if topic := strings.TrimSpace(d.Topic); topic != "" {
+		return topic
+	}
+	return fallback
 }
 
 func persistUsageSummary(ctx context.Context, deps Deps, jobID string, log *slog.Logger, orch *contentcreator.Orchestrator) {

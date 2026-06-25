@@ -14,6 +14,7 @@ struct RootView: View {
     @Environment(PurchaseManager.self) private var purchases
     @Environment(LaunchFlowStore.self) private var launchFlow
     @Environment(DeepLinkRouter.self) private var deepLinks
+    @Environment(PushNotificationManager.self) private var push
 
     @State private var launchPlan: LaunchPlanPresentation?
     @State private var didRunLaunchFlow = false
@@ -49,6 +50,11 @@ struct RootView: View {
                         }
                     }
                     .task { await startLaunchFlow() }
+                    .task { await push.requestAuthorizationIfNeeded() }
+                    .task(id: pushSyncKey) {
+                        await push.syncRegisteredToken(api: APIClient(tokens: auth),
+                                                       userID: auth.currentUser?.id)
+                    }
                     .sheet(item: $launchPlan) { plan in
                         LaunchFlowView(
                             steps: plan.steps,
@@ -90,6 +96,10 @@ struct RootView: View {
         case let .publicDiscussion(id): return "d:\(id)"
         case let .sharedDiscussion(token): return "s:\(token)"
         }
+    }
+
+    private var pushSyncKey: String {
+        "\(auth.currentUser?.id ?? ""):\(push.registrationKey)"
     }
 
     private func resolveDeepLink() async {

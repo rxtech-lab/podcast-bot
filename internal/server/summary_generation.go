@@ -27,6 +27,7 @@ type SummaryGenerationDeps struct {
 	Bus         *eventbus.Bus
 	Discussions *DiscussionStore
 	Points      *PointsStore
+	APNS        *APNSClient
 	Log         *slog.Logger
 }
 
@@ -184,7 +185,28 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		"completion_tokens", sum.CompletionTokens,
 		"total_tokens", sum.TotalTokens,
 		"cost_usd", sum.CostUSD)
+	notifySummaryReady(ctx, deps, input.DiscussionID)
 	publishSummaryEvent(deps, input.JobID, docType, string(SummaryReadyState))
+}
+
+func notifySummaryReady(ctx context.Context, deps SummaryGenerationDeps, discussionID string) {
+	if deps.APNS == nil || deps.Discussions == nil {
+		return
+	}
+	d, err := deps.Discussions.GetForNotification(ctx, discussionID)
+	if err != nil || d == nil {
+		if err != nil && deps.Log != nil {
+			deps.Log.Warn("summary ready push discussion lookup failed", "discussion_id", discussionID, "err", err)
+		}
+		return
+	}
+	SendPushNotification(ctx, deps.Discussions, deps.APNS, d.OwnerUserID, PushNotification{
+		Kind:         PushKindSummaryReady,
+		DiscussionID: d.ID,
+		Title:        "Summary ready",
+		Body:         pushDiscussionTitle(d, "Your podcast summary is ready."),
+		URL:          DiscussionDeepLink(deps.Env.WebsiteBaseURL, d.ID),
+	}, deps.Log)
 }
 
 func publishSummaryEvent(deps SummaryGenerationDeps, jobID, docType, status string) {

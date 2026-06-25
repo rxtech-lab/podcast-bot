@@ -140,33 +140,33 @@ type Discussion struct {
 	// discussion's whole lifecycle (planning + generation). It is the only
 	// usage figure shown to end users; the token/cost fields above are hidden
 	// from clients (zeroed) once the points economy is enabled.
-	PointsCharged       int64                `json:"points_charged"`
-	ShowUsageSummary    bool                 `json:"showUsageSummary"`
-	Visibility          DiscussionVisibility `json:"visibility"`
-	Cover               DiscussionCover      `json:"cover,omitempty"`
-	Creator             *CreatorProfile      `json:"creator,omitempty"`
-	LikeCount           int64                `json:"like_count"`
-	IsLiked             bool                 `json:"is_liked"`
-	IsOwner             bool                 `json:"is_owner"`
-	PublishedAt         *time.Time           `json:"published_at,omitempty"`
-	Script              *config.DebateTopic  `json:"script,omitempty"`
-	Markdown            string               `json:"markdown,omitempty"`
-	Sources             []config.Source      `json:"sources,omitempty"`
-	Researched          bool                 `json:"researched"`
-	Lines               []DiscussionLine     `json:"lines,omitempty"`
-	EditTurns           []DiscussionEditTurn `json:"edit_turns,omitempty"`
-	EditTurnsHasMore    bool                 `json:"edit_turns_has_more,omitempty"`
-	EditTurnsBefore     int64                `json:"edit_turns_before,omitempty"`
-	Progress            *DiscussionProgress  `json:"progress,omitempty"`
+	PointsCharged    int64                `json:"points_charged"`
+	ShowUsageSummary bool                 `json:"showUsageSummary"`
+	Visibility       DiscussionVisibility `json:"visibility"`
+	Cover            DiscussionCover      `json:"cover,omitempty"`
+	Creator          *CreatorProfile      `json:"creator,omitempty"`
+	LikeCount        int64                `json:"like_count"`
+	IsLiked          bool                 `json:"is_liked"`
+	IsOwner          bool                 `json:"is_owner"`
+	PublishedAt      *time.Time           `json:"published_at,omitempty"`
+	Script           *config.DebateTopic  `json:"script,omitempty"`
+	Markdown         string               `json:"markdown,omitempty"`
+	Sources          []config.Source      `json:"sources,omitempty"`
+	Researched       bool                 `json:"researched"`
+	Lines            []DiscussionLine     `json:"lines,omitempty"`
+	EditTurns        []DiscussionEditTurn `json:"edit_turns,omitempty"`
+	EditTurnsHasMore bool                 `json:"edit_turns_has_more,omitempty"`
+	EditTurnsBefore  int64                `json:"edit_turns_before,omitempty"`
+	Progress         *DiscussionProgress  `json:"progress,omitempty"`
 	// Summary is the content-free descriptor of the podcast's generated summary
 	// document. nil when no summary exists yet (e.g. the podcast hasn't finished).
 	// The Markdown body is never included here — it is fetched separately from the
 	// summary content endpoint when the summary view mounts. Populated lazily on
 	// the detail path only.
-	Summary             *SummaryMeta         `json:"summary,omitempty"`
-	AllowSendingMessage bool                 `json:"allowSendingMessage"`
-	CreatedAt           time.Time            `json:"created_at"`
-	UpdatedAt           time.Time            `json:"updated_at"`
+	Summary             *SummaryMeta `json:"summary,omitempty"`
+	AllowSendingMessage bool         `json:"allowSendingMessage"`
+	CreatedAt           time.Time    `json:"created_at"`
+	UpdatedAt           time.Time    `json:"updated_at"`
 }
 
 type DiscussionStore struct {
@@ -199,6 +199,13 @@ func NewDiscussionStore(dbPath, primaryURL, authToken string) (*DiscussionStore,
 		}
 	}
 	db.SetMaxOpenConns(1)
+	// The hosted libsql/Turso connector keeps a long-lived HTTP stream per
+	// connection. When that stream sits idle the server tears it down, and the
+	// next use fails with "stream is closed: driver: bad connection". Cap the
+	// connection lifetime/idle time so database/sql recycles the stream before
+	// it goes stale rather than handing back a dead one.
+	db.SetConnMaxIdleTime(30 * time.Second)
+	db.SetConnMaxLifetime(5 * time.Minute)
 	s := &DiscussionStore{db: db}
 	if err := s.ensureSchema(context.Background()); err != nil {
 		_ = s.Close()
@@ -366,9 +373,20 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			PRIMARY KEY(discussion_id, doc_type),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS user_push_tokens (
+			user_id TEXT NOT NULL,
+			token TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'sandbox',
+			platform TEXT NOT NULL DEFAULT 'ios',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(user_id, token, environment)
+		)`,
+		`CREATE INDEX IF NOT EXISTS user_push_tokens_user_env_idx
+			ON user_push_tokens(user_id, environment, updated_at DESC)`,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := s.exec(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -398,7 +416,7 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS native_discussions_market_idx
+	if _, err := s.exec(ctx, `CREATE INDEX IF NOT EXISTS native_discussions_market_idx
 		ON native_discussions(visibility, published_at DESC, created_at DESC, id DESC)`); err != nil {
 		return err
 	}
@@ -411,10 +429,20 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"script_json", "script_json TEXT NOT NULL DEFAULT ''"},
 		{"sources_json", "sources_json TEXT NOT NULL DEFAULT ''"},
 		{"markdown", "markdown TEXT NOT NULL DEFAULT ''"},
+		// op_id is a per-append idempotency key so the connection retry in s.exec
+		// cannot duplicate a turn (e.g. the "Current plan" history) when libsql
+		// applies the insert but the result read fails on a stale stream.
+		{"op_id", "op_id TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussion_edit_turns", col.name, col.def); err != nil {
 			return err
 		}
+	}
+	// Partial index: enforce op_id uniqueness only for real ids, so legacy rows
+	// (op_id = '') coexist and an INSERT OR IGNORE retry collapses to a no-op.
+	if _, err := s.exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS native_discussion_edit_turns_op_idx
+		ON native_discussion_edit_turns(op_id) WHERE op_id != ''`); err != nil {
+		return err
 	}
 	// Voice-message columns on transcript lines are newer than the table; backfill
 	// them on databases created before audio messages were supported.
@@ -518,9 +546,10 @@ func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp 
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO native_discussions
+	_, err = s.exec(ctx, `INSERT INTO native_discussions
 		(id, owner_user_id, topic, title, status, language, script_json, markdown, sources_json, researched, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
 		id, owner, topic, title, DiscussionPlanning, language, scriptJSON, resp.Markdown, sourcesJSON, boolInt(resp.Researched),
 		now.UnixMilli(), now.UnixMilli())
 	if err != nil {
@@ -569,9 +598,10 @@ func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, l
 	}
 	id := newJobID()
 	now := time.Now()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO native_discussions
+	_, err := s.exec(ctx, `INSERT INTO native_discussions
 		(id, owner_user_id, topic, title, status, language, script_json, markdown, sources_json, researched, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
 		id, owner, topic, "", DiscussionPlanning, language, "", "", "", 0,
 		now.UnixMilli(), now.UnixMilli())
 	if err != nil {
@@ -820,19 +850,26 @@ func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*D
 }
 
 func (s *DiscussionStore) Like(ctx context.Context, viewer, id string) (*Discussion, error) {
+	d, _, err := s.LikeWithCreated(ctx, viewer, id)
+	return d, err
+}
+
+func (s *DiscussionStore) LikeWithCreated(ctx context.Context, viewer, id string) (*Discussion, bool, error) {
 	if ok, err := s.isPublic(ctx, id); err != nil || !ok {
-		return nil, err
+		return nil, false, err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_likes
+	res, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_likes
 		(user_id, discussion_id, created_at) VALUES (?, ?, ?)`, viewer, id, time.Now().UnixMilli())
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return s.GetVisible(ctx, viewer, id)
+	d, err := s.GetVisible(ctx, viewer, id)
+	n, _ := res.RowsAffected()
+	return d, n > 0, err
 }
 
 func (s *DiscussionStore) Unlike(ctx context.Context, viewer, id string) (*Discussion, error) {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM native_discussion_likes WHERE user_id = ? AND discussion_id = ?`, viewer, id)
+	_, err := s.exec(ctx, `DELETE FROM native_discussion_likes WHERE user_id = ? AND discussion_id = ?`, viewer, id)
 	if err != nil {
 		return nil, err
 	}
@@ -847,7 +884,7 @@ func (s *DiscussionStore) UpsertCreatorProfile(ctx context.Context, profile Crea
 	if profile.ID == "" || profile.ID == "anonymous" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO creator_profiles
+	_, err := s.exec(ctx, `INSERT INTO creator_profiles
 		(user_id, display_name, username, avatar_url, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
@@ -897,6 +934,27 @@ func (s *DiscussionStore) creatorProfileOnce(ctx context.Context, viewer, creato
 	return &profile, nil
 }
 
+// exec runs a write statement, retrying on a transient libsql/Turso connection
+// error (e.g. "stream is closed: driver: bad connection"). The hosted libsql
+// driver surfaces a stale HTTP stream as a plain error rather than the
+// driver.ErrBadConn sentinel, so database/sql never retries it for us; the retry
+// here re-runs the statement on a fresh connection.
+//
+// IMPORTANT: the retry re-executes the statement, so callers must only pass
+// idempotent writes — UPDATE/DELETE, upserts (ON CONFLICT / INSERT OR IGNORE),
+// or inserts keyed so a re-run collapses to a no-op. A blind INSERT with an
+// autoincrement id must not use this path (it would duplicate on retry); make it
+// idempotent first or run it via s.db.ExecContext without retry.
+func (s *DiscussionStore) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := retryTransientDBConnection(ctx, func() error {
+		var execErr error
+		res, execErr = s.db.ExecContext(ctx, query, args...)
+		return execErr
+	})
+	return res, err
+}
+
 func retryTransientDBConnection(ctx context.Context, op func() error) error {
 	err := op()
 	if err == nil || !isTransientDBConnectionError(err) {
@@ -930,7 +988,7 @@ func (s *DiscussionStore) FollowCreator(ctx context.Context, follower, creatorID
 		return target, err
 	}
 	if follower != creatorID {
-		_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO creator_follows
+		_, err := s.exec(ctx, `INSERT OR IGNORE INTO creator_follows
 			(follower_user_id, creator_user_id, created_at) VALUES (?, ?, ?)`,
 			follower, creatorID, time.Now().UnixMilli())
 		if err != nil {
@@ -941,7 +999,7 @@ func (s *DiscussionStore) FollowCreator(ctx context.Context, follower, creatorID
 }
 
 func (s *DiscussionStore) UnfollowCreator(ctx context.Context, follower, creatorID string) (*CreatorProfile, error) {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM creator_follows WHERE follower_user_id = ? AND creator_user_id = ?`, follower, creatorID)
+	_, err := s.exec(ctx, `DELETE FROM creator_follows WHERE follower_user_id = ? AND creator_user_id = ?`, follower, creatorID)
 	if err != nil {
 		return nil, err
 	}
@@ -1077,7 +1135,7 @@ func (s *DiscussionStore) SetVisibility(ctx context.Context, owner, id string, v
 	if visibility == DiscussionPublic {
 		publishedAt = now
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+	res, err := s.exec(ctx, `UPDATE native_discussions SET
 		visibility = ?, published_at = ?, cover_type = ?, cover_image_url = ?, cover_image_key = ?,
 		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
@@ -1099,7 +1157,7 @@ func (s *DiscussionStore) SetVisibility(ctx context.Context, owner, id string, v
 // editor. Passing an empty cover clears the existing art.
 func (s *DiscussionStore) SetCover(ctx context.Context, owner, id string, cover DiscussionCover) (*Discussion, error) {
 	now := time.Now().UnixMilli()
-	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+	res, err := s.exec(ctx, `UPDATE native_discussions SET
 		cover_type = ?, cover_image_url = ?, cover_image_key = ?,
 		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
@@ -1167,6 +1225,42 @@ func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussio
 	return d, nil
 }
 
+func (s *DiscussionStore) GetByJobID(ctx context.Context, jobID string) (*Discussion, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+discussionSelectColumns+`
+		FROM native_discussions WHERE job_id = ? LIMIT 1`, jobID)
+	d, err := scanDiscussion(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	markDiscussionViewer(&d, d.OwnerUserID)
+	return &d, nil
+}
+
+func (s *DiscussionStore) GetForNotification(ctx context.Context, id string) (*Discussion, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+discussionSelectColumns+`
+		FROM native_discussions WHERE id = ?`, id)
+	d, err := scanDiscussion(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	markDiscussionViewer(&d, d.OwnerUserID)
+	return &d, nil
+}
+
 func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (*Discussion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+discussionSelectColumns+`
 		FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
@@ -1218,7 +1312,7 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+	res, err := s.exec(ctx, `UPDATE native_discussions SET
 		title = ?, language = ?, script_json = ?, markdown = ?, sources_json = ?, researched = ?, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
 		title, language, scriptJSON, resp.Markdown, sourcesJSON, boolInt(resp.Researched), time.Now().UnixMilli(), owner, id)
@@ -1261,7 +1355,7 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+	res, err := s.exec(ctx, `UPDATE native_discussions SET
 		script_json = ?, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
 		scriptJSON, time.Now().UnixMilli(), owner, id)
@@ -1275,7 +1369,7 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 }
 
 func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (*Discussion, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+	res, err := s.exec(ctx, `UPDATE native_discussions SET
 		status = ?, job_id = ?, prompt_tokens = 0, completion_tokens = 0, total_tokens = 0,
 		llm_cost_usd = 0, llm_cost_known = 0, tts_cost_usd = 0, music_cost_usd = 0, updated_at = ?
 		WHERE owner_user_id = ? AND id = ?`,
@@ -1290,13 +1384,13 @@ func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (
 }
 
 func (s *DiscussionStore) SetJobResult(ctx context.Context, id string, status DiscussionStatus, downloadURL string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET status = ?, download_url = ?, updated_at = ?
+	_, err := s.exec(ctx, `UPDATE native_discussions SET status = ?, download_url = ?, updated_at = ?
 		WHERE id = ?`, status, downloadURL, time.Now().UnixMilli(), id)
 	return err
 }
 
 func (s *DiscussionStore) SetUsage(ctx context.Context, id string, promptTokens, completionTokens, totalTokens int64, costUSD float64, costKnown bool, ttsCostUSD, musicCostUSD float64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE native_discussions SET
+	_, err := s.exec(ctx, `UPDATE native_discussions SET
 		prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, llm_cost_usd = ?, llm_cost_known = ?,
 		tts_cost_usd = ?, music_cost_usd = ?, updated_at = ?
 		WHERE id = ?`,
@@ -1306,7 +1400,7 @@ func (s *DiscussionStore) SetUsage(ctx context.Context, id string, promptTokens,
 }
 
 func (s *DiscussionStore) Delete(ctx context.Context, owner, id string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
+	res, err := s.exec(ctx, `DELETE FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
 	if err != nil {
 		return false, err
 	}
@@ -1338,9 +1432,14 @@ func (s *DiscussionStore) appendTurn(ctx context.Context, owner, id, role, text,
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO native_discussion_edit_turns
-		(discussion_id, role, text, script_json, sources_json, markdown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, role, text, scriptJSON, sourcesJSON, markdown, time.Now().UnixMilli())
+	// op_id is generated once per call, so the s.exec connection retry reuses it
+	// and INSERT OR IGNORE collapses a retried insert into a no-op — while two
+	// genuinely separate appends (even with identical text) get distinct ids and
+	// both persist.
+	opID := newJobID()
+	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_edit_turns
+		(op_id, discussion_id, role, text, script_json, sources_json, markdown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		opID, id, role, text, scriptJSON, sourcesJSON, markdown, time.Now().UnixMilli())
 	return err
 }
 
@@ -1440,7 +1539,18 @@ func (s *DiscussionStore) authorizeParticipation(ctx context.Context, viewer, id
 	return errDiscussionForbidden
 }
 
+// ReplaceTranscript rewrites the agent lines for a discussion. The whole
+// transaction is retried on a transient libsql connection error; the body is
+// idempotent (delete-all-agent-lines, then INSERT OR IGNORE, then bump
+// updated_at), so re-running it after a stale-stream failure yields the same
+// final state and never partially applies (a failed attempt rolls back).
 func (s *DiscussionStore) ReplaceTranscript(ctx context.Context, id string, lines []agent.TranscriptLine) error {
+	return retryTransientDBConnection(ctx, func() error {
+		return s.replaceTranscriptOnce(ctx, id, lines)
+	})
+}
+
+func (s *DiscussionStore) replaceTranscriptOnce(ctx context.Context, id string, lines []agent.TranscriptLine) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1612,7 +1722,7 @@ func (s *DiscussionStore) appendLine(ctx context.Context, id string, line Discus
 	if text == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
+	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_lines
 		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, strings.TrimSpace(line.Speaker), strings.TrimSpace(line.Role), strings.TrimSpace(line.Side),
@@ -1622,7 +1732,7 @@ func (s *DiscussionStore) appendLine(ctx context.Context, id string, line Discus
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE native_discussions SET updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id)
+	_, err = s.exec(ctx, `UPDATE native_discussions SET updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id)
 	return err
 }
 
@@ -1781,6 +1891,10 @@ func (s *DiscussionStore) ensureColumn(ctx context.Context, table, column, defin
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	// ALTER ADD COLUMN is not idempotent (a retry after a dropped result fails
+	// with "duplicate column name"), so it must not go through the retrying
+	// s.exec. The existence check above already guards re-runs; this is a
+	// startup-only path on a fresh connection.
 	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition))
 	return err
 }

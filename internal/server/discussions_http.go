@@ -324,6 +324,7 @@ func (s *Server) handleDiscussionPlan(w http.ResponseWriter, r *http.Request) {
 	if total, err := s.pointsCharged(r.Context(), d.ID); err == nil {
 		d.PointsCharged = total
 	}
+	s.notifyPlanReady(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	writeJSON(w, d)
 }
@@ -429,6 +430,7 @@ func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Reque
 	if total, err := s.pointsCharged(r.Context(), d.ID); err == nil {
 		d.PointsCharged = total
 	}
+	s.notifyPlanReady(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	_ = sse.send("done", d)
 }
@@ -535,6 +537,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 		updated.PointsCharged = total
 	}
 	s.clearDiscussionProgress(workCtx, id)
+	s.notifyPlanReady(workCtx, updated)
 	s.sanitizeDiscussionUsage(updated)
 	s.finishDiscussionPlanRun(id, run, nil)
 	_ = sse.send("done", updated)
@@ -831,6 +834,7 @@ func (s *Server) handleDiscussionSummaryGenerate(w http.ResponseWriter, r *http.
 		Bus:         s.d.Bus,
 		Discussions: s.d.Discussions,
 		Points:      s.d.Points,
+		APNS:        s.apns,
 		Log:         s.logger(),
 	}, input); err != nil {
 		if errors.Is(err, ErrSummaryNoTranscript) {

@@ -35,6 +35,7 @@ func startSummaryGeneration(deps Deps, jobID string, topic *config.DebateTopic, 
 		Bus:         deps.Bus,
 		Discussions: deps.Discussions,
 		Points:      deps.Points,
+		APNS:        deps.APNS,
 		Log:         deps.Log,
 	}, server.SummaryGenerationInput{
 		DiscussionID: deps.DiscussionID,

@@ -866,6 +866,10 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 	if uploader.Enabled() {
 		fmt.Fprintln(os.Stdout, "S3 upload enabled · bucket:", env.S3Bucket)
 	}
+	apns, err := server.NewAPNSClient(&jobEnv)
+	if err != nil {
+		log.Warn("APNs disabled", "err", err)
+	}
 
 	rt.srv = server.New(server.Deps{
 		Mode:           mode,
@@ -884,6 +888,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		ServiceToken:   env.DashboardServiceToken,
 		AuthIssuer:     env.AuthIssuer,
 		WebsiteBaseURL: env.WebsiteBaseURL,
+		APNS:           apns,
 		Uploader:       uploader,
 		ForceAudio:     forceAudio,
 		PodName:        ownerPodName(routingEnabled, env.PodName),
@@ -906,6 +911,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 				Jobs:        jobs,
 				Discussions: discussions,
 				Points:      points,
+				APNS:        apns,
 				Queue:       queue,
 				Log:         log,
 				Uploader:    uploader,

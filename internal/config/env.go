@@ -164,6 +164,16 @@ type Env struct {
 	// (…/s/{token}). Empty falls back to https://podcast.rxlab.app.
 	WebsiteBaseURL string
 
+	// APNs token-auth configuration for native push notifications. APNS_KEY_BASE64
+	// accepts a base64-encoded .p8 private key or the raw PEM .p8 contents.
+	// APNS_ENVIRONMENT is "sandbox" or "production". Empty APNs fields disable
+	// push sending while still allowing clients to register tokens.
+	APNSKeyID       string
+	APNSTeamID      string
+	APNSBundleID    string
+	APNSKeyBase64   string
+	APNSEnvironment string
+
 	// SearchAPIKey / SearchAPIURL configure the web-search backend the planner
 	// uses to ground a discussion plan in real sources when research is
 	// requested. SearchAPIKey comes from SEARCH_API_KEY; SearchAPIURL
@@ -290,6 +300,11 @@ func LoadEnv() (*Env, error) {
 		DashboardServiceToken: strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
 		AuthIssuer:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
 		WebsiteBaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("WEBSITE_BASE_URL")), "/"),
+		APNSKeyID:             strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
+		APNSTeamID:            strings.TrimSpace(os.Getenv("APNS_TEAM_ID")),
+		APNSBundleID:          strings.TrimSpace(os.Getenv("APNS_BUNDLE_ID")),
+		APNSKeyBase64:         strings.TrimSpace(os.Getenv("APNS_KEY_BASE64")),
+		APNSEnvironment:       strings.TrimSpace(os.Getenv("APNS_ENVIRONMENT")),
 		SearchAPIKey:          strings.TrimSpace(os.Getenv("SEARCH_API_KEY")),
 		SearchAPIURL:          strings.TrimSpace(os.Getenv("SEARCH_API_URL")),
 		FirecrawlAPIKey:       strings.TrimSpace(os.Getenv("FIRECRAWL_API_KEY")),
