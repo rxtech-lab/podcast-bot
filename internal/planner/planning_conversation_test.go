@@ -66,6 +66,9 @@ func TestConversationDispatchWritePlanHiddenUntilShowPlan(t *testing.T) {
 	if !strings.Contains(output, "Do not summarize") {
 		t.Fatalf("show_plan output should discourage plan summaries, got %q", output)
 	}
+	if !strings.Contains(output, "no JSON") || !strings.Contains(output, "no bilingual translation map") {
+		t.Fatalf("show_plan output should require a plain-text acknowledgement, got %q", output)
+	}
 	if shown == nil || shown.Script == nil || shown.Script.Title != "AI in Education" {
 		t.Fatalf("show_plan did not return the saved plan: %+v", shown)
 	}

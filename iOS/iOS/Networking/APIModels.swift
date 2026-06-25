@@ -84,7 +84,7 @@ struct ScriptDTO: Codable, Hashable, Sendable {
 
 /// A user-uploaded reference file. Documents carry markdown parsed by
 /// markitdown; images carry a URL so the engine can pass them to the model.
-struct Attachment: Codable, Sendable {
+struct Attachment: Codable, Hashable, Sendable {
     var filename: String
     var markdown: String?
     var url: String?
@@ -207,6 +207,64 @@ struct UploadCompleteRequest: Codable, Sendable {
         case key
         case filename
         case mimeType = "mime_type"
+    }
+}
+
+struct NotionStatusResponse: Codable, Sendable {
+    var connected: Bool
+    var workspaceID: String?
+    var workspaceName: String?
+    var workspaceIcon: String?
+
+    enum CodingKeys: String, CodingKey {
+        case connected
+        case workspaceID = "workspace_id"
+        case workspaceName = "workspace_name"
+        case workspaceIcon = "workspace_icon"
+    }
+}
+
+struct NotionAuthURLResponse: Codable, Sendable {
+    var authURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case authURL = "auth_url"
+    }
+}
+
+struct NotionPageDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var url: String?
+    var lastEditedTime: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case url
+        case lastEditedTime = "last_edited_time"
+    }
+}
+
+struct NotionPageSearchRequest: Codable, Sendable {
+    var query: String
+    var pageSize: Int = 25
+
+    enum CodingKeys: String, CodingKey {
+        case query
+        case pageSize = "page_size"
+    }
+}
+
+struct NotionPageSearchResponse: Codable, Sendable {
+    var pages: [NotionPageDTO]
+}
+
+struct NotionPageAttachmentRequest: Codable, Sendable {
+    var pageID: String
+
+    enum CodingKeys: String, CodingKey {
+        case pageID = "page_id"
     }
 }
 

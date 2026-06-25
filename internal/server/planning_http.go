@@ -153,7 +153,11 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		userText := planner.ConversationMessageText(prompt, req.Attachments, req.Language)
-		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{Role: "user", Text: userText}); err != nil {
+		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
+			Role:        "user",
+			Text:        userText,
+			Attachments: req.Attachments,
+		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

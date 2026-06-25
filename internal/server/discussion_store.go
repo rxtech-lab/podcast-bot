@@ -59,6 +59,18 @@ type MarketProfile struct {
 	Following []CreatorProfile `json:"following"`
 }
 
+type NotionConnection struct {
+	UserID        string    `json:"-"`
+	AccessToken   string    `json:"-"`
+	RefreshToken  string    `json:"-"`
+	BotID         string    `json:"bot_id,omitempty"`
+	WorkspaceID   string    `json:"workspace_id,omitempty"`
+	WorkspaceName string    `json:"workspace_name,omitempty"`
+	WorkspaceIcon string    `json:"workspace_icon,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 // Pagination bounds for listing discussions.
 const (
 	defaultDiscussionPageSize = 20
@@ -362,6 +374,17 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			joined_at INTEGER NOT NULL,
 			PRIMARY KEY(discussion_id, user_id),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS notion_connections (
+			user_id TEXT PRIMARY KEY,
+			access_token TEXT NOT NULL,
+			refresh_token TEXT NOT NULL DEFAULT '',
+			bot_id TEXT NOT NULL DEFAULT '',
+			workspace_id TEXT NOT NULL DEFAULT '',
+			workspace_name TEXT NOT NULL DEFAULT '',
+			workspace_icon TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
 		)`,
 		// Summary documents (Markdown) generated after a podcast finishes. Keyed by
 		// (discussion_id, doc_type) so additional document kinds (e.g. "ppt") can be
@@ -951,6 +974,55 @@ func (s *DiscussionStore) creatorProfileOnce(ctx context.Context, viewer, creato
 		return nil, nil
 	}
 	return &profile, nil
+}
+
+func (s *DiscussionStore) SaveNotionConnection(ctx context.Context, conn NotionConnection) error {
+	if s == nil || s.db == nil {
+		return errors.New("discussion store is not configured")
+	}
+	conn.UserID = strings.TrimSpace(conn.UserID)
+	conn.AccessToken = strings.TrimSpace(conn.AccessToken)
+	if conn.UserID == "" || conn.AccessToken == "" {
+		return errors.New("notion user id and access token are required")
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.exec(ctx, `INSERT INTO notion_connections
+		(user_id, access_token, refresh_token, bot_id, workspace_id, workspace_name, workspace_icon, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			access_token = excluded.access_token,
+			refresh_token = excluded.refresh_token,
+			bot_id = excluded.bot_id,
+			workspace_id = excluded.workspace_id,
+			workspace_name = excluded.workspace_name,
+			workspace_icon = excluded.workspace_icon,
+			updated_at = excluded.updated_at`,
+		conn.UserID, conn.AccessToken, conn.RefreshToken, conn.BotID, conn.WorkspaceID, conn.WorkspaceName, conn.WorkspaceIcon, now, now)
+	return err
+}
+
+func (s *DiscussionStore) NotionConnection(ctx context.Context, userID string) (*NotionConnection, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, nil
+	}
+	var conn NotionConnection
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx, `SELECT user_id, access_token, refresh_token, bot_id, workspace_id, workspace_name, workspace_icon, created_at, updated_at
+		FROM notion_connections WHERE user_id = ?`, userID).Scan(
+		&conn.UserID, &conn.AccessToken, &conn.RefreshToken, &conn.BotID, &conn.WorkspaceID, &conn.WorkspaceName, &conn.WorkspaceIcon, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	conn.CreatedAt = time.UnixMilli(created)
+	conn.UpdatedAt = time.UnixMilli(updated)
+	return &conn, nil
 }
 
 // exec runs a write statement, retrying on a transient libsql/Turso connection

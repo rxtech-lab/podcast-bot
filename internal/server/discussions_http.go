@@ -188,9 +188,10 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
-			Role: "user",
-			Text: planner.ConversationInitialText(*req.Plan),
-			OpID: "initial:" + d.ID,
+			Role:        "user",
+			Text:        planner.ConversationInitialText(*req.Plan),
+			Attachments: req.Plan.Attachments,
+			OpID:        "initial:" + d.ID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

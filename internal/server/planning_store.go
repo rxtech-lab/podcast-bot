@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/planner"
 )
 
 // PlanningConversationStatus tracks the lifecycle of a conversational planning
@@ -44,23 +46,24 @@ type PlanningConversation struct {
 // carry a tool_call_id + result (and, for write/update_plan, a plan snapshot);
 // question turns carry the question payload + (once answered) the answers.
 type planningTurnRow struct {
-	ID             int64
-	Seq            int64
-	Role           string
-	Text           string
-	ToolCallsJSON  string
-	ToolCallID     string
-	ToolName       string
-	ResultText     string
-	IsError        bool
-	ScriptJSON     string
-	SourcesJSON    string
-	Markdown       string
-	QuestionID     string
-	QuestionsJSON  string
-	AnswersJSON    string
-	QuestionStatus string
-	CreatedAt      int64
+	ID              int64
+	Seq             int64
+	Role            string
+	Text            string
+	AttachmentsJSON string
+	ToolCallsJSON   string
+	ToolCallID      string
+	ToolName        string
+	ResultText      string
+	IsError         bool
+	ScriptJSON      string
+	SourcesJSON     string
+	Markdown        string
+	QuestionID      string
+	QuestionsJSON   string
+	AnswersJSON     string
+	QuestionStatus  string
+	CreatedAt       int64
 }
 
 // planningTurnInput is what callers append. OpID is an idempotency key; when
@@ -69,6 +72,7 @@ type planningTurnRow struct {
 type planningTurnInput struct {
 	Role           string
 	Text           string
+	Attachments    []planner.Attachment
 	ToolCalls      []llm.ToolCall
 	ToolCallID     string
 	ToolName       string
@@ -89,10 +93,11 @@ type planningTurnInput struct {
 // turns into one card each so the iOS client renders a simple ordered list
 // (matching the linda-assistant conversation design).
 type PlanningPart struct {
-	Kind string `json:"kind"` // "text" | "tool"
-	ID   string `json:"id"`
-	Role string `json:"role,omitempty"` // text parts: "user" | "assistant"
-	Text string `json:"text,omitempty"`
+	Kind        string               `json:"kind"` // "text" | "tool"
+	ID          string               `json:"id"`
+	Role        string               `json:"role,omitempty"` // text parts: "user" | "assistant"
+	Text        string               `json:"text,omitempty"`
+	Attachments []planner.Attachment `json:"attachments,omitempty"`
 
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	ToolName   string          `json:"tool_name,omitempty"`
@@ -160,6 +165,7 @@ func (s *PlanningStore) ensureSchema(ctx context.Context) error {
 			seq INTEGER NOT NULL,
 			role TEXT NOT NULL,
 			text TEXT NOT NULL DEFAULT '',
+			attachments_json TEXT NOT NULL DEFAULT '',
 			tool_calls_json TEXT NOT NULL DEFAULT '',
 			tool_call_id TEXT NOT NULL DEFAULT '',
 			tool_name TEXT NOT NULL DEFAULT '',
@@ -187,7 +193,39 @@ func (s *PlanningStore) ensureSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.ensureColumn(ctx, "planning_turns", "attachments_json", "attachments_json TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *PlanningStore) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typ        string
+			notNull    int
+			defaultVal any
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition))
+	return err
 }
 
 func (s *PlanningStore) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -262,6 +300,14 @@ func (s *PlanningStore) AppendTurn(ctx context.Context, conversationID string, i
 	if opID == "" {
 		opID = newJobID()
 	}
+	attachmentsJSON := ""
+	if len(in.Attachments) > 0 {
+		b, err := json.Marshal(in.Attachments)
+		if err != nil {
+			return err
+		}
+		attachmentsJSON = string(b)
+	}
 	toolCallsJSON := ""
 	if len(in.ToolCalls) > 0 {
 		b, err := json.Marshal(in.ToolCalls)
@@ -288,10 +334,10 @@ func (s *PlanningStore) AppendTurn(ctx context.Context, conversationID string, i
 	}
 	now := time.Now().UnixMilli()
 	_, err := s.exec(ctx, `INSERT OR IGNORE INTO planning_turns
-		(op_id, conversation_id, seq, role, text, tool_calls_json, tool_call_id, tool_name, result_text, is_error,
+		(op_id, conversation_id, seq, role, text, attachments_json, tool_calls_json, tool_call_id, tool_name, result_text, is_error,
 		 script_json, sources_json, markdown, question_id, questions_json, answers_json, question_status, created_at)
-		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		opID, conversationID, conversationID, in.Role, in.Text, toolCallsJSON, in.ToolCallID, in.ToolName, in.ResultText, boolInt(in.IsError),
+		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		opID, conversationID, conversationID, in.Role, in.Text, attachmentsJSON, toolCallsJSON, in.ToolCallID, in.ToolName, in.ResultText, boolInt(in.IsError),
 		scriptJSON, sourcesJSON, in.Markdown, in.QuestionID, in.QuestionsJSON, in.AnswersJSON, in.QuestionStatus, now)
 	if err != nil {
 		return err
@@ -302,7 +348,7 @@ func (s *PlanningStore) AppendTurn(ctx context.Context, conversationID string, i
 
 // Turns returns every turn for a conversation, oldest first.
 func (s *PlanningStore) Turns(ctx context.Context, conversationID string) ([]planningTurnRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, seq, role, text, tool_calls_json, tool_call_id, tool_name, result_text,
+	rows, err := s.db.QueryContext(ctx, `SELECT id, seq, role, text, attachments_json, tool_calls_json, tool_call_id, tool_name, result_text,
 		is_error, script_json, sources_json, markdown, question_id, questions_json, answers_json, question_status, created_at
 		FROM planning_turns WHERE conversation_id = ? ORDER BY seq ASC`, conversationID)
 	if err != nil {
@@ -313,7 +359,7 @@ func (s *PlanningStore) Turns(ctx context.Context, conversationID string) ([]pla
 	for rows.Next() {
 		var r planningTurnRow
 		var isErr int64
-		if err := rows.Scan(&r.ID, &r.Seq, &r.Role, &r.Text, &r.ToolCallsJSON, &r.ToolCallID, &r.ToolName, &r.ResultText,
+		if err := rows.Scan(&r.ID, &r.Seq, &r.Role, &r.Text, &r.AttachmentsJSON, &r.ToolCallsJSON, &r.ToolCallID, &r.ToolName, &r.ResultText,
 			&isErr, &r.ScriptJSON, &r.SourcesJSON, &r.Markdown, &r.QuestionID, &r.QuestionsJSON, &r.AnswersJSON, &r.QuestionStatus, &r.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -404,7 +450,13 @@ func planningConversationParts(rows []planningTurnRow) []PlanningPart {
 	for _, r := range rows {
 		switch r.Role {
 		case "user":
-			parts = append(parts, PlanningPart{Kind: "text", ID: turnPartID(r), Role: "user", Text: planningUserDisplayText(r.Text)})
+			parts = append(parts, PlanningPart{
+				Kind:        "text",
+				ID:          turnPartID(r),
+				Role:        "user",
+				Text:        planningUserDisplayText(r.Text),
+				Attachments: planningTurnAttachments(r),
+			})
 		case "assistant":
 			if strings.TrimSpace(r.Text) != "" {
 				parts = append(parts, PlanningPart{Kind: "text", ID: turnPartID(r), Role: "assistant", Text: r.Text})
@@ -421,11 +473,25 @@ func planningConversationParts(rows []planningTurnRow) []PlanningPart {
 	return keepOnlyLatestVisiblePlan(parts)
 }
 
+func planningTurnAttachments(r planningTurnRow) []planner.Attachment {
+	if strings.TrimSpace(r.AttachmentsJSON) == "" {
+		return nil
+	}
+	var attachments []planner.Attachment
+	if err := json.Unmarshal([]byte(r.AttachmentsJSON), &attachments); err != nil {
+		return nil
+	}
+	return attachments
+}
+
 func planningUserDisplayText(text string) string {
 	const topicPrefix = "Topic:"
 	trimmed := strings.TrimSpace(text)
 	if idx := strings.Index(trimmed, "\n\nCurrent plan settings:"); idx >= 0 {
 		return strings.TrimSpace(trimmed[:idx])
+	}
+	if idx := strings.Index(trimmed, "\n\nThe user uploaded these reference documents;"); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
 	}
 	if !strings.Contains(trimmed, "Plan settings:") {
 		return trimmed

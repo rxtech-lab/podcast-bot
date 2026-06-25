@@ -126,6 +126,7 @@ struct PlanningPart: Codable, Sendable, Hashable, Identifiable {
     var id: String
     var role: String? = nil   // text parts: "user" | "assistant"
     var text: String? = nil
+    var attachments: [Attachment]? = nil
 
     var toolCallID: String? = nil
     var toolName: String? = nil
@@ -143,7 +144,7 @@ struct PlanningPart: Codable, Sendable, Hashable, Identifiable {
     var answers: AnyCodable? = nil
 
     enum CodingKeys: String, CodingKey {
-        case kind, id, role, text
+        case kind, id, role, text, attachments
         case toolCallID = "tool_call_id"
         case toolName = "tool_name"
         case status, input
@@ -156,6 +157,13 @@ struct PlanningPart: Codable, Sendable, Hashable, Identifiable {
 }
 
 extension PlanningPart {
+    var displayText: String {
+        guard role == "user" else {
+            return text ?? ""
+        }
+        return PlanningPart.userDisplayText(text ?? "")
+    }
+
     var isPlanCard: Bool {
         toolName == "show_plan" && script != nil
     }
@@ -174,6 +182,26 @@ extension PlanningPart {
         guard let questions, let questionID, let toolCallID else { return nil }
         return QuestionPayload(questionId: questionID, toolCallId: toolCallID,
                                toolName: toolName ?? "ask_question", questions: questions)
+    }
+
+    private static func userDisplayText(_ text: String) -> String {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = trimmed.range(of: "\n\nCurrent plan settings:") {
+            return String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let range = trimmed.range(of: "\n\nThe user uploaded these reference documents;") {
+            trimmed = String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard trimmed.contains("Plan settings:") else {
+            return trimmed
+        }
+        for line in trimmed.components(separatedBy: .newlines) {
+            let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("Topic:") {
+                return String(line.dropFirst("Topic:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return trimmed
     }
 }
 
