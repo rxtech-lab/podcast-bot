@@ -22,3 +22,23 @@ test("private podcast redirects to login, then opens after sign in", async ({ pa
   await expect(page.getByText("This is the private podcast transcript.")).toBeVisible();
   await expect(page.getByRole("button", { name: "E2E Viewer" })).toBeVisible();
 });
+
+test("private podcast with stale session stops on login instead of redirecting forever", async ({
+  page,
+  baseURL,
+}) => {
+  await page.context().addCookies([
+    {
+      name: "podcast-viewer.e2e-user",
+      value: "user-revoked",
+      url: baseURL ?? "http://127.0.0.1:3000",
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await page.goto("/p/private-podcast");
+
+  await expect(page).toHaveURL(/\/login\?next=%2Fp%2Fprivate-podcast$/);
+  await expect(page.getByRole("heading", { name: "Sign in to listen" })).toBeVisible();
+});
