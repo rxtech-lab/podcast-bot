@@ -23,7 +23,7 @@ struct SummaryView: View {
     @State private var isLoading = true
     @State private var loadError: String?
 
-    /// The temp file (PDF or Markdown) to hand to the system export sheet.
+    /// The temp file (PDF or Markdown) to hand to the system share sheet.
     @State private var exportFile: ExportedSummaryFile?
     @State private var isPreparingPDF = false
     @State private var exportError: String?
@@ -53,7 +53,7 @@ struct SummaryView: View {
                     }
                 }
                 .sheet(item: $exportFile) { file in
-                    SummaryDocumentExporter(url: file.url)
+                    FileShareSheet(url: file.url)
                 }
                 .sheet(isPresented: $showingNotionExport) {
                     NotionExportSheet(api: api, discussionID: discussionID, docType: docType)
@@ -154,7 +154,7 @@ struct SummaryView: View {
         }
     }
 
-    /// Fetches the server-rendered PDF and hands it to the export sheet. PDF
+    /// Fetches the server-rendered PDF and hands it to the share sheet. PDF
     /// rendering runs on Cloudflare and can take a few seconds; `isPreparingPDF`
     /// drives the menu label + the loading overlay meanwhile.
     private func downloadPDF() async {
@@ -170,7 +170,7 @@ struct SummaryView: View {
         }
     }
 
-    /// Writes the already-loaded Markdown body to a temp file and exports it.
+    /// Writes the already-loaded Markdown body to a temp file and shares it.
     private func downloadMarkdown() {
         guard let markdown = document?.markdown, !markdown.isEmpty else { return }
         do {
@@ -209,23 +209,10 @@ struct SummaryView: View {
 }
 
 /// A summary export (PDF or Markdown) sitting in a temp file, ready to hand to
-/// the system export sheet.
+/// the system share sheet.
 private struct ExportedSummaryFile: Identifiable {
     let id = UUID()
     let url: URL
-}
-
-/// Presents the iOS "save to Files / share" picker for an exported summary file.
-private struct SummaryDocumentExporter: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
-        picker.shouldShowFileExtensions = true
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 }
 
 /// Renders one ```mermaid fenced block natively. Falls back to showing the raw
@@ -281,6 +268,7 @@ struct NotionExportSheet: View {
     @State private var pages: [NotionPageDTO] = []
     @State private var selectedPageID: String?
     @State private var isExporting = false
+    @State private var isConnecting = false
     @State private var errorMessage: String?
     @State private var createdURL: URL?
     @State private var authSession: ASWebAuthenticationSession?
@@ -303,11 +291,19 @@ struct NotionExportSheet: View {
                         Button(phase == .done ? "Done" : "Cancel") { dismiss() }
                     }
                     if phase == .picking {
+                        ToolbarItemGroup(placement: .topBarTrailing) {
+                            Button {
+                                allowMorePages()
+                            } label: {
+                                Label("Allow Access to More Pages", systemImage: "folder.badge.plus")
+                            }
+                            .disabled(isConnecting || isExporting)
+                        }
                         ToolbarItem(placement: .confirmationAction) {
                             Button(isExporting ? "Exporting…" : "Export") {
                                 Task { await export() }
                             }
-                            .disabled(selectedPageID == nil || isExporting)
+                            .disabled(isExporting)
                         }
                     }
                 }
@@ -366,7 +362,7 @@ struct NotionExportSheet: View {
             } header: {
                 Text("Choose a parent page")
             } footer: {
-                Text("The summary is added as a new page inside the page you select.")
+                Text("Select a page to export inside it, or leave it empty to export at the root.")
             }
         }
         .searchable(text: $query, prompt: "Search pages")
@@ -468,18 +464,52 @@ struct NotionExportSheet: View {
     }
 
     private func export() async {
-        guard let parent = selectedPageID, !isExporting else { return }
+        await export(parentPageID: selectedPageID)
+    }
+
+    private func export(parentPageID: String?) async {
+        guard !isExporting else { return }
         isExporting = true
         errorMessage = nil
         defer { isExporting = false }
         do {
             let resp = try await api.exportSummaryToNotion(id: discussionID,
-                                                           parentPageID: parent,
+                                                           parentPageID: parentPageID,
                                                            docType: docType)
             createdURL = URL(string: resp.url)
             phase = .done
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func allowMorePages() {
+        guard !isConnecting else { return }
+        isConnecting = true
+        errorMessage = nil
+        Task {
+            do {
+                let url = try await api.notionAuthURL()
+                let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "debatepod") { _, error in
+                    Task { @MainActor in
+                        authSession = nil
+                        isConnecting = false
+                        guard error == nil else { return }
+                        if phase == .picking {
+                            await search()
+                        } else {
+                            await loadStatus()
+                        }
+                    }
+                }
+                session.presentationContextProvider = presentationProvider
+                session.prefersEphemeralWebBrowserSession = false
+                authSession = session
+                session.start()
+            } catch {
+                isConnecting = false
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 }

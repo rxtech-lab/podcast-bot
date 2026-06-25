@@ -269,10 +269,10 @@ struct NotionPageAttachmentRequest: Codable, Sendable {
 }
 
 /// POST /api/discussions/{id}/summary/notion request — exports a podcast's
-/// generated summary into the user's Notion workspace as a sub-page of the
-/// chosen parent page.
+/// generated summary into the user's Notion workspace. When `parentPageID` is
+/// nil, the server creates a private root-level page.
 struct NotionExportRequest: Codable, Sendable {
-    var parentPageID: String
+    var parentPageID: String?
     var docType: String?
 
     enum CodingKeys: String, CodingKey {

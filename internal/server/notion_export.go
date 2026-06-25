@@ -22,9 +22,11 @@ type notionExportResponse struct {
 }
 
 // handleExportSummaryToNotion writes a discussion's generated summary into the
-// requester's connected Notion workspace as a sub-page of a chosen parent page.
-// The summary Markdown (with the embedded "listen again" link) is converted to
-// Notion blocks. Same visibility gate as the other summary endpoints.
+// requester's connected Notion workspace. When parent_page_id is present, the
+// summary is created below that page; otherwise it is created as a private
+// root-level workspace page. The summary Markdown (with the embedded "listen
+// again" link) is converted to Notion blocks. Same visibility gate as the other
+// summary endpoints.
 func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
 	id := r.PathValue("id")
@@ -34,10 +36,6 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	parentPageID := strings.TrimSpace(req.ParentPageID)
-	if parentPageID == "" {
-		http.Error(w, "parent_page_id is required", http.StatusBadRequest)
-		return
-	}
 
 	// Visibility gate: only export summaries of discussions the user can see.
 	visible, err := s.d.Discussions.GetVisible(r.Context(), user.ID, id)
@@ -89,9 +87,10 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 // accepted in a single page-create / append-children request.
 const notionMaxChildrenPerRequest = 100
 
-// createNotionPage creates a page under parentPageID with the given title and
-// block children, returning the new page's URL and id. Children beyond Notion's
-// per-request cap are appended in follow-up batches.
+// createNotionPage creates a page under parentPageID, or at the workspace root
+// when parentPageID is empty, with the given title and block children. It returns
+// the new page's URL and id. Children beyond Notion's per-request cap are
+// appended in follow-up batches.
 func (s *Server) createNotionPage(ctx context.Context, token, parentPageID, title string, blocks []map[string]any) (string, string, error) {
 	first := blocks
 	var rest [][]map[string]any
@@ -107,7 +106,7 @@ func (s *Server) createNotionPage(ctx context.Context, token, parentPageID, titl
 	}
 
 	body := map[string]any{
-		"parent": map[string]any{"type": "page_id", "page_id": parentPageID},
+		"parent": notionPageParent(parentPageID),
 		"properties": map[string]any{
 			"title": map[string]any{
 				"title": []map[string]any{
@@ -134,6 +133,14 @@ func (s *Server) createNotionPage(ctx context.Context, token, parentPageID, titl
 		}
 	}
 	return created.URL, created.ID, nil
+}
+
+func notionPageParent(parentPageID string) map[string]any {
+	parentPageID = strings.TrimSpace(parentPageID)
+	if parentPageID == "" {
+		return map[string]any{"type": "workspace", "workspace": true}
+	}
+	return map[string]any{"type": "page_id", "page_id": parentPageID}
 }
 
 var (

@@ -126,7 +126,7 @@ struct PodcastPlayerView: View {
             get: { model?.downloadedPodcastFile },
             set: { model?.downloadedPodcastFile = $0 }
         )) { file in
-            PodcastDocumentExporter(url: file.url)
+            FileShareSheet(url: file.url)
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {
             if let model {
@@ -837,18 +837,6 @@ struct DownloadProgressSheet: View {
         .presentationDetents([.height(model.downloadErrorText == nil ? 220 : 320)])
         .interactiveDismissDisabled(model.isDownloadingPodcast)
     }
-}
-
-struct PodcastDocumentExporter: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
-        picker.shouldShowFileExtensions = true
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 }
 
 private struct PlanSheetView: View {
