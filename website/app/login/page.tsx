@@ -6,10 +6,11 @@ type Props = { searchParams: Promise<{ next?: string }> };
 // the rxlab OIDC flow, returning to the page the user was trying to reach.
 export default async function LoginPage({ searchParams }: Props) {
   const { next } = await searchParams;
-  const redirectTo = next && next.startsWith("/") ? next : "/";
+  const hasExplicitNext = next && next.startsWith("/");
+  const redirectTo = hasExplicitNext ? next : "/";
   const session = await auth();
-  if (session?.user?.id) {
-    // Already signed in — bounce straight to the target.
+  if (session?.user?.id && !hasExplicitNext) {
+    // Already signed in and no protected page explicitly requested login.
     const { redirect } = await import("next/navigation");
     redirect(redirectTo);
   }
