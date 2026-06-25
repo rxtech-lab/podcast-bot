@@ -84,6 +84,9 @@ type Deps struct {
 	// /api/discussions/{id}/planning* routes. Wired from the same database as
 	// Discussions.
 	Planning *PlanningStore
+	// PlanningStreams stores active planning stream IDs and replayable SSE
+	// frames in Redis so clients can resume after disconnecting.
+	PlanningStreams *PlanningStreamStore
 	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
 	// in Redis for 24h. nil disables caching — the handler fetches live each time.
 	ModelCatalog *ModelCatalogStore
@@ -285,6 +288,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
 		if d.Planning != nil {
 			s.mux.HandleFunc("GET /api/discussions/{id}/planning", s.handlePlanningConversationGet)
+			s.mux.HandleFunc("GET /api/discussions/{id}/planning/stream", s.handlePlanningStreamResume)
 			s.mux.HandleFunc("POST /api/discussions/{id}/planning/stream", s.handlePlanningStream)
 			s.mux.HandleFunc("POST /api/discussions/{id}/planning/answer", s.handlePlanningAnswer)
 		}

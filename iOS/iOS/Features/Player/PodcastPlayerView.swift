@@ -647,9 +647,17 @@ struct PodcastActionsMenu: View {
     let onCreateFromPlan: (() -> Void)?
     var onSignOut: (() -> Void)?
 
-    /// The plain, permanent public deep link for a published discussion.
+    /// The plain, permanent public link for a published discussion. The server
+    /// builds it (`share_url`, the same `/p/{id}` web-player URL embedded as the
+    /// summary's "listen again" link) so the shared link and the markdown link
+    /// always match. Falls back to building it locally only if an older server
+    /// response omits the field.
     private var publicShareURL: URL {
-        AppConfig.websiteBaseURL.appendingPathComponent("d").appendingPathComponent(model.discussion.id)
+        if let raw = model.discussion.shareURL,
+           let url = URL(string: raw) {
+            return url
+        }
+        return AppConfig.websiteBaseURL.appendingPathComponent("p").appendingPathComponent(model.discussion.id)
     }
 
     private var actionsTip: (any Tip)? {

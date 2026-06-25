@@ -234,7 +234,7 @@ final class APIClient: Sendable {
     /// Loads the persisted conversational planning thread for history rebuild.
     func planningConversation(id: String) async throws -> PlanningConversationView {
         let view: PlanningConversationView = try await get("/api/discussions/\(id)/planning")
-        apiLog.debug("planning conversation loaded id=\(id, privacy: .public) parts=\(view.parts.count, privacy: .public) needsRun=\((view.needsRun ?? false), privacy: .public)")
+        apiLog.debug("planning conversation loaded id=\(id, privacy: .public) parts=\(view.parts.count, privacy: .public) needsRun=\((view.needsRun ?? false), privacy: .public) running=\((view.isRunning ?? false), privacy: .public)")
         return view
     }
 
@@ -260,6 +260,13 @@ final class APIClient: Sendable {
         )
     }
 
+    /// Reattaches to an already-running server-side planning stream. The server
+    /// returns 204 when there is no active stream, which completes the sequence.
+    func resumeActivePlanningStream(id: String) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
+        apiLog.debug("planning SSE start kind=active-resume id=\(id, privacy: .public)")
+        return streamPlanningRequest(method: "GET", path: "/api/discussions/\(id)/planning/stream", body: nil)
+    }
+
     /// Answers (or skips) a pending question, resuming the agent loop over SSE.
     func answerPlanningQuestion(id: String, questionId: String, action: String,
                                 language: String? = nil,
@@ -278,38 +285,7 @@ final class APIClient: Sendable {
             let task = Task {
                 do {
                     let payload = try JSONEncoder().encode(body)
-                    guard let token = await tokens.token() else { throw APIError.notAuthenticated }
-                    var (bytes, http) = try await openSSE(path: path, body: payload, token: token)
-                    if http.statusCode == 401 {
-                        guard let fresh = await tokens.refreshedToken() else { throw APIError.notAuthenticated }
-                        (bytes, http) = try await openSSE(path: path, body: payload, token: fresh)
-                    }
-                    apiLog.debug("planning SSE opened path=\(path, privacy: .public) status=\(http.statusCode, privacy: .public)")
-                    guard (200..<300).contains(http.statusCode) else {
-                        var message = ""
-                        for try await line in bytes.lines { message += line }
-                        throw mapHTTPError(http.statusCode, Data(message.utf8))
-                    }
-                    var event = "message"
-                    var data = ""
-                    try await Self.consumeSSELines(bytes) { line in
-                        if line.isEmpty {
-                            Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
-                            event = "message"
-                            data = ""
-                        } else if line.hasPrefix(":") {
-                            return
-                        } else if line.hasPrefix("event:") {
-                            event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                        } else if line.hasPrefix("data:") {
-                            let chunk = String(line.dropFirst(5))
-                            let piece = chunk.hasPrefix(" ") ? String(chunk.dropFirst()) : chunk
-                            data += data.isEmpty ? piece : "\n" + piece
-                        }
-                    }
-                    Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
-                    apiLog.debug("planning SSE finished path=\(path, privacy: .public)")
-                    continuation.finish()
+                    try await consumePlanningSSE(method: "POST", path: path, body: payload, continuation: continuation)
                 } catch {
                     apiLog.error("planning SSE failed path=\(path, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: error)
@@ -317,6 +293,60 @@ final class APIClient: Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private func streamPlanningRequest(method: String, path: String, body payload: Data?) -> AsyncThrowingStream<PlanningStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await consumePlanningSSE(method: method, path: path, body: payload, continuation: continuation)
+                } catch {
+                    apiLog.error("planning SSE failed path=\(path, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func consumePlanningSSE(method: String, path: String, body payload: Data?,
+                                    continuation: AsyncThrowingStream<PlanningStreamEvent, Error>.Continuation) async throws {
+        guard let token = await tokens.token() else { throw APIError.notAuthenticated }
+        var (bytes, http) = try await openSSE(method: method, path: path, body: payload, token: token)
+        if http.statusCode == 401 {
+            guard let fresh = await tokens.refreshedToken() else { throw APIError.notAuthenticated }
+            (bytes, http) = try await openSSE(method: method, path: path, body: payload, token: fresh)
+        }
+        apiLog.debug("planning SSE opened path=\(path, privacy: .public) status=\(http.statusCode, privacy: .public)")
+        if http.statusCode == 204 {
+            continuation.finish()
+            return
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var message = ""
+            for try await line in bytes.lines { message += line }
+            throw mapHTTPError(http.statusCode, Data(message.utf8))
+        }
+        var event = "message"
+        var data = ""
+        try await Self.consumeSSELines(bytes) { line in
+            if line.isEmpty {
+                Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
+                event = "message"
+                data = ""
+            } else if line.hasPrefix(":") {
+                return
+            } else if line.hasPrefix("event:") {
+                event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+                let chunk = String(line.dropFirst(5))
+                let piece = chunk.hasPrefix(" ") ? String(chunk.dropFirst()) : chunk
+                data += data.isEmpty ? piece : "\n" + piece
+            }
+        }
+        Self.dispatchPlanningSSE(event: event, data: data, to: continuation)
+        apiLog.debug("planning SSE finished path=\(path, privacy: .public)")
+        continuation.finish()
     }
 
     private static func dispatchPlanningSSE(event: String, data: String,
@@ -1010,7 +1040,11 @@ final class APIClient: Sendable {
     }
 
     private func openSSE(path: String, body: Data, token: String) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
-        var req = request(method: "POST", path: path, body: body)
+        try await openSSE(method: "POST", path: path, body: body, token: token)
+    }
+
+    private func openSSE(method: String, path: String, body: Data?, token: String) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        var req = request(method: method, path: path, body: body)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // Planning can sit silently inside a long LLM call between progress

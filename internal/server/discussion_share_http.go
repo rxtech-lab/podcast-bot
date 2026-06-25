@@ -40,16 +40,12 @@ type shareResolveResponse struct {
 }
 
 func (s *Server) shareURL(token string) string {
-	base := strings.TrimRight(strings.TrimSpace(s.d.WebsiteBaseURL), "/")
-	if base == "" {
-		base = "https://podcast.rxlab.app"
-	}
-	return base + "/s/" + token
+	return s.frontendBaseURL() + "/s/" + token
 }
 
 // handleDiscussionShareCreate mints an expiring share link for an owned PRIVATE
 // discussion. Public discussions don't need a tracked link (the client shares
-// the plain /d/{id} URL), so this returns 409 for them.
+// the plain /p/{id} web-player URL), so this returns 409 for them.
 func (s *Server) handleDiscussionShareCreate(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
 	id := r.PathValue("id")

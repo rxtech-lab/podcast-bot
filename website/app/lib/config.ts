@@ -16,6 +16,17 @@ export function publicLink(id: string): string {
   return `${SITE_BASE_URL}/d/${id}`;
 }
 
+export function podcastLink(id: string): string {
+  return `${SITE_BASE_URL}/p/${id}`;
+}
+
 export function shareLink(token: string): string {
   return `${SITE_BASE_URL}/s/${token}`;
+}
+
+export function ogImageLink(params: { id?: string; token?: string }): string {
+  const search = new URLSearchParams();
+  if (params.id) search.set("id", params.id);
+  if (params.token) search.set("token", params.token);
+  return `${SITE_BASE_URL}/api/og?${search.toString()}`;
 }

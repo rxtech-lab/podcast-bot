@@ -543,6 +543,12 @@ struct PlanConversationView: View {
                 if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
                     parts = view.parts
                     requestInitialBottomScrollIfNeeded()
+                    if view.isRunning == true {
+                        beginStream {
+                            APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
+                        }
+                        return
+                    }
                     if view.needsRun == true {
                         beginStream {
                             APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
@@ -648,6 +654,13 @@ struct PlanConversationView: View {
                 if isStreaming {
                     if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
                         parts = view.parts
+                        if view.isRunning == true {
+                            streamTask = nil
+                            beginStream {
+                                APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
+                            }
+                            return
+                        }
                     }
                     isStreaming = false
                     progressText = nil
@@ -665,6 +678,15 @@ struct PlanConversationView: View {
                 isStreaming = false
                 progressText = nil
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id),
+                   view.isRunning == true {
+                    parts = view.parts
+                    errorMessage = nil
+                    streamTask = nil
+                    beginStream {
+                        APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
+                    }
+                }
             }
         }
     }

@@ -101,6 +101,7 @@ func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
+	s.applyDiscussionShareURL(d)
 	writeJSON(w, d)
 }
 
@@ -120,6 +121,7 @@ func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
+	s.applyDiscussionShareURL(d)
 	if created && d.OwnerUserID != "" && d.OwnerUserID != user.ID {
 		s.notifyMarketLike(r.Context(), d.OwnerUserID, d, userDisplayName(user))
 	}
@@ -142,6 +144,7 @@ func (s *Server) handleMarketUnlike(w http.ResponseWriter, r *http.Request) {
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
+	s.applyDiscussionShareURL(d)
 	writeJSON(w, d)
 }
 

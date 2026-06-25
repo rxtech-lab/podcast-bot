@@ -122,6 +122,8 @@ type PlanningConversationView struct {
 	Conversation *PlanningConversation `json:"conversation"`
 	Parts        []PlanningPart        `json:"parts"`
 	NeedsRun     bool                  `json:"needs_run"`
+	IsRunning    bool                  `json:"is_running,omitempty"`
+	ActiveStream string                `json:"active_stream_id,omitempty"`
 }
 
 // PlanningStore owns the conversational planning tables. It shares the

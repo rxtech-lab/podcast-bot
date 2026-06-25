@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { ViewerDiscussion } from "@/app/lib/viewer";
 
 type CaptionCue = {
@@ -53,7 +54,15 @@ function parseVTT(vtt: string): CaptionCue[] {
     .filter((cue): cue is CaptionCue => !!cue && cue.endMs > cue.startMs);
 }
 
-export function PodcastViewer({ discussion }: { discussion: ViewerDiscussion }) {
+export function PodcastViewer({
+  discussion,
+  headerAction,
+}: {
+  discussion: ViewerDiscussion;
+  // Trailing header control: the account dropdown (with sign-out) when signed
+  // in, or a sign-in button when viewing a public podcast anonymously.
+  headerAction?: ReactNode;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [durationMs, setDurationMs] = useState(durationToMs(discussion.duration_seconds));
@@ -62,11 +71,29 @@ export function PodcastViewer({ discussion }: { discussion: ViewerDiscussion }) 
 
   const lines = discussion.lines;
   const transcriptLines = lines.filter((line) => !line.is_user);
+  // Synced caption cues fall back to the transcript when the VTT sidecar is
+  // unavailable (older podcasts never uploaded one, or the fetch 404s). Each
+  // non-user line with a timestamp shows from its start until the next line
+  // begins — so captions keep working from data the page already has.
+  const lineCues = useMemo<CaptionCue[]>(() => {
+    const timed = lines.filter(
+      (line) => !line.is_user && typeof line.start_ms === "number" && line.start_ms >= 0
+    );
+    return timed.map((line, i) => {
+      const startMs = line.start_ms as number;
+      const nextStart = timed[i + 1]?.start_ms;
+      const endMs =
+        typeof nextStart === "number" && nextStart > startMs ? nextStart : startMs + 6000;
+      return { startMs, endMs, text: line.text };
+    });
+  }, [lines]);
   const hasAudio = !!discussion.download_url;
   const coverURL = discussion.cover?.image_url?.trim();
   const coverStart = discussion.cover?.gradient_start || "#14b8a6";
   const coverEnd = discussion.cover?.gradient_end || "#f59e0b";
-  const captionDurationMs = captionCues.reduce((max, cue) => Math.max(max, cue.endMs), 0);
+  // Prefer the finer-grained VTT cues; otherwise the transcript-derived ones.
+  const effectiveCues = captionCues.length > 0 ? captionCues : lineCues;
+  const captionDurationMs = effectiveCues.reduce((max, cue) => Math.max(max, cue.endMs), 0);
   const duration = Math.max(
     Number.isFinite(durationMs) ? durationMs : 0,
     currentMs,
@@ -78,9 +105,9 @@ export function PodcastViewer({ discussion }: { discussion: ViewerDiscussion }) 
   const speakerCount = new Set(transcriptLines.map((line) => line.speaker).filter(Boolean)).size;
   const caption = useMemo(() => {
     return (
-      captionCues.find((cue) => currentMs >= cue.startMs && currentMs < cue.endMs)?.text ?? ""
+      effectiveCues.find((cue) => currentMs >= cue.startMs && currentMs < cue.endMs)?.text ?? ""
     );
-  }, [captionCues, currentMs]);
+  }, [effectiveCues, currentMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,19 +161,15 @@ export function PodcastViewer({ discussion }: { discussion: ViewerDiscussion }) 
         }}
       />
 
-      <div className="relative mx-auto grid w-full max-w-7xl gap-8 px-5 py-6 sm:px-8 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.25fr)] lg:px-10 lg:py-0">
+      <div className="relative mx-auto grid w-full max-w-7xl gap-8 px-5 pt-10 pb-6 sm:px-8 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.25fr)] lg:px-10 lg:py-0">
         <section className="lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-y-auto">
-          <div className="flex min-h-full flex-col gap-6 lg:py-0">
+          <div className="flex min-h-full flex-col gap-6 lg:pt-10">
             <div className="space-y-6">
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
                 <div className="text-xs font-semibold uppercase text-teal-200/75">
                   podcast fm
                 </div>
-                {discussion.creator?.display_name ? (
-                  <div className="rounded-full border border-white/10 bg-white/[0.08] px-3 py-1 text-xs text-stone-200/80">
-                    {discussion.creator.display_name}
-                  </div>
-                ) : null}
+                {headerAction}
               </div>
 
               <div>
@@ -277,6 +300,30 @@ export function PodcastViewer({ discussion }: { discussion: ViewerDiscussion }) 
                   )}
                 </section>
               </div>
+
+              {discussion.creator?.display_name ? (
+                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3">
+                  {discussion.creator.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={discussion.creator.avatar_url}
+                      alt=""
+                      className="h-9 w-9 shrink-0 rounded-full object-cover"
+                      draggable={false}
+                    />
+                  ) : (
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/[0.12] text-sm font-semibold uppercase text-stone-200">
+                      {discussion.creator.display_name.trim().charAt(0).toUpperCase() || "?"}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-[0.68rem] uppercase text-stone-400">Creator</div>
+                    <div className="truncate text-sm font-medium text-stone-100">
+                      {discussion.creator.display_name}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-3">

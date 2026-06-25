@@ -580,6 +580,36 @@ func sameTranscriptLine(a, b agent.TranscriptLine) bool {
 		strings.TrimSpace(a.Text) == strings.TrimSpace(b.Text)
 }
 
+// subtitlesS3URL resolves a presigned URL for a job's subtitles sidecar. It uses
+// the persisted SubtitlesS3Key when set, otherwise falls back to the
+// deterministic upload key (jobID.vtt) when that object actually exists in the
+// bucket. The fallback is what lets captions survive a job whose record never
+// stored the key (older jobs, or jobs recovered from disk) on deployments where
+// the sidecar lives only in S3 — the case a public podcast viewed from another
+// pod hits. Returns "" when no S3 object is available (caller falls back to the
+// local sidecar).
+func (s *Server) subtitlesS3URL(ctx context.Context, j *Job) string {
+	if j == nil || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return ""
+	}
+	key := j.SubtitlesS3Key
+	if key == "" {
+		candidate := s.d.Uploader.Key(j.ID + ".vtt")
+		if info, err := s.d.Uploader.Head(ctx, candidate); err == nil && info.ContentLength > 0 {
+			key = candidate
+		}
+	}
+	if key == "" {
+		return ""
+	}
+	url, err := s.d.Uploader.DownloadURL(ctx, key, time.Hour)
+	if err != nil {
+		s.logger().Warn("subtitles s3 download url failed", "job", j.ID, "key", key, "err", err)
+		return ""
+	}
+	return url
+}
+
 // handleJobSubtitles serves the WebVTT sidecar the pipeline writes next to the
 // run audio. Available for any finished job that produced one (audio-only feeds
 // expose it as the captions track; video jobs already mux it into the mp4).
@@ -601,13 +631,9 @@ func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitles not ready", http.StatusTooEarly)
 		return
 	}
-	if j.SubtitlesS3Key != "" && s.d.Uploader.Enabled() {
-		if url, err := s.d.Uploader.DownloadURL(r.Context(), j.SubtitlesS3Key, time.Hour); err == nil {
-			http.Redirect(w, r, url, http.StatusFound)
-			return
-		} else {
-			s.logger().Warn("subtitles s3 download url failed", "job", id, "key", j.SubtitlesS3Key, "err", err)
-		}
+	if url := s.subtitlesS3URL(r.Context(), j); url != "" {
+		http.Redirect(w, r, url, http.StatusFound)
+		return
 	}
 	jobDir := s.jobArtifactDir(id)
 	if jobDir == "" {
@@ -643,13 +669,9 @@ func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) 
 	// No running orchestrator. Prefer the shared-storage copy (durable across
 	// pod recycles); fall back to the owner-local sidecar; else an empty
 	// (header-only) WebVTT so the client always gets a valid document.
-	if j := s.d.Jobs.Get(id); j != nil && j.SubtitlesS3Key != "" && s.d.Uploader.Enabled() {
-		if url, err := s.d.Uploader.DownloadURL(r.Context(), j.SubtitlesS3Key, time.Hour); err == nil {
-			http.Redirect(w, r, url, http.StatusFound)
-			return
-		} else {
-			s.logger().Warn("subtitles s3 download url failed", "job", id, "key", j.SubtitlesS3Key, "err", err)
-		}
+	if url := s.subtitlesS3URL(r.Context(), s.d.Jobs.Get(id)); url != "" {
+		http.Redirect(w, r, url, http.StatusFound)
+		return
 	}
 	if jobDir := s.jobArtifactDir(id); jobDir != "" {
 		subPath := filepath.Join(jobDir, "subtitles.vtt")

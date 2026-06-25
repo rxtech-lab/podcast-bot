@@ -205,7 +205,7 @@ func notifySummaryReady(ctx context.Context, deps SummaryGenerationDeps, discuss
 		DiscussionID: d.ID,
 		Title:        "Summary ready",
 		Body:         pushDiscussionTitle(d, "Your podcast summary is ready."),
-		URL:          DiscussionDeepLink(deps.Env.WebsiteBaseURL, d.ID),
+		URL:          DiscussionDeepLink(FrontendBaseURL(deps.Env), d.ID),
 	}, deps.Log)
 }
 

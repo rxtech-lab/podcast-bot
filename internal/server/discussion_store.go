@@ -155,6 +155,12 @@ type Discussion struct {
 	PointsCharged    int64                `json:"points_charged"`
 	ShowUsageSummary bool                 `json:"showUsageSummary"`
 	Visibility       DiscussionVisibility `json:"visibility"`
+	// ShareURL is the canonical public web link for this podcast — the same
+	// /p/{id} player page embedded as the summary's "listen again" link. The
+	// server builds it (clients never construct share links themselves) so the
+	// shared link and the markdown link always stay in lockstep. Populated by
+	// applyDiscussionShareURL on the read paths.
+	ShareURL         string               `json:"share_url,omitempty"`
 	Cover            DiscussionCover      `json:"cover,omitempty"`
 	Creator          *CreatorProfile      `json:"creator,omitempty"`
 	LikeCount        int64                `json:"like_count"`

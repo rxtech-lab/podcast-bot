@@ -77,6 +77,9 @@ func NewPointsStore(ds *DiscussionStore) (*PointsStore, error) {
 	if err := s.ensureSchema(context.Background()); err != nil {
 		return nil, err
 	}
+	if _, _, err := s.RepairLegacyGenerationOvercharges(context.Background()); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -166,6 +169,140 @@ func (s *PointsStore) repairBalance(ctx context.Context, userID string, balance 
 		ON CONFLICT(user_id) DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at`,
 		userID, balance, time.Now().UnixMilli())
 	return err
+}
+
+type legacyGenerationOvercharge struct {
+	discussionID  string
+	userID        string
+	pointsCharged int64
+	debited       int64
+}
+
+// RepairLegacyGenerationOvercharges fixes rows written by older settlement code
+// that debited more generation points in the ledger than the discussion's
+// recorded charge. It is idempotent and preserves later ledger balances by
+// shifting every subsequent balance_after by the repaired excess.
+func (s *PointsStore) RepairLegacyGenerationOvercharges(ctx context.Context) (int, int64, error) {
+	if s == nil {
+		return 0, 0, errors.New("points store is not configured")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `SELECT d.id, d.owner_user_id, d.points_charged, -COALESCE(SUM(l.delta), 0) AS debited
+		FROM native_discussions d
+		JOIN points_ledger l ON l.discussion_id = d.id AND l.user_id = d.owner_user_id
+		WHERE d.points_charged > 0
+			AND l.reason IN (?, ?, ?)
+		GROUP BY d.id, d.owner_user_id, d.points_charged
+		HAVING -COALESCE(SUM(l.delta), 0) > d.points_charged`,
+		"reserve:"+pointsReasonGeneration, pointsReasonGeneration, pointsReasonGenerationAdjustment)
+	if err != nil {
+		return 0, 0, err
+	}
+	var repairs []legacyGenerationOvercharge
+	for rows.Next() {
+		var r legacyGenerationOvercharge
+		if err := rows.Scan(&r.discussionID, &r.userID, &r.pointsCharged, &r.debited); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		repairs = append(repairs, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, 0, err
+	}
+
+	var total int64
+	seenUsers := map[string]bool{}
+	for _, r := range repairs {
+		excess := r.debited - r.pointsCharged
+		if excess <= 0 {
+			continue
+		}
+		repaired, err := s.repairLegacyGenerationOvercharge(ctx, tx, r, excess)
+		if err != nil {
+			return 0, 0, err
+		}
+		total += repaired
+		seenUsers[r.userID] = true
+	}
+	for userID := range seenUsers {
+		if err := repairCachedBalanceFromLatestLedger(ctx, tx, userID); err != nil {
+			return 0, 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return len(repairs), total, nil
+}
+
+func (s *PointsStore) repairLegacyGenerationOvercharge(ctx context.Context, tx *sql.Tx, r legacyGenerationOvercharge, excess int64) (int64, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, delta
+		FROM points_ledger
+		WHERE user_id = ? AND discussion_id = ?
+			AND reason IN (?, ?, ?)
+			AND delta < 0
+		ORDER BY id DESC`,
+		r.userID, r.discussionID, "reserve:"+pointsReasonGeneration, pointsReasonGeneration, pointsReasonGenerationAdjustment)
+	if err != nil {
+		return 0, err
+	}
+	type adjustment struct {
+		ledgerID int64
+		points   int64
+	}
+	var adjustments []adjustment
+	remaining := excess
+	for rows.Next() {
+		var ledgerID, delta int64
+		if err := rows.Scan(&ledgerID, &delta); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		points := -delta
+		if points > remaining {
+			points = remaining
+		}
+		adjustments = append(adjustments, adjustment{ledgerID: ledgerID, points: points})
+		remaining -= points
+		if remaining == 0 {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if remaining != 0 {
+		return 0, errors.New("legacy generation repair could not find enough debits")
+	}
+	var repaired int64
+	for _, adj := range adjustments {
+		if _, err := tx.ExecContext(ctx, `UPDATE points_ledger
+			SET delta = delta + ?
+			WHERE id = ?`, adj.points, adj.ledgerID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE points_ledger
+			SET balance_after = balance_after + ?
+			WHERE user_id = ? AND id >= ?`, adj.points, r.userID, adj.ledgerID); err != nil {
+			return 0, err
+		}
+		repaired += adj.points
+	}
+	return repaired, nil
 }
 
 // EnsureUser registers a signed-in user with a zero balance if they have never
@@ -1061,6 +1198,18 @@ func txBalance(ctx context.Context, tx *sql.Tx, userID string) (int64, error) {
 		return 0, nil
 	}
 	return bal, err
+}
+
+func repairCachedBalanceFromLatestLedger(ctx context.Context, tx *sql.Tx, userID string) error {
+	var bal int64
+	err := tx.QueryRowContext(ctx, `SELECT balance_after FROM points_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 1`, userID).Scan(&bal)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return upsertBalance(ctx, tx, userID, bal, time.Now().UnixMilli())
 }
 
 func upsertBalance(ctx context.Context, tx *sql.Tx, userID string, balance, now int64) error {

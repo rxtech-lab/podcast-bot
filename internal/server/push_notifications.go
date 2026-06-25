@@ -348,37 +348,73 @@ func maskPushToken(token string) string {
 }
 
 func (s *Server) discussionDeepLink(id string) string {
-	return DiscussionDeepLink(s.d.WebsiteBaseURL, id)
+	return DiscussionDeepLink(s.frontendBaseURL(), id)
 }
 
-func DiscussionDeepLink(websiteBaseURL, id string) string {
-	base := strings.TrimRight(websiteBaseURL, "/")
+// DiscussionDeepLink builds the /d/{id} universal link from an already-resolved
+// web base. Callers pass the frontend base (FRONTEND_PUBLIC_URL → WEBSITE_BASE_URL
+// → default) via FrontendBaseURL / Server.frontendBaseURL so every link type
+// (/p/, /s/, /d/) stays on one host.
+func DiscussionDeepLink(base, id string) string {
+	base = strings.TrimRight(base, "/")
 	if base == "" {
 		base = "https://podcast.rxlab.app"
 	}
 	return base + "/d/" + strings.TrimSpace(id)
 }
 
-// frontendBaseURL is the public base of the web frontend used for "listen again"
-// links. It prefers FRONTEND_PUBLIC_URL (which may point at localhost in dev),
-// then falls back to WEBSITE_BASE_URL, then the production default.
+// FrontendBaseURL resolves the public web base used to build every shareable
+// link (/p/, /s/, /d/), preferring FRONTEND_PUBLIC_URL, then WEBSITE_BASE_URL,
+// then the production default. Centralising it keeps all link types on one host
+// — point FRONTEND_PUBLIC_URL at localhost in dev and every link follows.
+func FrontendBaseURL(env *config.Env) string {
+	if env != nil {
+		if v := strings.TrimRight(strings.TrimSpace(env.FrontendPublicURL), "/"); v != "" {
+			return v
+		}
+		if v := strings.TrimRight(strings.TrimSpace(env.WebsiteBaseURL), "/"); v != "" {
+			return v
+		}
+	}
+	return "https://podcast.rxlab.app"
+}
+
+// frontendBaseURL is the Server-bound resolver behind every share / deep link.
+// It prefers FRONTEND_PUBLIC_URL (which may point at localhost in dev), then
+// WEBSITE_BASE_URL, then the production default. Mirrors FrontendBaseURL but also
+// honours Deps.WebsiteBaseURL for tests that set it without a full Env.
 func (s *Server) frontendBaseURL() string {
 	if s.d.Env != nil {
 		if v := strings.TrimRight(strings.TrimSpace(s.d.Env.FrontendPublicURL), "/"); v != "" {
 			return v
 		}
 	}
-	base := strings.TrimRight(strings.TrimSpace(s.d.WebsiteBaseURL), "/")
-	if base == "" {
-		base = "https://podcast.rxlab.app"
+	if base := strings.TrimRight(strings.TrimSpace(s.d.WebsiteBaseURL), "/"); base != "" {
+		return base
 	}
-	return base
+	if s.d.Env != nil {
+		if v := strings.TrimRight(strings.TrimSpace(s.d.Env.WebsiteBaseURL), "/"); v != "" {
+			return v
+		}
+	}
+	return "https://podcast.rxlab.app"
 }
 
 // podcastPlayerURL is the public, view-only web player page for a discussion —
 // the target of the "listen again" link embedded in exported summaries.
 func (s *Server) podcastPlayerURL(id string) string {
 	return s.frontendBaseURL() + "/p/" + strings.TrimSpace(id)
+}
+
+// applyDiscussionShareURL stamps the server-built public share link onto a
+// discussion so clients share a canonical URL rather than constructing one
+// themselves. It is the same /p/{id} player page used by the summary's "listen
+// again" link, keeping the shared link and the markdown link identical.
+func (s *Server) applyDiscussionShareURL(d *Discussion) {
+	if d == nil || strings.TrimSpace(d.ID) == "" {
+		return
+	}
+	d.ShareURL = s.podcastPlayerURL(d.ID)
 }
 
 // summaryMarkdownWithLink appends a "listen again" link to a summary's Markdown
