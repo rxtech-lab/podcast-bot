@@ -343,6 +343,8 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 		return agent.NewDiscussant(base, spec.Aspect)
 	case agent.RoleCommander:
 		return agent.NewCommander(base, o.Topic.Title, o.discussionMusicMoods)
+	case agent.RoleJudgement:
+		return agent.NewJudgement(base)
 	case agent.RoleSeriesHost:
 		// Translate the orchestrator-side sound plan to the agent-side
 		// SoundDirection (mirrors the puzzle host construction).

@@ -225,6 +225,27 @@ func TestPlanningConversationNeedsRunAfterSeededUser(t *testing.T) {
 	}
 }
 
+func TestPlanningConversationDoesNotAutoRunFailedConversation(t *testing.T) {
+	_, ps, discID := newTestPlanningStore(t)
+	ctx := context.Background()
+	conv, _ := ps.EnsureConversation(ctx, "u1", discID)
+	if err := ps.AppendTurn(ctx, conv.ID, planningTurnInput{Role: "user", Text: "retry me only when explicit"}); err != nil {
+		t.Fatalf("AppendTurn: %v", err)
+	}
+	turns, _ := ps.Turns(ctx, conv.ID)
+	if !planningConversationNeedsRun(turns) {
+		t.Fatalf("last user turn should still be structurally runnable")
+	}
+	conv.Status = PlanningConversationFailed
+	if planningConversationShouldAutoRun(conv, turns) {
+		t.Fatalf("failed conversation should not auto-run on history load")
+	}
+	conv.Status = PlanningConversationActive
+	if !planningConversationShouldAutoRun(conv, turns) {
+		t.Fatalf("active conversation with last user turn should auto-run")
+	}
+}
+
 func TestPlanningConversationHidesSeededSettingsInUserBubble(t *testing.T) {
 	seeded := `Design a panel discussion about the following topic.
 
@@ -261,6 +282,23 @@ The user uploaded these reference documents; ground the discussion in their cont
 	parts = planningConversationParts([]planningTurnRow{{ID: 4, Role: "user", Text: withAttachmentBlock}})
 	if len(parts) != 1 || parts[0].Text != "Please use this file" {
 		t.Fatalf("attachment display text = %+v, want only visible message", parts)
+	}
+	withReferenceBlock := `Design a panel discussion about the following topic.
+
+Topic: What comes after spatial computing?
+
+Plan settings:
+- Language for all names and text: en-US
+- Number of discussants: 3
+
+Use exactly 3 discussants.
+
+Referenced podcast context:
+Summary:
+Old episode summary`
+	parts = planningConversationParts([]planningTurnRow{{ID: 5, Role: "user", Text: withReferenceBlock}})
+	if len(parts) != 1 || parts[0].Text != "What comes after spatial computing?" {
+		t.Fatalf("reference display text = %+v, want only topic", parts)
 	}
 }
 
@@ -310,5 +348,59 @@ func TestPlanningConversationIncludesUserAttachments(t *testing.T) {
 	}
 	if parts[0].Attachments[0].Filename != "notes.md" || parts[0].Attachments[0].Markdown != "# Notes" {
 		t.Fatalf("attachment = %+v, want persisted metadata", parts[0].Attachments[0])
+	}
+}
+
+func TestPlanningConversationIncludesPodcastReferences(t *testing.T) {
+	ctx := context.Background()
+	ds, err := NewDiscussionStore(filepath.Join(t.TempDir(), "planning.db"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := NewPlanningStore(ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := ps.EnsureConversation(ctx, "owner", "discussion-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := planner.PodcastReference{
+		ID:      "pod-1",
+		Title:   "Original Podcast",
+		Topic:   "Original topic",
+		Context: "private context must not be serialized",
+	}
+	req := planner.PlanRequest{
+		Topic:       "Follow up with new regulation",
+		Language:    "en-US",
+		Discussants: 3,
+		Research:    true,
+		Reference:   &ref,
+	}
+	if err := ps.AppendTurn(ctx, conv.ID, planningTurnInput{
+		Role:       "user",
+		Text:       planner.ConversationInitialText(req),
+		References: []planner.PodcastReference{ref},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := ps.Turns(ctx, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := planningConversationParts(turns)
+	if len(parts) != 1 || parts[0].Text != "Follow up with new regulation" {
+		t.Fatalf("parts = %+v, want one user topic part", parts)
+	}
+	if len(parts[0].References) != 1 {
+		t.Fatalf("references = %+v, want one reference", parts[0].References)
+	}
+	got := parts[0].References[0]
+	if got.ID != ref.ID || got.Title != ref.Title || got.Topic != ref.Topic {
+		t.Fatalf("reference = %+v, want public metadata from %+v", got, ref)
+	}
+	if got.Context != "" {
+		t.Fatalf("reference context leaked to client: %q", got.Context)
 	}
 }

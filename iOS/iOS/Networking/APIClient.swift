@@ -113,6 +113,22 @@ final class APIClient: Sendable {
         return try await get("/api/discussions/\(id)", query: query)
     }
 
+    func parentPodcasts(limit: Int = 50, offset: Int = 0, query: String? = nil) async throws -> [Discussion] {
+        var queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedQuery.isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: trimmedQuery))
+        }
+        return try await get("/api/discussions/parent-podcasts", query: queryItems)
+    }
+
+    func parentPodcast(id: String) async throws -> PodcastReference {
+        try await get("/api/discussions/\(id)/parent-podcast")
+    }
+
     /// Fetches the generated summary document (Markdown body) for a podcast. The
     /// detail payload only carries a content-free `summary` descriptor; this is
     /// the separate endpoint the summary view calls on mount. Throws (404) when no
@@ -188,6 +204,7 @@ final class APIClient: Sendable {
                           type: String = "discussion",
                           generateCover: Bool = false,
                           coverPrompt: String? = nil,
+                          referenceDiscussionID: String? = nil,
                           plan: PlanRequest? = nil) async throws -> Discussion {
         try await send("POST", "/api/discussions",
                        body: DiscussionCreateRequest(topic: topic,
@@ -195,7 +212,8 @@ final class APIClient: Sendable {
                                                      language: language,
                                                      generateCover: generateCover,
                                                      coverPrompt: coverPrompt,
-                                                     plan: plan))
+                                                     plan: plan,
+                                                     referenceDiscussionID: referenceDiscussionID))
     }
 
     /// Creates a private planning discussion by copying the current plan from a

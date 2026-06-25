@@ -37,9 +37,10 @@ type discussionCreateRequest struct {
 	// filled in asynchronously and picked up the next time the discussion is
 	// fetched (e.g. when the player opens). CoverPrompt overrides the default
 	// prompt derived from the topic.
-	GenerateCover bool                 `json:"generate_cover"`
-	CoverPrompt   string               `json:"cover_prompt"`
-	Plan          *planner.PlanRequest `json:"plan,omitempty"`
+	GenerateCover         bool                 `json:"generate_cover"`
+	CoverPrompt           string               `json:"cover_prompt"`
+	Plan                  *planner.PlanRequest `json:"plan,omitempty"`
+	ReferenceDiscussionID string               `json:"reference_discussion_id,omitempty"`
 }
 
 type discussionImproveRequest struct {
@@ -67,6 +68,8 @@ type discussionSpeakerModelRequest struct {
 type discussionSourceSearchResponse struct {
 	Sources []config.Source `json:"sources"`
 }
+
+var errDiscussionReferenceNotReady = errors.New("reference discussion is not ready")
 
 const (
 	addSourcesBackgroundTimeout     = 5 * time.Minute
@@ -156,6 +159,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 // decouples discussion creation from the multi-minute planning run: even if the
 // stream drops, the discussion is already saved and recoverable in the library.
 func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
 	var req discussionCreateRequest
 	if !decodeJSONBody(w, r, &req) {
 		return
@@ -170,28 +174,61 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "only discussion creation is supported", http.StatusBadRequest)
 		return
 	}
-	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), s.requestUser(r).ID, topic, strings.TrimSpace(req.Language))
+	var reference *planner.PodcastReference
+	if refID := strings.TrimSpace(req.ReferenceDiscussionID); refID != "" {
+		ref, err := s.discussionReferenceForPlanning(r.Context(), user.ID, refID)
+		if errors.Is(err, errDiscussionReferenceNotReady) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if ref == nil {
+			http.Error(w, "reference discussion is not visible", http.StatusNotFound)
+			return
+		}
+		reference = ref
+	}
+	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), user.ID, topic, strings.TrimSpace(req.Language))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if req.GenerateCover {
-		s.startBackgroundCoverGeneration(s.requestUser(r).ID, d.ID, strings.TrimSpace(req.CoverPrompt), topic)
-	}
-	if req.Plan != nil && s.d.Planning != nil {
-		req.Plan.Topic = topic
-		if strings.TrimSpace(req.Plan.Language) == "" {
-			req.Plan.Language = strings.TrimSpace(req.Language)
-		}
-		conv, err := s.d.Planning.EnsureConversation(r.Context(), s.requestUser(r).ID, d.ID)
+	if reference != nil {
+		updated, err := s.d.Discussions.SetReference(r.Context(), user.ID, d.ID, reference.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if updated != nil {
+			d = updated
+		}
+	}
+	if req.GenerateCover {
+		s.startBackgroundCoverGeneration(user.ID, d.ID, strings.TrimSpace(req.CoverPrompt), topic)
+	}
+	if req.Plan != nil && s.d.Planning != nil {
+		req.Plan.Topic = topic
+		req.Plan.Reference = reference
+		if strings.TrimSpace(req.Plan.Language) == "" {
+			req.Plan.Language = strings.TrimSpace(req.Language)
+		}
+		conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, d.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var refs []planner.PodcastReference
+		if reference != nil {
+			refs = []planner.PodcastReference{*reference}
 		}
 		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
 			Role:        "user",
 			Text:        planner.ConversationInitialText(*req.Plan),
 			Attachments: req.Plan.Attachments,
+			References:  refs,
 			OpID:        "initial:" + d.ID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -199,6 +236,41 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	writeJSON(w, d)
+}
+
+func (s *Server) handleDiscussionParentPodcastList(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	limit := atoiDefault(r.URL.Query().Get("limit"), 0)
+	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	timer := newStationTimer()
+	qStart := time.Now()
+	items, err := s.d.Discussions.ListParentPodcasts(r.Context(), user.ID, query, limit, offset)
+	timer.mark("query", qStart)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.prepareDiscussionListRows(r, items, timer)
+	writeJSON(w, items)
+	s.logStationTiming("discussions.parent_podcasts.list", len(items), timer)
+}
+
+func (s *Server) handleDiscussionParentPodcastGet(w http.ResponseWriter, r *http.Request) {
+	ref, err := s.discussionReferenceForPlanning(r.Context(), s.requestUser(r).ID, r.PathValue("id"))
+	if errors.Is(err, errDiscussionReferenceNotReady) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ref == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, ref)
 }
 
 // startBackgroundCoverGeneration reserves points and spawns a goroutine that
@@ -234,6 +306,68 @@ func (s *Server) startBackgroundCoverGeneration(userID, discID, prompt, topic st
 		}
 		s.settleImageGeneration(ctx, userID, discID, reserved, reserveLedgerID)
 	}()
+}
+
+func (s *Server) discussionReferenceForPlanning(ctx context.Context, viewer, id string) (*planner.PodcastReference, error) {
+	d, err := s.d.Discussions.GetVisible(ctx, viewer, id)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	if d.Status != DiscussionReady {
+		return nil, errDiscussionReferenceNotReady
+	}
+	title := strings.TrimSpace(d.Title)
+	if title == "" && d.Script != nil {
+		title = strings.TrimSpace(d.Script.Title)
+	}
+	if title == "" {
+		title = strings.TrimSpace(d.Topic)
+	}
+	var sections []string
+	if doc, err := s.d.Discussions.SummaryDocumentFor(ctx, d.ID, SummaryDocTypeSummary); err != nil {
+		return nil, err
+	} else if doc != nil && strings.TrimSpace(doc.Markdown) != "" {
+		sections = append(sections, "Summary:\n"+strings.TrimSpace(doc.Markdown))
+	}
+	if d.Script != nil && strings.TrimSpace(d.Script.Background) != "" {
+		sections = append(sections, "Original plan background:\n"+strings.TrimSpace(d.Script.Background))
+	}
+	if len(d.Lines) > 0 {
+		sections = append(sections, "Transcript excerpts:\n"+discussionReferenceTranscript(d.Lines, 9000))
+	}
+	return &planner.PodcastReference{
+		ID:      d.ID,
+		Title:   title,
+		Topic:   d.Topic,
+		Context: strings.Join(sections, "\n\n"),
+	}, nil
+}
+
+func discussionReferenceTranscript(lines []DiscussionLine, maxChars int) string {
+	if maxChars <= 0 {
+		maxChars = 9000
+	}
+	var sb strings.Builder
+	for _, line := range lines {
+		text := strings.TrimSpace(line.Text)
+		if text == "" {
+			continue
+		}
+		speaker := strings.TrimSpace(line.Speaker)
+		if speaker == "" {
+			speaker = strings.TrimSpace(line.Role)
+		}
+		if speaker == "" {
+			speaker = "Speaker"
+		}
+		next := fmt.Sprintf("%s: %s\n", speaker, text)
+		if sb.Len() > 0 && sb.Len()+len(next) > maxChars {
+			sb.WriteString("...\n")
+			break
+		}
+		sb.WriteString(next)
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // handleDiscussionCoverSet persists a cover (gradient, uploaded image, or a

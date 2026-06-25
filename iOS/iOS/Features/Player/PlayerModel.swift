@@ -23,6 +23,8 @@ struct LiveLine: Identifiable, Equatable {
     var senderUserID: String? = nil
     /// Playback URL when this line is a voice message; nil for text-only lines.
     var audioURL: String? = nil
+    var sources: [SourceDTO]? = nil
+    var judgementComment: String? = nil
 
     var hasAudio: Bool {
         !(audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
@@ -37,7 +39,9 @@ struct LiveLine: Identifiable, Equatable {
                                      speaker: String,
                                      role: String,
                                      text: String,
-                                     done: Bool) -> LiveLine? {
+                                     done: Bool,
+                                     sources: [SourceDTO]? = nil,
+                                     judgementComment: String? = nil) -> LiveLine? {
         let chunk = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let idx = lines.lastIndex(where: { $0.speaker == speaker && !$0.done && !$0.isUser }) {
             if !chunk.isEmpty {
@@ -47,6 +51,12 @@ struct LiveLine: Identifiable, Equatable {
                     lines[idx].text += " " + chunk
                 }
             }
+            if let sources {
+                lines[idx].sources = sources
+            }
+            if let judgementComment {
+                lines[idx].judgementComment = judgementComment
+            }
             if done {
                 lines[idx].done = true
                 return lines[idx]
@@ -55,7 +65,8 @@ struct LiveLine: Identifiable, Equatable {
         }
 
         guard !chunk.isEmpty else { return nil }
-        let line = LiveLine(speaker: speaker, role: role, text: chunk, isUser: false, done: done)
+        let line = LiveLine(speaker: speaker, role: role, text: chunk, isUser: false, done: done,
+                            sources: sources, judgementComment: judgementComment)
         lines.append(line)
         return done ? line : nil
     }
@@ -307,7 +318,8 @@ final class PlayerModel {
         // Replay persisted transcript for a finished discussion.
         lines = discussion.sortedLines.map {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true,
-                     senderUserID: $0.senderUserID, audioURL: $0.audioURL)
+                     senderUserID: $0.senderUserID, audioURL: $0.audioURL,
+                     sources: $0.sources, judgementComment: $0.judgementComment)
         }
         if discussion.jobID != nil && !hasPodcastTranscript {
             showTranscriptLoadingIfNeeded()
@@ -993,6 +1005,13 @@ final class PlayerModel {
            line.audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             line.audioURL = audio
         }
+        if let sources = dto.sources, !(sources.isEmpty) {
+            line.sources = sources
+        }
+        if let judgement = dto.judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !judgement.isEmpty {
+            line.judgementComment = judgement
+        }
     }
 
     /// User-authored rows are visible once they are part of local discussion
@@ -1072,7 +1091,9 @@ final class PlayerModel {
                                                              speaker: speaker,
                                                              role: role,
                                                              text: text,
-                                                             done: data.done == true) {
+                                                             done: data.done == true,
+                                                             sources: data.sources,
+                                                             judgementComment: data.judgement_comment) {
                 persist(line: completed)
             }
             hideTranscriptLoadingIfReady()
@@ -1184,7 +1205,9 @@ final class PlayerModel {
                         senderUserID: line.senderUserID,
                         syncRemote: syncRemote,
                         audioURL: audioURL,
-                        audioKey: audioKey)
+                        audioKey: audioKey,
+                        sources: line.sources,
+                        judgementComment: line.judgementComment)
     }
 
     private func persistIfNeeded(speaker: String,
@@ -1195,7 +1218,9 @@ final class PlayerModel {
                                  senderUserID: String? = nil,
                                  syncRemote: Bool = true,
                                  audioURL: String? = nil,
-                                 audioKey: String? = nil) {
+                                 audioKey: String? = nil,
+                                 sources: [SourceDTO]? = nil,
+                                 judgementComment: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Keep an empty voice message (audio present, transcript unavailable) — its
         // audio is still worth persisting; only empty text-only lines are dropped.
@@ -1211,7 +1236,8 @@ final class PlayerModel {
         guard !exists else { return }
         let dto = DiscussionLineDTO(speaker: speaker, role: role, side: nil,
                                     text: trimmed, startMS: startMs, isUser: isUser,
-                                    senderUserID: senderUserID, audioURL: audioURL)
+                                    senderUserID: senderUserID, audioURL: audioURL,
+                                    sources: sources, judgementComment: judgementComment)
         discussion.lines = (discussion.lines ?? []) + [dto]
         guard syncRemote else { return }
         Task {
@@ -1272,7 +1298,8 @@ final class PlayerModel {
             } else {
                 lines.append(LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
                                       isUser: dto.isUser, done: true,
-                                      senderUserID: dto.senderUserID, audioURL: dto.audioURL))
+                                      senderUserID: dto.senderUserID, audioURL: dto.audioURL,
+                                      sources: dto.sources, judgementComment: dto.judgementComment))
             }
         }
         hideTranscriptLoadingIfReady()
@@ -1328,9 +1355,17 @@ final class PlayerModel {
                 if let persisted {
                     Self.applyPersistedMetadata(to: &lines[existingIndex], from: persisted)
                 }
+                if let sources = item.sources {
+                    lines[existingIndex].sources = sources
+                }
+                if let judgement = item.judgementComment {
+                    lines[existingIndex].judgementComment = judgement
+                }
             } else {
                 lines.append(LiveLine(speaker: item.speaker, role: role, text: text, isUser: isUser, done: true,
-                                      senderUserID: persisted?.senderUserID, audioURL: persisted?.audioURL))
+                                      senderUserID: persisted?.senderUserID, audioURL: persisted?.audioURL,
+                                      sources: item.sources ?? persisted?.sources,
+                                      judgementComment: item.judgementComment ?? persisted?.judgementComment))
                 didChange = true
             }
             // The job transcript has no audio metadata, so a voice message comes

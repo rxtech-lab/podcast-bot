@@ -81,7 +81,7 @@ func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Re
 			return
 		}
 		view.Parts = planningConversationParts(turns)
-		view.NeedsRun = planningConversationNeedsRun(turns)
+		view.NeedsRun = planningConversationShouldAutoRun(conv, turns)
 		if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
 			view.IsRunning = true
 			view.ActiveStream = active.RunID
@@ -165,10 +165,11 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		needsRun := planningConversationNeedsRun(turns)
+		needsRun := planningConversationShouldAutoRun(conv, turns)
 		s.logger().Info("planning stream resume state",
 			"discussion", id,
 			"conversation", conv.ID,
+			"status", conv.Status,
 			"turns", len(turns),
 			"last_role", planningLastTurnRole(turns),
 			"needs_run", needsRun,
@@ -282,7 +283,7 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 	if pending == nil {
 		// Already answered (or unknown) — idempotent no-op: return current state.
 		turns, _ := s.d.Planning.Turns(r.Context(), conv.ID)
-		writeJSON(w, planningDonePayload{Discussion: d, Conversation: PlanningConversationView{Conversation: conv, Parts: planningConversationParts(turns), NeedsRun: planningConversationNeedsRun(turns)}})
+		writeJSON(w, planningDonePayload{Discussion: d, Conversation: PlanningConversationView{Conversation: conv, Parts: planningConversationParts(turns), NeedsRun: planningConversationShouldAutoRun(conv, turns)}})
 		return
 	}
 	status := "answered"
@@ -410,7 +411,7 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 	finalTurns, _ := s.d.Planning.Turns(workCtx, conv.ID)
 	_ = sse.send("done", planningDonePayload{
 		Discussion:   updated,
-		Conversation: PlanningConversationView{Conversation: convFresh, Parts: planningConversationParts(finalTurns), NeedsRun: planningConversationNeedsRun(finalTurns)},
+		Conversation: PlanningConversationView{Conversation: convFresh, Parts: planningConversationParts(finalTurns), NeedsRun: planningConversationShouldAutoRun(convFresh, finalTurns)},
 	})
 	s.logger().Info("planning turn finished",
 		"discussion", d.ID,
@@ -521,7 +522,7 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 		Conversation: PlanningConversationView{
 			Conversation: convFresh,
 			Parts:        planningConversationParts(finalTurns),
-			NeedsRun:     planningConversationNeedsRun(finalTurns),
+			NeedsRun:     planningConversationShouldAutoRun(convFresh, finalTurns),
 		},
 	})
 	s.logger().Info("stored planning turn finished",

@@ -284,6 +284,9 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 		if err != nil {
 			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
 		}
+		if err := s.validateDraft(d); err != nil {
+			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
+		}
 		result, err := s.planner.assembleWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
 		if err != nil {
 			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
@@ -304,6 +307,20 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 	default:
 		return "unknown tool: " + tc.Name, dispatchTool, nil, "", true
 	}
+}
+
+func (s *conversationSession) validateDraft(d *draft) error {
+	if d == nil {
+		return fmt.Errorf("draft is required")
+	}
+	n := s.opts.Discussants
+	if n < 2 {
+		return nil
+	}
+	if len(d.Discussants) != n {
+		return fmt.Errorf("use exactly %d discussants; got %d", n, len(d.Discussants))
+	}
+	return nil
 }
 
 func (s *conversationSession) planLanguage() string {
@@ -430,5 +447,6 @@ func ConversationInitialText(req PlanRequest) string {
 		sb.WriteString("- Do not use live web research unless the user explicitly asks for it later.\n")
 	}
 	sb.WriteString(fmt.Sprintf("\nUse exactly %d discussants. Each discussant must have a distinct perspective.\n", n))
+	sb.WriteString(referencePrompt(req.Reference))
 	return AttachmentsText(sb.String(), req.Attachments)
 }

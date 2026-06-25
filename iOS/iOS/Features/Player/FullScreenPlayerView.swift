@@ -248,6 +248,7 @@ struct FullScreenPlayerView: View {
                 onEditCover: { showingCoverEditor = true },
                 onMakePrivate: {},
                 onShare: { showingShareSheet = true },
+                onCreateFollowUp: nil,
                 isCreatingFromPlan: false,
                 onCreateFromPlan: nil
             )

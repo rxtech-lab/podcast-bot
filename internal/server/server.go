@@ -274,11 +274,13 @@ func New(d Deps) *Server {
 	if d.Discussions != nil {
 		s.mux.HandleFunc("GET /api/discussions", s.handleDiscussionList)
 		s.mux.HandleFunc("POST /api/discussions", s.handleDiscussionCreate)
+		s.mux.HandleFunc("GET /api/discussions/parent-podcasts", s.handleDiscussionParentPodcastList)
 		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)
 		s.mux.HandleFunc("POST /api/discussions/plan/stream", s.handleDiscussionPlanStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/plan/stream", s.handleDiscussionPlanStreamForID)
 		s.mux.HandleFunc("POST /api/discussions/{id}/create/plan", s.handleDiscussionCreateFromPlan)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
+		s.mux.HandleFunc("GET /api/discussions/{id}/parent-podcast", s.handleDiscussionParentPodcastGet)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary", s.handleDiscussionSummary)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pdf", s.handleDiscussionSummaryPDF)
 		s.mux.HandleFunc("POST /api/discussions/{id}/summary/generate", s.handleDiscussionSummaryGenerate)
@@ -486,17 +488,20 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string, started func(*
 
 // transcriptDTO is the JSON-serialisable form of an agent.TranscriptLine.
 type transcriptDTO struct {
-	Speaker string    `json:"speaker"`
-	Role    string    `json:"role"`
-	Side    string    `json:"side"`
-	Text    string    `json:"text"`
-	At      time.Time `json:"at"`
+	Speaker          string                   `json:"speaker"`
+	Role             string                   `json:"role"`
+	Side             string                   `json:"side"`
+	Text             string                   `json:"text"`
+	At               time.Time                `json:"at"`
+	Sources          []agent.TranscriptSource `json:"sources,omitempty"`
+	JudgementComment string                   `json:"judgement_comment,omitempty"`
 }
 
 func toDTO(l agent.TranscriptLine) transcriptDTO {
 	return transcriptDTO{
 		Speaker: l.Speaker, Role: string(l.Role), Side: l.Side,
-		Text: l.Text, At: l.At,
+		Text: l.Text, At: l.At, Sources: l.Sources,
+		JudgementComment: l.JudgementComment,
 	}
 }
 
@@ -618,10 +623,12 @@ func writeDiscussionTranscript(w http.ResponseWriter, lines []DiscussionLine) {
 	out := make([]transcriptDTO, len(lines))
 	for i, l := range lines {
 		out[i] = transcriptDTO{
-			Speaker: l.Speaker,
-			Role:    l.Role,
-			Side:    l.Side,
-			Text:    l.Text,
+			Speaker:          l.Speaker,
+			Role:             l.Role,
+			Side:             l.Side,
+			Text:             l.Text,
+			Sources:          l.Sources,
+			JudgementComment: l.JudgementComment,
 		}
 	}
 	_ = json.NewEncoder(w).Encode(out)
@@ -651,6 +658,12 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 			"speaker":    m.Speaker, "role": string(m.Role), "side": m.Side,
 			"text": m.Text, "done": m.Done,
 			"isUserMessage": m.IsUserMessage,
+		}
+		if len(m.Sources) > 0 {
+			payload["sources"] = m.Sources
+		}
+		if m.JudgementComment != "" {
+			payload["judgement_comment"] = m.JudgementComment
 		}
 		if m.SenderUserID != "" {
 			payload["sender_user_id"] = m.SenderUserID

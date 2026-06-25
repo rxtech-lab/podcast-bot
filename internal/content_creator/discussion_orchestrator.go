@@ -42,6 +42,13 @@ func (o *Orchestrator) buildDiscussionAgents() error {
 			APIKey:  o.Topic.Commander.APIKey,
 		},
 		agent.RoleCommander, o.Env.HostModel)
+
+	o.Registry.Judgement = o.makeAgent(
+		config.AgentSpec{
+			Name:  "Judgement",
+			Model: o.Env.JudgementModel,
+		},
+		agent.RoleJudgement, o.Env.JudgementModel)
 	return nil
 }
 

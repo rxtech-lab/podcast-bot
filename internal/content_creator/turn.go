@@ -1,6 +1,8 @@
 package contentcreator
 
 import (
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +53,13 @@ type Turn struct {
 	mu     sync.Mutex
 	played bool
 	err    error
+
+	metaMu           sync.Mutex
+	sources          []agent.TranscriptSource
+	judgementComment string
 }
+
+var toolURLRe = regexp.MustCompile(`https?://[^\s\]\)"'<>]+`)
 
 // AppendText accumulates one sentence into the turn's full-text buffer.
 // Called by the producer for every sentence the LLM emits.
@@ -73,6 +81,79 @@ func (t *Turn) FullText() string {
 	t.textMu.Lock()
 	defer t.textMu.Unlock()
 	return t.fullText.String()
+}
+
+// RecordToolResult captures public source links returned by research/search
+// tools used while the speaker composed this turn.
+func (t *Turn) RecordToolResult(name, _, result string) {
+	if t == nil || !toolLooksLikeResearch(name) {
+		return
+	}
+	for _, raw := range toolURLRe.FindAllString(result, -1) {
+		raw = strings.TrimRight(raw, ".,;:)]}")
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			continue
+		}
+		src := agent.TranscriptSource{
+			Title:   u.Host,
+			URL:     u.String(),
+			Snippet: truncateSourceSnippet(result, 220),
+		}
+		t.addSource(src)
+	}
+}
+
+func toolLooksLikeResearch(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "search") ||
+		strings.Contains(n, "firecrawl") ||
+		strings.Contains(n, "crawl") ||
+		strings.Contains(n, "web") ||
+		strings.Contains(n, "url")
+}
+
+func truncateSourceSnippet(s string, n int) string {
+	flat := strings.Join(strings.Fields(s), " ")
+	r := []rune(flat)
+	if len(r) <= n {
+		return flat
+	}
+	return string(r[:n]) + "..."
+}
+
+func (t *Turn) addSource(src agent.TranscriptSource) {
+	t.metaMu.Lock()
+	defer t.metaMu.Unlock()
+	for _, existing := range t.sources {
+		if existing.URL == src.URL {
+			return
+		}
+	}
+	t.sources = append(t.sources, src)
+	if len(t.sources) > 5 {
+		t.sources = t.sources[:5]
+	}
+}
+
+func (t *Turn) Sources() []agent.TranscriptSource {
+	t.metaMu.Lock()
+	defer t.metaMu.Unlock()
+	out := make([]agent.TranscriptSource, len(t.sources))
+	copy(out, t.sources)
+	return out
+}
+
+func (t *Turn) SetJudgementComment(comment string) {
+	t.metaMu.Lock()
+	defer t.metaMu.Unlock()
+	t.judgementComment = strings.TrimSpace(comment)
+}
+
+func (t *Turn) JudgementComment() string {
+	t.metaMu.Lock()
+	defer t.metaMu.Unlock()
+	return t.judgementComment
 }
 
 // SetErr records a terminal error for this turn.

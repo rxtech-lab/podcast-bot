@@ -17,11 +17,6 @@ func conversationPlanSchema(discussants int) map[string]any {
 			},
 			"required": []string{"name", "aspect"},
 		},
-		"minItems": 2,
-	}
-	if discussants >= 2 {
-		discussantsSchema["minItems"] = discussants
-		discussantsSchema["maxItems"] = discussants
 	}
 	return map[string]any{
 		"type": "object",
@@ -56,7 +51,6 @@ func conversationTools(discussants int) []openai.ChatCompletionToolParam {
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
 					"description": "The http(s) URLs to read.",
-					"minItems":    1,
 				},
 			},
 			"required": []string{"urls"},
@@ -71,8 +65,7 @@ func conversationTools(discussants int) []openai.ChatCompletionToolParam {
 			"type": "object",
 			"properties": map[string]any{
 				"questions": map[string]any{
-					"type":     "array",
-					"minItems": 1,
+					"type": "array",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{

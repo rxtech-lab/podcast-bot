@@ -32,16 +32,18 @@ func PhaseLabel(contentType string, p agent.Phase) string {
 // Zero means "unknown" — emitters that don't have measured audio (e.g. the
 // final Done=true marker) leave it unset.
 type TranscriptMsg struct {
-	ChannelID     string
-	Speaker       string
-	Role          agent.Role
-	Side          string
-	Text          string
-	Done          bool
-	IsUserMessage bool
-	SenderUserID  string
-	AudioURL      string
-	AudioDuration time.Duration
+	ChannelID        string
+	Speaker          string
+	Role             agent.Role
+	Side             string
+	Text             string
+	Done             bool
+	IsUserMessage    bool
+	SenderUserID     string
+	AudioURL         string
+	AudioDuration    time.Duration
+	Sources          []agent.TranscriptSource
+	JudgementComment string
 }
 
 // TickMsg updates the elapsed/remaining clock display.

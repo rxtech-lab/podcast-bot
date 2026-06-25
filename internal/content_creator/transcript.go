@@ -71,11 +71,13 @@ func (t *Transcript) AppendFromTurn(tn *Turn) agent.TranscriptLine {
 		b.WriteString(sent)
 	}
 	line := agent.TranscriptLine{
-		Speaker: tn.Speaker.Name(),
-		Role:    tn.Speaker.Role(),
-		Side:    tn.Speaker.Side(),
-		Text:    b.String(),
-		At:      time.Now(),
+		Speaker:          tn.Speaker.Name(),
+		Role:             tn.Speaker.Role(),
+		Side:             tn.Speaker.Side(),
+		Text:             b.String(),
+		At:               time.Now(),
+		Sources:          tn.Sources(),
+		JudgementComment: tn.JudgementComment(),
 	}
 	t.mu.Lock()
 	t.lines = append(t.lines, line)
