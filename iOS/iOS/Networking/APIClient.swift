@@ -110,6 +110,62 @@ final class APIClient: Sendable {
         return try await get("/api/discussions/\(id)", query: query)
     }
 
+    /// Fetches the generated summary document (Markdown body) for a podcast. The
+    /// detail payload only carries a content-free `summary` descriptor; this is
+    /// the separate endpoint the summary view calls on mount. Throws (404) when no
+    /// summary exists yet.
+    func summary(id: String, docType: String = "summary") async throws -> SummaryDocument {
+        var query: [URLQueryItem] = []
+        if docType != "summary" {
+            query.append(URLQueryItem(name: "doc_type", value: docType))
+        }
+        return try await get("/api/discussions/\(id)/summary", query: query)
+    }
+
+    /// Starts or retries summary generation for an owned, finished podcast and
+    /// returns the refreshed discussion so the toolbar can show the pending state.
+    func generateSummary(id: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/summary/generate", body: EmptyRequest())
+    }
+
+    /// Downloads the summary rendered as a PDF (produced server-side via
+    /// Cloudflare Browser Rendering, with ```mermaid blocks drawn as real
+    /// diagrams) and writes it to a temporary file, returning the local URL ready
+    /// to share/export. Throws 404 when no summary exists, 503 when PDF export
+    /// isn't configured on the server.
+    func downloadSummaryPDF(id: String, docType: String = "summary", title: String) async throws -> URL {
+        var query: [URLQueryItem] = []
+        if docType != "summary" {
+            query.append(URLQueryItem(name: "doc_type", value: docType))
+        }
+        let (data, _) = try await perform(request(method: "GET",
+                                                  path: "/api/discussions/\(id)/summary/pdf",
+                                                  query: query))
+        return try writeSummaryFile(data: data, title: title, ext: "pdf")
+    }
+
+    /// Writes already-fetched summary Markdown to a temporary `.md` file and
+    /// returns the local URL, so the Markdown export shares the PDF export's sheet.
+    func writeSummaryMarkdown(_ markdown: String, title: String) throws -> URL {
+        try writeSummaryFile(data: Data(markdown.utf8), title: title, ext: "md")
+    }
+
+    /// Writes summary export bytes to a uniquely-named temp file under
+    /// `SummaryDownloads/`, sanitising the title into a safe base filename.
+    private func writeSummaryFile(data: Data, title: String, ext: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SummaryDownloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+        let sanitized = title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+        let baseName = String(sanitized).trimmingCharacters(in: CharacterSet(charactersIn: " -_"))
+        let name = baseName.isEmpty ? "Summary" : String(baseName.prefix(80))
+        let url = directory.appendingPathComponent(name).appendingPathExtension(ext)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
     func planDiscussion(_ req: PlanRequest) async throws -> Discussion {
         try await send("POST", "/api/discussions/plan", body: req)
     }

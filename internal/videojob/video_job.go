@@ -403,6 +403,10 @@ func run(ctx context.Context, deps Deps, jobID string,
 	persistUsageSummary(ctx, deps, jobID, logger, orch)
 	chargeGenerationPoints(ctx, deps, logger, orch)
 	persistDiscussionTranscript(ctx, deps, logger, orch)
+	// Auto-generate the podcast's summary document now that it has finished. Runs
+	// in the background so finalisation (stitch/upload) isn't blocked; the client
+	// is notified via summary_ready when it lands.
+	startSummaryGeneration(deps, jobID, topic, orch.Transcript.Snapshot())
 	status(fmt.Sprintf("orchestrator done (%s)",
 		time.Since(tRun).Round(time.Second)))
 

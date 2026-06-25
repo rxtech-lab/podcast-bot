@@ -17,6 +17,7 @@ const (
 	pointsReasonGeneration           = "generation"
 	pointsReasonGenerationAdjustment = "generation_adjustment"
 	pointsReasonImageGeneration      = "image_generation"
+	pointsReasonSummary              = "summary"
 	pointsReasonSignup               = "signup_grant"
 	pointsReasonPurchase             = "purchase" // suffixed with the event type, e.g. "purchase:RENEWAL"
 )
@@ -371,7 +372,8 @@ func (s *PointsStore) matchingReserveByDiscussion(ctx context.Context, userID st
 }
 
 func collapsibleSettlementReason(reason string) bool {
-	return reason == pointsReasonPlanning || reason == pointsReasonGeneration || reason == pointsReasonImageGeneration
+	return reason == pointsReasonPlanning || reason == pointsReasonGeneration ||
+		reason == pointsReasonImageGeneration || reason == pointsReasonSummary
 }
 
 func collapsibleReserveKind(reason string) (string, bool) {
@@ -382,6 +384,8 @@ func collapsibleReserveKind(reason string) (string, bool) {
 		return pointsReasonGeneration, true
 	case "reserve:" + pointsReasonImageGeneration:
 		return pointsReasonImageGeneration, true
+	case "reserve:" + pointsReasonSummary:
+		return pointsReasonSummary, true
 	default:
 		return "", false
 	}
@@ -838,6 +842,52 @@ func (s *PointsStore) ChargeGeneration(ctx context.Context, env *config.Env, dis
 		return nil
 	}
 	return s.SettleGeneration(ctx, discussionID, s.GenerationPoints(env, detail.CostUSD), detail)
+}
+
+// SummaryPoints converts a summary run's real cost into points at the standard
+// markup. Unlike generation there is no per-podcast minimum — a summary is
+// charged purely on its metered usage.
+func (s *PointsStore) SummaryPoints(env *config.Env, costUSD float64) int64 {
+	return pointsForCost(env, costUSD)
+}
+
+// ReserveSummary atomically holds the estimated summary cost against the
+// creator's balance before the summary agent runs, so summary generation is
+// never free and can't overdraw. Returns the reserved amount, the reserve ledger
+// id (for settlement), and ok=false (with no change) when the balance is short.
+// Reserved 0 / ok=true when points is disabled or the estimate is zero — the
+// caller then runs the summary without a hold and settles to actual.
+func (s *PointsStore) ReserveSummary(ctx context.Context, env *config.Env, userID, discussionID string) (reserved, reserveLedgerID int64, ok bool, err error) {
+	if s == nil {
+		return 0, 0, true, nil
+	}
+	required := int64(0)
+	if env != nil {
+		required = pointsForUSD(env, env.PointsSummaryEstUSD)
+	}
+	if required <= 0 {
+		return 0, 0, true, nil
+	}
+	accepted, _, ledgerID, err := s.ReserveWithLedgerID(ctx, userID, discussionID, required, pointsReasonSummary)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if !accepted {
+		return 0, 0, false, nil
+	}
+	return required, ledgerID, true, nil
+}
+
+// SettleSummary reconciles a summary reservation against the run's actual usage,
+// refunding the unused remainder and adding the actual points to the
+// discussion's running total. Pass actual=0 to fully refund when the summary
+// failed before producing chargeable work.
+func (s *PointsStore) SettleSummary(ctx context.Context, userID, discussionID string, reserveLedgerID, reserved, actual int64, detail PointsUsageDetail) error {
+	if s == nil || reserved <= 0 {
+		return nil
+	}
+	_, err := s.SettleReserved(ctx, userID, discussionID, reserveLedgerID, reserved, actual, pointsReasonSummary, detail)
+	return err
 }
 
 // Refund credits points back to a user (e.g. a reservation whose work never

@@ -18,6 +18,10 @@
 		DF6ADDF92FEB03C60045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF82FEB03C60045484F /* RevenueCatUI */; };
 		DF6AE8592FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
 		DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
+		DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9CE2FEC0E850045484F /* MarkdownUI */; };
+		DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9D02FEC0EB50045484F /* MarkdownUI */; };
+		AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000002 /* BeautifulMermaid */; };
+		AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000012 /* BeautifulMermaid */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -131,6 +135,7 @@
 				Features/Player/VoiceMessageRecorder.swift,
 				Features/Player/VoiceRecorderSheet.swift,
 				Features/Share/ShareSheet.swift,
+				Features/Summary/SummaryView.swift,
 				Networking/AcceptLanguage.swift,
 				Networking/APIClient.swift,
 				Networking/APIModels.swift,
@@ -194,6 +199,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */,
+				DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */,
+				AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */,
 				DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */,
 				DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */,
 				DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */,
@@ -224,6 +231,8 @@
 				DF6ADDF42FEB03A30045484F /* RxAuthSwift in Frameworks */,
 				DF6ADDF62FEB03A30045484F /* RxAuthSwiftUI in Frameworks */,
 				DF6ADDF22FEB03A30045484F /* SwiftStreamingMarkdown in Frameworks */,
+				DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */,
+				AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -319,6 +328,8 @@
 				DF6AD85B2FE9E5530045484F /* ReceiptParser */,
 				DF6AD85D2FE9E5530045484F /* RevenueCat */,
 				DF6AD85F2FE9E5530045484F /* RevenueCatUI */,
+				DF6AE9CE2FEC0E850045484F /* MarkdownUI */,
+				AABBCCDD0000000000000002 /* BeautifulMermaid */,
 			);
 			productName = iOS;
 			productReference = DF0DA32F2FE8445500A02339 /* iOS.app */;
@@ -391,6 +402,8 @@
 				DF6ADDF32FEB03A30045484F /* RxAuthSwift */,
 				DF6ADDF52FEB03A30045484F /* RxAuthSwiftUI */,
 				DF6ADDF82FEB03C60045484F /* RevenueCatUI */,
+				DF6AE9D02FEC0EB50045484F /* MarkdownUI */,
+				AABBCCDD0000000000000012 /* BeautifulMermaid */,
 			);
 			productName = iosClip;
 			productReference = DF6ADD9E2FEAF2CB0045484F /* iosClip.app */;
@@ -492,6 +505,8 @@
 				DF0DA35B2FE8459500A02339 /* XCRemoteSwiftPackageReference "SwiftStreamingMarkdown" */,
 				DFF5269C2FE8529A007BEF2A /* XCRemoteSwiftPackageReference "RxAuthSwift" */,
 				DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+				DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+				AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF0DA3302FE8445500A02339 /* Products */;
@@ -1199,6 +1214,22 @@
 				minimumVersion = 5.79.0;
 			};
 		};
+		DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.1;
+			};
+		};
+		AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/lukilabs/beautiful-mermaid-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 		DFF5269C2FE8529A007BEF2A /* XCRemoteSwiftPackageReference "RxAuthSwift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/rxtech-lab/RxAuthSwift";
@@ -1249,6 +1280,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
 			productName = RevenueCatUI;
+		};
+		DF6AE9CE2FEC0E850045484F /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
+		DF6AE9D02FEC0EB50045484F /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
+		AABBCCDD0000000000000002 /* BeautifulMermaid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
+			productName = BeautifulMermaid;
+		};
+		AABBCCDD0000000000000012 /* BeautifulMermaid */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */;
+			productName = BeautifulMermaid;
 		};
 		DFF5269D2FE8529A007BEF2A /* RxAuthSwift */ = {
 			isa = XCSwiftPackageProductDependency;

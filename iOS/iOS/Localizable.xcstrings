@@ -563,6 +563,9 @@
     "Could not create %@" : {
 
     },
+    "Could not generate summary" : {
+
+    },
     "Could not load %@" : {
 
     },
@@ -594,6 +597,9 @@
           }
         }
       }
+    },
+    "Couldn’t export" : {
+
     },
     "Couldn't open link" : {
 
@@ -823,6 +829,12 @@
     "Discussion" : {
       "comment" : "Round-table discussion type option"
     },
+    "Document type" : {
+
+    },
+    "Documents" : {
+
+    },
     "Done" : {
 
     },
@@ -873,6 +885,12 @@
           }
         }
       }
+    },
+    "Download Markdown" : {
+
+    },
+    "Download PDF" : {
+
     },
     "Download Podcast" : {
       "extractionState" : "stale",
@@ -1295,6 +1313,9 @@
         }
       }
     },
+    "Generate summary" : {
+
+    },
     "Generate the audio" : {
 
     },
@@ -1325,6 +1346,9 @@
       }
     },
     "Generating" : {
+
+    },
+    "Generating summary" : {
 
     },
     "Generating..." : {
@@ -2627,6 +2651,9 @@
         }
       }
     },
+    "Preparing PDF…" : {
+
+    },
     "Preparing Transcript" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2884,6 +2911,9 @@
         }
       }
     },
+    "Retry" : {
+
+    },
     "Revoke" : {
 
     },
@@ -3136,6 +3166,9 @@
     "Signed in" : {
 
     },
+    "Slides (coming soon)" : {
+
+    },
     "Source" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3259,6 +3292,12 @@
       }
     },
     "Subscription" : {
+
+    },
+    "Summary" : {
+
+    },
+    "Summary document" : {
 
     },
     "Switch between the cover art and synced captions while listening full screen." : {

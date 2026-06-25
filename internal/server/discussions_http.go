@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -125,9 +126,11 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 		}
 		s.applyDiscussionJobStatus(r, d, true)
 		s.applyDiscussionProgress(r.Context(), d)
+		s.applyDiscussionSummaryMeta(r.Context(), d)
 		s.refreshDiscussionCoverURL(r.Context(), d)
 		s.refreshDiscussionLineAudioURLs(r.Context(), d)
 		s.sanitizeDiscussionUsage(d)
+		s.logDiscussionSummaryReturn("discussions.get", d)
 		writeJSON(w, d)
 		return
 	}
@@ -137,9 +140,11 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionSummaryMeta(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
+	s.logDiscussionSummaryReturn("discussions.get", d)
 	writeJSON(w, d)
 }
 
@@ -775,6 +780,234 @@ func pastUserMessages(turns []DiscussionEditTurn) []string {
 	return out
 }
 
+// applyDiscussionSummaryMeta attaches the content-free summary descriptor to a
+// discussion on the detail path. The Markdown body is intentionally never loaded
+// here — clients fetch it from handleDiscussionSummary when the summary view
+// mounts. For a ready owner discussion without a summary row, the descriptor
+// advertises that manual generation can be started.
+func (s *Server) applyDiscussionSummaryMeta(ctx context.Context, d *Discussion) {
+	if d == nil || s.d.Discussions == nil {
+		return
+	}
+	meta, err := s.d.Discussions.SummaryMetaFor(ctx, d.ID, SummaryDocTypeSummary)
+	if err != nil {
+		s.logger().Warn("summary meta lookup failed", "discussion", d.ID, "err", err)
+		return
+	}
+	if meta == nil && d.Status == DiscussionReady {
+		meta = &SummaryMeta{
+			DocType:    SummaryDocTypeSummary,
+			Generation: d.IsOwner,
+		}
+	}
+	if meta != nil && !meta.Available && !meta.Pending && d.Status == DiscussionReady {
+		meta.Generation = d.IsOwner
+	}
+	d.Summary = meta
+}
+
+// handleDiscussionSummaryGenerate lets the discussion owner manually start or
+// retry summary generation after the podcast is ready. It returns the refreshed
+// discussion detail so clients can immediately render the pending menu state.
+func (s *Server) handleDiscussionSummaryGenerate(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if d.Status != DiscussionReady {
+		http.Error(w, "discussion is not ready", http.StatusConflict)
+		return
+	}
+	input := SummaryGenerationInputFromDiscussion(d)
+	if _, err := StartSummaryGeneration(r.Context(), SummaryGenerationDeps{
+		Env:         s.d.Env,
+		Bus:         s.d.Bus,
+		Discussions: s.d.Discussions,
+		Points:      s.d.Points,
+		Log:         s.logger(),
+	}, input); err != nil {
+		if errors.Is(err, ErrSummaryNoTranscript) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	updated, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.applyDiscussionSummaryMeta(r.Context(), updated)
+	s.logDiscussionSummaryReturn("discussions.summary.generate", updated)
+	writeJSON(w, updated)
+}
+
+// handleDiscussionSummary serves the generated summary document's Markdown body
+// for a discussion the requester can see. This is the separate content endpoint
+// the client calls only when the summary view mounts — the podcast detail never
+// carries the body. Returns 404 when no summary exists yet.
+func (s *Server) handleDiscussionSummary(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	docType := strings.TrimSpace(r.URL.Query().Get("doc_type"))
+	// Visibility gate: a viewer may read the summary of any discussion they can
+	// see (their own, or a public one). GetVisible returns nil when neither holds.
+	visible, err := s.d.Discussions.GetVisible(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if visible == nil {
+		http.NotFound(w, r)
+		return
+	}
+	doc, err := s.d.Discussions.SummaryDocumentFor(r.Context(), id, docType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if doc == nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, doc)
+}
+
+// handleDiscussionSummaryPDF renders the summary document to a PDF (via
+// Cloudflare Browser Rendering) and streams it back as an attachment. Same
+// visibility gate as handleDiscussionSummary; 404 when no summary exists, 503
+// when PDF export isn't configured.
+func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	docType := strings.TrimSpace(r.URL.Query().Get("doc_type"))
+	visible, err := s.d.Discussions.GetVisible(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if visible == nil {
+		http.NotFound(w, r)
+		return
+	}
+	doc, err := s.d.Discussions.SummaryDocumentFor(r.Context(), id, docType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if doc == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	title := strings.TrimSpace(visible.Title)
+	if title == "" {
+		title = strings.TrimSpace(visible.Topic)
+	}
+
+	cacheKey := s.summaryPDFCacheKey(id, doc)
+
+	// Serve a previously-rendered PDF from object storage when available. The
+	// Cloudflare render is the expensive step, so we pay it only once per summary
+	// version — the key embeds the summary's generated-at, so a regenerated
+	// summary renders fresh rather than serving a stale PDF.
+	if cacheKey != "" {
+		if info, err := s.d.Uploader.Head(r.Context(), cacheKey); err == nil && info.ContentLength > 0 {
+			if data, err := s.d.Uploader.Download(r.Context(), cacheKey); err == nil && len(data) > 0 {
+				s.writeSummaryPDF(w, title, data)
+				return
+			}
+		}
+	}
+
+	pdf, err := summaryPDFFromMarkdown(r.Context(), s.d.Env, title, doc.Markdown)
+	if errors.Is(err, errCloudflareNotConfigured) {
+		http.Error(w, "summary PDF export is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil {
+		s.logger().Error("summary pdf render failed", "discussion", id, "err", err)
+		http.Error(w, "failed to render summary PDF", http.StatusBadGateway)
+		return
+	}
+
+	// Cache for next time — best-effort; a storage failure must not fail the
+	// download the user is waiting on.
+	if cacheKey != "" {
+		if err := s.d.Uploader.UploadBytes(r.Context(), cacheKey, "application/pdf", pdf); err != nil {
+			s.logger().Warn("summary pdf cache upload failed", "discussion", id, "err", err)
+		}
+	}
+
+	s.writeSummaryPDF(w, title, pdf)
+}
+
+// summaryPDFCacheKey returns the object-storage key for a summary's rendered PDF,
+// or "" when uploads are disabled. The key embeds the summary's generated-at so a
+// regenerated summary produces a new key (old PDFs are orphaned, never stale).
+func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument) string {
+	if s.d.Uploader == nil || !s.d.Uploader.Enabled() || doc == nil {
+		return ""
+	}
+	docType := strings.TrimSpace(doc.DocType)
+	if docType == "" {
+		docType = SummaryDocTypeSummary
+	}
+	var gen int64
+	if doc.GeneratedAt != nil {
+		gen = doc.GeneratedAt.Unix()
+	}
+	return s.d.Uploader.Key(fmt.Sprintf("summary-pdf/%s/%s-v%s-%d.pdf",
+		discussionID, docType, summaryPDFTemplateVersion, gen))
+}
+
+// writeSummaryPDF streams the PDF bytes as a download attachment.
+func (s *Server) writeSummaryPDF(w http.ResponseWriter, title string, pdf []byte) {
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", summaryPDFFilename(title)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(pdf)))
+	_, _ = w.Write(pdf)
+}
+
+// summaryPDFFilename derives a safe, human-friendly download filename from the
+// discussion title.
+func summaryPDFFilename(title string) string {
+	name := strings.TrimSpace(title)
+	if name == "" {
+		name = "Summary"
+	}
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == ' ' || r == '-' || r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+	name = strings.TrimSpace(name)
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	if name == "" {
+		name = "Summary"
+	}
+	return name + ".pdf"
+}
+
 func (s *Server) applyDiscussionProgress(ctx context.Context, d *Discussion) {
 	if d == nil || s.d.Progress == nil {
 		return
@@ -1150,20 +1383,49 @@ func (s *Server) getOwnedDiscussion(w http.ResponseWriter, r *http.Request) *Dis
 }
 
 func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, timer *stationTimer) {
-	var coverDur, usageDur time.Duration
+	var coverDur, summaryDur, usageDur time.Duration
 	for i := range items {
 		// List rows skip resolving the presigned audio download URL — it is
 		// only needed on the detail screen and re-signing it per item is slow.
 		t0 := time.Now()
 		s.refreshDiscussionCoverURL(r.Context(), &items[i])
 		t1 := time.Now()
+		s.applyDiscussionSummaryMeta(r.Context(), &items[i])
+		t2 := time.Now()
 		s.sanitizeDiscussionUsage(&items[i])
 		items[i].DownloadURL = ""
 		coverDur += t1.Sub(t0)
-		usageDur += time.Since(t1)
+		summaryDur += t2.Sub(t1)
+		usageDur += time.Since(t2)
 	}
 	timer.add("cover", coverDur)
+	timer.add("summary", summaryDur)
 	timer.add("usage", usageDur)
+}
+
+func (s *Server) logDiscussionSummaryReturn(route string, d *Discussion) {
+	if d == nil {
+		return
+	}
+	if d.Summary == nil {
+		s.logger().Info("discussion summary return",
+			"route", route,
+			"discussion", d.ID,
+			"discussion_status", d.Status,
+			"is_owner", d.IsOwner,
+			"summary", nil)
+		return
+	}
+	s.logger().Info("discussion summary return",
+		"route", route,
+		"discussion", d.ID,
+		"discussion_status", d.Status,
+		"is_owner", d.IsOwner,
+		"summary_doc_type", d.Summary.DocType,
+		"summary_status", d.Summary.Status,
+		"summary_available", d.Summary.Available,
+		"summary_pending", d.Summary.Pending,
+		"summary_generation", d.Summary.Generation)
 }
 
 // applyDiscussionJobStatus reconciles a discussion's status against its job and

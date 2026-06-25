@@ -4,8 +4,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -132,6 +134,45 @@ func (u *Uploader) Upload(ctx context.Context, localPath, key string) error {
 		return fmt.Errorf("s3 upload: %w", err)
 	}
 	return nil
+}
+
+// UploadBytes stores data under key with the given content type. No-op (returns
+// nil) when the uploader is disabled. Use for small, already-in-memory artifacts
+// (e.g. a rendered PDF) rather than streaming a file from disk.
+func (u *Uploader) UploadBytes(ctx context.Context, key, contentType string, data []byte) error {
+	if !u.Enabled() {
+		return nil
+	}
+	if strings.TrimSpace(contentType) == "" {
+		contentType = "application/octet-stream"
+	}
+	_, err := u.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &u.cfg.Bucket,
+		Key:         &key,
+		Body:        bytes.NewReader(data),
+		ContentType: &contentType,
+	})
+	if err != nil {
+		return fmt.Errorf("s3 put: %w", err)
+	}
+	return nil
+}
+
+// Download fetches the full object bytes for key. Returns (nil, nil) when the
+// uploader is disabled or key is empty.
+func (u *Uploader) Download(ctx context.Context, key string) ([]byte, error) {
+	if !u.Enabled() || key == "" {
+		return nil, nil
+	}
+	resp, err := u.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &u.cfg.Bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get object: %w", err)
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
 
 // PresignPut returns a time-limited URL that accepts a direct PUT upload for
