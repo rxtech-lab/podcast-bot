@@ -160,6 +160,10 @@ extension PlanningPart {
         toolName == "show_plan" && script != nil
     }
 
+    var isTransientRunningTool: Bool {
+        kind == "tool" && status == "running" && !isPlanCard && !isQuestionCard
+    }
+
     var isQuestionCard: Bool {
         questions != nil && (status == "pending_question" || status == "completed" || status == "rejected")
     }

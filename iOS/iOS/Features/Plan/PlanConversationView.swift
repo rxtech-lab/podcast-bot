@@ -30,6 +30,8 @@ struct PlanConversationView: View {
     @State private var selectedLanguage: String
     @State private var streamTask: Task<Void, Never>?
     @State private var initialScrollTask: Task<Void, Never>?
+    @State private var streamHasActivity = false
+    @FocusState private var inputFocused: Bool
 
     init(discussion: Discussion,
          onGenerated: @escaping (Discussion) -> Void = { _ in }) {
@@ -64,6 +66,7 @@ struct PlanConversationView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: isShowingHistorySkeleton)
+        .animation(.spring(response: 0.34, dampingFraction: 0.86, blendDuration: 0.08), value: animatedRowIDs)
         .navigationTitle(discussion.title.isEmpty ? "Plan" : discussion.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
@@ -103,11 +106,24 @@ struct PlanConversationView: View {
     // MARK: - Rows
 
     private var rows: [PlanningRow] {
-        var r = parts.map { PlanningRow(id: $0.id, content: .part($0)) }
+        var r = visibleParts.map { PlanningRow(id: $0.id, content: .part($0)) }
         if isStreaming {
             r.append(PlanningRow(id: "planning-loading", content: .loading))
         }
         return r
+    }
+
+    private var visibleParts: [PlanningPart] {
+        guard isStreaming else { return parts }
+        var visible = parts
+        if let last = visible.last, last.isTransientRunningTool {
+            visible.removeLast()
+        }
+        return visible
+    }
+
+    private var animatedRowIDs: [String] {
+        rows.map(\.id)
     }
 
     @ViewBuilder
@@ -127,6 +143,7 @@ struct PlanConversationView: View {
                     PlanningToolCard(part: part) { selectedToolPart = part }
                     Spacer(minLength: 34)
                 }
+                .planningCardAppear(delay: 0.02)
             }
         }
     }
@@ -174,6 +191,7 @@ struct PlanConversationView: View {
                 .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             Spacer(minLength: 34)
         }
+        .planningCardAppear(delay: 0.04)
     }
 
     private func questionCard(_ part: PlanningPart) -> some View {
@@ -231,17 +249,25 @@ struct PlanConversationView: View {
     }
 
     private var loadingBubble: some View {
-        HStack(spacing: 10) {
-            ProgressView().tint(Theme.accent)
-            Text(progressText ?? String(localized: "Thinking…", comment: "Default progress text while the planning agent works"))
-                .font(.callout)
-                .foregroundStyle(Theme.secondaryText)
+        HStack {
+            HStack(spacing: 10) {
+                if !streamHasActivity {
+                    Text(String(localized: "Thinking…", comment: "Default progress text while the planning agent works"))
+                        .font(.callout)
+                        .foregroundStyle(Theme.secondaryText)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .leading)))
+                }
+                PlanningTypingDots()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Theme.agentBubble, in: .rect(cornerRadius: 20))
+            .animation(.easeInOut(duration: 0.18), value: streamHasActivity)
             Spacer(minLength: 34)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(Theme.agentBubble, in: .rect(cornerRadius: 20))
+        .accessibilityLabel(progressText ?? String(localized: "Thinking…", comment: "Default progress text while the planning agent works"))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .planningCardAppear()
     }
 
     // MARK: - History loading skeleton
@@ -377,6 +403,7 @@ struct PlanConversationView: View {
                 TextField("Message the planner", text: $input, axis: .vertical)
                     .lineLimit(1 ... 4)
                     .textFieldStyle(.plain)
+                    .focused($inputFocused)
                 Button(action: send) {
                     Image(systemName: isStreaming ? "ellipsis" : "arrow.up.circle.fill")
                         .font(.title2)
@@ -513,6 +540,11 @@ struct PlanConversationView: View {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         input = ""
+        // A vertical-axis TextField that is the first responder doesn't always
+        // refresh its displayed text when the binding is reset synchronously inside
+        // the send action. Re-assert the empty value on the next runloop so the
+        // field visibly clears without dismissing the keyboard.
+        DispatchQueue.main.async { input = "" }
         send(prompt: text, attachments: [])
     }
 
@@ -549,6 +581,7 @@ struct PlanConversationView: View {
 
     private func beginStream(_ makeStream: @escaping () -> AsyncThrowingStream<PlanningStreamEvent, Error>) {
         isStreaming = true
+        streamHasActivity = false
         progressText = String(localized: "Thinking…", comment: "Progress text while the planning agent works")
         streamTask?.cancel()
         let stream = makeStream()
@@ -585,12 +618,14 @@ struct PlanConversationView: View {
     private func handle(_ event: PlanningStreamEvent) {
         switch event {
         case let .textDelta(delta):
+            streamHasActivity = true
             upsertPart(id: "assistant-stream") { existing in
                 var p = existing ?? PlanningPart(kind: "text", id: "assistant-stream", role: "assistant", text: "")
                 p.text = (p.text ?? "") + delta
                 return p
             }
         case let .toolInputStart(payload):
+            streamHasActivity = true
             progressText = friendlyToolStatus(payload.toolName)
             if let id = payload.toolCallId, !id.isEmpty {
                 upsertPart(id: "tc-\(id)") { existing in
@@ -603,6 +638,7 @@ struct PlanConversationView: View {
                 }
             }
         case let .toolInputDelta(payload):
+            streamHasActivity = true
             guard let id = payload.toolCallId, !id.isEmpty else { return }
             upsertPart(id: "tc-\(id)") { existing in
                 var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(id)")
@@ -614,6 +650,7 @@ struct PlanConversationView: View {
                 return p
             }
         case let .toolCall(payload):
+            streamHasActivity = true
             upsertPart(id: "tc-\(payload.toolCallId)") { existing in
                 var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(payload.toolCallId)")
                 p.kind = "tool"
@@ -624,6 +661,7 @@ struct PlanConversationView: View {
                 return p
             }
         case let .toolResult(payload):
+            streamHasActivity = true
             upsertPart(id: "tc-\(payload.toolCallId)") { existing in
                 var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(payload.toolCallId)", toolCallID: payload.toolCallId, toolName: payload.toolName)
                 p.status = (payload.isError ?? false) ? "failed" : "completed"
@@ -631,6 +669,7 @@ struct PlanConversationView: View {
                 return p
             }
         case let .plan(payload):
+            streamHasActivity = true
             if let script = payload.script {
                 discussion.script = script
                 discussion.title = script.title
@@ -650,6 +689,7 @@ struct PlanConversationView: View {
                 return p
             }
         case let .question(payload):
+            streamHasActivity = true
             progressText = nil
             upsertPart(id: "tc-\(payload.toolCallId)") { existing in
                 var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(payload.toolCallId)", toolCallID: payload.toolCallId)
@@ -719,6 +759,65 @@ struct PlanConversationView: View {
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+}
+
+private struct PlanningTypingDots: View {
+    @State private var isAnimating = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(Theme.secondaryText)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(isAnimating ? 1 : 0.55)
+                    .opacity(isAnimating ? 1 : 0.3)
+                    .animation(
+                        .easeInOut(duration: 0.6)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(index) * 0.18),
+                        value: isAnimating
+                    )
+            }
+        }
+        // No oversized frame: the dots size to their intrinsic 7pt height so the
+        // bubble's padding centers them. A taller frame leaves vertical slack the
+        // dots ride to the top of, making them spill out of the bubble.
+        .onAppear { isAnimating = true }
+    }
+}
+
+private struct PlanningCardAppearModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isVisible = false
+    let delay: Double
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .scaleEffect(reduceMotion ? 1 : (isVisible ? 1 : 0.97), anchor: .topLeading)
+            .offset(y: reduceMotion ? 0 : (isVisible ? 0 : 10))
+            .transition(.asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .bottom)),
+                removal: .opacity
+            ))
+            .onAppear {
+                guard !isVisible else { return }
+                if reduceMotion {
+                    isVisible = true
+                } else {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.84).delay(delay)) {
+                        isVisible = true
+                    }
+                }
+            }
+    }
+}
+
+private extension View {
+    func planningCardAppear(delay: Double = 0) -> some View {
+        modifier(PlanningCardAppearModifier(delay: delay))
     }
 }
 

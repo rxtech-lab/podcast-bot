@@ -42,7 +42,8 @@ struct PlanDetailView: View {
     private var recoveredLoadingID: String { "recovered-progress-\(discussion.id)" }
 
     init(discussion: Discussion, initialPlan: PlanRequest? = nil,
-         onGenerated: @escaping (Discussion) -> Void = { _ in }) {
+         onGenerated: @escaping (Discussion) -> Void = { _ in })
+    {
         _discussion = State(initialValue: discussion)
         _selectedLanguage = State(initialValue: DiscussionLanguage.normalized(discussion.script?.language ?? discussion.language))
         self.initialPlan = initialPlan
@@ -152,12 +153,14 @@ struct PlanDetailView: View {
                 }
             ) { turn in
                 PlanEditBubble(turn: turn, progressText: progressText,
-                               onEditModels: { showingSpeakerModels = true }) {
+                               onEditModels: { showingSpeakerModels = true })
+                {
                     showingSources = true
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 7)
             }
+            .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .contentMargins(.bottom, 96, for: .scrollContent)
 
@@ -640,7 +643,7 @@ struct PlanDetailView: View {
         progressText = nil
         editTurns.removeAll { $0.role == .loading }
         appendError(fallbackError ?? String(localized: "Planning didn’t finish. Pull to refresh or try editing the plan.",
-                                             comment: "Fallback error when initial planning never produced a plan"))
+                                            comment: "Fallback error when initial planning never produced a plan"))
     }
 
     private func improve() {
@@ -700,7 +703,8 @@ struct PlanDetailView: View {
         for _ in 0 ..< 100 {
             if Task.isCancelled { return }
             if let full = try? await api.discussion(id: discussion.id),
-               full.updatedAt != nil, full.updatedAt != baselineUpdatedAt {
+               full.updatedAt != nil, full.updatedAt != baselineUpdatedAt
+            {
                 discussion = full
                 isImproving = false
                 appendUpdatedPlan()
@@ -712,7 +716,7 @@ struct PlanDetailView: View {
         progressText = nil
         editTurns.removeAll { $0.role == .loading }
         appendError(fallbackError ?? String(localized: "The edit didn’t finish. Pull to refresh or try again.",
-                                             comment: "Fallback error when a plan edit never produced a revised plan"))
+                                            comment: "Fallback error when a plan edit never produced a revised plan"))
     }
 
     private func generate() {
@@ -728,7 +732,7 @@ struct PlanDetailView: View {
                 // Not enough points to cover a full podcast — open the paywall.
                 isGenerating = false
                 errorMessage = String(localized: "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance)).",
-                              comment: "Shown when the user lacks enough points; values are formatted point amounts")
+                                      comment: "Shown when the user lacks enough points; values are formatted point amounts")
                 await purchases.refreshBalance()
                 showingPaywall = true
             } catch {
@@ -884,7 +888,8 @@ extension PlanSnapshot {
     /// Memberwise initializer for previews/tests (the production type only ships
     /// `init(discussion:)`).
     init(title: String, topic: String, background: String,
-         people: [PlanPersonSnapshot], sources: [PlanSourceSnapshot]) {
+         people: [PlanPersonSnapshot], sources: [PlanSourceSnapshot])
+    {
         self.title = title
         self.topic = topic
         self.background = background

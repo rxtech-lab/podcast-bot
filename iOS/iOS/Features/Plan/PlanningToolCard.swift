@@ -9,36 +9,62 @@ struct PlanningToolCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.callout)
-                    .foregroundStyle(iconColor)
-                    .frame(width: 22)
+            HStack(spacing: 12) {
+                iconBadge
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.subheadline.weight(.medium))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(statusText)
                         .font(.caption)
                         .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
                 }
-                Spacer(minLength: 8)
-                if status == .running {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.secondaryText)
-                }
+                Spacer(minLength: 6)
+                trailingAccessory
             }
-            .padding(12)
-            .frame(maxWidth: 280, alignment: .leading)
-            .background(Theme.agentBubble, in: .rect(cornerRadius: 14))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: 290, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Theme.agentBubble)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(iconColor.opacity(0.18), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.05), radius: 5, y: 2)
+            .animation(.easeInOut(duration: 0.18), value: status)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlanningToolCardButtonStyle())
     }
 
-    private enum Status { case running, completed, failed }
+    private var iconBadge: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(iconColor.opacity(0.16))
+                .frame(width: 30, height: 30)
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(iconColor)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingAccessory: some View {
+        if status == .running {
+            ProgressView().controlSize(.small)
+                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+        } else {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(Theme.secondaryText.opacity(0.7))
+                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+        }
+    }
+
+    private enum Status: Equatable { case running, completed, failed }
 
     private var status: Status {
         switch part.status {
@@ -83,6 +109,16 @@ struct PlanningToolCard: View {
         case .completed: return String(localized: "Tap to view details", comment: "Tool card hint to open the detail sheet")
         case .failed: return String(localized: "Failed", comment: "Tool card status when a tool failed")
         }
+    }
+}
+
+/// Subtle scale + dim feedback when the tool card is pressed.
+struct PlanningToolCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

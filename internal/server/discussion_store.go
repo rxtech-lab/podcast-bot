@@ -306,6 +306,17 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			created_at INTEGER NOT NULL,
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_speaker_models (
+			discussion_id TEXT NOT NULL,
+			speaker_name TEXT NOT NULL,
+			model TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, speaker_name),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_speaker_models_discussion_idx
+			ON native_discussion_speaker_models(discussion_id)`,
 		`CREATE TABLE IF NOT EXISTS native_discussion_likes (
 			user_id TEXT NOT NULL,
 			discussion_id TEXT NOT NULL,
@@ -554,6 +565,11 @@ func (s *DiscussionStore) Create(ctx context.Context, owner, topic string, resp 
 		now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return nil, err
+	}
+	if resp.Script != nil {
+		if err := s.seedSpeakerModelOverrides(ctx, id, resp.Script); err != nil {
+			return nil, err
+		}
 	}
 	_ = s.AppendPlanTurn(ctx, owner, id, "Current plan", resp)
 	return s.Get(ctx, owner, id)
@@ -829,6 +845,9 @@ func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*D
 		return nil, err
 	}
 	markDiscussionViewer(&d, viewer)
+	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+		return nil, err
+	}
 	lines, err := s.lines(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1240,6 +1259,9 @@ func (s *DiscussionStore) GetByJobID(ctx context.Context, jobID string) (*Discus
 		return nil, err
 	}
 	markDiscussionViewer(&d, d.OwnerUserID)
+	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+		return nil, err
+	}
 	return &d, nil
 }
 
@@ -1258,6 +1280,9 @@ func (s *DiscussionStore) GetForNotification(ctx context.Context, id string) (*D
 		return nil, err
 	}
 	markDiscussionViewer(&d, d.OwnerUserID)
+	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+		return nil, err
+	}
 	return &d, nil
 }
 
@@ -1272,6 +1297,9 @@ func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (
 		return nil, err
 	}
 	markDiscussionViewer(&d, owner)
+	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+		return nil, err
+	}
 	return &d, nil
 }
 
@@ -1301,6 +1329,18 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	title := ""
 	language := "en-US"
 	if resp.Script != nil {
+		current, err := s.getDiscussion(ctx, owner, id)
+		if err != nil {
+			return nil, err
+		}
+		if current != nil && current.Script != nil {
+			if err := s.seedSpeakerModelOverrides(ctx, id, current.Script); err != nil {
+				return nil, err
+			}
+		}
+		if err := s.applySpeakerModelOverridesToScript(ctx, id, resp.Script); err != nil {
+			return nil, err
+		}
 		title = resp.Script.Title
 		language = resp.Script.Language
 	}
@@ -1322,14 +1362,145 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, nil
 	}
+	if resp.Script != nil {
+		if err := s.upsertSpeakerModelOverrides(ctx, id, resp.Script); err != nil {
+			return nil, err
+		}
+	}
 	return s.Get(ctx, owner, id)
 }
 
-// SetSpeakerModel changes the LLM model for a single speaker (the host or a
-// discussant, matched by name) in the discussion's plan. Only script_json is
-// rewritten so sources/markdown/research survive. Returns nil (→ 404) when the
-// discussion has no plan or no speaker matches the given name.
+func (s *DiscussionStore) applySpeakerModelOverrides(ctx context.Context, d *Discussion) error {
+	if d == nil || d.Script == nil {
+		return nil
+	}
+	return s.applySpeakerModelOverridesToScript(ctx, d.ID, d.Script)
+}
+
+func (s *DiscussionStore) applySpeakerModelOverridesToScript(ctx context.Context, discussionID string, script *config.DebateTopic) error {
+	if script == nil {
+		return nil
+	}
+	overrides, err := s.speakerModelOverrides(ctx, discussionID)
+	if err != nil || len(overrides) == 0 {
+		return err
+	}
+	applySpeakerModelOverridesToTopic(script, overrides)
+	return nil
+}
+
+func (s *DiscussionStore) speakerModelOverrides(ctx context.Context, discussionID string) (map[string]string, error) {
+	discussionID = strings.TrimSpace(discussionID)
+	if discussionID == "" {
+		return nil, nil
+	}
+	overrides := map[string]string{}
+	err := retryTransientDBConnection(ctx, func() error {
+		rows, err := s.db.QueryContext(ctx, `SELECT speaker_name, model
+			FROM native_discussion_speaker_models WHERE discussion_id = ?`, discussionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		next := map[string]string{}
+		for rows.Next() {
+			var speaker, model string
+			if err := rows.Scan(&speaker, &model); err != nil {
+				return err
+			}
+			speaker = strings.TrimSpace(speaker)
+			model = strings.TrimSpace(model)
+			if speaker == "" || model == "" {
+				continue
+			}
+			next[speaker] = model
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		overrides = next
+		return nil
+	})
+	return overrides, err
+}
+
+func (s *DiscussionStore) seedSpeakerModelOverrides(ctx context.Context, discussionID string, script *config.DebateTopic) error {
+	if script == nil {
+		return nil
+	}
+	var count int
+	err := retryTransientDBConnection(ctx, func() error {
+		return s.db.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM native_discussion_speaker_models WHERE discussion_id = ?`,
+			discussionID).Scan(&count)
+	})
+	if err != nil || count > 0 {
+		return err
+	}
+	return s.upsertSpeakerModelOverrides(ctx, discussionID, script)
+}
+
+func (s *DiscussionStore) upsertSpeakerModelOverrides(ctx context.Context, discussionID string, script *config.DebateTopic) error {
+	if script == nil {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	for speaker, model := range speakerModelsFromTopic(script) {
+		if _, err := s.exec(ctx, `INSERT INTO native_discussion_speaker_models
+			(discussion_id, speaker_name, model, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(discussion_id, speaker_name) DO UPDATE SET
+				model = excluded.model,
+				updated_at = excluded.updated_at`,
+			discussionID, speaker, model, now, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func speakerModelsFromTopic(topic *config.DebateTopic) map[string]string {
+	out := map[string]string{}
+	if topic == nil {
+		return out
+	}
+	add := func(speaker, model string) {
+		speaker = strings.TrimSpace(speaker)
+		model = strings.TrimSpace(model)
+		if speaker == "" || model == "" {
+			return
+		}
+		out[speaker] = model
+	}
+	add(topic.Host.Name, topic.Host.Model)
+	for _, d := range topic.Discussants {
+		add(d.Name, d.Model)
+	}
+	return out
+}
+
+func applySpeakerModelOverridesToTopic(topic *config.DebateTopic, overrides map[string]string) {
+	if topic == nil || len(overrides) == 0 {
+		return
+	}
+	if model := overrides[strings.TrimSpace(topic.Host.Name)]; model != "" {
+		topic.Host.Model = model
+	}
+	for i := range topic.Discussants {
+		if model := overrides[strings.TrimSpace(topic.Discussants[i].Name)]; model != "" {
+			topic.Discussants[i].Model = model
+		}
+	}
+}
+
+// SetSpeakerModel changes the LLM model override for a single speaker (the host
+// or a discussant, matched by name) in the discussion's plan. The override lives
+// outside script_json so later plan regenerations that add/remove speakers keep
+// the user's existing per-speaker assignments by speaker name. Returns nil
+// (→ 404) when the discussion has no plan or no speaker matches the given name.
 func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speaker, model string) (*Discussion, error) {
+	speaker = strings.TrimSpace(speaker)
+	model = strings.TrimSpace(model)
 	d, err := s.getDiscussion(ctx, owner, id)
 	if err != nil || d == nil {
 		return nil, err
@@ -1337,28 +1508,34 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 	if d.Script == nil {
 		return nil, nil
 	}
+	if err := s.seedSpeakerModelOverrides(ctx, id, d.Script); err != nil {
+		return nil, err
+	}
 	matched := false
 	if d.Script.Host.Name == speaker {
-		d.Script.Host.Model = model
 		matched = true
 	}
 	for i := range d.Script.Discussants {
 		if d.Script.Discussants[i].Name == speaker {
-			d.Script.Discussants[i].Model = model
 			matched = true
 		}
 	}
 	if !matched {
 		return nil, nil
 	}
-	scriptJSON, err := marshalString(d.Script)
+	now := time.Now().UnixMilli()
+	_, err = s.exec(ctx, `INSERT INTO native_discussion_speaker_models
+		(discussion_id, speaker_name, model, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(discussion_id, speaker_name) DO UPDATE SET
+			model = excluded.model,
+			updated_at = excluded.updated_at`,
+		id, speaker, model, now, now)
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.exec(ctx, `UPDATE native_discussions SET
-		script_json = ?, updated_at = ?
-		WHERE owner_user_id = ? AND id = ?`,
-		scriptJSON, time.Now().UnixMilli(), owner, id)
+	res, err := s.exec(ctx, `UPDATE native_discussions SET updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`, now, owner, id)
 	if err != nil {
 		return nil, err
 	}
