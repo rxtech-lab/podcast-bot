@@ -5,6 +5,14 @@ import Foundation
 
 struct EmptyRequest: Codable, Sendable {}
 
+/// POST/DELETE /api/push-tokens. Environment is persisted server-side so
+/// sandbox and production APNs tokens never get mixed.
+struct PushTokenRequest: Codable, Sendable {
+    var token: String
+    var environment: String
+    var platform: String = "ios"
+}
+
 struct AgentDTO: Codable, Hashable, Sendable {
     var name: String
     var model: String?

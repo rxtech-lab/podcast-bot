@@ -139,6 +139,9 @@ type Deps struct {
 	// (typically "<pod>.<headless-svc>.<ns>.svc.cluster.local:<port>"). nil
 	// disables cross-pod routing.
 	PeerHostFor func(pod string) string
+
+	// APNS sends native push notifications. nil disables push sending.
+	APNS *APNSClient
 }
 
 // Server is the HTTP front-end.
@@ -153,6 +156,7 @@ type Server struct {
 	// oauth validates per-user rxlab bearer tokens via the issuer's userinfo
 	// endpoint (nil when AuthIssuer is unset).
 	oauth *oauthValidator
+	apns  *APNSClient
 
 	jobMessageRateMu   sync.Mutex
 	jobMessageRateLast map[string]time.Time
@@ -160,6 +164,9 @@ type Server struct {
 
 	discussionPlanMu   sync.Mutex
 	discussionPlanRuns map[string]*discussionPlanRun
+
+	pushMu           sync.Mutex
+	podcastStartSent map[string]bool
 }
 
 type discussionPlanRun struct {
@@ -175,12 +182,25 @@ func New(d Deps) *Server {
 		jobMessageRateLast: make(map[string]time.Time),
 		jobMessageRateNow:  time.Now,
 		discussionPlanRuns: make(map[string]*discussionPlanRun),
+		podcastStartSent:   make(map[string]bool),
 	}
 	if d.Password != "" {
 		s.authTok = authToken(d.Password)
 	}
 	if d.AuthIssuer != "" {
 		s.oauth = newOAuthValidator(d.AuthIssuer, d.Log)
+	}
+	if d.APNS != nil {
+		s.apns = d.APNS
+	} else if apns, err := NewAPNSClient(d.Env); err == nil {
+		s.apns = apns
+	} else {
+		s.logger().Warn("APNs disabled", "err", err)
+	}
+	if s.apns != nil {
+		s.logger().Info("APNs enabled", "environment", s.apns.Environment())
+	} else {
+		s.logger().Info("APNs disabled")
 	}
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
@@ -259,6 +279,8 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/cover/generate", s.handleDiscussionCoverGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/cover", s.handleDiscussionCoverSet)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
+		s.mux.HandleFunc("POST /api/push-tokens", s.handlePushTokenRegister)
+		s.mux.HandleFunc("DELETE /api/push-tokens", s.handlePushTokenDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/shares", s.handleDiscussionShareCreate)
 		s.mux.HandleFunc("GET /api/discussions/{id}/shares", s.handleDiscussionShareList)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}/shares/{token}", s.handleDiscussionShareRevoke)
@@ -278,6 +300,9 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("DELETE /api/market/stations/{id}/like", s.handleMarketUnlike)
 		s.mux.HandleFunc("GET /api/points/balance", s.handlePointsBalance)
 		s.mux.HandleFunc("GET /api/points/history", s.handlePointsHistory)
+	}
+	if s.apns != nil && d.Bus != nil && d.Discussions != nil {
+		go s.watchPushEvents()
 	}
 
 	// The RevenueCat webhook authenticates with its own shared secret (it can't

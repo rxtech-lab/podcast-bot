@@ -107,7 +107,7 @@ func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
 	s.rememberCreatorProfile(r.Context(), user)
-	d, err := s.d.Discussions.Like(r.Context(), user.ID, r.PathValue("id"))
+	d, created, err := s.d.Discussions.LikeWithCreated(r.Context(), user.ID, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -120,6 +120,9 @@ func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 	s.applyDiscussionProgress(r.Context(), d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
+	if created && d.OwnerUserID != "" && d.OwnerUserID != user.ID {
+		s.notifyMarketLike(r.Context(), d.OwnerUserID, d, userDisplayName(user))
+	}
 	writeJSON(w, d)
 }
 

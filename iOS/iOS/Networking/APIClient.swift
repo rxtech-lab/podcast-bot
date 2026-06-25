@@ -358,6 +358,20 @@ final class APIClient: Sendable {
         return response.types ?? []
     }
 
+    // MARK: - Push
+
+    func registerPushToken(_ token: String, environment: String) async throws {
+        try await sendNoContent("POST", "/api/push-tokens",
+                                body: PushTokenRequest(token: token,
+                                                       environment: environment))
+    }
+
+    func deletePushToken(_ token: String, environment: String) async throws {
+        try await sendNoContent("DELETE", "/api/push-tokens",
+                                body: PushTokenRequest(token: token,
+                                                       environment: environment))
+    }
+
     /// Changes the LLM model for one speaker (host or discussant, by name) in a
     /// discussion's plan and returns the updated discussion.
     func updateSpeakerModel(id: String, speaker: String, model: String) async throws -> Discussion {

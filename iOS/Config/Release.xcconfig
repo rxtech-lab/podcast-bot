@@ -15,3 +15,4 @@ AppAuthIssuer = https:/$()/auth.rxlab.app
 AppAuthClientID = client_a22a1a75102a4279bcb893f437e74027
 AppAuthRedirectURI = debatepod:/$()/oauth-callback
 AppAuthScopes = openid
+APS_ENVIRONMENT = production

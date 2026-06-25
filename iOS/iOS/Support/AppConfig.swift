@@ -54,4 +54,13 @@ enum AppConfig {
 
     /// True when a RevenueCat key is configured (purchases can be initialised).
     static var hasRevenueCat: Bool { !revenueCatAPIKey.isEmpty }
+
+    /// APNs token environment attached to push-token registration.
+    static let apnsEnvironment: String = {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }()
 }
