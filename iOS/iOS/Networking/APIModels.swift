@@ -461,6 +461,10 @@ struct JobEventData: Decodable, Sendable {
     var label: String?
     var elapsed_ms: Int?
     var remaining_ms: Int?
+    /// Carried by the `summary_ready` event so the client can react to the
+    /// matching document kind; the body is fetched separately on refresh.
+    var doc_type: String?
+    var status: String?
 }
 
 struct DiscussionLineRequest: Codable, Sendable {

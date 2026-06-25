@@ -29,8 +29,8 @@ final class JobSocket: @unchecked Sendable {
     }
 
     /// Opens the socket and yields decoded events, transparently reconnecting if
-    /// the connection drops while the job is still live. Cancelling the consuming
-    /// task (which terminates the stream) tears the socket down for good.
+    /// the connection drops. Cancelling the consuming task (which terminates the
+    /// stream) tears the socket down for good.
     func events() -> AsyncStream<JobEventEnvelope> {
         AsyncStream { continuation in
             let consumer = Task { [weak self] in
@@ -39,10 +39,11 @@ final class JobSocket: @unchecked Sendable {
                 while !Task.isCancelled && !self.closed {
                     let connected = await self.openAndStream(continuation: continuation)
                     if Task.isCancelled || self.closed { break }
-                    // The socket closed but the consumer didn't cancel — the job
-                    // may still be producing events. Tell the model to backfill,
-                    // then back off (capped) before re-opening. A clean spell of
-                    // streaming resets the backoff so a fresh drop reconnects fast.
+                    // The socket closed but the consumer did not cancel. The
+                    // discussion may still receive late events; tell the model
+                    // to backfill, then back off (capped) before re-opening. A
+                    // clean spell of streaming resets the backoff so a fresh
+                    // drop reconnects fast.
                     failures = connected ? 0 : failures + 1
                     continuation.yield(JobEventEnvelope(event: Self.reconnectEvent, data: nil))
                     let backoffMS = min(5_000, 250 * (1 << min(failures, 4)))

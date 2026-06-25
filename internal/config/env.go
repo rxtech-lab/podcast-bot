@@ -25,6 +25,16 @@ type Env struct {
 	// scene composition + story-beat ordering. Set via SCENE_PLANNER_MODEL.
 	ScenePlannerModel string
 
+	// PodcastSummaryModel is the LLM used by the post-generation summarizer agent
+	// that writes the Markdown summary document for a finished podcast. Falls back
+	// to HostModel when unset. Set via PODCAST_SUMMARY_MODEL.
+	PodcastSummaryModel string
+
+	// PodcastSummaryPPTModel is reserved for the future slide-deck ("PPT") summary
+	// document type. Falls back to PodcastSummaryModel when unset. Set via
+	// PODCAST_SUMMARY_PPT_MODEL.
+	PodcastSummaryPPTModel string
+
 	CompressionBaseURL string
 	CompressionKey     string
 	CompressionModel   string
@@ -79,6 +89,12 @@ type Env struct {
 	// before a planning / improve / add-sources round may run, so planning is
 	// never free. Default $0.05. Override with POINTS_PLAN_GATE_USD.
 	PointsPlanGateUSD float64
+
+	// PointsSummaryEstUSD is the estimated cost reserved before the post-generation
+	// summary agent runs, so summary generation is gated against the creator's
+	// balance and never starts uncharged. Reconciled to actual usage on completion.
+	// Default $0.05. Override with POINTS_SUMMARY_EST_USD.
+	PointsSummaryEstUSD float64
 
 	// PointsMinPerPodcast is the floor charged for a generation when its real
 	// cost can't be determined, so a podcast is never free. Default 1.
@@ -219,14 +235,16 @@ func LoadEnv() (*Env, error) {
 	pointsCostLeverage, pointsPerUSDCost := loadPointsCostConfig()
 
 	e := &Env{
-		OpenAIBaseURL:      strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
-		OpenAIKey:          strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
-		HostModel:          strings.TrimSpace(os.Getenv("HOST_MODEL")),
-		ScenePlannerModel:  strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
-		CompressionBaseURL: strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
-		CompressionKey:     strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
-		CompressionModel:   strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
-		TranscribeModel:    strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL")),
+		OpenAIBaseURL:          strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
+		OpenAIKey:              strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+		HostModel:              strings.TrimSpace(os.Getenv("HOST_MODEL")),
+		ScenePlannerModel:      strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
+		PodcastSummaryModel:    strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_MODEL")),
+		PodcastSummaryPPTModel: strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
+		CompressionBaseURL:     strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
+		CompressionKey:         strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
+		CompressionModel:       strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
+		TranscribeModel:        strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL")),
 		LLMInputCostPerMillion: parseFloatEnv(
 			"LLM_INPUT_COST_PER_MILLION",
 		),
@@ -243,6 +261,7 @@ func LoadEnv() (*Env, error) {
 		PointsPerUSDCost:          pointsPerUSDCost,
 		PointsEstCostPerMinuteUSD: parseFloatEnvDefault("POINTS_EST_COST_PER_MINUTE_USD", 0.02),
 		PointsPlanGateUSD:         parseFloatEnvDefault("POINTS_PLAN_GATE_USD", 0.05),
+		PointsSummaryEstUSD:       parseFloatEnvDefault("POINTS_SUMMARY_EST_USD", 0.05),
 		PointsMinPerPodcast:       parseIntEnvDefault("POINTS_MIN_PER_PODCAST", 1),
 		PointsSignupGrant:         parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
 		RevenueCatWebhookAuth:     strings.TrimSpace(os.Getenv("REVENUECAT_WEBHOOK_AUTH")),
@@ -287,6 +306,12 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.ScenePlannerModel == "" {
 		e.ScenePlannerModel = e.HostModel
+	}
+	if e.PodcastSummaryModel == "" {
+		e.PodcastSummaryModel = e.HostModel
+	}
+	if e.PodcastSummaryPPTModel == "" {
+		e.PodcastSummaryPPTModel = e.PodcastSummaryModel
 	}
 	if e.TranscribeModel == "" {
 		e.TranscribeModel = "gemini-2.5-flash"

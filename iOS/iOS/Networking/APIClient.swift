@@ -110,6 +110,24 @@ final class APIClient: Sendable {
         return try await get("/api/discussions/\(id)", query: query)
     }
 
+    /// Fetches the generated summary document (Markdown body) for a podcast. The
+    /// detail payload only carries a content-free `summary` descriptor; this is
+    /// the separate endpoint the summary view calls on mount. Throws (404) when no
+    /// summary exists yet.
+    func summary(id: String, docType: String = "summary") async throws -> SummaryDocument {
+        var query: [URLQueryItem] = []
+        if docType != "summary" {
+            query.append(URLQueryItem(name: "doc_type", value: docType))
+        }
+        return try await get("/api/discussions/\(id)/summary", query: query)
+    }
+
+    /// Starts or retries summary generation for an owned, finished podcast and
+    /// returns the refreshed discussion so the toolbar can show the pending state.
+    func generateSummary(id: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/summary/generate", body: EmptyRequest())
+    }
+
     func planDiscussion(_ req: PlanRequest) async throws -> Discussion {
         try await send("POST", "/api/discussions/plan", body: req)
     }

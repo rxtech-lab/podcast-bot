@@ -22,6 +22,7 @@ struct PodcastPlayerView: View {
     @State private var model: PlayerModel?
     @State private var message = ""
     @State private var showingPlan = false
+    @State private var showingSummary = false
     @State private var showingFullPlayer = false
     @State private var showingImporter = false
     @State private var showingPhotos = false
@@ -36,6 +37,8 @@ struct PodcastPlayerView: View {
     @State private var isUploadingAttachment = false
     @State private var isCreatingFromPlan = false
     @State private var createFromPlanError: String?
+    @State private var isGeneratingSummary = false
+    @State private var summaryGenerateError: String?
     @State private var transcriptIsAtBottom = true
     @State private var transcriptShouldScrollToBottom = false
     @State private var transcriptScrollRequestTask: Task<Void, Never>?
@@ -68,8 +71,16 @@ struct PodcastPlayerView: View {
         } message: {
             Text(createFromPlanError ?? "")
         }
+        .alert("Could not generate summary", isPresented: summaryGenerateErrorBinding) {
+            Button("OK", role: .cancel) { summaryGenerateError = nil }
+        } message: {
+            Text(summaryGenerateError ?? "")
+        }
         .sheet(isPresented: $showingPlan) {
-            PlanSheetView(discussion: model?.discussion ?? discussion)
+            PlanSheetView(discussion: currentDiscussion)
+        }
+        .sheet(isPresented: $showingSummary) {
+            summarySheet
         }
         .sheet(isPresented: $showingPointsHistory) {
             PointsHistoryView()
@@ -91,7 +102,7 @@ struct PodcastPlayerView: View {
             }
         }
         .sheet(isPresented: $showingShareSheet) {
-            ShareSheet(discussionID: (model?.discussion ?? discussion).id,
+            ShareSheet(discussionID: currentDiscussion.id,
                        api: APIClient(tokens: auth))
         }
         .sheet(isPresented: $showingCreatorProfile) {
@@ -161,12 +172,41 @@ struct PodcastPlayerView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                showingPlan = true
+            Menu {
+                Button {
+                    showingPlan = true
+                } label: {
+                    Label("Plan", systemImage: "doc.text")
+                }
+                if summaryAvailable {
+                    Button {
+                        showingSummary = true
+                    } label: {
+                        Label("Summary", systemImage: "doc.richtext")
+                    }
+                } else if summaryPending || isGeneratingSummary {
+                    Button {
+                    } label: {
+                        Label("Generating summary", systemImage: "hourglass")
+                    }
+                    .disabled(true)
+                } else if summaryGenerationAvailable {
+                    Button {
+                        generateSummary()
+                    } label: {
+                        Label("Generate summary", systemImage: "sparkles")
+                    }
+                } else {
+                    Button {
+                    } label: {
+                        Label("Summary", systemImage: "doc.richtext")
+                    }
+                    .disabled(true)
+                }
             } label: {
                 Image(systemName: "doc.text")
             }
-            .accessibilityLabel("Plan")
+            .accessibilityLabel("Documents")
             .popoverTip(PodcastPlanTip(), arrowEdge: .top)
         }
         if showsActionsMenu {
@@ -203,6 +243,34 @@ struct PodcastPlayerView: View {
         model?.discussion.creator ?? discussion.creator
     }
 
+    private var currentDiscussion: Discussion {
+        model?.discussion ?? discussion
+    }
+
+    /// Whether the Summary menu item is enabled — true only once the server has
+    /// generated the podcast's summary document (status `ready`).
+    private var summaryAvailable: Bool {
+        currentDiscussion.hasSummary
+    }
+
+    private var summaryPending: Bool {
+        currentDiscussion.summaryPending
+    }
+
+    private var summaryGenerationAvailable: Bool {
+        currentDiscussion.status == .ready
+            && currentDiscussion.isOwner == true
+            && currentDiscussion.canGenerateSummary
+    }
+
+    /// Extracted so the construction of `SummaryView` (and its `APIClient`) stays
+    /// out of the main `body` modifier chain, which is large enough that inlining
+    /// it pushes the SwiftUI type-checker past its time budget.
+    private var summarySheet: some View {
+        SummaryView(discussionID: currentDiscussion.id,
+                    api: APIClient(tokens: auth))
+    }
+
     private var showsActionsMenu: Bool {
         purchases.isConfigured
             || model?.showsPodcastActions == true
@@ -219,6 +287,13 @@ struct PodcastPlayerView: View {
         Binding(
             get: { createFromPlanError != nil },
             set: { if !$0 { createFromPlanError = nil } }
+        )
+    }
+
+    private var summaryGenerateErrorBinding: Binding<Bool> {
+        Binding(
+            get: { summaryGenerateError != nil },
+            set: { if !$0 { summaryGenerateError = nil } }
         )
     }
 
@@ -492,6 +567,27 @@ struct PodcastPlayerView: View {
             } catch {
                 // The existing player surface does not have a toast lane; leave
                 // the station public and let the user retry from the menu.
+            }
+        }
+    }
+
+    private func generateSummary() {
+        guard !isGeneratingSummary else { return }
+        isGeneratingSummary = true
+        Task { @MainActor in
+            defer { isGeneratingSummary = false }
+            do {
+                let updated = try await APIClient(tokens: auth).generateSummary(id: currentDiscussion.id)
+                if let model {
+                    model.discussion = PlayerModel.mergingLocalDiscussionState(
+                        current: model.discussion,
+                        fresh: updated
+                    )
+                    model.listenForJobUpdatesIfNeeded()
+                }
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                summaryGenerateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }
     }

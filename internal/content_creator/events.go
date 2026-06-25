@@ -120,6 +120,16 @@ type TopicMsg struct {
 	Episode int
 }
 
+// SummaryReadyMsg announces that a podcast's generated summary document has
+// finished (or failed) so connected clients can refresh the discussion detail
+// and pick up the new summary metadata. It carries no content — the client
+// re-fetches the summary body from the content endpoint when its view mounts.
+type SummaryReadyMsg struct {
+	ChannelID string
+	DocType   string
+	Status    string // "generating", "ready", or "failed"
+}
+
 // TopicsChangedMsg signals that the channel/debate list has changed (e.g. a
 // new debate.md was discovered by the folder watcher and added to a channel's
 // queue). The frontend reacts by re-fetching /api/topics. Broadcast only —
@@ -224,6 +234,8 @@ func MsgChannelID(v any) string {
 		return m.ChannelID
 	case TopicMsg:
 		return m.ChannelID
+	case SummaryReadyMsg:
+		return m.ChannelID
 	case TopicsChangedMsg:
 		return ""
 	case SceneAdvanceMsg:
@@ -267,6 +279,9 @@ func StampChannelID(v any, id string) any {
 		m.ChannelID = id
 		return m
 	case TopicMsg:
+		m.ChannelID = id
+		return m
+	case SummaryReadyMsg:
 		m.ChannelID = id
 		return m
 	case TopicsChangedMsg:

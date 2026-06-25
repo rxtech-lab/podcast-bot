@@ -186,6 +186,7 @@ final class PlayerModel {
     }
 
     private var socket: JobSocket?
+    private var isStartingJobSocket = false
     private var timeObserver: Any?
     private var itemStatusObservation: NSKeyValueObservation?
     private var playbackRetryTask: Task<Void, Never>?
@@ -316,6 +317,7 @@ final class PlayerModel {
         // the library handed us this discussion (e.g. the new-discussion toggle).
         tasks.append(Task { await self.refreshCover() })
         guard let jobID = discussion.jobID else { return }
+        listenForJobUpdatesIfNeeded()
 
         configureRemoteCommands()
         updateNowPlayingInfo()
@@ -328,7 +330,6 @@ final class PlayerModel {
         })
         tasks.append(Task { await setupPlayer(jobID: jobID) })
         if discussion.status == .generating {
-            tasks.append(Task { await listenEvents(jobID: jobID) })
             tasks.append(Task { await pollCaptions(jobID: jobID) })
             tasks.append(Task { await pollStatus(jobID: jobID) })
         } else {
@@ -345,6 +346,8 @@ final class PlayerModel {
         playbackRetryTask = nil
         forceHideTranscriptLoading()
         socket?.close()
+        socket = nil
+        isStartingJobSocket = false
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
         player.pause()
@@ -1020,23 +1023,28 @@ final class PlayerModel {
     private func listenEvents(jobID: String) async {
         let socket = JobSocket(api: api, jobID: jobID, discussionID: discussion.id)
         self.socket = socket
+        isStartingJobSocket = false
         for await env in socket.events() {
             handle(env)
-            // Stop once the job reaches a terminal state — otherwise the socket
-            // layer keeps reconnecting to a closed/idle completed-job socket and
-            // re-triggering transcript refreshes until the user leaves the screen.
-            if Task.isCancelled || isFinished || discussion.status != .generating { break }
+            if Task.isCancelled { break }
         }
         socket.close()
         if self.socket === socket { self.socket = nil }
     }
 
+    func listenForJobUpdatesIfNeeded() {
+        guard let jobID = discussion.jobID, socket == nil, !isStartingJobSocket else { return }
+        isStartingJobSocket = true
+        tasks.append(Task { await listenEvents(jobID: jobID) })
+    }
+
     private func handle(_ env: JobEventEnvelope) {
         // The socket layer injects this after a drop+reconnect (e.g. the app was
-        // backgrounded). It carries no data — its only job is to make us re-fetch
-        // the transcript and recover any lines we missed while disconnected.
+        // backgrounded). It carries no data; use it to re-fetch state that may
+        // have changed while disconnected.
         if env.event == JobSocket.reconnectEvent {
             refreshTranscriptAfterReconnect()
+            refreshDiscussionForSummary()
             return
         }
         guard let data = env.data else { return }
@@ -1078,9 +1086,39 @@ final class PlayerModel {
                 statusText = t
                 updateNowPlayingInfo()
             }
+        case "summary_ready":
+            // The server changed the podcast summary state (generating, ready,
+            // or failed). Re-fetch the discussion detail so the toolbar reflects
+            // pending/manual/available states; the body itself is fetched later
+            // by the summary view when it mounts.
+            applySummaryEvent(data)
+            refreshDiscussionForSummary()
         default:
             break
         }
+    }
+
+    /// Re-fetches the discussion detail to pick up updated `summary` metadata
+    /// after a `summary_ready` event, preserving local transcript state.
+    private func refreshDiscussionForSummary() {
+        tasks.append(Task { [weak self] in
+            guard let self else { return }
+            guard let fresh = try? await self.api.discussion(id: self.discussion.id) else { return }
+            self.discussion = Self.mergingLocalDiscussionState(current: self.discussion, fresh: fresh)
+            self.listenForJobUpdatesIfNeeded()
+        })
+    }
+
+    private func applySummaryEvent(_ data: JobEventData) {
+        guard let raw = data.status, let status = SummaryStatus(rawValue: raw) else { return }
+        discussion.summary = SummaryMeta(
+            docType: data.doc_type,
+            status: status,
+            available: status == .ready,
+            pending: status == .generating,
+            generation: false,
+            generatedAt: nil
+        )
     }
 
     private func mergeUserMessageEvent(speaker: String,
@@ -1211,6 +1249,8 @@ final class PlayerModel {
             discussion.downloadURLString = url
             downloadURL = URL(string: url)
         }
+        discussion.summary = fresh.summary
+        listenForJobUpdatesIfNeeded()
         let persisted = fresh.sortedLines
         guard !persisted.isEmpty else { return }
 
@@ -1414,9 +1454,7 @@ final class PlayerModel {
                     isForceStopping = false
                     isFinished = true
                     await refreshDiscussionAfterJobDone(job: job)
-                    // The live event socket is done; stop it so it can't keep
-                    // reconnecting now that the job has finished.
-                    socket?.close()
+                    listenForJobUpdatesIfNeeded()
                     await switchToFinalAudioIfNeeded(jobID: jobID)
                     return
                 } else if job.isError {
@@ -1453,10 +1491,12 @@ final class PlayerModel {
     /// Fetches the latest discussion solely to pick up cover art generated in
     /// the background, without disturbing live transcript/playback state.
     private func refreshCover() async {
-        if let fresh = try? await api.discussion(id: discussion.id),
-           let cover = fresh.cover,
-           cover.hasImage || cover.hasGradient {
-            discussion.cover = cover
+        if let fresh = try? await api.discussion(id: discussion.id) {
+            discussion.summary = fresh.summary
+            listenForJobUpdatesIfNeeded()
+            if let cover = fresh.cover, cover.hasImage || cover.hasGradient {
+                discussion.cover = cover
+            }
         }
         await refreshCoverAssets()
     }

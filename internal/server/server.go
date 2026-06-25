@@ -244,6 +244,8 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/plan/stream", s.handleDiscussionPlanStreamForID)
 		s.mux.HandleFunc("POST /api/discussions/{id}/create/plan", s.handleDiscussionCreateFromPlan)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
+		s.mux.HandleFunc("GET /api/discussions/{id}/summary", s.handleDiscussionSummary)
+		s.mux.HandleFunc("POST /api/discussions/{id}/summary/generate", s.handleDiscussionSummaryGenerate)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
@@ -653,6 +655,12 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 			"show":       m.Show,
 			"season":     m.Season,
 			"episode":    m.Episode,
+		}}, true
+	case contentcreator.SummaryReadyMsg:
+		return eventEnvelope{"summary_ready", map[string]any{
+			"channel_id": m.ChannelID,
+			"doc_type":   m.DocType,
+			"status":     m.Status,
 		}}, true
 	case contentcreator.TopicsChangedMsg:
 		_ = m

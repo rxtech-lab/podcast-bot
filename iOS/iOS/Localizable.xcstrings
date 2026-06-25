@@ -563,6 +563,9 @@
     "Could not create %@" : {
 
     },
+    "Could not generate summary" : {
+
+    },
     "Could not load %@" : {
 
     },
@@ -822,6 +825,12 @@
     },
     "Discussion" : {
       "comment" : "Round-table discussion type option"
+    },
+    "Document type" : {
+
+    },
+    "Documents" : {
+
     },
     "Done" : {
 
@@ -1295,6 +1304,9 @@
         }
       }
     },
+    "Generate summary" : {
+
+    },
     "Generate the audio" : {
 
     },
@@ -1325,6 +1337,9 @@
       }
     },
     "Generating" : {
+
+    },
+    "Generating summary" : {
 
     },
     "Generating..." : {
@@ -2884,6 +2899,9 @@
         }
       }
     },
+    "Retry" : {
+
+    },
     "Revoke" : {
 
     },
@@ -3136,6 +3154,9 @@
     "Signed in" : {
 
     },
+    "Slides (coming soon)" : {
+
+    },
     "Source" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3259,6 +3280,12 @@
       }
     },
     "Subscription" : {
+
+    },
+    "Summary" : {
+
+    },
+    "Summary document" : {
 
     },
     "Switch between the cover art and synced captions while listening full screen." : {

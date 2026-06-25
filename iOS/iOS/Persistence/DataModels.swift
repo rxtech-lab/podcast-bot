@@ -144,6 +144,11 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var editTurnsHasMore: Bool?
     var editTurnsBefore: Int64?
     var progress: DiscussionProgressDTO?
+    /// Content-free descriptor of the podcast's generated summary document. nil
+    /// when no summary exists yet (e.g. the podcast hasn't finished). The Markdown
+    /// body is never carried here — it is fetched separately when the summary view
+    /// mounts.
+    var summary: SummaryMeta?
     var allowSendingMessage: Bool?
     var createdAt: String?
     var updatedAt: String?
@@ -182,6 +187,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case editTurnsHasMore = "edit_turns_has_more"
         case editTurnsBefore = "edit_turns_before"
         case progress
+        case summary
         case allowSendingMessage
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -246,6 +252,60 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         guard let pts = pointsCharged, pts > 0 else { return nil }
         let formatted = UsageSummary.formatInt(pts)
         return "\(formatted) point\(pts == 1 ? "" : "s")"
+    }
+
+    /// Whether a summary document is ready to view for this podcast. True only
+    /// once the server has generated it (status `ready`).
+    var hasSummary: Bool { summary?.available == true }
+
+    /// Whether summary generation is already in progress.
+    var summaryPending: Bool { summary?.pending == true || summary?.status == .generating }
+
+    /// Whether the backend says this owner can manually trigger summary
+    /// generation for a ready podcast that has no finished summary.
+    var canGenerateSummary: Bool { summary?.generation == true }
+}
+
+/// Lifecycle of a generated summary document.
+enum SummaryStatus: String, Codable, Hashable, Sendable {
+    case generating
+    case ready
+    case failed
+}
+
+/// Content-free descriptor of a podcast's summary document, returned on the
+/// discussion detail payload. The Markdown body is fetched separately.
+struct SummaryMeta: Codable, Hashable, Sendable {
+    var docType: String?
+    var status: SummaryStatus?
+    var available: Bool?
+    var pending: Bool?
+    var generation: Bool?
+    var generatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case docType = "doc_type"
+        case status
+        case available
+        case pending
+        case generation
+        case generatedAt = "generated_at"
+    }
+}
+
+/// Full summary payload (including the Markdown body) returned by the summary
+/// content endpoint, fetched only when the summary view mounts.
+struct SummaryDocument: Codable, Hashable, Sendable {
+    var docType: String?
+    var status: SummaryStatus?
+    var markdown: String
+    var generatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case docType = "doc_type"
+        case status
+        case markdown
+        case generatedAt = "generated_at"
     }
 }
 

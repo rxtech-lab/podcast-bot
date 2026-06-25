@@ -158,6 +158,12 @@ type Discussion struct {
 	EditTurnsHasMore    bool                 `json:"edit_turns_has_more,omitempty"`
 	EditTurnsBefore     int64                `json:"edit_turns_before,omitempty"`
 	Progress            *DiscussionProgress  `json:"progress,omitempty"`
+	// Summary is the content-free descriptor of the podcast's generated summary
+	// document. nil when no summary exists yet (e.g. the podcast hasn't finished).
+	// The Markdown body is never included here — it is fetched separately from the
+	// summary content endpoint when the summary view mounts. Populated lazily on
+	// the detail path only.
+	Summary             *SummaryMeta         `json:"summary,omitempty"`
 	AllowSendingMessage bool                 `json:"allowSendingMessage"`
 	CreatedAt           time.Time            `json:"created_at"`
 	UpdatedAt           time.Time            `json:"updated_at"`
@@ -337,6 +343,27 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			user_id TEXT NOT NULL,
 			joined_at INTEGER NOT NULL,
 			PRIMARY KEY(discussion_id, user_id),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		// Summary documents (Markdown) generated after a podcast finishes. Keyed by
+		// (discussion_id, doc_type) so additional document kinds (e.g. "ppt") can be
+		// stored per podcast later. Content lives here — never on native_discussions
+		// — so it is never returned by the detail/list selects.
+		`CREATE TABLE IF NOT EXISTS native_discussion_summaries (
+			discussion_id TEXT NOT NULL,
+			doc_type TEXT NOT NULL DEFAULT 'summary',
+			status TEXT NOT NULL DEFAULT 'generating',
+			markdown TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			llm_cost_usd REAL NOT NULL DEFAULT 0,
+			generated_at INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, doc_type),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
 	}
