@@ -215,6 +215,7 @@ final class APIClient: Sendable {
     func createDiscussion(topic: String,
                           language: String,
                           type: String = "discussion",
+                          template: String? = nil,
                           generateCover: Bool = false,
                           coverPrompt: String? = nil,
                           referenceDiscussionID: String? = nil,
@@ -223,6 +224,7 @@ final class APIClient: Sendable {
                        body: DiscussionCreateRequest(topic: topic,
                                                      type: type,
                                                      language: language,
+                                                     template: template,
                                                      generateCover: generateCover,
                                                      coverPrompt: coverPrompt,
                                                      plan: plan,
@@ -632,6 +634,24 @@ final class APIClient: Sendable {
     func discussionTypes() async throws -> [DiscussionTypeDTO] {
         let response: DiscussionTypesResponseDTO = try await get("/api/discussion-types")
         return response.types ?? []
+    }
+
+    /// Plan templates available for the selected content type. The server owns
+    /// the available list so clients pick up new templates without an app update.
+    func templates(type: String) async throws -> [PlanTemplateDTO] {
+        let query = [URLQueryItem(name: "type", value: type)]
+        let url = request(method: "GET", path: "/api/templates", query: query).url?.absoluteString ?? "/api/templates"
+        apiLog.debug("templates request type=\(type, privacy: .public) url=\(url, privacy: .public)")
+        do {
+            let response: PlanTemplatesResponseDTO = try await get("/api/templates", query: query)
+            let templates = response.templates ?? []
+            let templateIDs = templates.map(\.id).joined(separator: ",")
+            apiLog.debug("templates response type=\(type, privacy: .public) count=\(templates.count, privacy: .public) ids=\(templateIDs, privacy: .public)")
+            return templates
+        } catch {
+            apiLog.error("templates request failed type=\(type, privacy: .public) url=\(url, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     // MARK: - Push

@@ -1347,8 +1347,49 @@
         }
       }
     },
+    "Choose templates for new %@s, including a research template for academic-style topics." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为新的 %@ 选择模板，包括适合学术风格主题的研究模板。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為新的 %@ 選擇範本，包括適合學術風格主題的研究範本。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為新的 %@ 選擇範本，包括適合學術風格主題的研究範本。"
+          }
+        }
+      }
+    },
     "Clear parent discussion" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除父讨论"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除父討論"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除父討論"
+          }
+        }
+      }
     },
     "Close" : {
       "comment" : "Dismiss the voice recorder after an error",
@@ -1617,10 +1658,48 @@
       }
     },
     "Could not load stations" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载电台"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入電台"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入電台"
+          }
+        }
+      }
     },
     "Could not update the plan" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更新计划"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更新計劃"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更新計劃"
+          }
+        }
+      }
     },
     "Couldn’t export" : {
       "localizations" : {
@@ -1802,7 +1881,26 @@
       }
     },
     "Create Follow-up" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建后续讨论"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立後續討論"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立後續討論"
+          }
+        }
+      }
     },
     "Create from Plan" : {
       "localizations" : {
@@ -1827,7 +1925,26 @@
       }
     },
     "Create or search for a podcast to use as follow-up context." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建或搜索一个播客，用作后续讨论的上下文。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立或搜尋一個播客，用作後續討論的上下文。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立或搜尋一個播客，用作後續討論的上下文。"
+          }
+        }
+      }
     },
     "Create share link" : {
       "localizations" : {
@@ -2072,6 +2189,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "辯論播客"
+          }
+        }
+      }
+    },
+    "Default" : {
+      "comment" : "Default plan template option",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設"
           }
         }
       }
@@ -3481,7 +3621,26 @@
       }
     },
     "Judgement" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "评判"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "評判"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "評判"
+          }
+        }
+      }
     },
     "Korean" : {
       "comment" : "Podcast language option",
@@ -3753,6 +3912,9 @@
           }
         }
       }
+    },
+    "Loading..." : {
+
     },
     "Loading…" : {
       "localizations" : {
@@ -4376,7 +4538,26 @@
       }
     },
     "No Station" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有电台"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有電台"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有電台"
+          }
+        }
+      }
     },
     "No transcript yet. You can type one, or send the audio for transcription." : {
       "comment" : "Placeholder shown when a reviewed voice message has no transcript",
@@ -4424,7 +4605,26 @@
       }
     },
     "None" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無"
+          }
+        }
+      }
     },
     "Notion Pages" : {
       "localizations" : {
@@ -4603,10 +4803,48 @@
       }
     },
     "Parent Discussion" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "父讨论"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "父討論"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "父討論"
+          }
+        }
+      }
     },
     "Parent Station" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "父电台"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "父電台"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "父電台"
+          }
+        }
+      }
     },
     "PDF, Word, slides, images" : {
       "localizations" : {
@@ -4961,6 +5199,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用 Notion 規劃"
+          }
+        }
+      }
+    },
+    "Plan with templates" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用模板规划"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用範本規劃"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用範本規劃"
           }
         }
       }
@@ -6044,6 +6304,30 @@
         }
       }
     },
+    "Research" : {
+      "comment" : "Research plan template option",
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "研究"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "研究"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "研究"
+          }
+        }
+      }
+    },
     "Researching & planning…" : {
       "comment" : "Progress text while the initial plan is being researched and drafted",
       "localizations" : {
@@ -6268,7 +6552,26 @@
       }
     },
     "Search stations" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索电台"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋電台"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋電台"
+          }
+        }
+      }
     },
     "Search your %@" : {
       "localizations" : {
@@ -7028,7 +7331,26 @@
       }
     },
     "Start generation" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始生成"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始生成"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始生成"
+          }
+        }
+      }
     },
     "Station Visibility" : {
       "localizations" : {
@@ -7317,6 +7639,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "點一下以查看詳細資料"
+          }
+        }
+      }
+    },
+    "Template" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模板"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "範本"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "範本"
           }
         }
       }

@@ -32,6 +32,7 @@ type discussionCreateRequest struct {
 	Topic    string `json:"topic"`
 	Type     string `json:"type"`
 	Language string `json:"language"`
+	Template string `json:"template,omitempty"`
 	// GenerateCover, when true, kicks off background AI cover-art generation for
 	// the new discussion. The placeholder is returned immediately; the cover is
 	// filled in asynchronously and picked up the next time the discussion is
@@ -191,7 +192,14 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		}
 		reference = ref
 	}
-	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), user.ID, topic, strings.TrimSpace(req.Language))
+	template := strings.TrimSpace(req.Template)
+	if req.Plan != nil && strings.TrimSpace(req.Plan.Template) != "" {
+		template = strings.TrimSpace(req.Plan.Template)
+	}
+	if _, ok := planner.TemplateByID(config.ContentTypeDiscussion, template); !ok {
+		template = planner.DefaultTemplateID
+	}
+	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), user.ID, topic, strings.TrimSpace(req.Language), template)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -211,6 +219,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Plan != nil && s.d.Planning != nil {
 		req.Plan.Topic = topic
+		req.Plan.Template = template
 		req.Plan.Reference = reference
 		if strings.TrimSpace(req.Plan.Language) == "" {
 			req.Plan.Language = strings.TrimSpace(req.Language)

@@ -81,13 +81,13 @@ const discussionSelectColumns = `id, owner_user_id, topic, title, status, langua
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, script_json, markdown, sources_json, researched,
-	reference_discussion_id, created_at, updated_at`
+	reference_discussion_id, plan_template, created_at, updated_at`
 
 const discussionListSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, '' AS script_json, '' AS markdown, '[]' AS sources_json, researched,
-	reference_discussion_id, created_at, updated_at`
+	reference_discussion_id, plan_template, created_at, updated_at`
 
 var (
 	errDiscussionNotVisible = errors.New("discussion is not visible")
@@ -174,6 +174,7 @@ type Discussion struct {
 	Sources               []config.Source      `json:"sources,omitempty"`
 	Researched            bool                 `json:"researched"`
 	ReferenceDiscussionID string               `json:"reference_discussion_id,omitempty"`
+	Template              string               `json:"template,omitempty"`
 	Lines                 []DiscussionLine     `json:"lines,omitempty"`
 	EditTurns             []DiscussionEditTurn `json:"edit_turns,omitempty"`
 	EditTurnsHasMore      bool                 `json:"edit_turns_has_more,omitempty"`
@@ -457,6 +458,7 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"cover_gradient_end", "cover_gradient_end TEXT NOT NULL DEFAULT ''"},
 		{"cover_prompt", "cover_prompt TEXT NOT NULL DEFAULT ''"},
 		{"reference_discussion_id", "reference_discussion_id TEXT NOT NULL DEFAULT ''"},
+		{"plan_template", "plan_template TEXT NOT NULL DEFAULT 'default'"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
@@ -644,21 +646,25 @@ func (s *DiscussionStore) CreateFromVisiblePlan(ctx context.Context, owner, sour
 // (script/sources/markdown) is filled in later via UpdatePlan once the planner
 // finishes. No plan turn is appended yet — the first turn is written when the
 // stream completes.
-func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, language string) (*Discussion, error) {
+func (s *DiscussionStore) CreatePlaceholder(ctx context.Context, owner, topic, language, template string) (*Discussion, error) {
 	if s == nil {
 		return nil, errors.New("discussion store is not configured")
 	}
 	if language == "" {
 		language = "en-US"
 	}
+	template = strings.TrimSpace(template)
+	if template == "" {
+		template = "default"
+	}
 	id := newJobID()
 	now := time.Now()
 	_, err := s.exec(ctx, `INSERT INTO native_discussions
-		(id, owner_user_id, topic, title, status, language, script_json, markdown, sources_json, researched, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, owner_user_id, topic, title, status, language, script_json, markdown, sources_json, researched, plan_template, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO NOTHING`,
 		id, owner, topic, "", DiscussionPlanning, language, "", "", "", 0,
-		now.UnixMilli(), now.UnixMilli())
+		template, now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -2109,7 +2115,7 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &created, &updated)
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated)
 	if err != nil {
 		return d, err
 	}
@@ -2128,7 +2134,7 @@ func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &created, &updated, &d.LikeCount, &liked, &owner)
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.LikeCount, &liked, &owner)
 	if err != nil {
 		return d, err
 	}
@@ -2170,6 +2176,9 @@ func finalizeScannedDiscussion(d *Discussion, scriptJSON, sourcesJSON string, re
 	}
 	if d.Visibility == "" {
 		d.Visibility = DiscussionPrivate
+	}
+	if strings.TrimSpace(d.Template) == "" {
+		d.Template = "default"
 	}
 	d.LLMCostKnown = costKnown != 0
 	d.Researched = researched != 0

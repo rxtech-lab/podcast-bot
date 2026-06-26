@@ -6,6 +6,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/planner"
 	"github.com/sirily11/debate-bot/internal/tools"
 )
 
@@ -27,10 +28,22 @@ type discussionTypesResponse struct {
 	Types []discussionTypeMeta `json:"types"`
 }
 
+type templatesResponse struct {
+	Templates []planner.Template `json:"templates"`
+}
+
 func (s *Server) handleDiscussionTypes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, discussionTypesResponse{Types: []discussionTypeMeta{
 		{ID: config.ContentTypeDiscussion, Label: "Discussion"},
 	}})
+}
+
+func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
+	contentType := r.URL.Query().Get("type")
+	if contentType == "" {
+		contentType = config.ContentTypeDiscussion
+	}
+	writeJSON(w, templatesResponse{Templates: planner.TemplatesByType(contentType)})
 }
 
 // handleModels enumerates the LLM models the engine can drive agents with, so

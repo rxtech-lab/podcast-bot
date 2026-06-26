@@ -57,6 +57,22 @@ struct DiscussionTypesResponseDTO: Codable, Sendable {
     var types: [DiscussionTypeDTO]?
 }
 
+/// One selectable plan template from GET /api/templates. The backend also
+/// returns the raw JSON schema, which Codable ignores here because the app only
+/// needs display metadata.
+struct PlanTemplateDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var name: String
+    var description: String?
+
+    var displayName: String { name.isEmpty ? id : name }
+}
+
+/// Body of GET /api/templates.
+struct PlanTemplatesResponseDTO: Codable, Sendable {
+    var templates: [PlanTemplateDTO]?
+}
+
 /// Body of PATCH /api/discussions/{id}/speaker-model.
 struct SpeakerModelRequest: Codable, Sendable {
     var speaker: String
@@ -122,6 +138,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
     var topic: String
     var type: String = "discussion"
     var language: String
+    var template: String?
     /// When true, the server kicks off background AI cover-art generation for the
     /// new discussion; the cover is filled in asynchronously and picked up the
     /// next time the discussion is fetched (e.g. when the player opens).
@@ -134,6 +151,7 @@ struct DiscussionCreateRequest: Codable, Sendable {
         case topic
         case type
         case language
+        case template
         case generateCover = "generate_cover"
         case coverPrompt = "cover_prompt"
         case plan
@@ -147,6 +165,7 @@ struct PlanRequest: Codable, Sendable {
     var topic: String
     var language: String = "en-US"
     var discussants: Int = 3
+    var template: String?
     var research: Bool = true
     var attachments: [Attachment]?
     var reference: PodcastReference?

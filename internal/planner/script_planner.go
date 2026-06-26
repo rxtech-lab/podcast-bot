@@ -87,6 +87,7 @@ type PlanRequest struct {
 	Language    string `json:"language"`
 	Channel     string `json:"channel"`
 	Discussants int    `json:"discussants"`
+	Template    string `json:"template,omitempty"`
 	// Research asks the planner to ground the draft in live web sources via
 	// Firecrawl search. Any links pasted into the topic are scraped regardless
 	// of this flag (when Firecrawl is configured).
@@ -154,12 +155,13 @@ Return STRICT JSON with this exact shape:
   "host": { "name": "moderator's display name" },
   "discussants": [ { "name": "display name", "aspect": "the distinct angle/perspective this person argues from" } ]
 }
-Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.%s%s%s`,
-		req.Topic, lang, n, n, referencePrompt(req.Reference), planningRequirementsPrompt(req.Research, extractURLs(req.Topic)), attachmentsPrompt(req.Attachments))
+Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, historical, cultural). Use %d discussants.%s%s%s%s`,
+		req.Topic, lang, n, n, templatePrompt(req.Template), referencePrompt(req.Reference), planningRequirementsPrompt(req.Research, extractURLs(req.Topic), req.Template), attachmentsPrompt(req.Attachments))
 
 	d, sources, err := p.draftJSON(ctx, user, req.Attachments, planningAgentOptions{
 		ResearchRequired: req.Research,
 		RequiredURLs:     extractURLs(req.Topic),
+		Template:         req.Template,
 	})
 	if err != nil {
 		return nil, err
@@ -229,7 +231,7 @@ func (p *Planner) revise(ctx context.Context, prev *config.DebateTopic, instruct
 Revise it per this instruction: %s
 
 Return STRICT JSON with the SAME shape (title, background, host{name}, discussants[]{name, aspect}). Keep the language as %s. Preserve good parts; change only what the instruction asks for.%s%s`,
-		string(prevJSON), conversationPrompt(pastMessages), instruction, lang, sourcesPrompt(existingSources)+planningRequirementsPrompt(false, requiredURLs), attachmentsPrompt(attachments))
+		string(prevJSON), conversationPrompt(pastMessages), instruction, lang, sourcesPrompt(existingSources)+planningRequirementsPrompt(false, requiredURLs, ""), attachmentsPrompt(attachments))
 
 	d, sources, err := p.draftJSON(ctx, user, attachments, planningAgentOptions{
 		RequiredURLs:             requiredURLs,
@@ -293,6 +295,14 @@ func attachmentsPrompt(attachments []Attachment) string {
 		fmt.Fprintf(&sb, "\n--- %s ---\n%s\n", name, truncate(strings.TrimSpace(a.Markdown), 6000))
 	}
 	return sb.String()
+}
+
+func templatePrompt(template string) string {
+	instructions := TemplateInstructions(template)
+	if instructions == "" {
+		return ""
+	}
+	return "\n\nTemplate instructions:\n" + instructions
 }
 
 func referencePrompt(ref *PodcastReference) string {

@@ -20,7 +20,7 @@ func newTestPlanningStore(t *testing.T) (*DiscussionStore, *PlanningStore, strin
 	if err != nil {
 		t.Fatalf("NewPlanningStore: %v", err)
 	}
-	d, err := ds.CreatePlaceholder(context.Background(), "u1", "AI in education", "en-US")
+	d, err := ds.CreatePlaceholder(context.Background(), "u1", "AI in education", "en-US", planner.DefaultTemplateID)
 	if err != nil {
 		t.Fatalf("CreatePlaceholder: %v", err)
 	}

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+
+	"github.com/sirily11/debate-bot/internal/planner"
 )
 
 func TestPlanningStreamStoreNilSafeWhenUnconfigured(t *testing.T) {
@@ -34,7 +36,7 @@ func TestPlanningStreamResumeNoActiveReturns204(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPlanningStore: %v", err)
 	}
-	disc, err := ds.CreatePlaceholder(context.Background(), "anonymous", "stream recovery", "en-US")
+	disc, err := ds.CreatePlaceholder(context.Background(), "anonymous", "stream recovery", "en-US", planner.DefaultTemplateID)
 	if err != nil {
 		t.Fatalf("CreatePlaceholder: %v", err)
 	}

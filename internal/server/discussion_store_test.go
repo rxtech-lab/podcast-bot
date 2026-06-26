@@ -13,6 +13,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/planner"
 )
 
 func TestDiscussionStoreLifecycle(t *testing.T) {
@@ -876,7 +877,7 @@ func TestDiscussionStoreSetCoverLeavesVisibilityPrivate(t *testing.T) {
 	defer store.Close()
 
 	owner := "oauth:owner"
-	d, err := store.CreatePlaceholder(ctx, owner, "cover anytime", "en-US")
+	d, err := store.CreatePlaceholder(ctx, owner, "cover anytime", "en-US", planner.DefaultTemplateID)
 	if err != nil {
 		t.Fatalf("CreatePlaceholder: %v", err)
 	}
@@ -922,6 +923,30 @@ func TestDiscussionStoreSetCoverLeavesVisibilityPrivate(t *testing.T) {
 	}
 	if missing != nil {
 		t.Fatalf("SetCover for missing id = %+v, want nil", missing)
+	}
+}
+
+func TestDiscussionStoreCreatePlaceholderPersistsTemplate(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	created, err := store.CreatePlaceholder(ctx, "oauth:owner", "template topic", "en-US", planner.DefaultTemplateID)
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+	if created.Template != planner.DefaultTemplateID {
+		t.Fatalf("created template = %q, want %q", created.Template, planner.DefaultTemplateID)
+	}
+	stored, err := store.Get(ctx, "oauth:owner", created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Template != planner.DefaultTemplateID {
+		t.Fatalf("stored template = %q, want %q", stored.Template, planner.DefaultTemplateID)
 	}
 }
 
@@ -989,7 +1014,7 @@ func TestDiscussionStoreVoiceMessageLineRoundTrip(t *testing.T) {
 	defer store.Close()
 
 	owner := "oauth:owner"
-	d, err := store.CreatePlaceholder(ctx, owner, "voice round trip", "en-US")
+	d, err := store.CreatePlaceholder(ctx, owner, "voice round trip", "en-US", planner.DefaultTemplateID)
 	if err != nil {
 		t.Fatalf("CreatePlaceholder: %v", err)
 	}

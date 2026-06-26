@@ -230,6 +230,7 @@ func New(d Deps) *Server {
 	// discovery and the planning/script-generation endpoints. They degrade
 	// gracefully when Env/MCPCfg are nil.
 	s.mux.HandleFunc("GET /api/discussion-types", s.handleDiscussionTypes)
+	s.mux.HandleFunc("GET /api/templates", s.handleTemplates)
 	s.mux.HandleFunc("GET /api/models", s.handleModels)
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
