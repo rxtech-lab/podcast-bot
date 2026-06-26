@@ -16,7 +16,27 @@ func conversationPlanSchema(template string) map[string]any {
 
 // conversationTools is the tool set for the conversational planner loop.
 func conversationTools(template string) []openai.ChatCompletionToolParam {
-	return []openai.ChatCompletionToolParam{
+	tools := []openai.ChatCompletionToolParam{}
+	if IsResearchTemplate(template) {
+		tools = append(tools,
+			toolDef("search_research_papers", "Search Firecrawl Research Index for ranked scientific or engineering papers. Use this before general web search for the research template.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "Research question, topic, method, benchmark, author, or category to search."},
+				},
+				"required": []string{"query"},
+			}),
+			toolDef("read_research_paper", "Read relevant full-text passages from one Firecrawl Research paper. Use after search_research_papers to verify the paper contains useful evidence.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"paper_id": map[string]any{"type": "string", "description": "The paperId or primaryId returned by search_research_papers."},
+					"query":    map[string]any{"type": "string", "description": "Question to answer using passages from this paper."},
+				},
+				"required": []string{"paper_id"},
+			}),
+		)
+	}
+	tools = append(tools,
 		toolDef("search_sources", "Search the web through Firecrawl and return candidate source URLs with snippets. Use this before crawl_sources; do not treat search snippets as full source content.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -71,5 +91,6 @@ func conversationTools(template string) []openai.ChatCompletionToolParam {
 			},
 			"required": []string{"questions"},
 		}),
-	}
+	)
+	return tools
 }

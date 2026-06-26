@@ -636,12 +636,22 @@ final class APIClient: Sendable {
         return response.types ?? []
     }
 
-    /// Plan templates available for the selected content type. Today the server
-    /// returns a single default template for discussions.
+    /// Plan templates available for the selected content type. The server owns
+    /// the available list so clients pick up new templates without an app update.
     func templates(type: String) async throws -> [PlanTemplateDTO] {
-        let encoded = type.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? type
-        let response: PlanTemplatesResponseDTO = try await get("/api/templates?type=\(encoded)")
-        return response.templates ?? []
+        let query = [URLQueryItem(name: "type", value: type)]
+        let url = request(method: "GET", path: "/api/templates", query: query).url?.absoluteString ?? "/api/templates"
+        apiLog.debug("templates request type=\(type, privacy: .public) url=\(url, privacy: .public)")
+        do {
+            let response: PlanTemplatesResponseDTO = try await get("/api/templates", query: query)
+            let templates = response.templates ?? []
+            let templateIDs = templates.map(\.id).joined(separator: ",")
+            apiLog.debug("templates response type=\(type, privacy: .public) count=\(templates.count, privacy: .public) ids=\(templateIDs, privacy: .public)")
+            return templates
+        } catch {
+            apiLog.error("templates request failed type=\(type, privacy: .public) url=\(url, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     // MARK: - Push

@@ -45,5 +45,11 @@ struct WhatsNewFeature: Identifiable, Equatable {
             subtitle: "You can now export your summary to Notion directly with live podcast playback.",
             icon: "square.and.arrow.up.on.square"
         ),
+        WhatsNewFeature(
+            id: "template-research-planning",
+            title: "Plan with templates",
+            subtitle: "Choose templates for new \(AppStringLiteral.stationNameRaw)s, including a research template for academic-style topics.",
+            icon: "square.grid.2x2.fill"
+        ),
     ]
 }

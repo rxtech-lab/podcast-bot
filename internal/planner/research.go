@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ import (
 // Rendering (see cloudflareMarkdownURL), so search does not request Firecrawl
 // page scraping.
 const firecrawlSearchURL = "https://api.firecrawl.dev/v2/search"
+
+const firecrawlResearchPapersURL = "https://api.firecrawl.dev/v2/search/research/papers"
 
 // cloudflareMarkdownURL is Cloudflare Browser Rendering's /markdown endpoint
 // (account id is the %s). It renders a URL in headless Chromium and returns the
@@ -49,6 +52,42 @@ type firecrawlDoc struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Markdown    string `json:"markdown"`
+}
+
+type firecrawlResearchPapersResponse struct {
+	Success bool                     `json:"success"`
+	Data    json.RawMessage          `json:"data"`
+	Papers  []firecrawlResearchPaper `json:"papers"`
+	Results []firecrawlResearchPaper `json:"results"`
+}
+
+type firecrawlResearchPaperResponse struct {
+	Success  bool                       `json:"success"`
+	Data     json.RawMessage            `json:"data"`
+	Paper    firecrawlResearchPaper     `json:"paper"`
+	Passages []firecrawlResearchPassage `json:"passages"`
+}
+
+type firecrawlResearchPaper struct {
+	PaperID   string                     `json:"paperId"`
+	PrimaryID string                     `json:"primaryId"`
+	Title     string                     `json:"title"`
+	Abstract  string                     `json:"abstract"`
+	URL       string                     `json:"url"`
+	Authors   []string                   `json:"authors"`
+	SourceIDs []string                   `json:"sourceIds"`
+	Year      int                        `json:"year"`
+	Published string                     `json:"published"`
+	Score     float64                    `json:"score"`
+	Passages  []firecrawlResearchPassage `json:"passages"`
+}
+
+type firecrawlResearchPassage struct {
+	Text    string  `json:"text"`
+	Passage string  `json:"passage"`
+	Content string  `json:"content"`
+	Section string  `json:"section"`
+	Score   float64 `json:"score"`
 }
 
 // cloudflareMarkdownRequest mirrors Cloudflare Browser Rendering's POST
@@ -151,6 +190,87 @@ func (p *Planner) SearchSources(ctx context.Context, query string) ([]config.Sou
 		return nil, fmt.Errorf("no readable search results")
 	}
 	return sources, nil
+}
+
+// researchPapers gathers academic sources through Firecrawl Research Index.
+// The endpoint returns paper metadata and abstracts, so these are still
+// candidate sources until readResearchPaper verifies relevant passages.
+func (p *Planner) researchPapers(ctx context.Context, query string) ([]config.Source, bool) {
+	key := strings.TrimSpace(p.env.FirecrawlAPIKey)
+	if key == "" {
+		return nil, false
+	}
+	endpoint, err := researchPapersURL(query, firecrawlSearchLimit)
+	if err != nil {
+		return nil, false
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var parsed firecrawlResearchPapersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, false
+	}
+	papers := parsed.researchPapers()
+	sources := make([]config.Source, 0, len(papers))
+	for _, paper := range papers {
+		if len(sources) >= firecrawlSearchLimit {
+			break
+		}
+		if s, ok := researchPaperToSource(paper, nil); ok {
+			sources = append(sources, s)
+		}
+	}
+	if len(sources) == 0 {
+		return nil, false
+	}
+	return sources, true
+}
+
+// readResearchPaper asks Firecrawl Research Index for passages inside a
+// candidate paper that answer the model's question.
+func (p *Planner) readResearchPaper(ctx context.Context, id, query string) (config.Source, bool) {
+	key := strings.TrimSpace(p.env.FirecrawlAPIKey)
+	if key == "" {
+		return config.Source{}, false
+	}
+	endpoint, err := researchPaperURL(id, query, 4)
+	if err != nil {
+		return config.Source{}, false
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return config.Source{}, false
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return config.Source{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return config.Source{}, false
+	}
+	var parsed firecrawlResearchPaperResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return config.Source{}, false
+	}
+	paper, passages := parsed.researchPaper()
+	return researchPaperToSource(paper, passages)
 }
 
 // crawlURLs reads each URL via Cloudflare Browser Rendering and returns one
@@ -270,6 +390,216 @@ func docToSource(d firecrawlDoc) (config.Source, bool) {
 		Snippet:  truncate(snippet, 400),
 		Markdown: markdown,
 	}, true
+}
+
+func researchPapersURL(query string, limit int) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", fmt.Errorf("query is required")
+	}
+	if limit <= 0 {
+		limit = firecrawlSearchLimit
+	}
+	u, err := url.Parse(firecrawlResearchPapersURL)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("query", query)
+	q.Set("k", fmt.Sprintf("%d", limit))
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func researchPaperURL(id, query string, limit int) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("paper_id is required")
+	}
+	if limit <= 0 {
+		limit = 4
+	}
+	u, err := url.Parse(firecrawlResearchPapersURL + "/" + url.PathEscape(id))
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	if strings.TrimSpace(query) != "" {
+		q.Set("query", strings.TrimSpace(query))
+		q.Set("k", fmt.Sprintf("%d", limit))
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func (r firecrawlResearchPapersResponse) researchPapers() []firecrawlResearchPaper {
+	out := append([]firecrawlResearchPaper{}, r.Papers...)
+	out = append(out, r.Results...)
+	out = append(out, decodeResearchPapers(r.Data)...)
+	return out
+}
+
+func decodeResearchPapers(raw json.RawMessage) []firecrawlResearchPaper {
+	if len(raw) == 0 {
+		return nil
+	}
+	var list []firecrawlResearchPaper
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list
+	}
+	var wrapped struct {
+		Papers  []firecrawlResearchPaper `json:"papers"`
+		Results []firecrawlResearchPaper `json:"results"`
+		Data    []firecrawlResearchPaper `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil
+	}
+	out := append([]firecrawlResearchPaper{}, wrapped.Papers...)
+	out = append(out, wrapped.Results...)
+	out = append(out, wrapped.Data...)
+	return out
+}
+
+func (r firecrawlResearchPaperResponse) researchPaper() (firecrawlResearchPaper, []firecrawlResearchPassage) {
+	paper := r.Paper
+	passages := append([]firecrawlResearchPassage{}, r.Passages...)
+	if len(r.Data) == 0 {
+		return paper, passages
+	}
+	var decoded firecrawlResearchPaper
+	if err := json.Unmarshal(r.Data, &decoded); err == nil && !decoded.empty() {
+		paper = decoded
+		passages = append(passages, decoded.Passages...)
+		return paper, passages
+	}
+	var wrapped struct {
+		Paper    firecrawlResearchPaper     `json:"paper"`
+		Passages []firecrawlResearchPassage `json:"passages"`
+		Results  []firecrawlResearchPassage `json:"results"`
+		Data     []firecrawlResearchPassage `json:"data"`
+	}
+	if err := json.Unmarshal(r.Data, &wrapped); err == nil {
+		if !wrapped.Paper.empty() {
+			paper = wrapped.Paper
+		}
+		passages = append(passages, wrapped.Passages...)
+		passages = append(passages, wrapped.Results...)
+		passages = append(passages, wrapped.Data...)
+	}
+	return paper, passages
+}
+
+func (p firecrawlResearchPaper) empty() bool {
+	return strings.TrimSpace(p.PaperID) == "" &&
+		strings.TrimSpace(p.PrimaryID) == "" &&
+		strings.TrimSpace(p.Title) == "" &&
+		strings.TrimSpace(p.Abstract) == ""
+}
+
+func researchPaperToSource(paper firecrawlResearchPaper, passages []firecrawlResearchPassage) (config.Source, bool) {
+	id := researchPaperID(paper)
+	title := strings.TrimSpace(paper.Title)
+	if title == "" {
+		title = id
+	}
+	if title == "" {
+		return config.Source{}, false
+	}
+	rawURL := researchPaperSourceURL(paper, id)
+	if rawURL == "" {
+		return config.Source{}, false
+	}
+	markdown := researchPaperMarkdown(paper, passages)
+	snippet := strings.TrimSpace(paper.Abstract)
+	if passageText := researchPassagesMarkdown(passages); passageText != "" {
+		snippet = passageText
+	}
+	if snippet == "" {
+		snippet = markdown
+	}
+	return config.Source{
+		Title:    title,
+		URL:      rawURL,
+		Snippet:  truncate(snippet, 400),
+		Markdown: markdown,
+	}, true
+}
+
+func researchPaperID(paper firecrawlResearchPaper) string {
+	for _, candidate := range []string{paper.PrimaryID, paper.PaperID} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	for _, id := range paper.SourceIDs {
+		if strings.TrimSpace(id) != "" {
+			return strings.TrimSpace(id)
+		}
+	}
+	return ""
+}
+
+func researchPaperSourceURL(paper firecrawlResearchPaper, id string) string {
+	if strings.TrimSpace(paper.URL) != "" {
+		return strings.TrimSpace(paper.URL)
+	}
+	if strings.HasPrefix(id, "arxiv:") {
+		return "https://arxiv.org/abs/" + strings.TrimPrefix(id, "arxiv:")
+	}
+	if id != "" {
+		return "firecrawl-research:" + id
+	}
+	return ""
+}
+
+func researchPaperMarkdown(paper firecrawlResearchPaper, passages []firecrawlResearchPassage) string {
+	var sb strings.Builder
+	if title := strings.TrimSpace(paper.Title); title != "" {
+		sb.WriteString("# " + title + "\n\n")
+	}
+	if id := researchPaperID(paper); id != "" {
+		sb.WriteString("Paper ID: " + id + "\n")
+	}
+	if len(paper.Authors) > 0 {
+		sb.WriteString("Authors: " + strings.Join(paper.Authors, ", ") + "\n")
+	}
+	if paper.Year > 0 {
+		fmt.Fprintf(&sb, "Year: %d\n", paper.Year)
+	} else if published := strings.TrimSpace(paper.Published); published != "" {
+		sb.WriteString("Published: " + published + "\n")
+	}
+	if strings.TrimSpace(paper.Abstract) != "" {
+		sb.WriteString("\nAbstract:\n")
+		sb.WriteString(strings.TrimSpace(paper.Abstract))
+		sb.WriteString("\n")
+	}
+	if passageText := researchPassagesMarkdown(passages); passageText != "" {
+		sb.WriteString("\nRelevant passages:\n")
+		sb.WriteString(passageText)
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func researchPassagesMarkdown(passages []firecrawlResearchPassage) string {
+	var lines []string
+	for _, p := range passages {
+		text := strings.TrimSpace(p.Text)
+		if text == "" {
+			text = strings.TrimSpace(p.Passage)
+		}
+		if text == "" {
+			text = strings.TrimSpace(p.Content)
+		}
+		if text == "" {
+			continue
+		}
+		if section := strings.TrimSpace(p.Section); section != "" {
+			text = section + ": " + text
+		}
+		lines = append(lines, "- "+text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // mergeSources appends add to base, skipping URLs already present. Persisted

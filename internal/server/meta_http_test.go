@@ -119,8 +119,8 @@ func TestHandleTemplates(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(out.Templates) != 1 {
-		t.Fatalf("templates length = %d, want 1", len(out.Templates))
+	if len(out.Templates) != 2 {
+		t.Fatalf("templates length = %d, want 2", len(out.Templates))
 	}
 	if out.Templates[0].ID != planner.DefaultTemplateID {
 		t.Fatalf("template id = %q, want %q", out.Templates[0].ID, planner.DefaultTemplateID)

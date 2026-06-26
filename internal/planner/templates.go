@@ -1,8 +1,13 @@
 package planner
 
-import "github.com/sirily11/debate-bot/internal/config"
+import (
+	"strings"
+
+	"github.com/sirily11/debate-bot/internal/config"
+)
 
 const DefaultTemplateID = "default"
+const ResearchTemplateID = "research"
 
 // Template is a named JSON schema for a planner output shape. The current
 // decoder/assembler still expects the default discussion shape; divergent
@@ -25,7 +30,30 @@ var templateRegistry = map[string][]Template{
 			Description: "A balanced panel-discussion plan with a host, background, and discussants.",
 			Schema:      defaultDiscussionPlanSchema(),
 		},
+		{
+			ID:          ResearchTemplateID,
+			Type:        config.ContentTypeDiscussion,
+			Name:        "Research",
+			Description: "A school-style discussion plan grounded in research papers and cited evidence.",
+			Schema:      defaultDiscussionPlanSchema(),
+		},
 	},
+}
+
+func IsResearchTemplate(id string) bool {
+	return strings.TrimSpace(id) == ResearchTemplateID
+}
+
+func TemplateInstructions(id string) string {
+	if !IsResearchTemplate(id) {
+		return ""
+	}
+	return strings.TrimSpace(`Template: Research
+- Produce a school-style discussion plan suitable for students, teachers, or classroom debate.
+- Prefer research papers and academic evidence over general web snippets when live research is enabled.
+- Ground the background in concrete findings, methods, datasets, tradeoffs, or limitations from the sources.
+- Make each discussant's aspect useful for learning: e.g. evidence, methods, ethics, policy, classroom impact, history, or counterargument.
+- Keep the plan understandable for a school audience without making it casual or shallow.`)
 }
 
 func defaultDiscussionPlanSchema() map[string]any {

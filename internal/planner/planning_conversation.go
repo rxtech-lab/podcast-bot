@@ -68,7 +68,7 @@ type ConversationOptions struct {
 	ExistingMarkdown string
 }
 
-const conversationSystem = `You are a conversational planning agent for a panel-discussion (podcast) generator.
+const conversationSystemBase = `You are a conversational planning agent for a panel-discussion (podcast) generator.
 
 You run as an agent loop with tools:
 - search_sources: search the web for candidate source URLs and snippets.
@@ -80,7 +80,7 @@ You run as an agent loop with tools:
 
 Guidelines:
 - If the user's request is unclear, underspecified, or could go several meaningful directions, call ask_question BEFORE writing a plan. It is fine to end your turn with only questions and no plan.
-- Gather web context when it would materially improve the plan: call search_sources first, inspect the candidate URLs/snippets, then call crawl_sources for the best relevant source(s) before writing when source substance is needed.
+- Gather web context when it would materially improve the plan: call search_sources first for regular web context, inspect the candidate URLs/snippets, then call crawl_sources for the best relevant source(s) before writing when source substance is needed.
 - Do not scrape every search result. Use crawl_sources only for URLs that look worth grounding the plan.
 - When you have enough to proceed, call write_plan. The app will not show that draft until you call show_plan.
 - Call show_plan only when the current plan should be visible to the user. Do not call it for internal drafts.
@@ -89,6 +89,22 @@ Guidelines:
 - Do not output the plan as prose or JSON outside the write_plan / update_plan tool calls.
 - After show_plan succeeds, do not summarize or restate the plan. Reply with one short plain-text sentence in the requested language, meaning: "The plan is ready above. Ask me any questions or tell me what you'd like to change."
 - That reply must be normal user-facing text only: no JSON, no object/dictionary, no key/value pairs, no code block, and no bilingual translation map.`
+
+const conversationResearchToolInstructions = `Additional research-template tools:
+- search_research_papers: search academic papers through Firecrawl Research Index.
+- read_research_paper: read relevant passages from a selected research paper.
+- For the research template, use search_research_papers before general web search when academic evidence is relevant, then call read_research_paper for strong candidate papers.`
+
+func conversationSystem(template string) string {
+	system := conversationSystemBase
+	if IsResearchTemplate(template) {
+		system += "\n\n" + conversationResearchToolInstructions
+	}
+	if instructions := TemplateInstructions(template); instructions != "" {
+		system += "\n\n" + instructions
+	}
+	return system
+}
 
 // convDispatchKind classifies a tool result so the loop knows how to record it.
 type convDispatchKind int
@@ -139,7 +155,7 @@ func (p *Planner) RunConversationTurn(ctx context.Context, history []llm.Message
 		} else {
 			p.emit("thinking", "Working…")
 		}
-		stream, err := client.Stream(ctx, conversationSystem, msgs, conversationTools(opts.Template))
+		stream, err := client.Stream(ctx, conversationSystem(opts.Template), msgs, conversationTools(opts.Template))
 		if err != nil {
 			return false, fmt.Errorf("planning conversation: %w", err)
 		}
@@ -252,6 +268,32 @@ func (p *Planner) RunConversationTurn(ctx context.Context, history []llm.Message
 // record the result (plain tool result, a plan, or a pausing question).
 func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (output string, kind convDispatchKind, res *Result, questionsJSON string, isErr bool) {
 	switch tc.Name {
+	case "search_research_papers":
+		query, err := stringArg(tc.Arguments, "query")
+		if err != nil {
+			return err.Error(), dispatchTool, nil, "", true
+		}
+		s.planner.emit("search", "Searching research papers for “"+truncate(query, 80)+"”")
+		found, ok := s.planner.researchPapers(ctx, query)
+		if !ok {
+			return "search_research_papers returned no readable papers. Continue with the user's context, existing sources, or general web search if useful.", dispatchTool, nil, "", false
+		}
+		s.sources = mergeSources(s.sources, found)
+		s.planner.emit("sources", fmt.Sprintf("Found %d research source%s so far", len(s.sources), plural(len(s.sources))))
+		return sourceDigest("search_research_papers results", found), dispatchTool, nil, "", false
+	case "read_research_paper":
+		paperID, err := stringArg(tc.Arguments, "paper_id")
+		if err != nil {
+			return err.Error(), dispatchTool, nil, "", true
+		}
+		query := optionalStringArg(tc.Arguments, "query")
+		s.planner.emit("read", "Reading research paper "+truncate(paperID, 80))
+		found, ok := s.planner.readResearchPaper(ctx, paperID, query)
+		if !ok {
+			return "read_research_paper could not read relevant passages for " + paperID + ". Continue if enough context is available.", dispatchTool, nil, "", false
+		}
+		s.sources = mergeSources(s.sources, []config.Source{found})
+		return sourceDigest("read_research_paper result", []config.Source{found}), dispatchTool, nil, "", false
 	case "search_sources":
 		query, err := stringArg(tc.Arguments, "query")
 		if err != nil {
@@ -343,9 +385,9 @@ func (s *conversationSession) planModel() string {
 // status phases emitToolStart understands.
 func conversationStatusName(name string) string {
 	switch name {
-	case "search_sources":
+	case "search_research_papers", "search_sources":
 		return "web_search"
-	case "crawl_sources":
+	case "read_research_paper", "crawl_sources":
 		return "read_url"
 	case "write_plan", "update_plan":
 		return "create_plan"
@@ -443,6 +485,11 @@ func ConversationInitialText(req PlanRequest) string {
 	sb.WriteString("Plan settings:\n")
 	sb.WriteString("- Language for all names and text: " + lang + "\n")
 	sb.WriteString(fmt.Sprintf("- Number of discussants: %d\n", n))
+	if instructions := TemplateInstructions(req.Template); instructions != "" {
+		sb.WriteString("\nTemplate instructions:\n")
+		sb.WriteString(instructions)
+		sb.WriteString("\n\n")
+	}
 	if req.Research {
 		sb.WriteString("- Research live sources when it would improve the plan.\n")
 	} else {

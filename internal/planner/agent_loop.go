@@ -17,6 +17,7 @@ type planningAgentOptions struct {
 	RequiredURLs             []string
 	ExistingSources          []config.Source
 	RequireSuccessfulURLRead bool
+	Template                 string
 }
 
 type planningToolSession struct {
@@ -24,6 +25,7 @@ type planningToolSession struct {
 	researchRequired         bool
 	requiredURLs             []string
 	requireSuccessfulURLRead bool
+	template                 string
 	sources                  []config.Source
 	searched                 bool
 	readURLs                 map[string]bool
@@ -46,23 +48,28 @@ func (p *Planner) runPlanningAgent(ctx context.Context, user string, attachments
 		researchRequired:         opts.ResearchRequired,
 		requiredURLs:             dedupeURLs(opts.RequiredURLs),
 		requireSuccessfulURLRead: opts.RequireSuccessfulURLRead,
+		template:                 opts.Template,
 		sources:                  append([]config.Source(nil), opts.ExistingSources...),
 		readURLs:                 map[string]bool{},
 		successfulURLReads:       map[string]bool{},
 	}
 
-	const system = `You are a planning agent for a panel-discussion generator.
+	system := `You are a planning agent for a panel-discussion generator.
 
 Run as an agent loop:
 - Use tools to gather external context when required or useful.
-- If web research is required, call web_search before creating the plan. Treat web_search as candidate discovery only.
-- After web_search, choose the most relevant result(s) and call read_url for a promising URL when you need source substance. Do not scrape every search result.
+- If the research template is selected, prefer search_research_papers before general web_search, then read_research_paper for strong candidates.
+- If web research is required, call an appropriate search tool before creating the plan. Treat search results as candidate discovery only.
+- After search, choose the most relevant result(s) and call the matching read tool when you need source substance. Do not read every result.
 - If specific URLs are required, call read_url for each URL before creating the plan.
 - After research/read_url tool results are returned, make one final assistant turn that calls only create_plan.
-- Do not call create_plan in the same assistant turn as web_search or read_url.
+- Do not call create_plan in the same assistant turn as any research/read tool.
 - Do not output the plan as prose or JSON outside the create_plan tool call.
 
 The final plan must be balanced, production-ready, and written in the requested language.`
+	if instructions := TemplateInstructions(opts.Template); instructions != "" {
+		system += "\n\n" + instructions
+	}
 
 	msgs := []llm.Message{{Role: llm.RoleUser, Parts: attachmentInputParts(user, attachments)}}
 	for round := 0; round < maxPlanningToolRounds; round++ {
@@ -80,7 +87,7 @@ The final plan must be balanced, production-ready, and written in the requested 
 			p.emit("thinking", "Composing the plan…")
 		}
 
-		stream, err := client.Stream(ctx, system, msgs, planningTools())
+		stream, err := client.Stream(ctx, system, msgs, planningTools(opts.Template))
 		if err != nil {
 			return nil, nil, fmt.Errorf("planning agent: %w", err)
 		}
@@ -165,17 +172,37 @@ const planningHeartbeatBytes = 1200
 // before its (sometimes lengthy) arguments finish streaming.
 func (p *Planner) emitToolStart(name string) {
 	switch name {
-	case "web_search":
+	case "search_research_papers", "web_search":
 		p.emit("search", "Searching the web…")
-	case "read_url":
+	case "read_research_paper", "read_url":
 		p.emit("read", "Reading sources…")
 	case "create_plan":
 		p.emit("writing", "Writing the plan…")
 	}
 }
 
-func planningTools() []openai.ChatCompletionToolParam {
-	return []openai.ChatCompletionToolParam{
+func planningTools(template string) []openai.ChatCompletionToolParam {
+	tools := []openai.ChatCompletionToolParam{}
+	if IsResearchTemplate(template) {
+		tools = append(tools,
+			toolDef("search_research_papers", "Search Firecrawl Research Index for ranked scientific or engineering papers. Use this before general web search for the research template.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "Research question, topic, method, benchmark, author, or category to search."},
+				},
+				"required": []string{"query"},
+			}),
+			toolDef("read_research_paper", "Read relevant full-text passages from one Firecrawl Research paper. Use after search_research_papers to verify the paper contains useful evidence.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"paper_id": map[string]any{"type": "string", "description": "The paperId or primaryId returned by search_research_papers."},
+					"query":    map[string]any{"type": "string", "description": "Question to answer using passages from this paper."},
+				},
+				"required": []string{"paper_id"},
+			}),
+		)
+	}
+	tools = append(tools,
 		toolDef("web_search", "Search the web through Firecrawl and return candidate source URLs with snippets. Use this before read_url; do not treat search snippets as full source content.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -190,10 +217,9 @@ func planningTools() []openai.ChatCompletionToolParam {
 			},
 			"required": []string{"url"},
 		}),
-		// TODO: Thread a selected template into the one-shot Generate path if it
-		// becomes user-selectable. This path stays default-only for now.
-		toolDef("create_plan", "Create the final panel-discussion plan. This must be the final tool call.", TemplateSchema(config.ContentTypeDiscussion, DefaultTemplateID)),
-	}
+		toolDef("create_plan", "Create the final panel-discussion plan. This must be the final tool call.", TemplateSchema(config.ContentTypeDiscussion, template)),
+	)
+	return tools
 }
 
 func toolDef(name, description string, schema map[string]any) openai.ChatCompletionToolParam {
@@ -225,6 +251,33 @@ func (s *planningToolSession) dispatch(ctx context.Context, name, jsonArgs strin
 		s.sources = mergeSources(s.sources, found)
 		s.planner.emit("sources", fmt.Sprintf("Found %d source%s so far", len(s.sources), plural(len(s.sources))))
 		return sourceDigest("web_search results", found), false, nil
+	case "search_research_papers":
+		query, err := stringArg(jsonArgs, "query")
+		if err != nil {
+			return "", false, err
+		}
+		s.searched = true
+		s.planner.emit("search", "Searching research papers for “"+truncate(query, 80)+"”")
+		found, ok := s.planner.researchPapers(ctx, query)
+		if !ok {
+			return "search_research_papers unavailable or returned no readable papers. Continue with the user's context and any provided sources.", false, nil
+		}
+		s.sources = mergeSources(s.sources, found)
+		s.planner.emit("sources", fmt.Sprintf("Found %d research source%s so far", len(s.sources), plural(len(s.sources))))
+		return sourceDigest("search_research_papers results", found), false, nil
+	case "read_research_paper":
+		paperID, err := stringArg(jsonArgs, "paper_id")
+		if err != nil {
+			return "", false, err
+		}
+		query := optionalStringArg(jsonArgs, "query")
+		s.planner.emit("read", "Reading research paper "+truncate(paperID, 80))
+		found, ok := s.planner.readResearchPaper(ctx, paperID, query)
+		if !ok {
+			return "read_research_paper unavailable or returned no readable passages for " + paperID + ". Continue if enough context is available.", false, nil
+		}
+		s.sources = mergeSources(s.sources, []config.Source{found})
+		return sourceDigest("read_research_paper result", []config.Source{found}), false, nil
 	case "read_url":
 		url, err := stringArg(jsonArgs, "url")
 		if err != nil {
@@ -267,6 +320,9 @@ func (s *planningToolSession) dispatch(ctx context.Context, name, jsonArgs strin
 
 func (s *planningToolSession) readyToCreate() error {
 	if s.researchRequired && !s.searched {
+		if IsResearchTemplate(s.template) {
+			return fmt.Errorf("call search_research_papers before create_plan")
+		}
 		return fmt.Errorf("call web_search before create_plan")
 	}
 	var missing []string
@@ -356,6 +412,14 @@ func stringArg(raw, key string) (string, error) {
 	return value, nil
 }
 
+func optionalStringArg(raw, key string) string {
+	var args map[string]string
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(args[key])
+}
+
 func sourceDigest(label string, sources []config.Source) string {
 	if len(sources) == 0 {
 		return label + ": no readable sources"
@@ -394,7 +458,7 @@ func plural(n int) string {
 	return "s"
 }
 
-func planningRequirementsPrompt(research bool, urls []string) string {
+func planningRequirementsPrompt(research bool, urls []string, template string) string {
 	urls = dedupeURLs(urls)
 	if !research && len(urls) == 0 {
 		return ""
@@ -402,8 +466,14 @@ func planningRequirementsPrompt(research bool, urls []string) string {
 	var sb strings.Builder
 	sb.WriteString("\n\nAgent-loop requirements:\n")
 	if research {
-		sb.WriteString("- Call web_search for the topic before create_plan.\n")
-		sb.WriteString("- If web_search returns a promising source, call read_url for that source before create_plan. Do not scrape every search result.\n")
+		if IsResearchTemplate(template) {
+			sb.WriteString("- Call search_research_papers for the topic before create_plan.\n")
+			sb.WriteString("- If search_research_papers returns a promising paper, call read_research_paper for that paper before create_plan.\n")
+			sb.WriteString("- Use web_search only as a fallback or supplement when paper results do not cover the topic.\n")
+		} else {
+			sb.WriteString("- Call web_search for the topic before create_plan.\n")
+			sb.WriteString("- If web_search returns a promising source, call read_url for that source before create_plan. Do not scrape every search result.\n")
+		}
 	}
 	for _, url := range urls {
 		fmt.Fprintf(&sb, "- Call read_url for %s before create_plan.\n", url)
