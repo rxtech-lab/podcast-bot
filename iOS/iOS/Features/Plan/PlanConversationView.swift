@@ -607,17 +607,30 @@ struct PlanConversationView: View {
                 didLoadHistory = true
                 isLoadingHistory = true
                 defer { isLoadingHistory = false }
-                if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
+                let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id)
+                if let view {
                     parts = view.parts
                     requestInitialBottomScrollIfNeeded()
-                    let conversationFailed = view.conversation?.status == "failed"
-                    if !conversationFailed, view.isRunning == true {
+                }
+                let conversationFailed = view?.conversation?.status == "failed"
+                if !conversationFailed {
+                    if view?.isRunning == true {
                         beginStream {
                             APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
                         }
                         return
                     }
-                    if !conversationFailed, view.needsRun == true {
+                    // Connect to the plan stream when the server has a turn waiting
+                    // to run (needs_run), or when this is a freshly created planning
+                    // station whose server-seeded first turn hasn't surfaced/run yet
+                    // (empty history, no plan — the history fetch can lag right after
+                    // creation, or fail outright). The resume endpoint re-checks
+                    // server-side and no-ops cleanly if there's nothing to run, so
+                    // this is safe and idempotent.
+                    let isUnstartedPlanning = parts.isEmpty
+                        && discussion.status == .planning
+                        && discussion.script == nil
+                    if view?.needsRun == true || isUnstartedPlanning {
                         beginStream {
                             APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
                         }
