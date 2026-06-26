@@ -1,4 +1,5 @@
 import Foundation
+import JSONSchemaForm
 
 /// DTOs mirroring the debate-bot engine JSON. Field names match the Go structs'
 /// json tags (snake_case).
@@ -73,6 +74,60 @@ struct PlanTemplatesResponseDTO: Codable, Sendable {
     var templates: [PlanTemplateDTO]?
 }
 
+struct PrecheckResponseDTO: Codable, Sendable {
+    var newDiscussion: PrecheckNewDiscussionDTO
+
+    enum CodingKeys: String, CodingKey {
+        case newDiscussion = "new_discussion"
+    }
+}
+
+struct PrecheckNewDiscussionDTO: Codable, Sendable {
+    var form: PrecheckFormDTO
+}
+
+struct PrecheckFormDTO: Codable, Sendable {
+    var title: String
+    var description: String?
+    var submitTitle: String
+    var cancelTitle: String
+    var loadingTitle: String
+    var schema: [String: AnyCodable]
+    var uiSchema: [String: AnyCodable]?
+    var initialData: [String: AnyCodable]?
+    var actions: [PrecheckFormActionDTO]?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case description
+        case submitTitle = "submit_title"
+        case cancelTitle = "cancel_title"
+        case loadingTitle = "loading_title"
+        case schema
+        case uiSchema = "ui_schema"
+        case initialData = "initial_data"
+        case actions
+    }
+}
+
+struct PrecheckFormActionDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var kind: String
+    var title: String
+    var description: String?
+    var systemImage: String?
+    var deepLink: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case title
+        case description
+        case systemImage = "system_image"
+        case deepLink = "deep_link"
+    }
+}
+
 /// Body of PATCH /api/discussions/{id}/speaker-model.
 struct SpeakerModelRequest: Codable, Sendable {
     var speaker: String
@@ -134,27 +189,18 @@ struct PodcastReference: Codable, Hashable, Sendable, Identifiable {
 
 /// POST /api/discussions request body: creates an empty placeholder discussion
 /// (status "planning") so the client gets an id before streaming the plan.
+///
+/// `form` is the raw JSONSchemaForm output for the new-discussion form (served by
+/// GET /api/precheck), posted verbatim. The server owns every form key, so the
+/// client never reads or transforms field values — it just hands the form back.
+/// `referenceDiscussionID` is contextual (set when planning from an existing
+/// podcast), not a form field.
 struct DiscussionCreateRequest: Codable, Sendable {
-    var topic: String
-    var type: String = "discussion"
-    var language: String
-    var template: String?
-    /// When true, the server kicks off background AI cover-art generation for the
-    /// new discussion; the cover is filled in asynchronously and picked up the
-    /// next time the discussion is fetched (e.g. when the player opens).
-    var generateCover: Bool = false
-    var coverPrompt: String?
-    var plan: PlanRequest?
+    var form: FormData
     var referenceDiscussionID: String?
 
     enum CodingKeys: String, CodingKey {
-        case topic
-        case type
-        case language
-        case template
-        case generateCover = "generate_cover"
-        case coverPrompt = "cover_prompt"
-        case plan
+        case form
         case referenceDiscussionID = "reference_discussion_id"
     }
 }

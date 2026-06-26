@@ -1,5 +1,5 @@
 {
-  "originHash" : "491450a07d661e194b80f1b278b657ee2bfab09cda155946b44572c53d22db86",
+  "originHash" : "2e08dda3fd70eeef9ad1764d0f410ecde12e3d35c199c65c482763e4228da8bd",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -78,6 +78,33 @@
       "state" : {
         "revision" : "924936d0427cb25a61169739a7660230bffa6ea6",
         "version" : "0.8.0"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections",
+      "state" : {
+        "revision" : "a0cb0954ecb21e4e31b0070e6ed5674e8556685a",
+        "version" : "1.6.0"
+      }
+    },
+    {
+      "identity" : "swift-json-schema",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sirily11/swift-json-schema",
+      "state" : {
+        "revision" : "663afab8c131151950fd7fb114871c02a529a4b4",
+        "version" : "1.0.2"
+      }
+    },
+    {
+      "identity" : "swift-jsonschema-form",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sirily11/swift-jsonschema-form.git",
+      "state" : {
+        "revision" : "16639236ffc71713042d144dc1e92b4e8f1bc689",
+        "version" : "1.0.5"
       }
     },
     {

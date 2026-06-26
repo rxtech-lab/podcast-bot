@@ -69,16 +69,8 @@ struct PodcastPlayerView: View {
         .navigationTitle(discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : discussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { podcastToolbar }
-        .alert("Could not create \(AppStringLiteral.stationNameRaw)", isPresented: createFromPlanErrorBinding) {
-            Button("OK", role: .cancel) { createFromPlanError = nil }
-        } message: {
-            Text(createFromPlanError ?? "")
-        }
-        .alert("Could not generate summary", isPresented: summaryGenerateErrorBinding) {
-            Button("OK", role: .cancel) { summaryGenerateError = nil }
-        } message: {
-            Text(summaryGenerateError ?? "")
-        }
+        .modifier(CreateFromPlanErrorAlert(error: $createFromPlanError))
+        .modifier(SummaryGenerateErrorAlert(error: $summaryGenerateError))
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: currentDiscussion)
         }
@@ -95,82 +87,37 @@ struct PodcastPlayerView: View {
             PointsHistoryView()
         }
         .sheet(isPresented: $showingPublishSheet) {
-            if let model {
-                PublishStationSheet(discussion: Binding(
-                    get: { model.discussion },
-                    set: { model.discussion = $0 }
-                ))
-            }
+            publishStationSheet
         }
         .sheet(isPresented: $showingCoverEditor) {
-            if let model {
-                CoverEditorSheet(discussion: Binding(
-                    get: { model.discussion },
-                    set: { model.discussion = $0 }
-                ))
-            }
+            coverEditorSheet
         }
         .sheet(isPresented: $showingShareSheet) {
-            ShareSheet(discussionID: currentDiscussion.id,
-                       api: APIClient(tokens: auth))
+            shareSheet
         }
         .sheet(isPresented: $showingCreatorProfile) {
-            if let creator = currentCreator {
-                CreatorProfileView(creatorID: creator.id,
-                                   initialProfile: creator,
-                                   onCreateFromPlan: onCreatedFromPlan)
-            }
+            creatorProfileSheet
         }
         .sheet(isPresented: $showingFollowUpForm) {
-            NewDiscussionView(reference: currentDiscussion.podcastReference) { created in
-                showingFollowUpForm = false
-                onCreatedFollowUp?(created)
-            }
+            followUpFormSheet
         }
-        .sheet(isPresented: Binding(
-            get: { model?.showsDownloadDialog == true },
-            set: { isPresented in
-                if !isPresented { model?.showsDownloadDialog = false }
-            }
-        )) {
-            if let model {
-                DownloadProgressSheet(model: model)
-            }
+        .sheet(isPresented: downloadDialogBinding) {
+            downloadProgressSheet
         }
-        .sheet(item: Binding(
-            get: { model?.downloadedPodcastFile },
-            set: { model?.downloadedPodcastFile = $0 }
-        )) { file in
-            FileShareSheet(url: file.url)
+        .sheet(item: downloadedPodcastFileBinding) { file in
+            fileShareSheet(file)
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {
-            if let model {
-                FullScreenPlayerView(model: model)
-            }
+            fullPlayerCover
         }
         .task {
-            if model == nil {
-                let m = PlayerModel(discussion: discussion,
-                                    api: APIClient(tokens: auth),
-                                    username: auth.currentUser?.name ?? "You",
-                                    userID: auth.currentUser?.id ?? "",
-                                    shareToken: shareToken)
-                m.start()
-                model = m
-            }
-            await purchases.refreshBalance()
+            await loadPlayerIfNeeded()
         }
         .onDisappear {
-            // Presenting the full-screen cover disappears this view; don't tear
-            // down the shared model in that case — only on real navigation exit.
-            guard !showingFullPlayer else { return }
-            model?.stop()
+            stopPlayerIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
-            // Returning to the foreground while the job is live: the socket may
-            // have been torn down while suspended, so reconcile the transcript
-            // immediately to recover anything that streamed in the background.
-            if phase == .active { model?.foregroundRefresh() }
+            handleScenePhaseChange(phase)
         }
         .preventsIdleSleep()
     }
@@ -289,6 +236,88 @@ struct PodcastPlayerView: View {
                     api: APIClient(tokens: auth))
     }
 
+    @ViewBuilder
+    private var publishStationSheet: some View {
+        if let model {
+            PublishStationSheet(discussion: discussionBinding(for: model))
+        }
+    }
+
+    @ViewBuilder
+    private var coverEditorSheet: some View {
+        if let model {
+            CoverEditorSheet(discussion: discussionBinding(for: model))
+        }
+    }
+
+    private var shareSheet: some View {
+        ShareSheet(discussionID: currentDiscussion.id,
+                   api: APIClient(tokens: auth))
+    }
+
+    @ViewBuilder
+    private var creatorProfileSheet: some View {
+        if let creator = currentCreator {
+            CreatorProfileView(creatorID: creator.id,
+                               initialProfile: creator,
+                               onCreateFromPlan: onCreatedFromPlan)
+        }
+    }
+
+    private var followUpFormSheet: some View {
+        NewDiscussionView(reference: currentPodcastReference) { created in
+            showingFollowUpForm = false
+            onCreatedFollowUp?(created)
+        }
+    }
+
+    @ViewBuilder
+    private var downloadProgressSheet: some View {
+        if let model {
+            DownloadProgressSheet(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private var fullPlayerCover: some View {
+        if let model {
+            FullScreenPlayerView(model: model)
+        }
+    }
+
+    private func discussionBinding(for model: PlayerModel) -> Binding<Discussion> {
+        Binding(
+            get: { model.discussion },
+            set: { model.discussion = $0 }
+        )
+    }
+
+    private var downloadDialogBinding: Binding<Bool> {
+        Binding(
+            get: { model?.showsDownloadDialog == true },
+            set: { isPresented in
+                if !isPresented { model?.showsDownloadDialog = false }
+            }
+        )
+    }
+
+    private var downloadedPodcastFileBinding: Binding<DownloadedPodcastFile?> {
+        Binding(
+            get: { model?.downloadedPodcastFile },
+            set: { model?.downloadedPodcastFile = $0 }
+        )
+    }
+
+    private func fileShareSheet(_ file: DownloadedPodcastFile) -> some View {
+        FileShareSheet(url: file.url)
+    }
+
+    private var currentPodcastReference: PodcastReference {
+        PodcastReference(id: currentDiscussion.id,
+                         title: currentDiscussion.displayTitle,
+                         topic: currentDiscussion.topic)
+    }
+
     private var showsActionsMenu: Bool {
         purchases.isConfigured
             || model?.showsPodcastActions == true
@@ -319,6 +348,33 @@ struct PodcastPlayerView: View {
             get: { summaryGenerateError != nil },
             set: { if !$0 { summaryGenerateError = nil } }
         )
+    }
+
+    private func loadPlayerIfNeeded() async {
+        if model == nil {
+            let player = PlayerModel(discussion: discussion,
+                                     api: APIClient(tokens: auth),
+                                     username: auth.currentUser?.name ?? "You",
+                                     userID: auth.currentUser?.id ?? "",
+                                     shareToken: shareToken)
+            player.start()
+            model = player
+        }
+        await purchases.refreshBalance()
+    }
+
+    private func stopPlayerIfNeeded() {
+        // Presenting the full-screen cover disappears this view; don't tear down
+        // the shared model in that case — only on real navigation exit.
+        guard !showingFullPlayer else { return }
+        model?.stop()
+    }
+
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        // Returning to the foreground while the job is live: the socket may have
+        // been torn down while suspended, so reconcile immediately.
+        guard phase == .active else { return }
+        model?.foregroundRefresh()
     }
 
     /// Balance label for the podcast options menu, matching the discussion page.
@@ -657,6 +713,46 @@ private struct PodcastTranscriptLoadingView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
+    }
+}
+
+private struct CreateFromPlanErrorAlert: ViewModifier {
+    @Binding var error: String?
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { error != nil },
+            set: { if !$0 { error = nil } }
+        )
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Could not create \(AppStringLiteral.stationNameRaw)", isPresented: isPresented) {
+                Button("OK", role: .cancel) { error = nil }
+            } message: {
+                Text(error ?? "")
+            }
+    }
+}
+
+private struct SummaryGenerateErrorAlert: ViewModifier {
+    @Binding var error: String?
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { error != nil },
+            set: { if !$0 { error = nil } }
+        )
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Could not generate summary", isPresented: isPresented) {
+                Button("OK", role: .cancel) { error = nil }
+            } message: {
+                Text(error ?? "")
+            }
     }
 }
 

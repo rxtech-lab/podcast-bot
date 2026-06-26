@@ -1,41 +1,36 @@
+import JSONSchema
+import JSONSchemaForm
+import OSLog
 import SwiftUI
 import TipKit
-import OSLog
 
 private let newDiscussionLog = Logger(subsystem: "com.debatebot.ios", category: "NewDiscussion")
 
-/// Step 1 of planning: enter a topic + panelist count, then ask the engine to
-/// draft a plan (title, background, people, researched sources). On success the
-/// plan is persisted and pushed into the editor.
+/// Step 1 of planning: render the server-provided form, then ask the backend to
+/// create a planning discussion from the submitted values.
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
     /// Called once the placeholder discussion and its first planning turn are
     /// created. The plan page resumes that server-seeded turn.
     var onPlanned: (Discussion) -> Void = { _ in }
-    @State private var topic = ""
-    @State private var selectedReference: PodcastReference?
-    @AppStorage("newDiscussion.type") private var discussionType = "discussion"
-    @AppStorage("newDiscussion.template") private var planTemplate = "default"
-    @AppStorage("newDiscussion.discussants") private var discussants = 3
-    @AppStorage("newDiscussion.language") private var language = "en-US"
-    @State private var attachments: [PendingAttachment] = []
-    @State private var discussionTypes: [DiscussionTypeDTO] = Self.defaultDiscussionTypes
-    @State private var planTemplates: [PlanTemplateDTO] = []
-    @State private var isLoadingDiscussionTypes = false
-    @State private var loadingTemplatesForType: String?
-    @AppStorage("newDiscussion.generateCover") private var generateCover = false
+    private let initialReference: PodcastReference?
+    @State private var precheckForm: PrecheckFormDTO?
+    @State private var formSchema: JSONSchema?
+    @State private var formSchemaJSON: String?
+    @State private var formUISchema: [String: Any]?
+    @State private var formData = FormData.object(properties: [:])
+    @State private var pickerCoordinator = NewDiscussionFormCoordinator()
+    @State private var isLoadingForm = false
     @State private var isPlanning = false
     @State private var errorMessage: String?
-    @State private var showingReferencePicker = false
 
-    private static let defaultDiscussionTypes = [
-        DiscussionTypeDTO(id: "discussion",
-                          label: String(localized: "Discussion", comment: "Round-table discussion type option"))
-    ]
+    /// Field id of the parent-discussion picker within the rendered schema
+    /// (root → reference → discussion_id), used to pre-fill a contextual parent.
+    private let referenceFieldID = "root_reference_discussion_id"
 
     init(reference: PodcastReference? = nil, onPlanned: @escaping (Discussion) -> Void = { _ in }) {
-        _selectedReference = State(initialValue: reference)
+        initialReference = reference
         self.onPlanned = onPlanned
     }
 
@@ -45,11 +40,11 @@ struct NewDiscussionView: View {
                 Theme.background.ignoresSafeArea()
                 form
             }
-            .navigationTitle("New \(AppStringLiteral.stationNameRaw)")
+            .navigationTitle(precheckForm?.title ?? "New \(AppStringLiteral.stationNameRaw)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(precheckForm?.cancelTitle ?? "Cancel") { dismiss() }
                         .disabled(isPlanning)
                 }
 
@@ -58,45 +53,64 @@ struct NewDiscussionView: View {
                         if isPlanning {
                             ProgressView()
                         } else {
-                            Text("Plan")
+                            Text(precheckForm?.submitTitle ?? "Plan")
                         }
                     }
-                    .disabled(topic.trimmingCharacters(in: .whitespaces).isEmpty || isPlanning || attachments.isUploading || planTemplates.isEmpty)
+                    .disabled(!canSubmit)
                     .popoverTip(NewDiscussionPlanTip(), arrowEdge: .top)
                 }
             }
         }
         .interactiveDismissDisabled(true)
-        .onAppear(perform: normalizeStoredSettings)
-        .sheet(isPresented: $showingReferencePicker) {
-            ReferencePodcastPickerSheet(selection: $selectedReference)
+        .sheet(isPresented: pickerPresented) {
+            ReferencePodcastPickerSheet(
+                selectedID: pickerCoordinator.activeSelectionID,
+                onSelect: { pickerCoordinator.complete(with: $0) }
+            )
         }
         .task {
-            await loadDiscussionTypes()
+            await loadPrecheck()
         }
-        .task(id: discussionType) {
-            await loadPlanTemplates()
-        }
+    }
+
+    /// Drives the parent-discussion picker sheet; clears coordinator state when the
+    /// sheet is dismissed without a selection (Cancel / swipe-down).
+    private var pickerPresented: Binding<Bool> {
+        Binding(
+            get: { pickerCoordinator.isPresenting },
+            set: { isPresenting in
+                if isPresenting {
+                    pickerCoordinator.isPresenting = true
+                } else {
+                    pickerCoordinator.cancel()
+                }
+            }
+        )
     }
 
     private var form: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Topic").font(.headline)
-                    TextField("e.g. The future of AI in education", text: $topic, axis: .vertical)
-                        .lineLimit(10...15)
-                        .textFieldStyle(.plain)
-                        .padding(12)
-                        .glassEffect(in: .rect(cornerRadius: 16))
-                    Text("Tip: paste a link in the topic and the agent will read it.")
-                        .font(.caption)
-                        .foregroundStyle(Theme.secondaryText)
+                if isLoadingForm && precheckForm == nil {
+                    HStack {
+                        Spacer()
+                        ProgressView().tint(Theme.accent)
+                        Spacer()
+                    }
+                    .padding(.vertical, 24)
+                } else if let formSchema, let formSchemaJSON {
+                    JSONSchemaForm(
+                        schema: formSchema,
+                        uiSchema: formUISchema,
+                        formData: $formData,
+                        schemaJSON: formSchemaJSON,
+                        showSubmitButton: false,
+                        widgets: NewDiscussionFormUI.widgets(coordinator: pickerCoordinator),
+                        templates: NewDiscussionFormUI.templates()
+                    )
+                } else {
+                    EmptyView()
                 }
-
-                referenceRow
-
-                optionsCard
 
                 if let errorMessage {
                     Text(errorMessage).font(.footnote).foregroundStyle(.red)
@@ -105,7 +119,7 @@ struct NewDiscussionView: View {
                 if isPlanning {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text("Creating \(AppStringLiteral.stationNameRaw)...")
+                        Text(precheckForm?.loadingTitle ?? "Creating \(AppStringLiteral.stationNameRaw)...")
                     }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -117,298 +131,94 @@ struct NewDiscussionView: View {
         .disabled(isPlanning)
     }
 
-    private var referenceRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "rectangle.stack.badge.play")
-                .foregroundStyle(Theme.accent)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Parent Discussion")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                if let selectedReference {
-                    Text(selectedReference.displayTitle)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryText)
-                        .lineLimit(1)
-                } else {
-                    Text("None")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryText)
-                }
-            }
-            Spacer()
-            if selectedReference != nil {
-                Button {
-                    self.selectedReference = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Theme.secondaryText)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear parent discussion")
-            }
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.secondaryText)
-        }
-        .padding(12)
-        .glassEffect(in: .rect(cornerRadius: 16))
-        .contentShape(.rect)
-        .onTapGesture { showingReferencePicker = true }
-    }
-
-    /// One liquid-glass card grouping attach files, panelists, and language.
-    private var optionsCard: some View {
-        VStack(spacing: 0) {
-            AttachmentsRow(attachments: $attachments, grouped: true)
-            rowDivider
-            discussionTypeRow
-            rowDivider
-            templateRow
-            rowDivider
-            panelistsRow
-            rowDivider
-            DiscussionLanguageMenu(selection: $language, grouped: true)
-            rowDivider
-            generateCoverRow
-        }
-        .glassEffect(in: .rect(cornerRadius: 16))
-    }
-
-    private var discussionTypeRow: some View {
-        Menu {
-            Picker("Type", selection: $discussionType) {
-                ForEach(discussionTypes) { type in
-                    Text(type.displayLabel).tag(type.id)
-                }
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Type")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    loadingSubtitle(isLoading: isLoadingDiscussionTypes,
-                                    text: labelForDiscussionType(discussionType))
-                }
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            .padding(12)
-        }
-        .tint(Theme.accent)
-        .disabled(isLoadingDiscussionTypes)
-    }
-
-    private var templateRow: some View {
-        Menu {
-            Picker("Template", selection: $planTemplate) {
-                ForEach(planTemplates) { template in
-                    Text(template.displayName).tag(template.id)
-                }
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "square.grid.2x2")
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Template")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    loadingSubtitle(isLoading: isLoadingPlanTemplates,
-                                    text: labelForPlanTemplate(planTemplate))
-                }
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            .padding(12)
-        }
-        .tint(Theme.accent)
-        .disabled(isLoadingPlanTemplates || planTemplates.isEmpty)
-    }
-
-    private var isLoadingPlanTemplates: Bool {
-        loadingTemplatesForType == discussionType
-    }
-
-    @ViewBuilder
-    private func loadingSubtitle(isLoading: Bool, text: String) -> some View {
-        if isLoading {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(Theme.accent)
-                Text("Loading...")
-            }
-            .font(.subheadline)
-            .foregroundStyle(Theme.secondaryText)
-        } else {
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(Theme.secondaryText)
-        }
-    }
-
-    /// Opt-in toggle: when on, the server generates AI cover art in the
-    /// background after the discussion is created, and it appears the next time
-    /// the discussion is opened.
-    private var generateCoverRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "photo.badge.plus")
-                .foregroundStyle(Theme.accent)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Generate cover")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text("Create AI cover art in the background")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            Spacer()
-            Toggle("Generate cover", isOn: $generateCover)
-                .labelsHidden()
-                .tint(Theme.accent)
-        }
-        .padding(12)
-    }
-
-    private var panelistsRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "person.2.fill")
-                .foregroundStyle(Theme.accent)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Panelists")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text("\(discussants) people")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            Spacer()
-            Stepper("Panelists", value: $discussants, in: 2...6)
-                .labelsHidden()
-        }
-        .padding(12)
-    }
-
-    private var rowDivider: some View {
-        Divider()
-            .overlay(Theme.divider.opacity(0.5))
-            .padding(.leading, 46)
-    }
-
-    private func normalizeStoredSettings() {
-        discussants = min(max(discussants, 2), 6)
-        language = DiscussionLanguage.normalized(language)
-        normalizeDiscussionType()
-        normalizePlanTemplate()
+    private var canSubmit: Bool {
+        precheckForm != nil
+            && !isLoadingForm
+            && !isPlanning
     }
 
     @MainActor
-    private func loadDiscussionTypes() async {
-        isLoadingDiscussionTypes = true
-        defer { isLoadingDiscussionTypes = false }
+    private func loadPrecheck() async {
+        guard precheckForm == nil else { return }
+        isLoadingForm = true
+        defer { isLoadingForm = false }
         do {
-            let api = APIClient(tokens: auth)
-            let fetched = try await api.discussionTypes()
-            discussionTypes = fetched.isEmpty ? Self.defaultDiscussionTypes : fetched
-            normalizeDiscussionType()
+            let response = try await APIClient(tokens: auth).precheck()
+            applyPrecheckForm(response.newDiscussion.form)
+            errorMessage = nil
         } catch {
-            discussionTypes = Self.defaultDiscussionTypes
-            normalizeDiscussionType()
+            newDiscussionLog.error("precheck failed error=\(error.localizedDescription, privacy: .public)")
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 
     @MainActor
-    private func loadPlanTemplates() async {
-        let requestedType = discussionType
-        newDiscussionLog.info("templates fetch start type=\(requestedType, privacy: .public)")
-        loadingTemplatesForType = requestedType
-        planTemplates = []
-        defer {
-            if loadingTemplatesForType == requestedType {
-                loadingTemplatesForType = nil
-            }
-        }
-        do {
-            let api = APIClient(tokens: auth)
-            let fetched = try await api.templates(type: requestedType)
-            let templateIDs = fetched.map(\.id).joined(separator: ",")
-            guard requestedType == discussionType else {
-                newDiscussionLog.notice("templates fetch stale type=\(requestedType, privacy: .public) currentType=\(discussionType, privacy: .public) count=\(fetched.count, privacy: .public) ids=\(templateIDs, privacy: .public)")
-                return
-            }
-            if fetched.isEmpty {
-                newDiscussionLog.warning("templates fetch empty type=\(requestedType, privacy: .public)")
-            } else {
-                newDiscussionLog.info("templates fetch success type=\(requestedType, privacy: .public) count=\(fetched.count, privacy: .public) ids=\(templateIDs, privacy: .public)")
-            }
-            planTemplates = fetched
-            normalizePlanTemplate()
-            newDiscussionLog.info("templates applied type=\(requestedType, privacy: .public) selected=\(planTemplate, privacy: .public) count=\(planTemplates.count, privacy: .public)")
-        } catch {
-            newDiscussionLog.error("templates fetch failed type=\(requestedType, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-            planTemplates = []
-            normalizePlanTemplate()
+    private func applyPrecheckForm(_ form: PrecheckFormDTO) {
+        precheckForm = form
+        formSchemaJSON = jsonString(from: form.schema)
+        formSchema = formSchemaJSON.flatMap { try? JSONSchema(jsonString: $0) }
+        formUISchema = foundationDictionary(from: form.uiSchema)
+        formData = decodedFormData(from: form.initialData)
+        // When planning from an existing podcast, pre-fill the parent into the form
+        // and cache it so the picker row shows its title.
+        if let initialReference {
+            setFormReferenceID(initialReference.id)
+            pickerCoordinator.cache(initialReference, for: referenceFieldID)
         }
     }
 
-    private func normalizeDiscussionType() {
-        if !discussionTypes.contains(where: { $0.id == discussionType }) {
-            discussionType = discussionTypes.first?.id ?? "discussion"
+    /// Writes a parent discussion id into the form's `reference.discussion_id` value.
+    private func setFormReferenceID(_ id: String) {
+        var root = formData.object ?? [:]
+        var reference = root["reference"]?.object ?? [:]
+        reference["discussion_id"] = .string(id)
+        root["reference"] = .object(properties: reference)
+        formData = .object(properties: root)
+    }
+
+    private func jsonString(from value: some Encodable) -> String? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func foundationDictionary(from value: [String: AnyCodable]?) -> [String: Any]? {
+        guard let value,
+              let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else {
+            return nil
         }
+        return dictionary
     }
 
-    private func normalizePlanTemplate() {
-        guard !planTemplates.isEmpty else { return }
-        if !planTemplates.contains(where: { $0.id == planTemplate }) {
-            planTemplate = planTemplates.first?.id ?? planTemplate
+    private func decodedFormData(from value: [String: AnyCodable]?) -> FormData {
+        guard let value,
+              let data = try? JSONEncoder().encode(value),
+              let decoded = try? JSONDecoder().decode(FormData.self, from: data)
+        else {
+            return .object(properties: [:])
         }
+        return decoded
     }
 
-    private func labelForDiscussionType(_ id: String) -> String {
-        discussionTypes.first(where: { $0.id == id })?.displayLabel ?? id
-    }
-
-    private func labelForPlanTemplate(_ id: String) -> String {
-        planTemplates.first(where: { $0.id == id })?.displayName ?? id
-    }
-
-    /// Creates the placeholder discussion (fast), then hands it plus the plan
-    /// request to the caller, which navigates to the plan page where the plan is
-    /// streamed in. Creating the row first means the discussion is saved even if
-    /// the planning stream is later interrupted.
+    /// Creates the placeholder discussion (fast), then hands it to the caller,
+    /// which navigates to the plan page where the plan is streamed in. Creating
+    /// the row first means the discussion is saved even if the planning stream is
+    /// later interrupted.
+    ///
+    /// The whole form value tree is posted verbatim; the backend owns every key,
+    /// so this view never reads or transforms individual fields.
     private func plan() {
-        let trimmed = topic.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
         isPlanning = true
         errorMessage = nil
         let api = APIClient(tokens: auth)
-        let ready = attachments.apiAttachments
-        let reference = selectedReference
-        let request = PlanRequest(type: discussionType, topic: trimmed, language: language, discussants: discussants,
-                                  template: planTemplate,
-                                  research: true, attachments: ready.isEmpty ? nil : ready, reference: reference)
+        let submitted = formData
+        // The parent discussion is carried inside the form (reference.discussion_id),
+        // so it no longer needs to be passed separately.
         Task {
             do {
-                let created = try await api.createDiscussion(topic: trimmed,
-                                                             language: language,
-                                                             type: discussionType,
-                                                             template: planTemplate,
-                                                             generateCover: generateCover,
-                                                             referenceDiscussionID: reference?.id,
-                                                             plan: request)
+                let created = try await api.createDiscussion(form: submitted)
                 isPlanning = false
                 dismiss()
                 onPlanned(created)
@@ -420,239 +230,3 @@ struct NewDiscussionView: View {
     }
 }
 
-private struct ReferencePodcastPickerSheet: View {
-    @Environment(AuthManager.self) private var auth
-    @Environment(\.dismiss) private var dismiss
-    @Binding var selection: PodcastReference?
-    @State private var discussions: [Discussion] = []
-    @State private var query = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-    @State private var searchTask: Task<Void, Never>?
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                List {
-                    if isLoading && discussions.isEmpty {
-                        HStack {
-                            Spacer()
-                            ProgressView().tint(Theme.accent)
-                            Spacer()
-                        }
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                    }
-                    ForEach(discussions) { discussion in
-                        Button {
-                            selection = discussion.podcastReference
-                            dismiss()
-                        } label: {
-                            HStack(spacing: 12) {
-                                DiscussionCoverThumbnail(discussion: discussion, size: 44)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(discussion.displayTitle)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Text(discussion.topic)
-                                        .font(.caption)
-                                        .foregroundStyle(Theme.secondaryText)
-                                        .lineLimit(2)
-                                }
-                                Spacer()
-                                if selection?.id == discussion.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(Theme.accent)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                if let errorMessage, discussions.isEmpty {
-                    ContentUnavailableView("Could not load stations",
-                                           systemImage: "exclamationmark.triangle",
-                                           description: Text(errorMessage))
-                } else if !isLoading && discussions.isEmpty {
-                    ContentUnavailableView("No Station",
-                                           systemImage: "waveform",
-                                           description: Text("Create or search for a podcast to use as follow-up context."))
-                }
-            }
-            .navigationTitle("Parent Station")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search stations")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-            .task {
-                await load()
-            }
-            .onChange(of: query) { _, value in
-                searchTask?.cancel()
-                searchTask = Task {
-                    try? await Task.sleep(for: .milliseconds(250))
-                    guard !Task.isCancelled else { return }
-                    await load(search: value)
-                }
-            }
-            .onDisappear {
-                searchTask?.cancel()
-            }
-        }
-    }
-
-    @MainActor
-    private func load(search: String? = nil) async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            discussions = try await APIClient(tokens: auth).parentPodcasts(limit: 50, query: search ?? query)
-            errorMessage = nil
-        } catch {
-            guard !APIClient.isCancellation(error) else { return }
-            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-private struct DiscussionCoverThumbnail: View {
-    let discussion: Discussion
-    let size: CGFloat
-
-    var body: some View {
-        Group {
-            if let url = discussion.cover?.renderableImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        fallback
-                    }
-                }
-            } else if let cover = discussion.cover, cover.hasGradient {
-                LinearGradient(colors: [color(cover.gradientStart), color(cover.gradientEnd)],
-                               startPoint: .topLeading,
-                               endPoint: .bottomTrailing)
-            } else {
-                fallback
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(.rect(cornerRadius: 8))
-    }
-
-    private var fallback: some View {
-        ZStack {
-            LinearGradient(colors: [Theme.accent.opacity(0.75), Color.orange.opacity(0.72)],
-                           startPoint: .topLeading,
-                           endPoint: .bottomTrailing)
-            Image(systemName: "waveform")
-                .font(.system(size: size * 0.38, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-    }
-
-    private func color(_ hex: String?) -> Color {
-        guard let hex else { return Theme.accent }
-        let trimmed = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
-        guard trimmed.count == 6, let value = Int(trimmed, radix: 16) else {
-            return Theme.accent
-        }
-        let red = Double((value >> 16) & 0xff) / 255.0
-        let green = Double((value >> 8) & 0xff) / 255.0
-        let blue = Double(value & 0xff) / 255.0
-        return Color(red: red, green: green, blue: blue)
-    }
-}
-
-extension Discussion {
-    var podcastReference: PodcastReference {
-        PodcastReference(id: id, title: displayTitle, topic: topic)
-    }
-}
-
-struct DiscussionLanguage: Identifiable, Hashable {
-    let code: String
-    let label: String
-
-    var id: String { code }
-
-    static let supported: [DiscussionLanguage] = [
-        DiscussionLanguage(code: "en-US", label: String(localized: "English", comment: "Podcast language option")),
-        DiscussionLanguage(code: "zh-CN", label: String(localized: "Chinese (Simplified)", comment: "Podcast language option")),
-        DiscussionLanguage(code: "zh-TW", label: String(localized: "Chinese (Traditional)", comment: "Podcast language option")),
-        DiscussionLanguage(code: "ja-JP", label: String(localized: "Japanese", comment: "Podcast language option")),
-        DiscussionLanguage(code: "ko-KR", label: String(localized: "Korean", comment: "Podcast language option")),
-        DiscussionLanguage(code: "es-ES", label: String(localized: "Spanish", comment: "Podcast language option")),
-        DiscussionLanguage(code: "fr-FR", label: String(localized: "French", comment: "Podcast language option")),
-        DiscussionLanguage(code: "de-DE", label: String(localized: "German", comment: "Podcast language option"))
-    ]
-
-    static func normalized(_ code: String) -> String {
-        supported.first(where: { $0.code == code })?.code ?? "en-US"
-    }
-
-    static func label(for code: String) -> String {
-        supported.first(where: { $0.code == code })?.label ?? code
-    }
-}
-
-struct DiscussionLanguageMenu: View {
-    @Binding var selection: String
-    var title = String(localized: "\(AppStringLiteral.stationNameRaw) language", comment: "Label for the podcast language picker")
-    /// Grouped renders the row without its own glass background so it can share
-    /// one card with another control (e.g. the attach-files row).
-    var grouped: Bool = false
-
-    var body: some View {
-        Menu {
-            Picker(title, selection: $selection) {
-                ForEach(DiscussionLanguage.supported) { language in
-                    Text(language.label).tag(language.code)
-                }
-            }
-        } label: {
-            let row = HStack(spacing: 12) {
-                Image(systemName: "globe")
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text(DiscussionLanguage.label(for: selection))
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryText)
-                }
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            .padding(12)
-
-            if grouped {
-                row
-            } else {
-                row.glassEffect(in: .rect(cornerRadius: 16))
-            }
-        }
-        .tint(Theme.accent)
-        .onAppear {
-            selection = DiscussionLanguage.normalized(selection)
-        }
-    }
-}

@@ -225,6 +225,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/me", s.handleGetMe)
 	s.mux.HandleFunc("POST /api/me", s.handlePostMe)
 	s.mux.HandleFunc("GET /api/debug", s.handleDebug)
+	s.mux.HandleFunc("GET /api/precheck", s.handlePrecheck)
 
 	// Dashboard-facing metadata routes (always mounted): model + tool
 	// discovery and the planning/script-generation endpoints. They degrade
