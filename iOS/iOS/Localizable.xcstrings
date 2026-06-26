@@ -1571,9 +1571,6 @@
         }
       }
     },
-    "Could not load discussions" : {
-
-    },
     "Could not load market" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1618,6 +1615,9 @@
           }
         }
       }
+    },
+    "Could not load stations" : {
+
     },
     "Could not update the plan" : {
 
@@ -3480,6 +3480,9 @@
         }
       }
     },
+    "Judgement" : {
+
+    },
     "Korean" : {
       "comment" : "Podcast language option",
       "localizations" : {
@@ -4127,9 +4130,6 @@
         }
       }
     },
-    "No Discussions" : {
-
-    },
     "No Followed Creators" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4374,6 +4374,9 @@
           }
         }
       }
+    },
+    "No Station" : {
+
     },
     "No transcript yet. You can type one, or send the audio for transcription." : {
       "comment" : "Placeholder shown when a reviewed voice message has no transcript",
@@ -6220,9 +6223,6 @@
         }
       }
     },
-    "Search discussions" : {
-
-    },
     "Search pages" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6266,6 +6266,9 @@
           }
         }
       }
+    },
+    "Search stations" : {
+
     },
     "Search your %@" : {
       "localizations" : {
