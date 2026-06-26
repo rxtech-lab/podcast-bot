@@ -473,7 +473,16 @@ struct AttachmentsRow: View {
     }
 }
 
-private struct NotionPagePickerSheet: View {
+/// The attachment sources offered by the picker menu. The new-discussion form
+/// routes each through its deep-link coordinator so the actual picker is hosted
+/// by the parent view rather than the form widget.
+enum AttachmentSource {
+    case notion
+    case photos
+    case files
+}
+
+struct NotionPagePickerSheet: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
@@ -616,7 +625,7 @@ private struct NotionPagePickerSheet: View {
 }
 
 @MainActor
-private final class AttachmentWebAuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+final class AttachmentWebAuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }

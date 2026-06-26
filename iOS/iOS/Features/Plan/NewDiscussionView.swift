@@ -1,6 +1,7 @@
 import JSONSchema
 import JSONSchemaForm
 import OSLog
+import PhotosUI
 import SwiftUI
 import TipKit
 
@@ -21,6 +22,7 @@ struct NewDiscussionView: View {
     @State private var formUISchema: [String: Any]?
     @State private var formData = FormData.object(properties: [:])
     @State private var pickerCoordinator = NewDiscussionFormCoordinator()
+    @State private var attachmentsCoordinator = NewDiscussionAttachmentsCoordinator()
     @State private var isLoadingForm = false
     @State private var isPlanning = false
     @State private var errorMessage: String?
@@ -68,9 +70,47 @@ struct NewDiscussionView: View {
                 onSelect: { pickerCoordinator.complete(with: $0) }
             )
         }
+        .fileImporter(
+            isPresented: attachmentBinding(\.showingImporter),
+            allowedContentTypes: attachmentContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            if case let .success(urls) = result {
+                attachmentsCoordinator.importFiles(urls)
+            }
+        }
+        .photosPicker(
+            isPresented: attachmentBinding(\.showingPhotos),
+            selection: photosSelection,
+            matching: .images
+        )
+        .onChange(of: attachmentsCoordinator.selectedPhotos) { _, items in
+            attachmentsCoordinator.importPhotos(items)
+        }
+        .sheet(isPresented: attachmentBinding(\.showingNotionPicker)) {
+            NotionPagePickerSheet { pages in
+                attachmentsCoordinator.importNotionPages(pages)
+            }
+        }
         .task {
             await loadPrecheck()
         }
+    }
+
+    /// Two-way binding into a coordinator presentation flag, keeping the picker
+    /// state parent-owned (the form widget can't reliably host these sheets).
+    private func attachmentBinding(_ keyPath: ReferenceWritableKeyPath<NewDiscussionAttachmentsCoordinator, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { attachmentsCoordinator[keyPath: keyPath] },
+            set: { attachmentsCoordinator[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private var photosSelection: Binding<[PhotosPickerItem]> {
+        Binding(
+            get: { attachmentsCoordinator.selectedPhotos },
+            set: { attachmentsCoordinator.selectedPhotos = $0 }
+        )
     }
 
     /// Drives the parent-discussion picker sheet; clears coordinator state when the
@@ -105,7 +145,10 @@ struct NewDiscussionView: View {
                         formData: $formData,
                         schemaJSON: formSchemaJSON,
                         showSubmitButton: false,
-                        widgets: NewDiscussionFormUI.widgets(coordinator: pickerCoordinator),
+                        widgets: NewDiscussionFormUI.widgets(
+                            coordinator: pickerCoordinator,
+                            attachmentsCoordinator: attachmentsCoordinator
+                        ),
                         templates: NewDiscussionFormUI.templates()
                     )
                 } else {
@@ -135,6 +178,7 @@ struct NewDiscussionView: View {
         precheckForm != nil
             && !isLoadingForm
             && !isPlanning
+            && !attachmentsCoordinator.isUploading
     }
 
     @MainActor

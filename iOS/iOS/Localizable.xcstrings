@@ -626,6 +626,9 @@
         }
       }
     },
+    "Add attachment" : {
+
+    },
     "Add link or search" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4662,6 +4665,9 @@
           }
         }
       }
+    },
+    "Notion, photos, or files" : {
+      "comment" : "Attachment picker subtitle"
     },
     "OK" : {
       "localizations" : {

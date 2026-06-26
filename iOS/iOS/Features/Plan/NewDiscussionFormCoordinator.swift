@@ -1,4 +1,7 @@
+import AuthenticationServices
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Coordinates the deep-link-driven parent-discussion picker for the backend-rendered
 /// New Discussion form.
@@ -96,6 +99,224 @@ extension Discussion {
     /// Lightweight reference used as a parent discussion for follow-up planning.
     var podcastReference: PodcastReference {
         PodcastReference(id: id, title: displayTitle, topic: topic)
+    }
+}
+
+/// Coordinates the deep-link-driven attachments picker for the backend-rendered
+/// New Discussion form.
+///
+/// Like `NewDiscussionFormCoordinator`, this exists because a `JSONSchemaForm`
+/// widget cannot reliably own presentation/upload state: the form re-creates the
+/// widget (wrapped in `AnyView`) on every edit, which would drop in-flight upload
+/// `@State` and dismiss a half-open importer. So the live `attachments` list and
+/// the presentation flags live here (owned by `NewDiscussionView`), the widget's
+/// menu opens a source through the backend-declared deep link, and the parent view
+/// hosts the actual file/photo/Notion pickers — mirroring the parent-discussion
+/// picker. Ready attachments are written back into the form value via `onReady`.
+@Observable
+@MainActor
+final class NewDiscussionAttachmentsCoordinator {
+    /// Host of the deep link the backend uses for the attachments picker
+    /// (`debatepod://attachment-picker`).
+    static let pickerHost = "attachment-picker"
+
+    /// Live picked attachments with upload status, rendered as chips by the widget.
+    private(set) var attachments: [PendingAttachment] = []
+
+    /// Presentation flags bound to the parent view's pickers.
+    var showingImporter = false
+    var showingPhotos = false
+    var showingNotionPicker = false
+    var selectedPhotos: [PhotosPickerItem] = []
+
+    /// Notion connection status, loaded once so the menu can offer connect vs pick.
+    private(set) var notionConnected = false
+    private(set) var notionStatusLoaded = false
+
+    /// True while any attachment is still uploading — used to block submission.
+    var isUploading: Bool { attachments.isUploading }
+
+    private var fieldID: String?
+    private var onReady: (([Attachment]) -> Void)?
+    private var api: APIClient?
+    private var notionStatusLoading = false
+    private var notionAuthSession: ASWebAuthenticationSession?
+    private let presentationProvider = AttachmentWebAuthPresentationContextProvider()
+
+    /// Supplied by the widget so uploads can run; cheap to set repeatedly.
+    func configure(api: APIClient) { self.api = api }
+
+    /// Registered by the widget so completed uploads flow back into `formData`.
+    func bind(fieldID: String, onReady: @escaping ([Attachment]) -> Void) {
+        self.fieldID = fieldID
+        self.onReady = onReady
+    }
+
+    /// Interpret the backend deep link and present the picker for `source`.
+    func open(deepLink: String, source: AttachmentSource) {
+        guard let url = URL(string: deepLink), url.host == Self.pickerHost else { return }
+        switch source {
+        case .files:
+            showingImporter = true
+        case .photos:
+            showingPhotos = true
+        case .notion:
+            if notionConnected {
+                showingNotionPicker = true
+            } else {
+                connectNotion()
+            }
+        }
+    }
+
+    func remove(_ id: UUID) {
+        attachments.removeAll { $0.id == id }
+        syncReady()
+    }
+
+    // MARK: - Imports (mirrors AttachmentsRow, but parent-owned for the form)
+
+    /// Reads each file's bytes within its security scope, then uploads.
+    func importFiles(_ urls: [URL]) {
+        guard let api else { return }
+        for url in urls {
+            let access = url.startAccessingSecurityScopedResource()
+            let data = try? Data(contentsOf: url)
+            if access { url.stopAccessingSecurityScopedResource() }
+            let filename = url.lastPathComponent
+            guard let data else {
+                attachments.append(PendingAttachment(filename: filename, status: .failed(String(localized: "Couldn't read file", comment: "Attachment error when a picked file's bytes can't be read")), markdown: nil))
+                continue
+            }
+            let mime = url.attachmentMIMEType
+            let pending = PendingAttachment(filename: filename, status: .uploading, markdown: nil, mimeType: mime)
+            attachments.append(pending)
+            let id = pending.id
+            Task {
+                do {
+                    let resp = try await api.uploadFile(data: data, filename: filename, mimeType: mime)
+                    updateStatus(id, status: .ready, response: resp)
+                } catch {
+                    let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                    updateStatus(id, status: .failed(message), response: nil)
+                }
+            }
+        }
+    }
+
+    func importPhotos(_ items: [PhotosPickerItem]) {
+        guard let api, !items.isEmpty else { return }
+        for item in items {
+            let utType = item.supportedContentTypes.first
+            let ext = utType?.preferredFilenameExtension ?? "jpg"
+            let mime = utType?.preferredMIMEType ?? "image/jpeg"
+            let filename = "Photo-\(UUID().uuidString.prefix(6)).\(ext)"
+            let pending = PendingAttachment(filename: filename, status: .uploading, markdown: nil, mimeType: mime)
+            attachments.append(pending)
+            let id = pending.id
+            Task {
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                        updateStatus(id, status: .failed(String(localized: "Couldn't read photo", comment: "Attachment error when a picked photo's bytes can't be loaded")), response: nil)
+                        return
+                    }
+                    let resp = try await api.uploadFile(data: data, filename: filename, mimeType: mime)
+                    updateStatus(id, status: .ready, response: resp)
+                } catch {
+                    let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                    updateStatus(id, status: .failed(message), response: nil)
+                }
+            }
+        }
+        selectedPhotos = []
+    }
+
+    func importNotionPages(_ pages: [NotionPageDTO]) {
+        guard let api, !pages.isEmpty else { return }
+        for page in pages {
+            let filename = "\(page.title.isEmpty ? "Notion page" : page.title).md"
+            let pending = PendingAttachment(filename: filename, status: .uploading, markdown: nil, url: page.url, mimeType: "text/markdown+notion")
+            attachments.append(pending)
+            let id = pending.id
+            Task {
+                do {
+                    let resp = try await api.notionPageAttachment(pageID: page.id)
+                    updateStatus(id, status: .ready, response: resp)
+                } catch {
+                    let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                    updateStatus(id, status: .failed(message), response: nil)
+                }
+            }
+        }
+    }
+
+    private func updateStatus(_ id: UUID, status: PendingAttachment.Status, response: UploadResponse?) {
+        guard let idx = attachments.firstIndex(where: { $0.id == id }) else { return }
+        attachments[idx].status = status
+        attachments[idx].markdown = response?.markdown
+        attachments[idx].url = response?.url
+        attachments[idx].mimeType = response?.mimeType
+        syncReady()
+    }
+
+    /// Push the ready attachments into the form value.
+    private func syncReady() {
+        onReady?(attachments.apiAttachments)
+    }
+
+    // MARK: - Notion connection
+
+    func loadNotionStatus() async {
+        guard !notionStatusLoaded, !notionStatusLoading, let api else { return }
+        notionStatusLoading = true
+        defer {
+            notionStatusLoading = false
+            notionStatusLoaded = true
+        }
+        do {
+            notionConnected = try await api.notionStatus().connected
+        } catch {
+            notionConnected = false
+        }
+    }
+
+    private func connectNotion() {
+        guard let api else { return }
+        Task {
+            do {
+                let url = try await api.notionAuthURL()
+                let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "debatepod") { [weak self] _, error in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.notionAuthSession = nil
+                        guard error == nil else { return }
+                        do {
+                            self.notionConnected = try await api.notionStatus().connected
+                            self.notionStatusLoaded = true
+                            if self.notionConnected {
+                                self.showingNotionPicker = true
+                            }
+                        } catch {
+                            self.notionConnected = false
+                            self.notionStatusLoaded = true
+                        }
+                    }
+                }
+                session.presentationContextProvider = presentationProvider
+                session.prefersEphemeralWebBrowserSession = false
+                notionAuthSession = session
+                session.start()
+            } catch {
+                let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                attachments.append(PendingAttachment(filename: "Notion", status: .failed(message), markdown: nil))
+            }
+        }
+    }
+}
+
+private extension URL {
+    var attachmentMIMEType: String {
+        UTType(filenameExtension: pathExtension)?.preferredMIMEType ?? "application/octet-stream"
     }
 }
 

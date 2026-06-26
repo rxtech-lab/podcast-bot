@@ -47,6 +47,11 @@ type newDiscussionForm struct {
 	Prompt struct {
 		Topic string `json:"topic"`
 	} `json:"prompt"`
+	// Attachments are the user-uploaded reference files chosen in the form
+	// (Notion pages, images, documents). They are folded into the initial
+	// planning turn so the agent can ground the plan on them — mirroring the
+	// follow-up message path's attachment handling.
+	Attachments []planner.Attachment `json:"attachments,omitempty"`
 	// Reference is the optional parent discussion selected in the form. It is
 	// equivalent to the top-level ReferenceDiscussionID (which is still accepted
 	// for the contextual "plan from an existing podcast" entry point), but lets
@@ -254,6 +259,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			Template:    template,
 			Research:    true,
 			Reference:   reference,
+			Attachments: req.Form.Attachments,
 		}
 		conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, d.ID)
 		if err != nil {
@@ -265,10 +271,11 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			refs = []planner.PodcastReference{*reference}
 		}
 		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
-			Role:       "user",
-			Text:       planner.ConversationInitialText(plan),
-			References: refs,
-			OpID:       "initial:" + d.ID,
+			Role:        "user",
+			Text:        planner.ConversationInitialText(plan),
+			References:  refs,
+			Attachments: req.Form.Attachments,
+			OpID:        "initial:" + d.ID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -157,10 +157,14 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 	if !ok {
 		t.Fatalf("schema.properties missing or wrong type: %#v", form.Schema["properties"])
 	}
-	for _, key := range []string{"prompt", "reference", "settings"} {
+	for _, key := range []string{"prompt", "attachments", "reference", "settings"} {
 		if _, ok := props[key]; !ok {
 			t.Fatalf("schema.properties missing %q", key)
 		}
+	}
+	attachments := props["attachments"].(map[string]any)
+	if attachments["type"] != "array" {
+		t.Fatalf("attachments.type = %v, want array", attachments["type"])
 	}
 	reference := props["reference"].(map[string]any)
 	referenceProps := reference["properties"].(map[string]any)
@@ -189,9 +193,17 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 	if got := form.UISchema["ui:widget"]; got != nil {
 		t.Fatalf("ui:widget = %#v, want nil", got)
 	}
-	wantOrder := []any{"prompt", "reference", "settings"}
+	wantOrder := []any{"prompt", "attachments", "reference", "settings"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Fatalf("ui:order = %#v, want %#v", order, wantOrder)
+	}
+	attachmentsUI := form.UISchema["attachments"].(map[string]any)
+	if attachmentsUI["ui:widget"] != "attachmentsPicker" {
+		t.Fatalf("attachments.ui:widget = %v, want attachmentsPicker", attachmentsUI["ui:widget"])
+	}
+	attachmentsOpts := attachmentsUI["ui:options"].(map[string]any)
+	if attachmentsOpts["deep_link"] != "debatepod://attachment-picker" {
+		t.Fatalf("attachments deep_link = %v", attachmentsOpts["deep_link"])
 	}
 	settingsUI := form.UISchema["settings"].(map[string]any)
 	if settingsUI["ui:objectTemplate"] != "card" {
