@@ -2076,6 +2076,9 @@
         }
       }
     },
+    "Default" : {
+      "comment" : "Default plan template option"
+    },
     "Deselect source" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7320,6 +7323,9 @@
           }
         }
       }
+    },
+    "Template" : {
+
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {

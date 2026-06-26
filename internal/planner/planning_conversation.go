@@ -61,6 +61,7 @@ type ConversationOptions struct {
 	Language         string
 	Channel          string
 	Discussants      int
+	Template         string
 	AgentModel       string
 	ExistingSources  []config.Source
 	ExistingPlan     *config.DebateTopic
@@ -70,8 +71,8 @@ type ConversationOptions struct {
 const conversationSystem = `You are a conversational planning agent for a panel-discussion (podcast) generator.
 
 You run as an agent loop with tools:
-- search_sources: research the topic on the web.
-- crawl_sources: read specific URLs the user mentions.
+- search_sources: search the web for candidate source URLs and snippets.
+- crawl_sources: scrape/read specific promising URLs for clean markdown content.
 - ask_question: ask the user structured questions when their intent is ambiguous. Prefer asking over guessing.
 - write_plan: write the initial plan once you have enough context.
 - update_plan: revise the current plan (provide the full updated plan).
@@ -79,7 +80,8 @@ You run as an agent loop with tools:
 
 Guidelines:
 - If the user's request is unclear, underspecified, or could go several meaningful directions, call ask_question BEFORE writing a plan. It is fine to end your turn with only questions and no plan.
-- Gather web context with search_sources / crawl_sources when it would materially improve the plan.
+- Gather web context when it would materially improve the plan: call search_sources first, inspect the candidate URLs/snippets, then call crawl_sources for the best relevant source(s) before writing when source substance is needed.
+- Do not scrape every search result. Use crawl_sources only for URLs that look worth grounding the plan.
 - When you have enough to proceed, call write_plan. The app will not show that draft until you call show_plan.
 - Call show_plan only when the current plan should be visible to the user. Do not call it for internal drafts.
 - Afterwards you may keep refining with update_plan in response to the user, then call show_plan again only when the revised plan should replace the visible plan.
@@ -137,7 +139,7 @@ func (p *Planner) RunConversationTurn(ctx context.Context, history []llm.Message
 		} else {
 			p.emit("thinking", "Working…")
 		}
-		stream, err := client.Stream(ctx, conversationSystem, msgs, conversationTools(opts.Discussants))
+		stream, err := client.Stream(ctx, conversationSystem, msgs, conversationTools(opts.Template))
 		if err != nil {
 			return false, fmt.Errorf("planning conversation: %w", err)
 		}

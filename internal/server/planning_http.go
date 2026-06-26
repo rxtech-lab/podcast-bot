@@ -377,6 +377,7 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 		Language:         planningLanguage(d, languageOverride),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
+		Template:         planningTemplate(d),
 		AgentModel:       planningAgentModel(d),
 		ExistingSources:  d.Sources,
 		ExistingPlan:     d.Script,
@@ -485,6 +486,7 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 		Language:         planningLanguage(d, languageOverride),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
+		Template:         planningTemplate(d),
 		AgentModel:       planningAgentModel(d),
 		ExistingSources:  d.Sources,
 		ExistingPlan:     d.Script,
@@ -724,6 +726,20 @@ func planningDiscussants(d *Discussion) int {
 		return len(d.Script.Discussants)
 	}
 	return 0
+}
+
+func planningTemplate(d *Discussion) string {
+	if d == nil {
+		return planner.DefaultTemplateID
+	}
+	tmpl := strings.TrimSpace(d.Template)
+	if _, ok := planner.TemplateByID(config.ContentTypeDiscussion, tmpl); ok {
+		if tmpl == "" {
+			return planner.DefaultTemplateID
+		}
+		return tmpl
+	}
+	return planner.DefaultTemplateID
 }
 
 func planningAgentModel(d *Discussion) string {

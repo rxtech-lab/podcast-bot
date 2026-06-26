@@ -215,6 +215,7 @@ final class APIClient: Sendable {
     func createDiscussion(topic: String,
                           language: String,
                           type: String = "discussion",
+                          template: String? = nil,
                           generateCover: Bool = false,
                           coverPrompt: String? = nil,
                           referenceDiscussionID: String? = nil,
@@ -223,6 +224,7 @@ final class APIClient: Sendable {
                        body: DiscussionCreateRequest(topic: topic,
                                                      type: type,
                                                      language: language,
+                                                     template: template,
                                                      generateCover: generateCover,
                                                      coverPrompt: coverPrompt,
                                                      plan: plan,
@@ -632,6 +634,14 @@ final class APIClient: Sendable {
     func discussionTypes() async throws -> [DiscussionTypeDTO] {
         let response: DiscussionTypesResponseDTO = try await get("/api/discussion-types")
         return response.types ?? []
+    }
+
+    /// Plan templates available for the selected content type. Today the server
+    /// returns a single default template for discussions.
+    func templates(type: String) async throws -> [PlanTemplateDTO] {
+        let encoded = type.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? type
+        let response: PlanTemplatesResponseDTO = try await get("/api/templates?type=\(encoded)")
+        return response.templates ?? []
     }
 
     // MARK: - Push

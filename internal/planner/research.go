@@ -15,7 +15,8 @@ import (
 
 // firecrawlSearchURL grounds a plan in live web results. Reading a single URL
 // the user pasted or added is handled separately by Cloudflare Browser
-// Rendering (see cloudflareMarkdownURL) — both return clean markdown.
+// Rendering (see cloudflareMarkdownURL), so search does not request Firecrawl
+// page scraping.
 const firecrawlSearchURL = "https://api.firecrawl.dev/v2/search"
 
 // cloudflareMarkdownURL is Cloudflare Browser Rendering's /markdown endpoint
@@ -27,22 +28,15 @@ const cloudflareMarkdownURL = "https://api.cloudflare.com/client/v4/accounts/%s/
 // sources are not capped; user-added links should remain attached to the plan.
 const firecrawlSearchLimit = 10
 
-// firecrawlSearchRequest mirrors Firecrawl's POST /v2/search body. Asking for
-// the markdown scrape format gives the planner real page substance, not just a
-// title + snippet.
+// firecrawlSearchRequest mirrors Firecrawl's POST /v2/search body. Keep this
+// metadata-only; explicit URL reads do the heavier page rendering.
 type firecrawlSearchRequest struct {
-	Query         string                 `json:"query"`
-	Limit         int                    `json:"limit"`
-	ScrapeOptions firecrawlScrapeOptions `json:"scrapeOptions"`
-}
-
-type firecrawlScrapeOptions struct {
-	Formats []string `json:"formats"`
+	Query string `json:"query"`
+	Limit int    `json:"limit"`
 }
 
 // firecrawlSearchResponse captures the web results we care about. Firecrawl
-// nests results under data.web[]; markdown is present when scrapeOptions asked
-// for it.
+// nests results under data.web[].
 type firecrawlSearchResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
@@ -105,9 +99,8 @@ func (p *Planner) research(ctx context.Context, topic string) ([]config.Source, 
 	}
 
 	body, _ := json.Marshal(firecrawlSearchRequest{
-		Query:         topic,
-		Limit:         firecrawlSearchLimit,
-		ScrapeOptions: firecrawlScrapeOptions{Formats: []string{"markdown"}},
+		Query: topic,
+		Limit: firecrawlSearchLimit,
 	})
 	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -133,6 +126,9 @@ func (p *Planner) research(ctx context.Context, topic string) ([]config.Source, 
 
 	sources := make([]config.Source, 0, len(parsed.Data.Web))
 	for _, r := range parsed.Data.Web {
+		if len(sources) >= firecrawlSearchLimit {
+			break
+		}
 		if s, ok := docToSource(r); ok {
 			sources = append(sources, s)
 		}

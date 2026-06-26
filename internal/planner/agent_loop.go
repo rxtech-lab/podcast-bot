@@ -55,7 +55,8 @@ func (p *Planner) runPlanningAgent(ctx context.Context, user string, attachments
 
 Run as an agent loop:
 - Use tools to gather external context when required or useful.
-- If web research is required, call web_search before creating the plan.
+- If web research is required, call web_search before creating the plan. Treat web_search as candidate discovery only.
+- After web_search, choose the most relevant result(s) and call read_url for a promising URL when you need source substance. Do not scrape every search result.
 - If specific URLs are required, call read_url for each URL before creating the plan.
 - After research/read_url tool results are returned, make one final assistant turn that calls only create_plan.
 - Do not call create_plan in the same assistant turn as web_search or read_url.
@@ -175,45 +176,23 @@ func (p *Planner) emitToolStart(name string) {
 
 func planningTools() []openai.ChatCompletionToolParam {
 	return []openai.ChatCompletionToolParam{
-		toolDef("web_search", "Search the web through Firecrawl and return readable sources for planning.", map[string]any{
+		toolDef("web_search", "Search the web through Firecrawl and return candidate source URLs with snippets. Use this before read_url; do not treat search snippets as full source content.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string", "description": "Search query to research the discussion topic."},
 			},
 			"required": []string{"query"},
 		}),
-		toolDef("read_url", "Read a specific URL through Firecrawl and return clean markdown context.", map[string]any{
+		toolDef("read_url", "Scrape/read one specific promising URL and return clean markdown context. Use after web_search when a candidate source looks useful.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url": map[string]any{"type": "string", "description": "The http(s) URL to read."},
 			},
 			"required": []string{"url"},
 		}),
-		toolDef("create_plan", "Create the final panel-discussion plan. This must be the final tool call.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"title":      map[string]any{"type": "string"},
-				"background": map[string]any{"type": "string", "description": "Two to four neutral paragraphs grounding the discussion."},
-				"host": map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"name": map[string]any{"type": "string"}},
-					"required":   []string{"name"},
-				},
-				"discussants": map[string]any{
-					"type": "array",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"name":   map[string]any{"type": "string"},
-							"aspect": map[string]any{"type": "string"},
-						},
-						"required": []string{"name", "aspect"},
-					},
-					"minItems": 2,
-				},
-			},
-			"required": []string{"title", "background", "host", "discussants"},
-		}),
+		// TODO: Thread a selected template into the one-shot Generate path if it
+		// becomes user-selectable. This path stays default-only for now.
+		toolDef("create_plan", "Create the final panel-discussion plan. This must be the final tool call.", TemplateSchema(config.ContentTypeDiscussion, DefaultTemplateID)),
 	}
 }
 
@@ -424,6 +403,7 @@ func planningRequirementsPrompt(research bool, urls []string) string {
 	sb.WriteString("\n\nAgent-loop requirements:\n")
 	if research {
 		sb.WriteString("- Call web_search for the topic before create_plan.\n")
+		sb.WriteString("- If web_search returns a promising source, call read_url for that source before create_plan. Do not scrape every search result.\n")
 	}
 	for _, url := range urls {
 		fmt.Fprintf(&sb, "- Call read_url for %s before create_plan.\n", url)

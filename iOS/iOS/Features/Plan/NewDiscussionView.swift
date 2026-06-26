@@ -13,10 +13,12 @@ struct NewDiscussionView: View {
     @State private var topic = ""
     @State private var selectedReference: PodcastReference?
     @AppStorage("newDiscussion.type") private var discussionType = "discussion"
+    @AppStorage("newDiscussion.template") private var planTemplate = "default"
     @AppStorage("newDiscussion.discussants") private var discussants = 3
     @AppStorage("newDiscussion.language") private var language = "en-US"
     @State private var attachments: [PendingAttachment] = []
     @State private var discussionTypes: [DiscussionTypeDTO] = Self.defaultDiscussionTypes
+    @State private var planTemplates: [PlanTemplateDTO] = Self.defaultPlanTemplates
     @AppStorage("newDiscussion.generateCover") private var generateCover = false
     @State private var isPlanning = false
     @State private var errorMessage: String?
@@ -25,6 +27,12 @@ struct NewDiscussionView: View {
     private static let defaultDiscussionTypes = [
         DiscussionTypeDTO(id: "discussion",
                           label: String(localized: "Discussion", comment: "Round-table discussion type option"))
+    ]
+
+    private static let defaultPlanTemplates = [
+        PlanTemplateDTO(id: "default",
+                        name: String(localized: "Default", comment: "Default plan template option"),
+                        description: nil)
     ]
 
     init(reference: PodcastReference? = nil, onPlanned: @escaping (Discussion) -> Void = { _ in }) {
@@ -66,6 +74,7 @@ struct NewDiscussionView: View {
         }
         .task {
             await loadDiscussionTypes()
+            await loadPlanTemplates()
         }
     }
 
@@ -155,6 +164,8 @@ struct NewDiscussionView: View {
             rowDivider
             discussionTypeRow
             rowDivider
+            templateRow
+            rowDivider
             panelistsRow
             rowDivider
             DiscussionLanguageMenu(selection: $language, grouped: true)
@@ -181,6 +192,36 @@ struct NewDiscussionView: View {
                         .font(.headline)
                         .foregroundStyle(.primary)
                     Text(labelForDiscussionType(discussionType))
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .padding(12)
+        }
+        .tint(Theme.accent)
+    }
+
+    private var templateRow: some View {
+        Menu {
+            Picker("Template", selection: $planTemplate) {
+                ForEach(planTemplates) { template in
+                    Text(template.displayName).tag(template.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "square.grid.2x2")
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Template")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(labelForPlanTemplate(planTemplate))
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                 }
@@ -248,6 +289,7 @@ struct NewDiscussionView: View {
         discussants = min(max(discussants, 2), 6)
         language = DiscussionLanguage.normalized(language)
         normalizeDiscussionType()
+        normalizePlanTemplate()
     }
 
     @MainActor
@@ -263,14 +305,37 @@ struct NewDiscussionView: View {
         }
     }
 
+    @MainActor
+    private func loadPlanTemplates() async {
+        do {
+            let api = APIClient(tokens: auth)
+            let fetched = try await api.templates(type: discussionType)
+            planTemplates = fetched.isEmpty ? Self.defaultPlanTemplates : fetched
+            normalizePlanTemplate()
+        } catch {
+            planTemplates = Self.defaultPlanTemplates
+            normalizePlanTemplate()
+        }
+    }
+
     private func normalizeDiscussionType() {
         if !discussionTypes.contains(where: { $0.id == discussionType }) {
             discussionType = discussionTypes.first?.id ?? "discussion"
         }
     }
 
+    private func normalizePlanTemplate() {
+        if !planTemplates.contains(where: { $0.id == planTemplate }) {
+            planTemplate = planTemplates.first?.id ?? "default"
+        }
+    }
+
     private func labelForDiscussionType(_ id: String) -> String {
         discussionTypes.first(where: { $0.id == id })?.displayLabel ?? id
+    }
+
+    private func labelForPlanTemplate(_ id: String) -> String {
+        planTemplates.first(where: { $0.id == id })?.displayName ?? id
     }
 
     /// Creates the placeholder discussion (fast), then hands it plus the plan
@@ -286,12 +351,14 @@ struct NewDiscussionView: View {
         let ready = attachments.apiAttachments
         let reference = selectedReference
         let request = PlanRequest(type: discussionType, topic: trimmed, language: language, discussants: discussants,
+                                  template: planTemplate,
                                   research: true, attachments: ready.isEmpty ? nil : ready, reference: reference)
         Task {
             do {
                 let created = try await api.createDiscussion(topic: trimmed,
                                                              language: language,
                                                              type: discussionType,
+                                                             template: planTemplate,
                                                              generateCover: generateCover,
                                                              referenceDiscussionID: reference?.id,
                                                              plan: request)

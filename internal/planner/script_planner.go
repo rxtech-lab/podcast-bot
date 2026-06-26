@@ -87,6 +87,7 @@ type PlanRequest struct {
 	Language    string `json:"language"`
 	Channel     string `json:"channel"`
 	Discussants int    `json:"discussants"`
+	Template    string `json:"template,omitempty"`
 	// Research asks the planner to ground the draft in live web sources via
 	// Firecrawl search. Any links pasted into the topic are scraped regardless
 	// of this flag (when Firecrawl is configured).

@@ -1,62 +1,42 @@
 package planner
 
-import "github.com/openai/openai-go"
+import (
+	"github.com/openai/openai-go"
+
+	"github.com/sirily11/debate-bot/internal/config"
+)
 
 // conversationPlanSchema is the structured plan shape shared by write_plan and
 // update_plan. It mirrors create_plan (agent_loop.go) but, unlike create_plan,
 // these tools are NOT terminal — the conversation continues so the user can keep
 // refining the plan.
-func conversationPlanSchema(discussants int) map[string]any {
-	discussantsSchema := map[string]any{
-		"type": "array",
-		"items": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name":   map[string]any{"type": "string"},
-				"aspect": map[string]any{"type": "string"},
-			},
-			"required": []string{"name", "aspect"},
-		},
-	}
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"title":      map[string]any{"type": "string"},
-			"background": map[string]any{"type": "string", "description": "Two to four neutral paragraphs grounding the discussion."},
-			"host": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"name": map[string]any{"type": "string"}},
-				"required":   []string{"name"},
-			},
-			"discussants": discussantsSchema,
-		},
-		"required": []string{"title", "background", "host", "discussants"},
-	}
+func conversationPlanSchema(template string) map[string]any {
+	return TemplateSchema(config.ContentTypeDiscussion, template)
 }
 
 // conversationTools is the tool set for the conversational planner loop.
-func conversationTools(discussants int) []openai.ChatCompletionToolParam {
+func conversationTools(template string) []openai.ChatCompletionToolParam {
 	return []openai.ChatCompletionToolParam{
-		toolDef("search_sources", "Search the web through Firecrawl and return readable sources to ground the plan.", map[string]any{
+		toolDef("search_sources", "Search the web through Firecrawl and return candidate source URLs with snippets. Use this before crawl_sources; do not treat search snippets as full source content.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string", "description": "Search query to research the discussion topic."},
 			},
 			"required": []string{"query"},
 		}),
-		toolDef("crawl_sources", "Read one or more specific URLs and return clean markdown context.", map[string]any{
+		toolDef("crawl_sources", "Scrape/read one or more promising URLs and return clean markdown context. Use after search_sources when candidate sources look useful.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"urls": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "The http(s) URLs to read.",
+					"description": "The selected http(s) URLs to read.",
 				},
 			},
 			"required": []string{"urls"},
 		}),
-		toolDef("write_plan", "Write and save the initial panel-discussion plan internally. This does not show the plan to the user; call show_plan after this when the plan is ready to display.", conversationPlanSchema(discussants)),
-		toolDef("update_plan", "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display.", conversationPlanSchema(discussants)),
+		toolDef("write_plan", "Write and save the initial panel-discussion plan internally. This does not show the plan to the user; call show_plan after this when the plan is ready to display.", conversationPlanSchema(template)),
+		toolDef("update_plan", "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display.", conversationPlanSchema(template)),
 		toolDef("show_plan", "Show the current saved plan in the app. Call only after write_plan or update_plan, and only when the plan should be visible to the user. After this tool returns, acknowledge briefly instead of summarizing the plan.", map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

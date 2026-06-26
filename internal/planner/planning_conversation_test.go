@@ -100,7 +100,7 @@ func TestConversationDispatchEnforcesExactDiscussantCount(t *testing.T) {
 }
 
 func TestConversationToolsAvoidGatewayUnsupportedSchemaKeywords(t *testing.T) {
-	for _, tool := range conversationTools(3) {
+	for _, tool := range conversationTools(DefaultTemplateID) {
 		raw, err := json.Marshal(tool.Function.Parameters)
 		if err != nil {
 			t.Fatalf("marshal %s parameters: %v", tool.Function.Name, err)

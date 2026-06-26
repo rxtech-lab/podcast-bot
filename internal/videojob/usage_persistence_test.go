@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/planner"
 	"github.com/sirily11/debate-bot/internal/server"
 )
 
@@ -22,7 +23,7 @@ func TestPersistUsageSnapshotStoresMediaOnlyUsageBeforeCompletion(t *testing.T) 
 	defer discussions.Close()
 
 	jobs.Add("job-a")
-	disc, err := discussions.CreatePlaceholder(ctx, "user-a", "topic", "en-US")
+	disc, err := discussions.CreatePlaceholder(ctx, "user-a", "topic", "en-US", planner.DefaultTemplateID)
 	if err != nil {
 		t.Fatalf("CreatePlaceholder: %v", err)
 	}

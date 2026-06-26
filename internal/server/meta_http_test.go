@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/planner"
 )
 
 func newMetaServer(t *testing.T, env *config.Env, mcp *config.MCPConfig) *httptest.Server {
@@ -100,6 +101,35 @@ func TestHandleDiscussionTypes(t *testing.T) {
 	}
 	if out.Types[0].ID != config.ContentTypeDiscussion {
 		t.Fatalf("type id = %q, want %q", out.Types[0].ID, config.ContentTypeDiscussion)
+	}
+}
+
+func TestHandleTemplates(t *testing.T) {
+	ts := newMetaServer(t, nil, nil)
+
+	resp, err := http.Get(ts.URL + "/api/templates?type=discussion")
+	if err != nil {
+		t.Fatalf("get templates: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out templatesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Templates) != 1 {
+		t.Fatalf("templates length = %d, want 1", len(out.Templates))
+	}
+	if out.Templates[0].ID != planner.DefaultTemplateID {
+		t.Fatalf("template id = %q, want %q", out.Templates[0].ID, planner.DefaultTemplateID)
+	}
+	if out.Templates[0].Type != config.ContentTypeDiscussion {
+		t.Fatalf("template type = %q, want %q", out.Templates[0].Type, config.ContentTypeDiscussion)
+	}
+	if out.Templates[0].Schema == nil {
+		t.Fatal("template schema is nil")
 	}
 }
 

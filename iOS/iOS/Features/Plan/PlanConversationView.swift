@@ -18,6 +18,7 @@ struct PlanConversationView: View {
     @State private var selectedToolPart: PlanningPart?
     @State private var selectedAttachment: AttachmentPreviewItem?
     @State private var selectedReference: PodcastReference?
+    @State private var selectedSourcesDiscussion: Discussion?
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
@@ -89,6 +90,9 @@ struct PlanConversationView: View {
         }
         .sheet(item: $selectedReference) { reference in
             PodcastReferencePreviewSheet(reference: reference)
+        }
+        .sheet(item: $selectedSourcesDiscussion) { discussion in
+            SourcesSheet(discussion: discussion, allowsAddingSources: false)
         }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingSpeakerModels) {
@@ -273,6 +277,7 @@ struct PlanConversationView: View {
             VStack(spacing: 0) {
                 PlanSnapshotCard(label: String(localized: "Plan", comment: "Label for a plan card in the conversation"),
                                  snapshot: PlanSnapshot(turn: turn, topic: discussion.topic),
+                                 onSourcesTapped: { openSources(for: part) },
                                  onEditModels: part.script == nil ? nil : { openSpeakerModels(for: part) })
                     .padding(14)
 
@@ -586,6 +591,17 @@ struct PlanConversationView: View {
             discussion.sources = part.sources
         }
         showingSpeakerModels = true
+    }
+
+    private func openSources(for part: PlanningPart) {
+        var sourceDiscussion = discussion
+        if let script = part.script {
+            sourceDiscussion.script = script
+            sourceDiscussion.title = script.title
+        }
+        sourceDiscussion.markdown = part.markdown
+        sourceDiscussion.sources = part.sources
+        selectedSourcesDiscussion = sourceDiscussion
     }
 
     private func syncVisiblePlanCards(from updated: Discussion) {
