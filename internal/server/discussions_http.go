@@ -28,20 +28,43 @@ func atoiDefault(s string, def int) int {
 // discussionCreateRequest creates an empty placeholder discussion so the client
 // gets an id up front, then streams the plan into it via
 // /api/discussions/{id}/plan/stream.
+//
+// The client posts the raw JSONSchemaForm values for the new-discussion form
+// (see newDiscussionPrecheckForm) verbatim under Form, plus ReferenceDiscussionID
+// which is contextual rather than a form field. The server owns every form key,
+// so adding a field to the precheck schema only requires reading it here — the
+// client renders and submits the form without knowing any key.
 type discussionCreateRequest struct {
-	Topic    string `json:"topic"`
-	Type     string `json:"type"`
-	Language string `json:"language"`
-	Template string `json:"template,omitempty"`
-	// GenerateCover, when true, kicks off background AI cover-art generation for
-	// the new discussion. The placeholder is returned immediately; the cover is
-	// filled in asynchronously and picked up the next time the discussion is
-	// fetched (e.g. when the player opens). CoverPrompt overrides the default
-	// prompt derived from the topic.
-	GenerateCover         bool                 `json:"generate_cover"`
-	CoverPrompt           string               `json:"cover_prompt"`
-	Plan                  *planner.PlanRequest `json:"plan,omitempty"`
-	ReferenceDiscussionID string               `json:"reference_discussion_id,omitempty"`
+	Form                  newDiscussionForm `json:"form"`
+	ReferenceDiscussionID string            `json:"reference_discussion_id,omitempty"`
+}
+
+// newDiscussionForm mirrors the structure produced by newDiscussionPrecheckForm:
+// a "prompt" group, an optional "reference" group, and a "settings" group.
+// Unknown keys are ignored, and any key the client omits decodes to its zero
+// value and is defaulted below.
+type newDiscussionForm struct {
+	Prompt struct {
+		Topic string `json:"topic"`
+	} `json:"prompt"`
+	// Reference is the optional parent discussion selected in the form. It is
+	// equivalent to the top-level ReferenceDiscussionID (which is still accepted
+	// for the contextual "plan from an existing podcast" entry point), but lets
+	// the parent be chosen as a first-class form field via the discussion picker.
+	Reference struct {
+		DiscussionID string `json:"discussion_id"`
+	} `json:"reference"`
+	Settings struct {
+		Type        string `json:"type"`
+		Template    string `json:"template"`
+		Discussants int    `json:"discussants"`
+		Language    string `json:"language"`
+		// GenerateCover, when true, kicks off background AI cover-art generation
+		// for the new discussion. The placeholder is returned immediately; the
+		// cover is filled in asynchronously and picked up the next time the
+		// discussion is fetched (e.g. when the player opens).
+		GenerateCover bool `json:"generate_cover"`
+	} `json:"settings"`
 }
 
 type discussionImproveRequest struct {
@@ -165,18 +188,26 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	topic := strings.TrimSpace(req.Topic)
+	settings := req.Form.Settings
+	topic := strings.TrimSpace(req.Form.Prompt.Topic)
 	if topic == "" {
 		http.Error(w, "topic is required", http.StatusBadRequest)
 		return
 	}
-	contentType := strings.TrimSpace(req.Type)
+	contentType := strings.TrimSpace(settings.Type)
 	if contentType != "" && contentType != config.ContentTypeDiscussion {
 		http.Error(w, "only discussion creation is supported", http.StatusBadRequest)
 		return
 	}
+	language := strings.TrimSpace(settings.Language)
+	// Prefer the parent chosen in the form (reference.discussion_id); fall back to
+	// the contextual top-level reference_discussion_id.
+	refID := strings.TrimSpace(req.Form.Reference.DiscussionID)
+	if refID == "" {
+		refID = strings.TrimSpace(req.ReferenceDiscussionID)
+	}
 	var reference *planner.PodcastReference
-	if refID := strings.TrimSpace(req.ReferenceDiscussionID); refID != "" {
+	if refID != "" {
 		ref, err := s.discussionReferenceForPlanning(r.Context(), user.ID, refID)
 		if errors.Is(err, errDiscussionReferenceNotReady) {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -192,14 +223,11 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		}
 		reference = ref
 	}
-	template := strings.TrimSpace(req.Template)
-	if req.Plan != nil && strings.TrimSpace(req.Plan.Template) != "" {
-		template = strings.TrimSpace(req.Plan.Template)
-	}
+	template := strings.TrimSpace(settings.Template)
 	if _, ok := planner.TemplateByID(config.ContentTypeDiscussion, template); !ok {
 		template = planner.DefaultTemplateID
 	}
-	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), user.ID, topic, strings.TrimSpace(req.Language), template)
+	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), user.ID, topic, language, template)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -214,15 +242,18 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			d = updated
 		}
 	}
-	if req.GenerateCover {
-		s.startBackgroundCoverGeneration(user.ID, d.ID, strings.TrimSpace(req.CoverPrompt), topic)
+	if settings.GenerateCover {
+		s.startBackgroundCoverGeneration(user.ID, d.ID, "", topic)
 	}
-	if req.Plan != nil && s.d.Planning != nil {
-		req.Plan.Topic = topic
-		req.Plan.Template = template
-		req.Plan.Reference = reference
-		if strings.TrimSpace(req.Plan.Language) == "" {
-			req.Plan.Language = strings.TrimSpace(req.Language)
+	if s.d.Planning != nil {
+		plan := planner.PlanRequest{
+			Type:        config.ContentTypeDiscussion,
+			Topic:       topic,
+			Language:    language,
+			Discussants: settings.Discussants,
+			Template:    template,
+			Research:    true,
+			Reference:   reference,
 		}
 		conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, d.ID)
 		if err != nil {
@@ -234,11 +265,10 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			refs = []planner.PodcastReference{*reference}
 		}
 		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
-			Role:        "user",
-			Text:        planner.ConversationInitialText(*req.Plan),
-			Attachments: req.Plan.Attachments,
-			References:  refs,
-			OpID:        "initial:" + d.ID,
+			Role:       "user",
+			Text:       planner.ConversationInitialText(plan),
+			References: refs,
+			OpID:       "initial:" + d.ID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

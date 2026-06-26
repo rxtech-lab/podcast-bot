@@ -32,6 +32,7 @@ struct PlanConversationView: View {
     @State private var shouldScrollToInitialBottom = false
     @State private var didRequestInitialBottomScroll = false
     @State private var selectedLanguage: String
+    @State private var languageOptions: [PlanLanguageOption] = []
     @State private var streamTask: Task<Void, Never>?
     @State private var initialScrollTask: Task<Void, Never>?
     @State private var streamHasActivity = false
@@ -40,7 +41,7 @@ struct PlanConversationView: View {
     init(discussion: Discussion,
          onGenerated: @escaping (Discussion) -> Void = { _ in }) {
         _discussion = State(initialValue: discussion)
-        _selectedLanguage = State(initialValue: DiscussionLanguage.normalized(discussion.script?.language ?? discussion.language))
+        _selectedLanguage = State(initialValue: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language))
         self.onGenerated = onGenerated
     }
 
@@ -111,9 +112,12 @@ struct PlanConversationView: View {
             Button("Generate") { generate() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This turns the current plan into an audio podcast in \(DiscussionLanguage.label(for: selectedLanguage)). It can take a few minutes and uses generation credits.")
+            Text("This turns the current plan into an audio podcast in \(PlanLanguageOption.label(for: selectedLanguage, options: languageOptions)). It can take a few minutes and uses generation credits.")
         }
-        .task { await purchases.refreshBalance() }
+        .task {
+            await purchases.refreshBalance()
+            await loadLanguageOptions()
+        }
         .onAppear(perform: start)
         .onDisappear {
             streamTask?.cancel()
@@ -541,8 +545,8 @@ struct PlanConversationView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Picker("Podcast language", selection: $selectedLanguage) {
-                    ForEach(DiscussionLanguage.supported) { language in
-                        Text(language.label).tag(language.code)
+                    ForEach(PlanLanguageOption.pickerOptions(selected: selectedLanguage, options: languageOptions)) { language in
+                        Text(language.label).tag(language.id)
                     }
                 }
                 .disabled(isGenerating)
@@ -681,6 +685,17 @@ struct PlanConversationView: View {
             try? await Task.sleep(for: .milliseconds(10))
             guard !Task.isCancelled else { return }
             shouldScrollToInitialBottom = true
+        }
+    }
+
+    @MainActor
+    private func loadLanguageOptions() async {
+        guard languageOptions.isEmpty else { return }
+        do {
+            let form = try await APIClient(tokens: auth).precheck().newDiscussion.form
+            languageOptions = form.languageOptions
+        } catch {
+            languageOptions = []
         }
     }
 

@@ -20,6 +20,7 @@ struct PlanDetailView: View {
     @State private var errorMessage: String?
     @State private var editTurns: [PlanEditTurn] = []
     @State private var attachments: [PendingAttachment] = []
+    @State private var languageOptions: [PlanLanguageOption] = []
     @State private var showingSources = false
     @State private var showingSpeakerModels = false
     @State private var showingGenerateConfirm = false
@@ -45,7 +46,7 @@ struct PlanDetailView: View {
          onGenerated: @escaping (Discussion) -> Void = { _ in })
     {
         _discussion = State(initialValue: discussion)
-        _selectedLanguage = State(initialValue: DiscussionLanguage.normalized(discussion.script?.language ?? discussion.language))
+        _selectedLanguage = State(initialValue: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language))
         self.initialPlan = initialPlan
         self.onGenerated = onGenerated
     }
@@ -65,7 +66,10 @@ struct PlanDetailView: View {
         .sheet(isPresented: $showingPointsHistory) { PointsHistoryView() }
         .sheet(isPresented: $showingPublishSheet) { PublishStationSheet(discussion: $discussion) }
         .sheet(isPresented: $showingSpeakerModels) { SpeakerModelsSheet(discussion: $discussion) }
-        .task { await purchases.refreshBalance() }
+        .task {
+            await purchases.refreshBalance()
+            await loadLanguageOptions()
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -76,8 +80,8 @@ struct PlanDetailView: View {
                         Divider()
                     }
                     Picker("\(AppStringLiteral.stationNameRaw) language", selection: $selectedLanguage) {
-                        ForEach(DiscussionLanguage.supported) { language in
-                            Text(language.label).tag(language.code)
+                        ForEach(PlanLanguageOption.pickerOptions(selected: selectedLanguage, options: languageOptions)) { language in
+                            Text(language.label).tag(language.id)
                         }
                     }
                     .disabled(isGenerating)
@@ -124,7 +128,7 @@ struct PlanDetailView: View {
             Button("Generate") { generate() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This turns the current plan into an audio \(AppStringLiteral.stationNameRaw) in \(DiscussionLanguage.label(for: selectedLanguage)). It can take a few minutes and uses generation credits.")
+            Text("This turns the current plan into an audio \(AppStringLiteral.stationNameRaw) in \(PlanLanguageOption.label(for: selectedLanguage, options: languageOptions)). It can take a few minutes and uses generation credits.")
         }
         .sheet(isPresented: $showingSources) {
             SourcesSheet(
@@ -540,13 +544,24 @@ struct PlanDetailView: View {
     }
 
     private var planOptionsAccessibilityLabel: String {
-        var parts = [String(localized: "\(AppStringLiteral.stationNameRaw) language: \(DiscussionLanguage.label(for: selectedLanguage)).",
+        var parts = [String(localized: "\(AppStringLiteral.stationNameRaw) language: \(PlanLanguageOption.label(for: selectedLanguage, options: languageOptions)).",
                             comment: "Accessibility label stating the selected podcast language")]
         if purchases.isConfigured {
             parts.insert(String(localized: "Remaining points: \(pointsMenuLabel).",
                                 comment: "Accessibility label stating the remaining points balance"), at: 0)
         }
         return parts.joined(separator: " ")
+    }
+
+    @MainActor
+    private func loadLanguageOptions() async {
+        guard languageOptions.isEmpty else { return }
+        do {
+            let form = try await APIClient(tokens: auth).precheck().newDiscussion.form
+            languageOptions = form.languageOptions
+        } catch {
+            languageOptions = []
+        }
     }
 
     /// Allow sending when there's an instruction (and nothing is in flight).

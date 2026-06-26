@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "%@ actions" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1193,6 +1196,7 @@
     },
     "Chinese (Simplified)" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1216,6 +1220,7 @@
     },
     "Chinese (Traditional)" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1859,6 +1864,7 @@
       }
     },
     "Create AI cover art in the background" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2285,6 +2291,7 @@
     },
     "Discussion" : {
       "comment" : "Round-table discussion type option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2575,6 +2582,7 @@
       }
     },
     "e.g. The future of AI in education" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2642,6 +2650,7 @@
     },
     "English" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3086,6 +3095,7 @@
     },
     "French" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3174,6 +3184,7 @@
       }
     },
     "Generate cover" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3420,6 +3431,7 @@
     },
     "German" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3599,6 +3611,7 @@
     },
     "Japanese" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3644,6 +3657,7 @@
     },
     "Korean" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3914,7 +3928,7 @@
       }
     },
     "Loading..." : {
-
+      "comment" : "Resolving parent discussion title"
     },
     "Loading…" : {
       "localizations" : {
@@ -4605,6 +4619,7 @@
       }
     },
     "None" : {
+      "comment" : "No parent discussion selected",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -4803,6 +4818,7 @@
       }
     },
     "Parent Discussion" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -7287,6 +7303,7 @@
     },
     "Spanish" : {
       "comment" : "Podcast language option",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -7644,6 +7661,7 @@
       }
     },
     "Template" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8125,6 +8143,7 @@
       }
     },
     "Tip: paste a link in the topic and the agent will read it." : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8170,6 +8189,7 @@
       }
     },
     "Topic" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8281,6 +8301,7 @@
       }
     },
     "Type" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

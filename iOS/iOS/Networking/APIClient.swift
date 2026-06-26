@@ -1,4 +1,5 @@
 import Foundation
+import JSONSchemaForm
 import OSLog
 
 private let apiLog = Logger(subsystem: "com.debatebot.ios", category: "APIClient")
@@ -212,22 +213,13 @@ final class APIClient: Sendable {
     /// Creates an empty placeholder discussion (status "planning") and returns it
     /// with a server id, so the client can navigate to the plan page and stream
     /// the plan into it. Decouples creation from the multi-minute planning run.
-    func createDiscussion(topic: String,
-                          language: String,
-                          type: String = "discussion",
-                          template: String? = nil,
-                          generateCover: Bool = false,
-                          coverPrompt: String? = nil,
-                          referenceDiscussionID: String? = nil,
-                          plan: PlanRequest? = nil) async throws -> Discussion {
+    /// Creates the placeholder discussion from the raw new-discussion form values
+    /// (the JSONSchemaForm output for GET /api/precheck). The server reads every
+    /// field, so the client posts the form verbatim without interpreting any key.
+    func createDiscussion(form: FormData,
+                          referenceDiscussionID: String? = nil) async throws -> Discussion {
         try await send("POST", "/api/discussions",
-                       body: DiscussionCreateRequest(topic: topic,
-                                                     type: type,
-                                                     language: language,
-                                                     template: template,
-                                                     generateCover: generateCover,
-                                                     coverPrompt: coverPrompt,
-                                                     plan: plan,
+                       body: DiscussionCreateRequest(form: form,
                                                      referenceDiscussionID: referenceDiscussionID))
     }
 
@@ -652,6 +644,12 @@ final class APIClient: Sendable {
             apiLog.error("templates request failed type=\(type, privacy: .public) url=\(url, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
             throw error
         }
+    }
+
+    /// Server-owned client bootstrap metadata. The new discussion form schema,
+    /// localized labels, and supported native actions are negotiated here.
+    func precheck() async throws -> PrecheckResponseDTO {
+        try await get("/api/precheck")
     }
 
     // MARK: - Push
@@ -1196,12 +1194,23 @@ final class APIClient: Sendable {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(AcceptLanguage.headerValue, forHTTPHeaderField: "Accept-Language")
+        req.setValue("ios", forHTTPHeaderField: "X-Client-Platform")
+        req.setValue(Self.clientVersion, forHTTPHeaderField: "X-Client-Version")
+        req.setValue(Self.clientBuild, forHTTPHeaderField: "X-Client-Build")
         if let body {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         return req
     }
+
+    private static let clientVersion: String = {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+    }()
+
+    private static let clientBuild: String = {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    }()
 
     private func pathComponent(_ value: String) -> String {
         var allowed = CharacterSet.urlPathAllowed

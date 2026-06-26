@@ -291,3 +291,72 @@ enum PlanningStreamEvent: Sendable {
     case done(PlanningDonePayload)
     case failed(String)
 }
+
+struct PlanLanguageOption: Identifiable, Hashable {
+    let id: String
+    let label: String
+
+    static func initialCode(_ code: String) -> String {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "en-US" : trimmed
+    }
+
+    static func pickerOptions(selected: String, options: [PlanLanguageOption]) -> [PlanLanguageOption] {
+        let selected = initialCode(selected)
+        guard !options.contains(where: { $0.id == selected }) else { return options }
+        return [PlanLanguageOption(id: selected, label: displayName(for: selected))] + options
+    }
+
+    static func label(for code: String, options: [PlanLanguageOption]) -> String {
+        let code = initialCode(code)
+        return options.first(where: { $0.id == code })?.label ?? displayName(for: code)
+    }
+
+    private static func displayName(for code: String) -> String {
+        Locale.current.localizedString(forIdentifier: code) ?? code
+    }
+}
+
+extension PrecheckFormDTO {
+    var languageOptions: [PlanLanguageOption] {
+        guard let languageSchema = languageSchema else {
+            return []
+        }
+        if case let .array(values)? = languageSchema["x-options"] {
+            return values.compactMap { value in
+                guard case let .object(option) = value,
+                      let id = precheckString(option["id"]) else {
+                    return nil
+                }
+                return PlanLanguageOption(id: id, label: precheckString(option["label"]) ?? id)
+            }
+        }
+        if case let .array(values)? = languageSchema["enum"] {
+            return values.compactMap { value in
+                guard case let .string(id) = value else { return nil }
+                return PlanLanguageOption(id: id, label: PlanLanguageOption.label(for: id, options: []))
+            }
+        }
+        return []
+    }
+
+    private var languageSchema: [String: AnyCodable]? {
+        guard case let .object(properties)? = schema["properties"] else {
+            return nil
+        }
+        if case let .object(languageSchema)? = properties["language"] {
+            return languageSchema
+        }
+        guard case let .object(settingsSchema)? = properties["settings"],
+              case let .object(settingsProperties)? = settingsSchema["properties"],
+              case let .object(languageSchema)? = settingsProperties["language"] else {
+            return nil
+        }
+        return languageSchema
+    }
+}
+
+private func precheckString(_ value: AnyCodable?) -> String? {
+    guard case let .string(string)? = value else { return nil }
+    return string
+}

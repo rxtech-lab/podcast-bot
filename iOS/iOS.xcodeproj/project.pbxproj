@@ -22,6 +22,12 @@
 		DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
 		DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9CE2FEC0E850045484F /* MarkdownUI */; };
 		DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9D02FEC0EB50045484F /* MarkdownUI */; };
+		DF6AF75A2FEE6A380045484F /* JSONSchemaForm in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF7592FEE6A380045484F /* JSONSchemaForm */; };
+		DF6AF75C2FEE6A380045484F /* JSONSchemaValidator in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF75B2FEE6A380045484F /* JSONSchemaValidator */; };
+		DF6AF8362FEEE6F00045484F /* JSONSchemaForm in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF8352FEEE6F00045484F /* JSONSchemaForm */; };
+		DF6AF8382FEEE6F00045484F /* JSONSchemaValidator in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF8372FEEE6F00045484F /* JSONSchemaValidator */; };
+		DF6AF83A2FEEE6FE0045484F /* JSONSchemaForm in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF8392FEEE6FE0045484F /* JSONSchemaForm */; };
+		DF6AF83C2FEEE6FE0045484F /* JSONSchemaValidator in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF83B2FEEE6FE0045484F /* JSONSchemaValidator */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -122,7 +128,9 @@
 				Features/Library/MarketplaceView.swift,
 				Features/Library/PublishStationSheet.swift,
 				Features/Plan/AttachmentSupport.swift,
+				Features/Plan/NewDiscussionFormCoordinator.swift,
 				Features/Plan/NewDiscussionView.swift,
+				Features/Plan/NewDiscussionWidgets.swift,
 				Features/Plan/PlanConversationView.swift,
 				Features/Plan/PlanDetailView.swift,
 				Features/Plan/PlanningModels.swift,
@@ -203,8 +211,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */,
+				DF6AF8362FEEE6F00045484F /* JSONSchemaForm in Frameworks */,
 				DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */,
+				DF6AF75A2FEE6A380045484F /* JSONSchemaForm in Frameworks */,
+				DF6AF8382FEEE6F00045484F /* JSONSchemaValidator in Frameworks */,
 				AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */,
+				DF6AF75C2FEE6A380045484F /* JSONSchemaValidator in Frameworks */,
 				DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */,
 				DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */,
 				DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */,
@@ -235,6 +247,8 @@
 				DF6ADDF42FEB03A30045484F /* RxAuthSwift in Frameworks */,
 				DF6ADDF62FEB03A30045484F /* RxAuthSwiftUI in Frameworks */,
 				DF6ADDF22FEB03A30045484F /* SwiftStreamingMarkdown in Frameworks */,
+				DF6AF83C2FEEE6FE0045484F /* JSONSchemaValidator in Frameworks */,
+				DF6AF83A2FEEE6FE0045484F /* JSONSchemaForm in Frameworks */,
 				DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */,
 				AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */,
 			);
@@ -334,6 +348,10 @@
 				DF6AD85F2FE9E5530045484F /* RevenueCatUI */,
 				DF6AE9CE2FEC0E850045484F /* MarkdownUI */,
 				AABBCCDD0000000000000002 /* BeautifulMermaid */,
+				DF6AF7592FEE6A380045484F /* JSONSchemaForm */,
+				DF6AF75B2FEE6A380045484F /* JSONSchemaValidator */,
+				DF6AF8352FEEE6F00045484F /* JSONSchemaForm */,
+				DF6AF8372FEEE6F00045484F /* JSONSchemaValidator */,
 			);
 			productName = iOS;
 			productReference = DF0DA32F2FE8445500A02339 /* iOS.app */;
@@ -408,6 +426,8 @@
 				DF6ADDF82FEB03C60045484F /* RevenueCatUI */,
 				DF6AE9D02FEC0EB50045484F /* MarkdownUI */,
 				AABBCCDD0000000000000012 /* BeautifulMermaid */,
+				DF6AF8392FEEE6FE0045484F /* JSONSchemaForm */,
+				DF6AF83B2FEEE6FE0045484F /* JSONSchemaValidator */,
 			);
 			productName = iosClip;
 			productReference = DF6ADD9E2FEAF2CB0045484F /* iosClip.app */;
@@ -511,6 +531,7 @@
 				DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 				DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */,
+				DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF0DA3302FE8445500A02339 /* Products */;
@@ -1234,6 +1255,14 @@
 				minimumVersion = 2.4.1;
 			};
 		};
+		DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sirily11/swift-jsonschema-form.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.5;
+			};
+		};
 		DFF5269C2FE8529A007BEF2A /* XCRemoteSwiftPackageReference "RxAuthSwift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/rxtech-lab/RxAuthSwift";
@@ -1304,6 +1333,34 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
 			productName = MarkdownUI;
+		};
+		DF6AF7592FEE6A380045484F /* JSONSchemaForm */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JSONSchemaForm;
+		};
+		DF6AF75B2FEE6A380045484F /* JSONSchemaValidator */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JSONSchemaValidator;
+		};
+		DF6AF8352FEEE6F00045484F /* JSONSchemaForm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */;
+			productName = JSONSchemaForm;
+		};
+		DF6AF8372FEEE6F00045484F /* JSONSchemaValidator */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */;
+			productName = JSONSchemaValidator;
+		};
+		DF6AF8392FEEE6FE0045484F /* JSONSchemaForm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */;
+			productName = JSONSchemaForm;
+		};
+		DF6AF83B2FEEE6FE0045484F /* JSONSchemaValidator */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */;
+			productName = JSONSchemaValidator;
 		};
 		DFF5269D2FE8529A007BEF2A /* RxAuthSwift */ = {
 			isa = XCSwiftPackageProductDependency;

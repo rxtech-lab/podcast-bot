@@ -189,6 +189,9 @@ struct AttachmentsRow: View {
     /// Grouped renders the attach row without its own glass background so it can
     /// share one card with another control (e.g. the language menu).
     var grouped: Bool = false
+    var title: String = "Attach files"
+    var subtitle: String? = "PDF, Word, slides, images"
+    var systemImage: String = "paperclip"
 
     @State private var showingImporter = false
     @State private var showingPhotos = false
@@ -281,16 +284,18 @@ struct AttachmentsRow: View {
     @ViewBuilder
     private var attachCard: some View {
         let row = HStack(spacing: 12) {
-            Image(systemName: "paperclip")
+            Image(systemName: systemImage)
                 .foregroundStyle(Theme.accent)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Attach files")
+                Text(title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text("PDF, Word, slides, images")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondaryText)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
             Spacer()
             Image(systemName: "plus.circle.fill")

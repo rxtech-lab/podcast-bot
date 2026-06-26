@@ -281,7 +281,7 @@ func TestDiscussionParentPodcastEndpointsRequireReady(t *testing.T) {
 	}
 
 	body := strings.NewReader(fmt.Sprintf(
-		`{"topic":"Follow up","language":"en-US","reference_discussion_id":%q}`,
+		`{"form":{"prompt":{"topic":"Follow up"},"settings":{"language":"en-US"}},"reference_discussion_id":%q}`,
 		pending.ID,
 	))
 	resp, err = http.Post(ts.URL+"/api/discussions", "application/json", body)
@@ -376,7 +376,7 @@ func TestDiscussionImproveStreamPersistsUserTurnBeforePlanFinishes(t *testing.T)
 
 func apiCreateDiscussion(t *testing.T, baseURL, topic string) Discussion {
 	t.Helper()
-	body := strings.NewReader(fmt.Sprintf(`{"topic":%q,"language":"en-US"}`, topic))
+	body := strings.NewReader(fmt.Sprintf(`{"form":{"prompt":{"topic":%q},"settings":{"language":"en-US"}}}`, topic))
 	resp, err := http.Post(baseURL+"/api/discussions", "application/json", body)
 	if err != nil {
 		t.Fatalf("create discussion: %v", err)

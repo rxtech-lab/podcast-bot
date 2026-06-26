@@ -131,6 +131,60 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
     }
 
+    func testPrecheckAddsClientHeadersAndDecodesSchema() async throws {
+        var capturedRequest: URLRequest?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            let body = """
+            {
+              "new_discussion": {
+                "form": {
+                  "title": "New Station",
+                  "submit_title": "Plan",
+                  "cancel_title": "Cancel",
+                  "loading_title": "Creating station...",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "topic": { "type": "string" }
+                    }
+                  },
+                  "ui_schema": {
+                    "topic": { "ui:widget": "textarea" }
+                  },
+                  "initial_data": {
+                    "topic": ""
+                  },
+                  "actions": []
+                }
+              }
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+
+        let response = try await api.precheck()
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "GET")
+        XCTAssertEqual(capturedRequest?.url?.path, "/api/precheck")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "X-Client-Platform"), "ios")
+        XCTAssertNotNil(capturedRequest?.value(forHTTPHeaderField: "X-Client-Version"))
+        XCTAssertNotNil(capturedRequest?.value(forHTTPHeaderField: "X-Client-Build"))
+        XCTAssertEqual(response.newDiscussion.form.title, "New Station")
+        XCTAssertEqual(response.newDiscussion.form.schema["type"], .string("object"))
+    }
+
     func testMarketStationsSearchAddsQueryParameter() async throws {
         var capturedRequest: URLRequest?
         URLProtocolStub.handler = { request in
