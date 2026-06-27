@@ -11,7 +11,10 @@ import SwiftUI
 enum NewDiscussionFormUI {
     /// Glass leaf widgets keyed by the `ui:widget` names emitted by the backend.
     @MainActor
-    static func widgets(coordinator: NewDiscussionFormCoordinator) -> [String: JSONSchemaFormWidget] {
+    static func widgets(
+        coordinator: NewDiscussionFormCoordinator,
+        attachmentsCoordinator: NewDiscussionAttachmentsCoordinator
+    ) -> [String: JSONSchemaFormWidget] {
         [
             "glassText": { context in AnyView(GlassTextWidget(context: context)) },
             "glassMenu": { context in AnyView(GlassMenuWidget(context: context)) },
@@ -19,6 +22,9 @@ enum NewDiscussionFormUI {
             "glassToggle": { context in AnyView(GlassToggleWidget(context: context)) },
             "discussionPicker": { context in
                 AnyView(DiscussionPickerWidget(context: context, coordinator: coordinator))
+            },
+            "attachmentsPicker": { context in
+                AnyView(AttachmentsPickerWidget(context: context, coordinator: attachmentsCoordinator))
             },
         ]
     }
@@ -327,5 +333,130 @@ private struct DiscussionPickerWidget: View {
         if let reference = try? await APIClient(tokens: auth).parentPodcast(id: selectedID) {
             coordinator.cache(reference, for: context.id)
         }
+    }
+}
+
+/// Attachments row. Renders the picked-file chips and a source menu (Notion,
+/// photos, files); each menu item opens the matching picker through the form
+/// coordinator using the backend-declared deep link. The coordinator (owned by
+/// `NewDiscussionView`) holds the live upload state and writes ready attachments
+/// back into the form value here.
+private struct AttachmentsPickerWidget: View {
+    let context: JSONSchemaFormWidgetContext
+    let coordinator: NewDiscussionAttachmentsCoordinator
+    @Environment(AuthManager.self) private var auth
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(context.fieldTitle).font(.headline)
+            if !coordinator.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(coordinator.attachments) { att in
+                            chip(att)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            Menu {
+                Button {
+                    open(.notion)
+                } label: {
+                    if coordinator.notionStatusLoaded {
+                        Label(coordinator.notionConnected ? "Pick Notion Page" : "Connect to Notion",
+                              systemImage: coordinator.notionConnected ? "doc.text.magnifyingglass" : "link.badge.plus")
+                    } else {
+                        Label("Checking Notion", systemImage: "hourglass")
+                    }
+                }
+                .disabled(!coordinator.notionStatusLoaded)
+                Button {
+                    open(.photos)
+                } label: {
+                    Label("Photo Library", systemImage: "photo.on.rectangle")
+                }
+                Button {
+                    open(.files)
+                } label: {
+                    Label("Files", systemImage: "folder")
+                }
+            } label: {
+                attachCard
+            }
+            .buttonStyle(.plain)
+        }
+        .task {
+            coordinator.configure(api: APIClient(tokens: auth))
+            coordinator.bind(fieldID: context.id) { ready in
+                context.formData.wrappedValue = AttachmentsPickerWidget.formData(from: ready)
+            }
+            await coordinator.loadNotionStatus()
+        }
+    }
+
+    private func open(_ source: AttachmentSource) {
+        guard let deepLink = context.deepLink else { return }
+        coordinator.open(deepLink: deepLink, source: source)
+    }
+
+    /// Full-width glass card matching the form's other inputs.
+    private var attachCard: some View {
+        HStack(spacing: 12) {
+            RowIcon(systemName: context.icon)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Add attachment")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(context.fieldDescription ?? String(localized: "Notion, photos, or files", comment: "Attachment picker subtitle"))
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer()
+            Image(systemName: "plus.circle.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .padding(12)
+        .glassEffect(in: .rect(cornerRadius: 16))
+    }
+
+    private func chip(_ att: PendingAttachment) -> some View {
+        HStack(spacing: 6) {
+            switch att.status {
+            case .uploading:
+                ProgressView().controlSize(.mini).tint(Theme.accent)
+            case .ready:
+                Image(systemName: "doc.fill").font(.caption2).foregroundStyle(Theme.accent)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
+            }
+            Text(att.filename)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .foregroundStyle(.primary)
+            Button {
+                coordinator.remove(att.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .glassEffect(in: .capsule)
+    }
+
+    /// Encode the ready attachments as the array form value (keys match the Go
+    /// `planner.Attachment` json tags via `Attachment`'s CodingKeys).
+    static func formData(from attachments: [Attachment]) -> FormData {
+        guard let data = try? JSONEncoder().encode(attachments),
+              let decoded = try? JSONDecoder().decode(FormData.self, from: data)
+        else {
+            return .array(items: [])
+        }
+        return decoded
     }
 }

@@ -111,6 +111,19 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 					},
 					"required": []any{"topic"},
 				},
+				"attachments": map[string]any{
+					"type":        "array",
+					"title":       phrase(lang, "Attachments", "附件", "附件"),
+					"description": phrase(lang, "Add Notion pages, images, or documents to ground the plan.", "添加 Notion 页面、图片或文档作为规划依据。", "新增 Notion 頁面、圖片或文件作為規劃依據。"),
+					"default":     []any{},
+					// Each item is a server Attachment (filename + markdown/url +
+					// mime_type) filled in by the client's attachmentsPicker widget
+					// after upload; the server reads them back as planner.Attachment.
+					"items": map[string]any{
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
 				"reference": map[string]any{
 					"type":                 "object",
 					"title":                phrase(lang, "Parent Discussion", "父讨论", "父討論"),
@@ -176,7 +189,7 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 			"required": []any{"prompt", "settings"},
 		},
 		UISchema: map[string]any{
-			"ui:order": []any{"prompt", "reference", "settings"},
+			"ui:order": []any{"prompt", "attachments", "reference", "settings"},
 			"prompt": map[string]any{
 				"ui:order": []any{"topic"},
 				"topic": map[string]any{
@@ -184,6 +197,13 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 					"ui:options": map[string]any{
 						"placeholder": phrase(lang, "e.g. The future of AI in education", "例如：人工智能在教育中的未来", "例如：人工智慧在教育中的未來"),
 					},
+				},
+			},
+			"attachments": map[string]any{
+				"ui:widget": "attachmentsPicker",
+				"ui:options": map[string]any{
+					"icon":      "paperclip",
+					"deep_link": "debatepod://attachment-picker",
 				},
 			},
 			"reference": map[string]any{
@@ -229,6 +249,7 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 			"prompt": map[string]any{
 				"topic": "",
 			},
+			"attachments": []any{},
 			"reference": map[string]any{
 				"discussion_id": "",
 			},
