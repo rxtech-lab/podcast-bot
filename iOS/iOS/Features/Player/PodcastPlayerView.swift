@@ -159,6 +159,7 @@ struct PodcastPlayerView: View {
                     } label: {
                         Label("Generate summary", systemImage: "sparkles")
                     }
+                    .accessibilityIdentifier("player.generateSummary")
                 } else {
                     Button {
                     } label: {
@@ -169,6 +170,7 @@ struct PodcastPlayerView: View {
             } label: {
                 Image(systemName: "doc.text")
             }
+            .accessibilityIdentifier("player.documents")
             .accessibilityLabel("Documents")
             .popoverTip(PodcastPlanTip(), arrowEdge: .top)
         }
@@ -874,6 +876,7 @@ struct PodcastActionsMenu: View {
         } label: {
             Image(systemName: "ellipsis")
         }
+        .accessibilityIdentifier("player.more")
         .accessibilityLabel("\(AppStringLiteral.stationNameRaw) actions")
         .popoverTip(actionsTip, arrowEdge: .top)
         .confirmationDialog(

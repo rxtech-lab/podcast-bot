@@ -49,3 +49,77 @@ jobs:
           path: build.log
           retention-days: 7
           if-no-files-found: ignore
+
+  test-ios:
+    name: Run iOS UI Tests
+    runs-on: [self-hosted, macOS, ARM64, ui-tests]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The E2E backend encodes audio with ffmpeg (LiveStream pacer + ConcatToMP3).
+      - name: Install ffmpeg
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1; then
+            echo "ffmpeg already present: $(command -v ffmpeg)"
+          else
+            echo "Installing ffmpeg via Homebrew..."
+            brew install ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+
+      - name: Prepare Simulators
+        run: |
+          echo "Shutting down all simulators..."
+          xcrun simctl shutdown all 2>/dev/null || true
+          echo "Erasing all simulators..."
+          xcrun simctl erase all 2>/dev/null || true
+          echo "Simulators ready"
+
+      # Builds the Go backend in hermetic E2E mode (fake LLM/TTS, local SQLite,
+      # auth bypassed, seeded fixtures), waits for health, then runs the
+      # iosUITestPlan against it on the simulator and tears the server down.
+      - name: Run iOS UI test plan (E2E)
+        run: ./scripts/e2e.sh
+        env:
+          E2E_TEST_PLAN: iosUITestPlan
+          E2E_SIMULATOR: iPhone 17 Pro
+
+      - name: Upload backend server log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-e2e-server-log
+          path: /tmp/debate-bot-e2e.server.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload xcodebuild log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-e2e-xcodebuild-log
+          path: /tmp/debate-bot-e2e.xcodebuild.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload test result bundle
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-e2e-xcresult
+          path: /tmp/debate-bot-e2e.xcresult
+          retention-days: 7
+          if-no-files-found: ignore

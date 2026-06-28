@@ -592,6 +592,11 @@ func EnsureOutDir(p string) error {
 // and validates the env vars that provider requires. Defaults to Azure when
 // the field is blank.
 func buildTTSProvider(env *config.Env, topic *config.DebateTopic) (tts.Provider, error) {
+	// E2E mode: swap in a hermetic provider that emits silent clips so generation
+	// runs end to end without a real speech backend.
+	if env.E2EMode {
+		return tts.NewFake(), nil
+	}
 	provider := topic.TTSProvider
 	if provider == "" {
 		provider = config.TTSProviderAzure

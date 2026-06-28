@@ -20,6 +20,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
+	"github.com/sirily11/debate-bot/internal/e2e"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/storage"
@@ -515,6 +516,21 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		fmt.Fprintln(os.Stderr, "env:", err)
 		return nil, 1
 	}
+	// E2E mode: stand up the in-process fake LLM and point every model endpoint
+	// at it, so planning, generation, and summarization run without a real
+	// provider. Done before the jobEnv copy below so the runner inherits it.
+	if env.E2EMode {
+		base, _, ferr := e2e.StartFakeLLM()
+		if ferr != nil {
+			fmt.Fprintln(os.Stderr, "e2e fake llm:", ferr)
+			return nil, 1
+		}
+		env.OpenAIBaseURL = base
+		env.OpenAIKey = "e2e"
+		env.CompressionBaseURL = base
+		env.CompressionKey = "e2e"
+		fmt.Fprintln(os.Stdout, "E2E mode enabled · fake LLM at", base)
+	}
 	if outOverride != "" {
 		env.OutDir = outOverride
 	}
@@ -753,6 +769,21 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		fmt.Fprintln(os.Stderr, "env:", err)
 		return nil, 1
 	}
+	// E2E mode: stand up the in-process fake LLM and point every model endpoint
+	// at it, so planning, generation, and summarization run without a real
+	// provider. Done before the jobEnv copy below so the runner inherits it.
+	if env.E2EMode {
+		base, _, ferr := e2e.StartFakeLLM()
+		if ferr != nil {
+			fmt.Fprintln(os.Stderr, "e2e fake llm:", ferr)
+			return nil, 1
+		}
+		env.OpenAIBaseURL = base
+		env.OpenAIKey = "e2e"
+		env.CompressionBaseURL = base
+		env.CompressionKey = "e2e"
+		fmt.Fprintln(os.Stdout, "E2E mode enabled · fake LLM at", base)
+	}
 	if outOverride != "" {
 		env.OutDir = outOverride
 	}
@@ -830,6 +861,14 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		fmt.Fprintln(os.Stderr, "planning db:", err)
 		cancel()
 		return nil, 1
+	}
+	if jobEnv.E2EMode {
+		if err := discussions.SeedE2E(ctx, points); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e seed:", err)
+			cancel()
+			return nil, 1
+		}
+		fmt.Fprintln(os.Stdout, "E2E mode · database seeded")
 	}
 	queue, err := goqueue.NewQueue(maxConcurrency)
 	if err != nil {

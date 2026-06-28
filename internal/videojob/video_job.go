@@ -173,6 +173,11 @@ func run(ctx context.Context, deps Deps, jobID string,
 ) {
 	logger := deps.Log.With("job", jobID, "type", topic.Type, "title", topic.Title)
 	audioOnly := sub.AudioOnly
+	// E2E mode always renders audio-only so the video encoder/stitch path (and its
+	// image dependencies) never runs.
+	if deps.Env.E2EMode {
+		audioOnly = true
+	}
 	deps.Jobs.Update(jobID, func(j *server.Job) { j.Status = server.JobRunning })
 
 	send := func(v any) {
@@ -379,7 +384,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// the orchestrator runs (the session bed must be installed pre-Run, and
 	// the stage paints the first background as soon as it lands). Without this
 	// the show rendered over a bare background with no imagery.
-	if topic.Type == config.ContentTypeDiscussion {
+	if topic.Type == config.ContentTypeDiscussion && !jobEnv.E2EMode {
 		t0 := time.Now()
 		if audioOnly {
 			status("preparing discussion audio (music)…")

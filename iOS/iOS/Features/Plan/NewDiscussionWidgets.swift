@@ -160,6 +160,7 @@ private struct GlassTextWidget: View {
                 .textFieldStyle(.plain)
                 .padding(12)
                 .glassEffect(in: .rect(cornerRadius: 16))
+                .accessibilityIdentifier("newPlan.field")
             if let description = context.fieldDescription, !description.isEmpty {
                 Text(description)
                     .font(.caption)

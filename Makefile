@@ -12,7 +12,8 @@ PLATFORM  := linux/amd64
 BUILDER   := debate-bot-builder
 
 .PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke \
-        style-test style-golden style-font buildx-setup docker-build docker-push
+        style-test style-golden style-font buildx-setup docker-build docker-push \
+        e2e e2e-server
 
 all: build
 
@@ -103,3 +104,16 @@ style-test: style-font
 # Review the diff before committing the updated PNGs.
 style-golden: style-font
 	go test ./internal/video -run TestStyleGolden -update-golden
+
+# --- End-to-end testing -----------------------------------------------------
+# Full hermetic E2E run: build + launch the seeded backend (fake LLM/TTS, auth
+# bypassed, local SQLite), then run the iOS XCUITest suite against it on the
+# simulator, then tear down. Override the sim/port: make e2e E2E_SIMULATOR='iPhone 17'.
+e2e:
+	./scripts/e2e.sh
+
+# Start just the hermetic, seeded backend in E2E mode and leave it running
+# (Ctrl-C to stop). Use for manual API poking or pointing the iOS app at a local
+# server. Override the port: make e2e-server E2E_PORT=8099.
+e2e-server:
+	./scripts/e2e-server.sh

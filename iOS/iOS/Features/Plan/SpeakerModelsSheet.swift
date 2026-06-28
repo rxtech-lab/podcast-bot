@@ -133,6 +133,7 @@ struct SpeakerModelsSheet: View {
                             Text(model.displayLabel)
                         }
                     }
+                    .accessibilityIdentifier("model.\(model.id)")
                 }
             }
         } label: {
@@ -146,6 +147,7 @@ struct SpeakerModelsSheet: View {
             .foregroundStyle(Theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityIdentifier("speakerModel.menu.\(speaker.id)")
         .disabled(isLoadingModels && models.isEmpty)
     }
 

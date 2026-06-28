@@ -24,10 +24,15 @@ struct iOSApp: App {
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
-        try? Tips.configure([
-            .datastoreLocation(.applicationDefault),
-            .displayFrequency(.immediate)
-        ])
+        // In E2E mode, leave TipKit unconfigured so no `.popoverTip` ever
+        // displays — an onboarding tip popover would cover the UI (e.g. the
+        // new-plan topic field) and make elements non-hittable for the tests.
+        if !AppConfig.isE2E {
+            try? Tips.configure([
+                .datastoreLocation(.applicationDefault),
+                .displayFrequency(.immediate)
+            ])
+        }
         // Configure RevenueCat before anything reads Purchases.shared. Guarded so
         // a missing key disables purchases instead of crashing.
         if AppConfig.hasRevenueCat {
@@ -39,6 +44,15 @@ struct iOSApp: App {
         let auth = AuthManager()
         _auth = State(initialValue: auth)
         _purchases = State(initialValue: PurchaseManager(tokens: auth))
+
+        // E2E: preset the injected deep link before the first render so the
+        // resolver's `.task(id:)` in RootView picks it up immediately, avoiding a
+        // race with the onAppear hook below.
+        if AppConfig.isE2E, let url = AppConfig.e2eDeepLink {
+            let router = DeepLinkRouter()
+            router.handle(url: url)
+            _deepLinks = State(initialValue: router)
+        }
     }
 
     var body: some Scene {
@@ -53,6 +67,12 @@ struct iOSApp: App {
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
                     appDelegate.configure(deepLinks: deepLinks, push: push)
+                    // E2E: route a launch-provided deep link through the normal
+                    // resolver so deep-link flows are deterministic under XCUITest
+                    // (no Safari/simctl round-trip).
+                    if AppConfig.isE2E, let url = AppConfig.e2eDeepLink {
+                        deepLinks.handle(url: url)
+                    }
                 }
                 // Universal links (https://podcast.rxlab.app/d|s/...) arrive as a
                 // browsing user activity; custom-scheme links via onOpenURL.
@@ -126,6 +146,9 @@ final class PushNotificationManager {
     }
 
     func requestAuthorizationIfNeeded() async {
+        // The E2E harness must not trigger the system notification-permission
+        // alert, which would cover the UI and block the tests.
+        guard !AppConfig.isE2E else { return }
         guard !didRequestAuthorization else { return }
         didRequestAuthorization = true
         do {

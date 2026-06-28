@@ -1,0 +1,25 @@
+{
+  "configurations" : [
+    {
+      "id" : "80E82507-0A07-417B-94BD-41C63F0E929F",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "maximumTestRepetitions" : 3,
+    "testTimeoutsEnabled" : true
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:iOS.xcodeproj",
+        "identifier" : "DF0DA3472FE8445600A02339",
+        "name" : "iOSUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

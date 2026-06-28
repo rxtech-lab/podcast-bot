@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -262,6 +263,14 @@ type Env struct {
 	// disables cross-pod job routing.
 	PeerHostTemplate string
 
+	// E2EMode, when set (E2E_MODE=true), puts the whole stack into a hermetic
+	// end-to-end test configuration: an in-process fake OpenAI-compatible LLM
+	// replaces the real model endpoint, a fake TTS provider emits silent audio,
+	// auth is bypassed (every request resolves to the fixed user "test"), and
+	// the database is seeded with known fixtures on boot. It is wired in
+	// bootstrap; never enable it in production.
+	E2EMode bool
+
 	// PersistentRoot is the non-session base directory for cross-run
 	// archives — today only the series content type uses it (every
 	// episode writes its assets to
@@ -361,6 +370,8 @@ func LoadEnv() (*Env, error) {
 
 		PodName:          podIdentity(),
 		PeerHostTemplate: strings.TrimSpace(os.Getenv("PEER_HOST_TEMPLATE")),
+
+		E2EMode: strings.EqualFold(strings.TrimSpace(os.Getenv("E2E_MODE")), "true"),
 	}
 
 	if e.CompressionBaseURL == "" {
@@ -400,6 +411,52 @@ func LoadEnv() (*Env, error) {
 		// This is captured BEFORE bootstrap appends the session stamp so
 		// archived episodes survive across runs.
 		e.PersistentRoot = e.OutDir
+	}
+
+	// In E2E mode the real provider credentials/models are irrelevant — the
+	// fake LLM is wired in during bootstrap. Backfill placeholders so the rest
+	// of the config (which expects non-empty model names / base URL) is valid,
+	// and skip the required-env validation below.
+	if e.E2EMode {
+		// Safety: never let E2E mode touch the cloud database or cache, even when a
+		// real TURSO_CONNECTION_URL / REDIS_URL is present in .env (godotenv.Overload
+		// makes .env win over the process environment, so the orchestration script
+		// cannot reliably blank these from the outside). Forcing them empty here
+		// guarantees a local SQLite file and a disabled Redis for every E2E run.
+		e.TursoConnectionURL = ""
+		e.TursoAuthToken = ""
+		e.RedisURL = ""
+		// Force an isolated, deterministic data root so the seeded SQLite DB and
+		// per-run output never collide with a developer's real OUT_DIR (which .env
+		// may pin). The orchestration script wipes E2E_DATA_ROOT before each run so
+		// every run starts from a freshly seeded database.
+		root := strings.TrimSpace(os.Getenv("E2E_DATA_ROOT"))
+		if root == "" {
+			root = filepath.Join(os.TempDir(), "debate-bot-e2e")
+		}
+		e.OutDir = root
+		e.PersistentRoot = root
+		if e.OpenAIBaseURL == "" {
+			e.OpenAIBaseURL = "http://127.0.0.1:0/v1" // overridden in bootstrap
+		}
+		if e.OpenAIKey == "" {
+			e.OpenAIKey = "e2e"
+		}
+		for _, m := range []*string{&e.HostModel, &e.CompressionModel, &e.ScenePlannerModel, &e.PodcastSummaryModel, &e.JudgementModel, &e.PodcastSummaryPPTModel} {
+			if *m == "" {
+				*m = "e2e-fake-model"
+			}
+		}
+		if e.CompressionBaseURL == "" {
+			e.CompressionBaseURL = e.OpenAIBaseURL
+		}
+		if e.CompressionKey == "" {
+			e.CompressionKey = e.OpenAIKey
+		}
+		if e.GeminiAPIKey == "" {
+			e.GeminiAPIKey = "e2e"
+		}
+		return e, nil
 	}
 
 	var missing []string
