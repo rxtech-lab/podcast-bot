@@ -24,10 +24,15 @@ struct iOSApp: App {
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
-        try? Tips.configure([
-            .datastoreLocation(.applicationDefault),
-            .displayFrequency(.immediate)
-        ])
+        // In E2E mode, leave TipKit unconfigured so no `.popoverTip` ever
+        // displays — an onboarding tip popover would cover the UI (e.g. the
+        // new-plan topic field) and make elements non-hittable for the tests.
+        if !AppConfig.isE2E {
+            try? Tips.configure([
+                .datastoreLocation(.applicationDefault),
+                .displayFrequency(.immediate)
+            ])
+        }
         // Configure RevenueCat before anything reads Purchases.shared. Guarded so
         // a missing key disables purchases instead of crashing.
         if AppConfig.hasRevenueCat {
@@ -141,6 +146,9 @@ final class PushNotificationManager {
     }
 
     func requestAuthorizationIfNeeded() async {
+        // The E2E harness must not trigger the system notification-permission
+        // alert, which would cover the UI and block the tests.
+        guard !AppConfig.isE2E else { return }
         guard !didRequestAuthorization else { return }
         didRequestAuthorization = true
         do {
