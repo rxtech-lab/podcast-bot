@@ -59,6 +59,7 @@ struct NewDiscussionView: View {
                         }
                     }
                     .disabled(!canSubmit)
+                    .accessibilityIdentifier("newPlan.submit")
                     .popoverTip(NewDiscussionPlanTip(), arrowEdge: .top)
                 }
             }

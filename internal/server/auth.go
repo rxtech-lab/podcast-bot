@@ -30,6 +30,15 @@ func authToken(password string) string {
 // authEnabled reports whether the server was started with a password.
 func (s *Server) authEnabled() bool { return s.d.Password != "" }
 
+// e2eMode reports whether the server is running in hermetic end-to-end test
+// mode. In that mode authentication is bypassed entirely and every request
+// resolves to the fixed test user.
+func (s *Server) e2eMode() bool { return s.d.Env != nil && s.d.Env.E2EMode }
+
+// e2eUserID is the fixed owner id every request maps to in E2E mode. The seed
+// fixtures and the iOS test harness use this exact id.
+const e2eUserID = "test"
+
 // requestAuthed reports whether the request carries a valid auth cookie.
 // Always true when no password is configured.
 func (s *Server) requestAuthed(r *http.Request) bool {
@@ -98,6 +107,9 @@ func (s *Server) requestAuthorized(r *http.Request) bool {
 }
 
 func (s *Server) authorizeRequest(r *http.Request) authDecision {
+	if s.e2eMode() {
+		return authDecision{authorized: true, method: "e2e", reason: "e2e mode bypasses auth"}
+	}
 	tok := bearerToken(r)
 	decision := authDecision{
 		reason:    "no accepted credentials",
@@ -199,6 +211,9 @@ type requestUser struct {
 }
 
 func (s *Server) requestUser(r *http.Request) requestUser {
+	if s.e2eMode() {
+		return requestUser{ID: e2eUserID, Name: "Test"}
+	}
 	if tok := bearerToken(r); tok != "" {
 		sum := sha256.Sum256([]byte(tok))
 		fallback := "bearer:" + hex.EncodeToString(sum[:])

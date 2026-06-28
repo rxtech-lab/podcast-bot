@@ -39,6 +39,7 @@ struct ShareSheet: View {
                         }
                     }
                     .disabled(isCreating)
+                    .accessibilityIdentifier("share.create")
                     .popoverTip(ShareStationTip(), arrowEdge: .top)
                 } header: {
                     Text("New link")

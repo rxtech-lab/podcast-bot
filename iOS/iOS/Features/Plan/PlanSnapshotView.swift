@@ -121,6 +121,7 @@ struct PlanSnapshotCard: View {
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(Theme.accent)
+                            .accessibilityIdentifier("plan.editModels")
                         }
                     }
                     ForEach(snapshot.people) { person in

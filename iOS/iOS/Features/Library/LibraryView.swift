@@ -182,6 +182,7 @@ struct LibraryView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button { showingNew = true } label: { Image(systemName: "plus") }
+                .accessibilityIdentifier("library.new")
         }
         ToolbarItem(placement: .topBarLeading) {
             Menu {
@@ -234,6 +235,7 @@ struct LibraryView: View {
                     DiscussionRow(discussion: d, isSelected: isRegular && selection?.id == d.id)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("discussion.row.\(d.id)")
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))

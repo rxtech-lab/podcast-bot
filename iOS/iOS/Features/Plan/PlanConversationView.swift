@@ -302,6 +302,7 @@ struct PlanConversationView: View {
                         .padding(.vertical, 13)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("plan.generate")
                     .disabled(isGenerating || isStreaming || !canGenerate)
                 }
             }
@@ -519,12 +520,14 @@ struct PlanConversationView: View {
                     .lineLimit(1 ... 4)
                     .textFieldStyle(.plain)
                     .focused($inputFocused)
+                    .accessibilityIdentifier("plan.input")
                 Button(action: send) {
                     Image(systemName: isStreaming ? "ellipsis" : "arrow.up.circle.fill")
                         .font(.title2)
                         .foregroundStyle(Theme.accent)
                 }
                 .disabled(!canSend)
+                .accessibilityIdentifier("plan.send")
             }
             .padding(12)
             .glassEffect(in: .capsule)

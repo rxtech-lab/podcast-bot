@@ -418,11 +418,18 @@ func (p *Planner) assembleWithModel(d *draft, lang, channel string, sources []co
 			Aspect: dd.Aspect,
 		})
 	}
+	totalMinutes := 30
+	if p.env.E2EMode {
+		// Keep E2E podcasts tiny: a sub-90s target makes the discussion planner
+		// transition straight from openings to closings, so generation finishes in
+		// a handful of fake turns instead of dozens.
+		totalMinutes = 1
+	}
 	topic := &config.DebateTopic{
 		Title:             d.Title,
 		Type:              config.ContentTypeDiscussion,
 		Language:          lang,
-		TotalMinutes:      30,
+		TotalMinutes:      totalMinutes,
 		SegmentMaxSeconds: 60,
 		TTSProvider:       config.TTSProviderAzure,
 		Resolution:        config.Resolution1080p,

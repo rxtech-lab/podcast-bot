@@ -39,6 +39,15 @@ struct iOSApp: App {
         let auth = AuthManager()
         _auth = State(initialValue: auth)
         _purchases = State(initialValue: PurchaseManager(tokens: auth))
+
+        // E2E: preset the injected deep link before the first render so the
+        // resolver's `.task(id:)` in RootView picks it up immediately, avoiding a
+        // race with the onAppear hook below.
+        if AppConfig.isE2E, let url = AppConfig.e2eDeepLink {
+            let router = DeepLinkRouter()
+            router.handle(url: url)
+            _deepLinks = State(initialValue: router)
+        }
     }
 
     var body: some Scene {
@@ -53,6 +62,12 @@ struct iOSApp: App {
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
                     appDelegate.configure(deepLinks: deepLinks, push: push)
+                    // E2E: route a launch-provided deep link through the normal
+                    // resolver so deep-link flows are deterministic under XCUITest
+                    // (no Safari/simctl round-trip).
+                    if AppConfig.isE2E, let url = AppConfig.e2eDeepLink {
+                        deepLinks.handle(url: url)
+                    }
                 }
                 // Universal links (https://podcast.rxlab.app/d|s/...) arrive as a
                 // browsing user activity; custom-scheme links via onOpenURL.
