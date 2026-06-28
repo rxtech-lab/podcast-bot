@@ -112,6 +112,12 @@ struct RootView: View {
     /// before presenting.
     private func startLaunchFlow() async {
         guard !didRunLaunchFlow else { return }
+        // The E2E harness drives the library/player directly; the welcome,
+        // what's-new, and paywall sheets would cover the UI and break the tests.
+        if AppConfig.isE2E {
+            didRunLaunchFlow = true
+            return
+        }
         // Wait until RevenueCat has loaded customer info (or purchases are
         // disabled) so `isPro` reflects the real entitlement state. Bounded so a
         // failed load doesn't block the flow forever (~5s).
