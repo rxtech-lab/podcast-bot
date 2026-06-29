@@ -6,6 +6,7 @@ mcp.json
 out
 .DS_Store
 frontend/node_modules
+tools/ppt-renderer/node_modules
 frontend/dist
 internal/server/web-dist/*
 !internal/server/web-dist/

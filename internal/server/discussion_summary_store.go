@@ -17,9 +17,11 @@ const (
 	SummaryFailed     SummaryStatus = "failed"
 )
 
-// SummaryDocTypeSummary is the default document type — a Markdown summary. Future
-// kinds (e.g. a slide deck) get their own doc_type and reuse this table.
-const SummaryDocTypeSummary = "summary"
+// Summary document types stored per discussion.
+const (
+	SummaryDocTypeSummary = "summary"
+	SummaryDocTypePPT     = "ppt"
+)
 
 // SummaryMeta is the content-free descriptor returned on the discussion detail
 // payload. Markdown is intentionally excluded — clients fetch the body separately

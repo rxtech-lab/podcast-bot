@@ -1,6 +1,7 @@
 import AuthenticationServices
 import BeautifulMermaid
 import MarkdownUI
+import QuickLook
 import SwiftUI
 import TipKit
 
@@ -9,8 +10,9 @@ import TipKit
 /// rendered with swift-markdown-ui (non-streaming), and any ```mermaid fenced
 /// block is drawn natively with beautiful-mermaid-swift.
 ///
-/// A toolbar picker selects the document type — today only "Summary document";
-/// slide-deck / other kinds are reserved for the future.
+/// A toolbar picker selects the document type. The Markdown summary is always
+/// available here; a generated slide deck appears when the server has stored the
+/// `ppt` summary document.
 struct SummaryView: View {
     let discussionID: String
     /// Used only to name the exported PDF / Markdown file; defaults to "Summary".
@@ -22,24 +24,72 @@ struct SummaryView: View {
     @State private var document: SummaryDocument?
     @State private var isLoading = true
     @State private var loadError: String?
+    @State private var isPPTDeckAvailable = false
+    @State private var pptPreviewFile: ExportedSummaryFile?
 
     /// The temp file (PDF or Markdown) to hand to the system share sheet.
     @State private var exportFile: ExportedSummaryFile?
     @State private var isPreparingPDF = false
+    @State private var isPreparingPPTX = false
+    @State private var isPreparingSlidesPDF = false
     @State private var exportError: String?
     @State private var showingNotionExport = false
+
+    private var isSummaryDocumentSelected: Bool { docType == "summary" }
+    private var isPPTDocumentSelected: Bool { docType == "ppt" }
 
     private var canExport: Bool {
         guard let document else { return false }
         return !document.markdown.isEmpty
     }
 
+    private var canExportMarkdownDocument: Bool {
+        isSummaryDocumentSelected && canExport
+    }
+
+    private var canExportSlideDeck: Bool {
+        if isSummaryDocumentSelected {
+            return canExport
+        }
+        return isPPTDocumentSelected && isPPTDeckAvailable
+    }
+
+    private var isPreparingExport: Bool {
+        isPreparingPDF || isPreparingPPTX || isPreparingSlidesPDF
+    }
+
+    private var preparingExportTitle: LocalizedStringKey {
+        if isPreparingPPTX { return "Preparing PPTX…" }
+        if isPreparingSlidesPDF { return "Preparing slides PDF…" }
+        return "Preparing PDF…"
+    }
+
+    private var pptxExportTitle: LocalizedStringKey {
+        if isPreparingPPTX { return "Preparing PPTX…" }
+        return isPPTDeckAvailable ? "Download PPTX" : "Generate PPTX"
+    }
+
+    private var slidesPDFExportTitle: LocalizedStringKey {
+        if isPreparingSlidesPDF { return "Preparing slides PDF…" }
+        return isPPTDeckAvailable ? "Download slides PDF" : "Generate slides PDF"
+    }
+
+    private var pptxExportIcon: String {
+        if isPreparingPPTX { return "hourglass" }
+        return isPPTDeckAvailable ? "rectangle.on.rectangle" : "wand.and.stars"
+    }
+
+    private var slidesPDFExportIcon: String {
+        if isPreparingSlidesPDF { return "hourglass" }
+        return isPPTDeckAvailable ? "rectangle.stack" : "wand.and.stars"
+    }
+
     var body: some View {
         NavigationStack {
             content
                 .overlay {
-                    if isPreparingPDF {
-                        pdfPreparingOverlay
+                    if isPreparingExport {
+                        exportPreparingOverlay
                     }
                 }
                 .navigationTitle("Summary")
@@ -75,20 +125,36 @@ struct SummaryView: View {
         if isLoading {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if isPPTDocumentSelected {
+            pptPreviewContent
         } else if let document, !document.markdown.isEmpty {
-            ScrollView {
-                Markdown(document.markdown)
-                    .markdownBlockStyle(\.codeBlock) { configuration in
-                        if configuration.language?.lowercased() == "mermaid" {
-                            MermaidBlock(code: configuration.content)
-                        } else {
-                            configuration.label
-                        }
-                    }
-                    .padding()
-            }
+            markdownContent(markdown: document.markdown)
         } else {
             emptyState
+        }
+    }
+
+    private func markdownContent(markdown: String) -> some View {
+        ScrollView {
+            Markdown(markdown)
+                .markdownBlockStyle(\.codeBlock) { configuration in
+                    if configuration.language?.lowercased() == "mermaid" {
+                        MermaidBlock(code: configuration.content)
+                    } else {
+                        configuration.label
+                    }
+                }
+                .padding()
+        }
+    }
+
+    private var pptPreviewContent: some View {
+        Group {
+            if let url = pptPreviewFile?.url {
+                SummaryPPTXPreview(url: url)
+            } else {
+                emptyState
+            }
         }
     }
 
@@ -108,19 +174,30 @@ struct SummaryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Document-type picker plus the download actions. Only "Summary document"
-    /// is selectable today; the slide-deck option is shown disabled to signal
-    /// future support. Downloads are enabled once the Markdown body has loaded.
+    /// Document-type picker plus the export actions. The slide deck is generated
+    /// lazily from the loaded summary when it does not exist yet.
     @ViewBuilder
     private var documentTypeMenu: some View {
         let menu = Menu {
             Picker("Document type", selection: $docType) {
                 Label("Summary document", systemImage: "doc.richtext").tag("summary")
+                if isPPTDeckAvailable {
+                    Label("PPTX", systemImage: "rectangle.on.rectangle").tag("ppt")
+                }
             }
-            Button {} label: {
-                Label("Slides (coming soon)", systemImage: "rectangle.on.rectangle")
+            Button {
+                Task { await downloadPPTX() }
+            } label: {
+                Label(pptxExportTitle, systemImage: pptxExportIcon)
             }
-            .disabled(true)
+            .disabled(!canExportSlideDeck || isPreparingExport)
+
+            Button {
+                Task { await downloadSlidesPDF() }
+            } label: {
+                Label(slidesPDFExportTitle, systemImage: slidesPDFExportIcon)
+            }
+            .disabled(!canExportSlideDeck || isPreparingExport)
 
             Button {
                 Task { await downloadPDF() }
@@ -128,26 +205,26 @@ struct SummaryView: View {
                 Label(isPreparingPDF ? "Preparing PDF…" : "Download PDF",
                       systemImage: isPreparingPDF ? "hourglass" : "arrow.down.doc")
             }
-            .disabled(!canExport || isPreparingPDF)
+            .disabled(!canExportMarkdownDocument || isPreparingExport)
 
             Button {
                 downloadMarkdown()
             } label: {
                 Label("Download Markdown", systemImage: "arrow.down.doc.fill")
             }
-            .disabled(!canExport)
+            .disabled(!canExportMarkdownDocument || isPreparingExport)
 
             Button {
                 showingNotionExport = true
             } label: {
                 Label("Export to Notion", systemImage: "square.and.arrow.up.on.square")
             }
-            .disabled(!canExport)
+            .disabled(!canExportMarkdownDocument || isPreparingExport)
         } label: {
             Image(systemName: "ellipsis.circle")
         }
 
-        if canExport {
+        if canExportMarkdownDocument {
             menu.popoverTip(SummaryPDFDownloadTip(), arrowEdge: .top)
         } else {
             menu
@@ -158,7 +235,7 @@ struct SummaryView: View {
     /// rendering runs on Cloudflare and can take a few seconds; `isPreparingPDF`
     /// drives the menu label + the loading overlay meanwhile.
     private func downloadPDF() async {
-        guard canExport, !isPreparingPDF else { return }
+        guard canExportMarkdownDocument, !isPreparingExport else { return }
         isPreparingPDF = true
         defer { isPreparingPDF = false }
         do {
@@ -170,9 +247,43 @@ struct SummaryView: View {
         }
     }
 
+    /// Fetches the server-rendered PPTX deck and shares it.
+    private func downloadPPTX() async {
+        guard canExportSlideDeck, !isPreparingExport else { return }
+        if isPPTDocumentSelected, let pptPreviewFile {
+            exportFile = pptPreviewFile
+            return
+        }
+        isPreparingPPTX = true
+        defer { isPreparingPPTX = false }
+        do {
+            let file = try ExportedSummaryFile(url: await api.downloadSummaryPPTX(id: discussionID, title: title))
+            exportFile = file
+            pptPreviewFile = file
+            isPPTDeckAvailable = true
+        } catch {
+            exportError = "Couldn’t export the PPTX. Please try again."
+        }
+    }
+
+    /// Fetches the server-rendered slide-deck PDF and shares it.
+    private func downloadSlidesPDF() async {
+        guard canExportSlideDeck, !isPreparingExport else { return }
+        isPreparingSlidesPDF = true
+        defer { isPreparingSlidesPDF = false }
+        do {
+            exportFile = try ExportedSummaryFile(
+                url: await api.downloadSummarySlidesPDF(id: discussionID, title: title)
+            )
+            isPPTDeckAvailable = true
+        } catch {
+            exportError = "Couldn’t export the slides PDF. Please try again."
+        }
+    }
+
     /// Writes the already-loaded Markdown body to a temp file and shares it.
     private func downloadMarkdown() {
-        guard let markdown = document?.markdown, !markdown.isEmpty else { return }
+        guard canExportMarkdownDocument, let markdown = document?.markdown, !markdown.isEmpty else { return }
         do {
             exportFile = try ExportedSummaryFile(url: api.writeSummaryMarkdown(markdown, title: title))
         } catch {
@@ -180,13 +291,13 @@ struct SummaryView: View {
         }
     }
 
-    /// Dimmed HUD shown while the server renders the PDF.
-    private var pdfPreparingOverlay: some View {
+    /// Dimmed HUD shown while the server renders an export.
+    private var exportPreparingOverlay: some View {
         ZStack {
             Color.black.opacity(0.25).ignoresSafeArea()
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Preparing PDF…")
+                Text(preparingExportTitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -198,13 +309,60 @@ struct SummaryView: View {
     private func load() async {
         isLoading = true
         loadError = nil
+        if isPPTDocumentSelected {
+            await loadPPTXPreview()
+            return
+        }
+        pptPreviewFile = nil
         do {
-            document = try await api.summary(id: discussionID, docType: docType)
+            let loaded = try await api.summary(id: discussionID, docType: docType)
+            document = loaded
+            isLoading = false
+            if isSummaryDocumentSelected, !loaded.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await refreshPPTDeckAvailability()
+            } else if isPPTDocumentSelected {
+                isPPTDeckAvailable = loaded.status == .ready
+                    && !loaded.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            } else {
+                isPPTDeckAvailable = false
+            }
+            return
         } catch {
             document = nil
+            isPPTDeckAvailable = false
             loadError = "Couldn’t load the summary. Please try again."
+            if isPPTDocumentSelected {
+                docType = "summary"
+            }
         }
         isLoading = false
+    }
+
+    private func loadPPTXPreview() async {
+        document = nil
+        do {
+            let file = try ExportedSummaryFile(url: await api.downloadSummaryPPTX(id: discussionID, title: title))
+            pptPreviewFile = file
+            isPPTDeckAvailable = true
+        } catch {
+            pptPreviewFile = nil
+            isPPTDeckAvailable = false
+            loadError = "Couldn’t load the PPTX. Please try again."
+            docType = "summary"
+        }
+        isLoading = false
+    }
+
+    private func refreshPPTDeckAvailability() async {
+        do {
+            let deck = try await api.summary(id: discussionID, docType: "ppt")
+            isPPTDeckAvailable = deck.status == .ready
+                && !deck.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } catch APIError.http(404, _) {
+            isPPTDeckAvailable = false
+        } catch {
+            isPPTDeckAvailable = false
+        }
     }
 }
 
@@ -213,6 +371,42 @@ struct SummaryView: View {
 private struct ExportedSummaryFile: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+private struct SummaryPPTXPreview: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: QLPreviewController, context: Context) {
+        context.coordinator.url = url
+        controller.reloadData()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        var url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+            1
+        }
+
+        func previewController(_ controller: QLPreviewController,
+                               previewItemAt index: Int) -> QLPreviewItem {
+            url as NSURL
+        }
+    }
 }
 
 /// Renders one ```mermaid fenced block natively. Falls back to showing the raw

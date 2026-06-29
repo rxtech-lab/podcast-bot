@@ -285,6 +285,8 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/discussions/{id}/parent-podcast", s.handleDiscussionParentPodcastGet)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary", s.handleDiscussionSummary)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pdf", s.handleDiscussionSummaryPDF)
+		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pptx", s.handleDiscussionSummaryPPTX)
+		s.mux.HandleFunc("GET /api/discussions/{id}/summary/ppt/pdf", s.handleDiscussionSummaryPPTPDF)
 		s.mux.HandleFunc("POST /api/discussions/{id}/summary/generate", s.handleDiscussionSummaryGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/summary/notion", s.handleExportSummaryToNotion)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)

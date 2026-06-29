@@ -1731,6 +1731,50 @@
         }
       }
     },
+    "Couldn’t export the PPTX. Please try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法导出 PPTX。请重试。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法匯出 PPTX。請再試一次。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法匯出 PPTX。請再試一次。"
+          }
+        }
+      }
+    },
+    "Couldn’t export the slides PDF. Please try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法导出演示文稿 PDF。请重试。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法匯出簡報 PDF。請再試一次。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法匯出簡報 PDF。請再試一次。"
+          }
+        }
+      }
+    },
     "Couldn't open link" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2517,6 +2561,50 @@
         }
       }
     },
+    "Download PPTX" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载 PPTX"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載 PPTX"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載 PPTX"
+          }
+        }
+      }
+    },
+    "Download slides PDF" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载演示文稿 PDF"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載簡報 PDF"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載簡報 PDF"
+          }
+        }
+      }
+    },
     "Downloading" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3250,6 +3338,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "生成播客"
+          }
+        }
+      }
+    },
+    "Generate PPTX" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成 PPTX"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "產生 PPTX"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "產生 PPTX"
+          }
+        }
+      }
+    },
+    "Generate slides PDF" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成演示文稿 PDF"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "產生簡報 PDF"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "產生簡報 PDF"
           }
         }
       }
@@ -5649,6 +5781,9 @@
         }
       }
     },
+    "PPTX" : {
+
+    },
     "Preparing a question…" : {
       "comment" : "Progress while preparing a question",
       "localizations" : {
@@ -5736,6 +5871,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在準備 PDF…"
+          }
+        }
+      }
+    },
+    "Preparing PPTX…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备 PPTX…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備 PPTX…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備 PPTX…"
+          }
+        }
+      }
+    },
+    "Preparing slides PDF…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备演示文稿 PDF…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備簡報 PDF…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備簡報 PDF…"
           }
         }
       }
@@ -7242,6 +7421,7 @@
       }
     },
     "Slides (coming soon)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

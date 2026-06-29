@@ -40,6 +40,15 @@ type Env struct {
 	// PODCAST_SUMMARY_PPT_MODEL.
 	PodcastSummaryPPTModel string
 
+	// PPTXRendererScript points at the Node/pptxgenjs renderer used to turn a
+	// generated deck JSON spec into a .pptx file. Empty uses the built-in
+	// tools/ppt-renderer/render.mjs path.
+	PPTXRendererScript string
+
+	// LibreOfficePath is the soffice binary used to convert generated PPTX files
+	// to PDF. Empty searches PATH.
+	LibreOfficePath string
+
 	CompressionBaseURL string
 	CompressionKey     string
 	CompressionModel   string
@@ -301,6 +310,8 @@ func LoadEnv() (*Env, error) {
 		PodcastSummaryModel:    strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_MODEL")),
 		JudgementModel:         strings.TrimSpace(os.Getenv("JUDGEMENT_MODEL_NAME")),
 		PodcastSummaryPPTModel: strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
+		PPTXRendererScript:     strings.TrimSpace(os.Getenv("PPTX_RENDERER_SCRIPT")),
+		LibreOfficePath:        strings.TrimSpace(os.Getenv("LIBREOFFICE_PATH")),
 		CompressionBaseURL:     strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
 		CompressionKey:         strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
 		CompressionModel:       strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
