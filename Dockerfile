@@ -30,19 +30,30 @@ ENV CGO_ENABLED=1
 RUN go build -o /out/debate-bot ./cmd/debate-bot
 
 ############################
-# Stage 3 — runtime image  #
+# Stage 3 — PPTX renderer  #
+############################
+FROM node:22-bookworm-slim AS ppt-renderer
+WORKDIR /src/tools/ppt-renderer
+COPY tools/ppt-renderer/package.json tools/ppt-renderer/package-lock.json ./
+RUN npm ci --omit=dev
+COPY tools/ppt-renderer/render.mjs ./
+
+############################
+# Stage 4 — runtime image  #
 ############################
 # ffmpeg + ffplay are required on PATH (audio.VerifyTools); the Debian ffmpeg
 # package provides both.
-FROM debian:bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg ca-certificates \
+        ffmpeg ca-certificates libreoffice-impress fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=backend /out/debate-bot /usr/local/bin/debate-bot
+COPY --from=ppt-renderer /src/tools/ppt-renderer ./tools/ppt-renderer
 
 EXPOSE 3000
 ENV OUT_DIR=/app/out
+ENV PPTX_RENDERER_SCRIPT=/app/tools/ppt-renderer/render.mjs
 
 # Default: stream mode. Override the args to switch to video mode, e.g.
 #   docker run ... debate-bot server --mode video --addr :3000

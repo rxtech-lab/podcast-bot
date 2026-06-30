@@ -1,0 +1,8 @@
+{
+  "name": "debate-bot-ppt-renderer",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pptxgenjs": "4.0.1"
+  }
+}

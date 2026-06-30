@@ -60,6 +60,7 @@ final class APIClient: Sendable {
     let baseURL: URL
     private let tokens: TokenProviding
     private let session: URLSession
+    private static let summaryExportTimeout: TimeInterval = 600
 
     private enum HLSPlaylistState {
         case ready
@@ -171,10 +172,44 @@ final class APIClient: Sendable {
         if docType != "summary" {
             query.append(URLQueryItem(name: "doc_type", value: docType))
         }
-        let (data, _) = try await perform(request(method: "GET",
-                                                  path: "/api/discussions/\(id)/summary/pdf",
-                                                  query: query))
-        return try writeSummaryFile(data: data, title: title, ext: "pdf")
+        var req = request(method: "GET",
+                          path: "/api/discussions/\(id)/summary/pdf",
+                          query: query)
+        req.timeoutInterval = Self.summaryExportTimeout
+        do {
+            let (data, _) = try await perform(req)
+            return try writeSummaryFile(data: data, title: title, ext: "pdf")
+        } catch {
+            apiLog.error("summary pdf export failed discussion=\(id, privacy: .public) docType=\(docType, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
+    /// Downloads the summary rendered as a PowerPoint deck. The server creates
+    /// the deck on first export and reuses the cached S3 artifact afterwards.
+    func downloadSummaryPPTX(id: String, title: String) async throws -> URL {
+        var req = request(method: "GET", path: "/api/discussions/\(id)/summary/pptx")
+        req.timeoutInterval = Self.summaryExportTimeout
+        do {
+            let (data, _) = try await perform(req)
+            return try writeSummaryFile(data: data, title: title, ext: "pptx")
+        } catch {
+            apiLog.error("summary pptx export failed discussion=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
+    /// Downloads the generated summary slide deck converted to a PDF.
+    func downloadSummarySlidesPDF(id: String, title: String) async throws -> URL {
+        var req = request(method: "GET", path: "/api/discussions/\(id)/summary/ppt/pdf")
+        req.timeoutInterval = Self.summaryExportTimeout
+        do {
+            let (data, _) = try await perform(req)
+            return try writeSummaryFile(data: data, title: title, ext: "pdf")
+        } catch {
+            apiLog.error("summary slides pdf export failed discussion=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     /// Writes already-fetched summary Markdown to a temporary `.md` file and

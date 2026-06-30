@@ -69,10 +69,10 @@ func (f *FakeLLM) handleModels(w http.ResponseWriter, r *http.Request) {
 // --- request parsing ---
 
 type fakeChatReq struct {
-	Stream         bool              `json:"stream"`
-	Tools          []fakeTool        `json:"tools"`
-	Messages       []fakeMsg         `json:"messages"`
-	ResponseFormat json.RawMessage   `json:"response_format"`
+	Stream         bool            `json:"stream"`
+	Tools          []fakeTool      `json:"tools"`
+	Messages       []fakeMsg       `json:"messages"`
+	ResponseFormat json.RawMessage `json:"response_format"`
 }
 
 type fakeTool struct {
@@ -203,6 +203,9 @@ func (f *FakeLLM) handleChat(w http.ResponseWriter, r *http.Request) {
 		f.streamCreatePlan(sw, req)
 	case tools["write_summary_chunk"]:
 		f.streamSummarizer(sw, req)
+	case strings.Contains(req.allText(), "Create a concise slide deck JSON"):
+		sw.text(e2eSummaryDeckJSON)
+		sw.finish("stop")
 	default:
 		// Generation agents (host/discussants/etc.) and any other text call.
 		sw.text("This is a synthetic end-to-end test reply. The discussion continues.")
@@ -284,6 +287,8 @@ const e2eSummaryMarkdown = "# E2E Test Summary\n\n" +
 	"## Participants & Positions\n\n### Test Host\n\nModerated the synthetic discussion.\n\n" +
 	"## Points of Agreement and Disagreement\n\nThis is test content.\n\n" +
 	"## Conclusion\n\nEnd-to-end summary generation works.\n"
+
+const e2eSummaryDeckJSON = `{"title":"E2E Test Summary","subtitle":"Synthetic slide deck","slides":[{"title":"Overview","bullets":["Synthetic podcast summary generated for testing","The discussion uses deterministic fake content","The deck export path can render PPTX bytes"]},{"title":"Participants","bullets":["Test Host moderates the conversation","Speakers provide predictable transcript lines","The output stays concise"]},{"title":"Takeaway","bullets":["Summary generation works end to end","Slide generation uses the stored summary","Exported artifacts can be cached"]}]}`
 
 // makeDraftJSON builds the planner `draft` JSON (title, background, host{name},
 // discussants[]{name, aspect}) with exactly n discussants.
