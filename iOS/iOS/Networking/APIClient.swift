@@ -162,6 +162,32 @@ final class APIClient: Sendable {
         try await send("POST", "/api/discussions/\(id)/summary/generate", body: EmptyRequest())
     }
 
+    func discussionUIActions(id: String,
+                             surface: String,
+                             docType: String? = nil,
+                             supportsPoints: Bool = false,
+                             supportsFollowUp: Bool = false,
+                             supportsCreateFromPlan: Bool = false,
+                             supportsSignOut: Bool = false) async throws -> DiscussionUIActionsResponse {
+        var query = [URLQueryItem(name: "surface", value: surface)]
+        if let docType, !docType.isEmpty {
+            query.append(URLQueryItem(name: "doc_type", value: docType))
+        }
+        if supportsPoints {
+            query.append(URLQueryItem(name: "supports_points", value: "true"))
+        }
+        if supportsFollowUp {
+            query.append(URLQueryItem(name: "supports_follow_up", value: "true"))
+        }
+        if supportsCreateFromPlan {
+            query.append(URLQueryItem(name: "supports_create_from_plan", value: "true"))
+        }
+        if supportsSignOut {
+            query.append(URLQueryItem(name: "supports_sign_out", value: "true"))
+        }
+        return try await get("/api/discussions/\(id)/ui-actions", query: query)
+    }
+
     /// Downloads the summary rendered as a PDF (produced server-side via
     /// Cloudflare Browser Rendering, with ```mermaid blocks drawn as real
     /// diagrams) and writes it to a temporary file, returning the local URL ready

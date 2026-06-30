@@ -378,6 +378,36 @@ struct NotionExportResponse: Codable, Sendable {
     }
 }
 
+struct DiscussionUIActionsResponse: Codable, Sendable {
+    var id: String
+    var items: [DiscussionUIActionItem]
+}
+
+struct DiscussionUIActionItem: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var loadingTitle: String?
+    var systemImage: String?
+    var role: String?
+    var enabled: Bool
+    var action: DiscussionUIAction
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case loadingTitle = "loading_title"
+        case systemImage = "system_image"
+        case role
+        case enabled
+        case action
+    }
+}
+
+struct DiscussionUIAction: Codable, Hashable, Sendable {
+    var type: String
+    var link: String
+}
+
 /// POST /api/transcribe request body — asks the server to transcribe an
 /// already-uploaded voice message (gateway whisper) when the device couldn't do
 /// it on-device.

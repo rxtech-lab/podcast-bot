@@ -34,6 +34,7 @@ struct SummaryView: View {
     @State private var isPreparingSlidesPDF = false
     @State private var exportError: String?
     @State private var showingNotionExport = false
+    @State private var actionItems: [DiscussionUIActionItem] = []
 
     private var isSummaryDocumentSelected: Bool { docType == "summary" }
     private var isPPTDocumentSelected: Bool { docType == "ppt" }
@@ -116,7 +117,10 @@ struct SummaryView: View {
                 } message: {
                     Text(exportError ?? "")
                 }
-                .task(id: docType) { await load() }
+                .task(id: docType) {
+                    await load()
+                    await loadSummaryActions()
+                }
         }
     }
 
@@ -174,60 +178,77 @@ struct SummaryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Document-type picker plus the export actions. The slide deck is generated
+    /// Backend-rendered document and export actions. The slide deck is generated
     /// lazily from the loaded summary when it does not exist yet.
     @ViewBuilder
     private var documentTypeMenu: some View {
-        let menu = Menu {
-            Picker("Document type", selection: $docType) {
-                Label("Summary document", systemImage: "doc.richtext").tag("summary")
-                if isPPTDeckAvailable {
-                    Label("PPTX", systemImage: "rectangle.on.rectangle").tag("ppt")
-                }
-            }
-            Button {
-                Task { await downloadPPTX() }
-            } label: {
-                Label(pptxExportTitle, systemImage: pptxExportIcon)
-            }
-            .disabled(!canExportSlideDeck || isPreparingExport)
-
-            Button {
-                Task { await downloadSlidesPDF() }
-            } label: {
-                Label(slidesPDFExportTitle, systemImage: slidesPDFExportIcon)
-            }
-            .disabled(!canExportSlideDeck || isPreparingExport)
-
-            Button {
-                Task { await downloadPDF() }
-            } label: {
-                Label(isPreparingPDF ? "Preparing PDF…" : "Download PDF",
-                      systemImage: isPreparingPDF ? "hourglass" : "arrow.down.doc")
-            }
-            .disabled(!canExportMarkdownDocument || isPreparingExport)
-
-            Button {
-                downloadMarkdown()
-            } label: {
-                Label("Download Markdown", systemImage: "arrow.down.doc.fill")
-            }
-            .disabled(!canExportMarkdownDocument || isPreparingExport)
-
-            Button {
-                showingNotionExport = true
-            } label: {
-                Label("Export to Notion", systemImage: "square.and.arrow.up.on.square")
-            }
-            .disabled(!canExportMarkdownDocument || isPreparingExport)
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
+        let menu = DiscussionActionsMenu(
+            items: actionItems,
+            labelSystemImage: "ellipsis.circle",
+            accessibilityLabel: "Summary actions",
+            isBusy: isSummaryActionBusy,
+            perform: performSummaryAction
+        )
 
         if canExportMarkdownDocument {
             menu.popoverTip(SummaryPDFDownloadTip(), arrowEdge: .top)
         } else {
             menu
+        }
+    }
+
+    private func loadSummaryActions() async {
+        do {
+            let response = try await api.discussionUIActions(id: discussionID,
+                                                             surface: "summary-actions",
+                                                             docType: docType)
+            actionItems = response.items
+        } catch {
+            actionItems = []
+        }
+    }
+
+    private func performSummaryAction(_ item: DiscussionUIActionItem) {
+        guard let path = validatedSummaryActionPath(item) else { return }
+        switch path {
+        case ["summary", "select", "summary"]:
+            docType = "summary"
+        case ["summary", "select", "ppt"]:
+            docType = "ppt"
+        case ["summary", "export", "pptx"]:
+            Task { await downloadPPTX() }
+        case ["summary", "export", "slides-pdf"]:
+            Task { await downloadSlidesPDF() }
+        case ["summary", "export", "pdf"]:
+            Task { await downloadPDF() }
+        case ["summary", "export", "markdown"]:
+            downloadMarkdown()
+        case ["summary", "sheet", "notion"]:
+            showingNotionExport = true
+        default:
+            break
+        }
+    }
+
+    private func validatedSummaryActionPath(_ item: DiscussionUIActionItem) -> [String]? {
+        guard let url = URL(string: item.action.link),
+              url.scheme == "debatepod",
+              url.host == "discussion" else { return nil }
+        let components = url.pathComponents.filter { $0 != "/" }
+        guard components.first == discussionID else { return nil }
+        return Array(components.dropFirst())
+    }
+
+    private func isSummaryActionBusy(_ item: DiscussionUIActionItem) -> Bool {
+        switch item.id {
+        case "download-pptx":
+            return isPreparingPPTX
+        case "download-slides-pdf":
+            return isPreparingSlidesPDF
+        case "download-pdf":
+            return isPreparingPDF
+        default:
+            return false
         }
     }
 
@@ -261,6 +282,7 @@ struct SummaryView: View {
             exportFile = file
             pptPreviewFile = file
             isPPTDeckAvailable = true
+            await loadSummaryActions()
         } catch {
             exportError = "Couldn’t export the PPTX. Please try again."
         }
@@ -276,6 +298,7 @@ struct SummaryView: View {
                 url: await api.downloadSummarySlidesPDF(id: discussionID, title: title)
             )
             isPPTDeckAvailable = true
+            await loadSummaryActions()
         } catch {
             exportError = "Couldn’t export the slides PDF. Please try again."
         }

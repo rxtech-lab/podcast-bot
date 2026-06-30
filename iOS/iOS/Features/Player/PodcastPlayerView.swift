@@ -42,6 +42,9 @@ struct PodcastPlayerView: View {
     @State private var createFromPlanError: String?
     @State private var isGeneratingSummary = false
     @State private var summaryGenerateError: String?
+    @State private var documentActionItems: [DiscussionUIActionItem] = []
+    @State private var podcastActionItems: [DiscussionUIActionItem] = []
+    @State private var showingForceStopConfirm = false
     @State private var transcriptIsAtBottom = true
     @State private var transcriptShouldScrollToBottom = false
     @State private var transcriptScrollRequestTask: Task<Void, Never>?
@@ -113,11 +116,26 @@ struct PodcastPlayerView: View {
         .task {
             await loadPlayerIfNeeded()
         }
+        .task(id: uiActionsRefreshKey) {
+            await loadUIActions()
+        }
         .onDisappear {
             stopPlayerIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             handleScenePhaseChange(phase)
+        }
+        .confirmationDialog(
+            "Force stop this \(AppStringLiteral.stationNameRaw)?",
+            isPresented: $showingForceStopConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Force Stop", role: .destructive) {
+                model?.forceStop()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The current generation will stop after finalising audio that has already been created. New turns will not be generated.")
         }
         .preventsIdleSleep()
     }
@@ -135,62 +153,29 @@ struct PodcastPlayerView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button {
-                    showingPlan = true
-                } label: {
-                    Label("Plan", systemImage: "doc.text")
-                }
-                if summaryAvailable {
-                    Button {
-                        showingSummary = true
-                    } label: {
-                        Label("Summary", systemImage: "doc.richtext")
-                    }
-                } else if summaryPending || isGeneratingSummary {
-                    Button {
-                    } label: {
-                        Label("Generating summary", systemImage: "hourglass")
-                    }
-                    .disabled(true)
-                } else if summaryGenerationAvailable {
-                    Button {
-                        generateSummary()
-                    } label: {
-                        Label("Generate summary", systemImage: "sparkles")
-                    }
-                    .accessibilityIdentifier("player.generateSummary")
-                } else {
-                    Button {
-                    } label: {
-                        Label("Summary", systemImage: "doc.richtext")
-                    }
-                    .disabled(true)
-                }
-            } label: {
-                Image(systemName: "doc.text")
-            }
+            DiscussionActionsMenu(
+                items: documentActionItems,
+                labelSystemImage: "doc.text",
+                accessibilityLabel: "Documents",
+                isBusy: isDocumentActionBusy,
+                perform: performDocumentAction
+            )
             .accessibilityIdentifier("player.documents")
-            .accessibilityLabel("Documents")
             .popoverTip(PodcastPlanTip(), arrowEdge: .top)
         }
         if showsActionsMenu {
             ToolbarItem(placement: .topBarTrailing) {
                 if let model {
-                    PodcastActionsMenu(
-                        model: model,
-                        showsPoints: purchases.isConfigured,
-                        pointsMenuLabel: pointsMenuLabel,
-                        onShowPoints: { showingPointsHistory = true },
-                        onPublish: { showingPublishSheet = true },
-                        onEditCover: { showingCoverEditor = true },
-                        onMakePrivate: { makePrivate(model) },
-                        onShare: { showingShareSheet = true },
-                        onCreateFollowUp: createFollowUpAction,
-                        isCreatingFromPlan: isCreatingFromPlan,
-                        onCreateFromPlan: createFromPlanAction,
-                        onSignOut: onSignOut
+                    DiscussionActionsMenu(
+                        items: podcastActionItems,
+                        labelSystemImage: "ellipsis",
+                        accessibilityLabel: "\(AppStringLiteral.stationNameRaw) actions",
+                        titleOverride: podcastActionTitle,
+                        isBusy: isPodcastActionBusy,
+                        perform: performPodcastAction
                     )
+                    .accessibilityIdentifier("player.more")
+                    .popoverTip(podcastActionsTip(for: model), arrowEdge: .top)
                 } else {
                     PodcastLoadingMenu(
                         showsPoints: purchases.isConfigured,
@@ -229,6 +214,25 @@ struct PodcastPlayerView: View {
             && currentDiscussion.canGenerateSummary
     }
 
+    private var uiActionsRefreshKey: String {
+        let d = currentDiscussion
+        return [
+            d.id,
+            d.status.rawValue,
+            d.visibility?.rawValue ?? "",
+            d.isOwner == true ? "owner" : "viewer",
+            d.summary?.status?.rawValue ?? "",
+            d.summary?.available == true ? "summary-ready" : "summary-not-ready",
+            d.summary?.pending == true ? "summary-pending" : "summary-not-pending",
+            d.summary?.generation == true ? "summary-generation" : "summary-no-generation",
+            d.jobID ?? "",
+            d.downloadURLString ?? "",
+            onCreatedFollowUp == nil ? "no-follow-up" : "follow-up",
+            onCreatedFromPlan == nil ? "no-create-from-plan" : "create-from-plan",
+            onSignOut == nil ? "no-sign-out" : "sign-out"
+        ].joined(separator: "|")
+    }
+
     /// Extracted so the construction of `SummaryView` (and its `APIClient`) stays
     /// out of the main `body` modifier chain, which is large enough that inlining
     /// it pushes the SwiftUI type-checker past its time budget.
@@ -236,6 +240,112 @@ struct PodcastPlayerView: View {
         SummaryView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
                     api: APIClient(tokens: auth))
+    }
+
+    private func loadUIActions() async {
+        let api = APIClient(tokens: auth)
+        do {
+            let documents = try await api.discussionUIActions(id: currentDiscussion.id,
+                                                              surface: "podcast-documents")
+            documentActionItems = documents.items
+        } catch {
+            documentActionItems = []
+        }
+        do {
+            let actions = try await api.discussionUIActions(
+                id: currentDiscussion.id,
+                surface: "podcast-actions",
+                supportsPoints: purchases.isConfigured,
+                supportsFollowUp: onCreatedFollowUp != nil,
+                supportsCreateFromPlan: onCreatedFromPlan != nil,
+                supportsSignOut: onSignOut != nil
+            )
+            podcastActionItems = actions.items
+        } catch {
+            podcastActionItems = []
+        }
+    }
+
+    private func performDocumentAction(_ item: DiscussionUIActionItem) {
+        guard let path = validatedDiscussionActionPath(item) else { return }
+        switch path {
+        case ["sheet", "plan"]:
+            showingPlan = true
+        case ["sheet", "summary"]:
+            showingSummary = true
+        case ["action", "summary-generate"]:
+            generateSummary()
+        default:
+            break
+        }
+    }
+
+    private func performPodcastAction(_ item: DiscussionUIActionItem) {
+        guard let path = validatedDiscussionActionPath(item) else { return }
+        switch path {
+        case ["sheet", "points"]:
+            showingPointsHistory = true
+        case ["sheet", "publish"]:
+            showingPublishSheet = true
+        case ["sheet", "cover"]:
+            showingCoverEditor = true
+        case ["sheet", "share"]:
+            showingShareSheet = true
+        case ["sheet", "follow-up"]:
+            showingFollowUpForm = true
+        case ["action", "create-from-plan"]:
+            createFromPlan()
+        case ["action", "make-private"]:
+            if let model { makePrivate(model) }
+        case ["action", "download-podcast"]:
+            model?.downloadPodcast()
+        case ["action", "force-stop"]:
+            showingForceStopConfirm = true
+        case ["action", "sign-out"]:
+            onSignOut?()
+        default:
+            break
+        }
+    }
+
+    private func validatedDiscussionActionPath(_ item: DiscussionUIActionItem) -> [String]? {
+        guard let url = URL(string: item.action.link),
+              url.scheme == "debatepod",
+              url.host == "discussion" else { return nil }
+        let components = url.pathComponents.filter { $0 != "/" }
+        guard components.first == currentDiscussion.id else { return nil }
+        return Array(components.dropFirst())
+    }
+
+    private func isDocumentActionBusy(_ item: DiscussionUIActionItem) -> Bool {
+        item.id == "generate-summary" && isGeneratingSummary
+    }
+
+    private func isPodcastActionBusy(_ item: DiscussionUIActionItem) -> Bool {
+        switch item.id {
+        case "create-from-plan":
+            return isCreatingFromPlan
+        case "download-podcast":
+            return model?.isDownloadingPodcast == true
+        case "force-stop":
+            return model?.isForceStopping == true
+        default:
+            return false
+        }
+    }
+
+    private func podcastActionTitle(_ item: DiscussionUIActionItem) -> String? {
+        item.id == "points" ? pointsMenuLabel : nil
+    }
+
+    private func podcastActionsTip(for model: PlayerModel) -> (any Tip)? {
+        if model.discussion.isPublic {
+            return ShareStationTip()
+        }
+        if model.discussion.isOwner != false {
+            return PublishToMarketTip()
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -323,6 +433,7 @@ struct PodcastPlayerView: View {
     private var showsActionsMenu: Bool {
         purchases.isConfigured
             || model?.showsPodcastActions == true
+            || !podcastActionItems.isEmpty
             || onCreatedFromPlan != nil
             || onCreatedFollowUp != nil
             || onSignOut != nil
@@ -755,6 +866,64 @@ private struct SummaryGenerateErrorAlert: ViewModifier {
             } message: {
                 Text(error ?? "")
             }
+    }
+}
+
+struct DiscussionActionsMenu: View {
+    let items: [DiscussionUIActionItem]
+    let labelSystemImage: String
+    let accessibilityLabel: String
+    var titleOverride: (DiscussionUIActionItem) -> String? = { _ in nil }
+    let isBusy: (DiscussionUIActionItem) -> Bool
+    let perform: (DiscussionUIActionItem) -> Void
+
+    var body: some View {
+        Menu {
+            if items.isEmpty {
+                Label("Loading", systemImage: "hourglass")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(items) { item in
+                    actionRow(item)
+                }
+            }
+        } label: {
+            Image(systemName: labelSystemImage)
+        }
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private func actionRow(_ item: DiscussionUIActionItem) -> some View {
+        let busy = isBusy(item)
+        let disabled = !item.enabled || busy
+        if item.action.type == "share-link", let url = URL(string: item.action.link) {
+            ShareLink(item: url) {
+                rowLabel(item, busy: busy)
+            }
+            .disabled(disabled)
+        } else {
+            Button(role: buttonRole(for: item)) {
+                perform(item)
+            } label: {
+                rowLabel(item, busy: busy)
+            }
+            .disabled(disabled)
+        }
+    }
+
+    @ViewBuilder
+    private func rowLabel(_ item: DiscussionUIActionItem, busy: Bool) -> some View {
+        let title = busy ? (item.loadingTitle ?? titleOverride(item) ?? item.title) : (titleOverride(item) ?? item.title)
+        if let systemImage = item.systemImage, !systemImage.isEmpty {
+            Label(title, systemImage: busy && item.loadingTitle != nil ? "hourglass" : systemImage)
+        } else {
+            Text(title)
+        }
+    }
+
+    private func buttonRole(for item: DiscussionUIActionItem) -> ButtonRole? {
+        item.role == "destructive" ? .destructive : nil
     }
 }
 
