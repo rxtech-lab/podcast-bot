@@ -58,6 +58,7 @@ type ConvEvent struct {
 // ConversationOptions carries the non-creative scaffolding the plan tools need
 // to assemble a full DebateTopic from the model's draft.
 type ConversationOptions struct {
+	Type             string
 	Language         string
 	Channel          string
 	Discussants      int
@@ -68,7 +69,7 @@ type ConversationOptions struct {
 	ExistingMarkdown string
 }
 
-const conversationSystemBase = `You are a conversational planning agent for a panel-discussion (podcast) generator.
+const conversationSystemBase = `You are a conversational planning agent for a podcast generator.
 
 You run as an agent loop with tools:
 - search_sources: search the web for candidate source URLs and snippets.
@@ -85,7 +86,7 @@ Guidelines:
 - When you have enough to proceed, call write_plan. The app will not show that draft until you call show_plan.
 - Call show_plan only when the current plan should be visible to the user. Do not call it for internal drafts.
 - Afterwards you may keep refining with update_plan in response to the user, then call show_plan again only when the revised plan should replace the visible plan.
-- Keep the plan balanced, production-ready, and written in the requested language.
+- Keep the plan production-ready and written in the requested language.
 - Do not output the plan as prose or JSON outside the write_plan / update_plan tool calls.
 - After show_plan succeeds, do not summarize or restate the plan. Reply with one short plain-text sentence in the requested language, meaning: "The plan is ready above. Ask me any questions or tell me what you'd like to change."
 - That reply must be normal user-facing text only: no JSON, no object/dictionary, no key/value pairs, no code block, and no bilingual translation map.`
@@ -104,6 +105,22 @@ func conversationSystem(template string) string {
 		system += "\n\n" + instructions
 	}
 	return system
+}
+
+func conversationSystemForType(contentType, template string) string {
+	if contentType != config.ContentTypeAudioBook {
+		return conversationSystem(template)
+	}
+	return conversationSystemBase + `
+
+Audiobook-specific contract:
+- Plan an audio-book, not a panel discussion.
+- The plan should contain a narrator, optional speakers/character voices, one compact overall Markdown summary, and dedicated chapter sections in the "chapters" field.
+- Uploaded long documents are represented by bounded server digests. Do not ask the user to paste the full source into the chat, and do not dump long source text into the plan.
+- Prefer 3 chapters for most sources. Use 4 or 5 only when the source is genuinely long or has major distinct parts. Never produce more than 5 chapters.
+- Chapter titles should not include "Chapter 1" / "Chapter 2" prefixes. Keep each chapter summary to one or two concise sentences.
+- Do not repeat the chapter list inside "overall_summary"; chapters belong only in the structured "chapters" field.
+- The generated plan is an outline only; full narration happens during the audio generation phase.`
 }
 
 // convDispatchKind classifies a tool result so the loop knows how to record it.
@@ -155,7 +172,7 @@ func (p *Planner) RunConversationTurn(ctx context.Context, history []llm.Message
 		} else {
 			p.emit("thinking", "Working…")
 		}
-		stream, err := client.Stream(ctx, conversationSystem(opts.Template), msgs, conversationTools(opts.Template))
+		stream, err := client.Stream(ctx, conversationSystemForType(opts.Type, opts.Template), msgs, conversationTools(opts.Type, opts.Template))
 		if err != nil {
 			return false, fmt.Errorf("planning conversation: %w", err)
 		}
@@ -324,14 +341,7 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 		return sourceDigest("crawl_sources results", found), dispatchTool, nil, "", false
 	case "write_plan", "update_plan":
 		s.planner.emit("writing", "Writing the plan…")
-		d, err := decodeDraft(tc.Arguments)
-		if err != nil {
-			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
-		}
-		if err := s.validateDraft(d); err != nil {
-			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
-		}
-		result, err := s.planner.assembleWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+		result, err := s.assemblePlanFromToolArgs(tc.Arguments)
 		if err != nil {
 			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
 		}
@@ -351,6 +361,24 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 	default:
 		return "unknown tool: " + tc.Name, dispatchTool, nil, "", true
 	}
+}
+
+func (s *conversationSession) assemblePlanFromToolArgs(args string) (*Result, error) {
+	if s.opts.Type == config.ContentTypeAudioBook {
+		d, err := decodeAudioBookDraft(args)
+		if err != nil {
+			return nil, err
+		}
+		return s.planner.assembleAudioBookWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+	}
+	d, err := decodeDraft(args)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateDraft(d); err != nil {
+		return nil, err
+	}
+	return s.planner.assembleWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
 }
 
 func (s *conversationSession) validateDraft(d *draft) error {
@@ -480,11 +508,22 @@ func ConversationInitialText(req PlanRequest) string {
 		n = 6
 	}
 	var sb strings.Builder
-	sb.WriteString("Design a panel discussion about the following topic.\n\n")
+	contentType := strings.TrimSpace(req.Type)
+	if contentType == "" {
+		contentType = config.ContentTypeDiscussion
+	}
+	if contentType == config.ContentTypeAudioBook {
+		sb.WriteString("Design an audio-book plan from the following topic and sources.\n\n")
+	} else {
+		sb.WriteString("Design a panel discussion about the following topic.\n\n")
+	}
 	sb.WriteString("Topic: " + topic + "\n\n")
 	sb.WriteString("Plan settings:\n")
+	sb.WriteString("- Content type: " + contentType + "\n")
 	sb.WriteString("- Language for all names and text: " + lang + "\n")
-	sb.WriteString(fmt.Sprintf("- Number of discussants: %d\n", n))
+	if contentType != config.ContentTypeAudioBook {
+		sb.WriteString(fmt.Sprintf("- Number of discussants: %d\n", n))
+	}
 	if instructions := TemplateInstructions(req.Template); instructions != "" {
 		sb.WriteString("\nTemplate instructions:\n")
 		sb.WriteString(instructions)
@@ -495,7 +534,11 @@ func ConversationInitialText(req PlanRequest) string {
 	} else {
 		sb.WriteString("- Do not use live web research unless the user explicitly asks for it later.\n")
 	}
-	sb.WriteString(fmt.Sprintf("\nUse exactly %d discussants. Each discussant must have a distinct perspective.\n", n))
+	if contentType == config.ContentTypeAudioBook {
+		sb.WriteString("\nCreate an audiobook outline with a `style`, narrator, optional speakers, one compact overall Markdown summary, and dedicated ordered chapter sections in `chapters`. Style must be one of news, conversational, audiobook, podcast, or meeting; infer it from the source unless the user or selected template asks for a specific style. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose `conversational`. Prefer 3 chapters, use 4 or 5 only for long or clearly multipart sources, and never produce more than 5. Do not include full source text in the plan, do not number chapter titles, and do not repeat the chapter list in the summary.\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("\nUse exactly %d discussants. Each discussant must have a distinct perspective.\n", n))
+	}
 	sb.WriteString(referencePrompt(req.Reference))
-	return AttachmentsText(sb.String(), req.Attachments)
+	return strings.TrimSpace(sb.String()) + attachmentsPromptForType(contentType, req.Attachments)
 }

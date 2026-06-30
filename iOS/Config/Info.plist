@@ -59,6 +59,8 @@
 	<string>PanelFM uses the microphone to record voice messages you send into a discussion.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>PanelFM transcribes your voice messages on this device so the panel can read them as text.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PanelFM saves rendered audiobook videos to your photo library when you choose Save to Camera Roll.</string>
 
 	<!-- Keep audio playing when backgrounded / screen locked. -->
 	<key>UIBackgroundModes</key>

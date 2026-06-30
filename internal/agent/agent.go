@@ -96,6 +96,7 @@ type TranscriptLine struct {
 	Role             Role
 	Side             string
 	Text             string
+	ImageURL         string
 	At               time.Time
 	Pending          bool
 	Addressed        bool

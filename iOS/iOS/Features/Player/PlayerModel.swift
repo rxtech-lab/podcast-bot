@@ -23,11 +23,18 @@ struct LiveLine: Identifiable, Equatable {
     var senderUserID: String? = nil
     /// Playback URL when this line is a voice message; nil for text-only lines.
     var audioURL: String? = nil
+    /// Illustration URL when this line is an image-only bubble (audiobook
+    /// content); nil for ordinary lines.
+    var imageURL: String? = nil
     var sources: [SourceDTO]? = nil
     var judgementComment: String? = nil
 
     var hasAudio: Bool {
         !(audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    var hasImage: Bool {
+        !(imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     var hasDisplayText: Bool {
@@ -43,7 +50,17 @@ struct LiveLine: Identifiable, Equatable {
                                      sources: [SourceDTO]? = nil,
                                      judgementComment: String? = nil) -> LiveLine? {
         let chunk = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let idx = lines.lastIndex(where: { $0.speaker == speaker && !$0.done && !$0.isUser }) {
+        // Only continue the *current* (last) streaming bubble, and only when it
+        // belongs to the same speaker. Any intervening line — a different
+        // speaker's turn, a user message, or an inline image — makes the last
+        // line no longer a match, so this chunk starts a fresh bubble. That is
+        // what breaks a long turn into per-speaker messages and splits text
+        // around images, instead of appending forever to one growing bubble.
+        if let idx = lines.indices.last,
+           lines[idx].speaker == speaker,
+           !lines[idx].done,
+           !lines[idx].isUser,
+           !lines[idx].hasImage {
             if !chunk.isEmpty {
                 if lines[idx].text.isEmpty {
                     lines[idx].text = chunk
@@ -65,10 +82,24 @@ struct LiveLine: Identifiable, Equatable {
         }
 
         guard !chunk.isEmpty else { return nil }
+        // Starting a new bubble (speaker changed, or the previous one was closed
+        // by a user message / image): finish any still-open agent bubble so it
+        // stops streaming and renders as a completed message.
+        if let prev = lines.indices.last, !lines[prev].done, !lines[prev].isUser, !lines[prev].hasImage {
+            lines[prev].done = true
+        }
         let line = LiveLine(speaker: speaker, role: role, text: chunk, isUser: false, done: done,
                             sources: sources, judgementComment: judgementComment)
         lines.append(line)
         return done ? line : nil
+    }
+
+    /// Marks the current (last) streaming agent bubble finished, if there is one.
+    /// Called before inserting a user message or an inline image so the text that
+    /// streamed before it renders as its own completed bubble.
+    static func finalizeLastOpenAgentLine(in lines: inout [LiveLine]) {
+        guard let idx = lines.indices.last, !lines[idx].done, !lines[idx].isUser, !lines[idx].hasImage else { return }
+        lines[idx].done = true
     }
 }
 
@@ -319,6 +350,7 @@ final class PlayerModel {
         lines = discussion.sortedLines.map {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true,
                      senderUserID: $0.senderUserID, audioURL: $0.audioURL,
+                     imageURL: $0.imageURL,
                      sources: $0.sources, judgementComment: $0.judgementComment)
         }
         if discussion.jobID != nil && !hasPodcastTranscript {
@@ -408,6 +440,10 @@ final class PlayerModel {
         guard canSendMessages, !trimmed.isEmpty || isVoice else { return }
         let line = LiveLine(speaker: username, role: "user", text: trimmed, isUser: true, done: true,
                             senderUserID: currentUserID.isEmpty ? nil : currentUserID, audioURL: audioURL)
+        // Close any agent bubble still streaming so this message lands after it in
+        // its own bubble, and the agent's next words start a fresh bubble below —
+        // instead of the earlier bubble continuing to grow past the user message.
+        LiveLine.finalizeLastOpenAgentLine(in: &lines)
         lines.append(line)
         let jobID = discussion.jobID
         persistIfNeeded(line: line, syncRemote: jobID == nil, audioURL: audioURL, audioKey: audioKey)
@@ -1005,6 +1041,11 @@ final class PlayerModel {
            line.audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             line.audioURL = audio
         }
+        if let image = dto.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !image.isEmpty,
+           line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            line.imageURL = image
+        }
         if let sources = dto.sources, !(sources.isEmpty) {
             line.sources = sources
         }
@@ -1069,6 +1110,23 @@ final class PlayerModel {
         guard let data = env.data else { return }
         switch env.event {
         case "transcript":
+            // Image-only event (audiobook illustration): append an image bubble
+            // and stop — there's no spoken text to merge.
+            if let img = data.image_url?.trimmingCharacters(in: .whitespacesAndNewlines), !img.isEmpty {
+                // Close the streaming text bubble so text before the image is one
+                // finished message and text after it starts a new one (the
+                // text / image / text split the transcript should show).
+                LiveLine.finalizeLastOpenAgentLine(in: &lines)
+                let imgLine = LiveLine(speaker: data.speaker ?? "",
+                                       role: data.role ?? "",
+                                       text: "",
+                                       isUser: false,
+                                       done: true,
+                                       imageURL: img)
+                lines.append(imgLine)
+                hideTranscriptLoadingIfReady()
+                return
+            }
             guard let speaker = data.speaker, let text = data.text else { return }
             let role = data.role ?? ""
             if data.isUserMessage == true {
@@ -1163,6 +1221,9 @@ final class PlayerModel {
                 lines[existingIndex].audioURL = audio
             }
         } else {
+            // Close any streaming agent bubble first so an incoming participant
+            // message lands in order rather than the agent bubble growing past it.
+            LiveLine.finalizeLastOpenAgentLine(in: &lines)
             lines.append(LiveLine(speaker: speaker,
                                   role: role,
                                   text: trimmed,
@@ -1299,6 +1360,7 @@ final class PlayerModel {
                 lines.append(LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
                                       isUser: dto.isUser, done: true,
                                       senderUserID: dto.senderUserID, audioURL: dto.audioURL,
+                                      imageURL: dto.imageURL,
                                       sources: dto.sources, judgementComment: dto.judgementComment))
             }
         }
@@ -1343,6 +1405,20 @@ final class PlayerModel {
     private func mergeTranscriptSnapshot(_ snapshot: [TranscriptDTO]) {
         var didChange = false
         for item in snapshot {
+            if let imageURL = item.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !imageURL.isEmpty {
+                let role = item.role
+                if !lines.contains(where: { $0.imageURL == imageURL }) {
+                    lines.append(LiveLine(speaker: item.speaker,
+                                          role: role,
+                                          text: "",
+                                          isUser: false,
+                                          done: true,
+                                          imageURL: imageURL))
+                    didChange = true
+                }
+                continue
+            }
             let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             let role = item.role
@@ -1379,17 +1455,42 @@ final class PlayerModel {
             persistIfNeeded(speaker: item.speaker, role: role, text: text, isUser: isUser)
         }
         if didChange {
-            lines.sort { lhs, rhs in
-                let leftIndex = discussion.sortedLines.firstIndex {
-                    $0.speaker == lhs.speaker && $0.role == lhs.role && $0.text == lhs.text && $0.isUser == lhs.isUser
-                } ?? Int.max
-                let rightIndex = discussion.sortedLines.firstIndex {
-                    $0.speaker == rhs.speaker && $0.role == rhs.role && $0.text == rhs.text && $0.isUser == rhs.isUser
-                } ?? Int.max
-                return leftIndex < rightIndex
-            }
+            let ordered = lines.enumerated().sorted { lhs, rhs in
+                let leftOrder = transcriptSnapshotOrder(for: lhs.element, in: snapshot)
+                let rightOrder = transcriptSnapshotOrder(for: rhs.element, in: snapshot)
+                if leftOrder != rightOrder { return leftOrder < rightOrder }
+                return lhs.offset < rhs.offset
+            }.map(\.element)
+            lines = ordered
         }
         hideTranscriptLoadingIfReady()
+    }
+
+    private func transcriptSnapshotOrder(for line: LiveLine, in snapshot: [TranscriptDTO]) -> Int {
+        if let imageURL = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !imageURL.isEmpty,
+           let snapshotIndex = snapshot.firstIndex(where: {
+               $0.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines) == imageURL
+           }) {
+            return snapshotIndex
+        }
+        let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty,
+           let snapshotIndex = snapshot.firstIndex(where: { item in
+               let role = item.role
+               let isUser = role == "user" || role == "viewer"
+               return item.speaker == line.speaker && role == line.role &&
+                   item.text.trimmingCharacters(in: .whitespacesAndNewlines) == text &&
+                   isUser == line.isUser
+           }) {
+            return snapshotIndex
+        }
+        if text.isEmpty {
+            return Int.max
+        }
+        return discussion.sortedLines.firstIndex {
+            $0.speaker == line.speaker && $0.role == line.role && $0.text == text && $0.isUser == line.isUser
+        } ?? Int.max
     }
 
     private var hasPodcastTranscript: Bool {

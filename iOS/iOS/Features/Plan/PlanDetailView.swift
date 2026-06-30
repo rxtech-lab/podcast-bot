@@ -23,6 +23,7 @@ struct PlanDetailView: View {
     @State private var languageOptions: [PlanLanguageOption] = []
     @State private var showingSources = false
     @State private var showingSpeakerModels = false
+    @State private var selectedChapters: PlanChaptersPresentation?
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
     @State private var showingPointsHistory = false
@@ -66,6 +67,9 @@ struct PlanDetailView: View {
         .sheet(isPresented: $showingPointsHistory) { PointsHistoryView() }
         .sheet(isPresented: $showingPublishSheet) { PublishStationSheet(discussion: $discussion) }
         .sheet(isPresented: $showingSpeakerModels) { SpeakerModelsSheet(discussion: $discussion) }
+        .sheet(item: $selectedChapters) { presentation in
+            AudioBookChaptersSheet(presentation: presentation)
+        }
         .task {
             await purchases.refreshBalance()
             await loadLanguageOptions()
@@ -157,7 +161,10 @@ struct PlanDetailView: View {
                 }
             ) { turn in
                 PlanEditBubble(turn: turn, progressText: progressText,
-                               onEditModels: { showingSpeakerModels = true })
+                               onEditModels: { showingSpeakerModels = true },
+                               onChaptersTapped: { snapshot in
+                                   selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+                               })
                 {
                     showingSources = true
                 }
@@ -843,6 +850,7 @@ private struct PlanEditBubble: View {
     let turn: PlanEditTurn
     var progressText: String? = nil
     var onEditModels: () -> Void = {}
+    var onChaptersTapped: (PlanSnapshot) -> Void = { _ in }
     var onSourcesTapped: () -> Void
 
     var body: some View {
@@ -873,7 +881,9 @@ private struct PlanEditBubble: View {
         case .plan:
             if let snapshot = turn.snapshot {
                 PlanSnapshotCard(label: turn.label ?? "Plan", snapshot: snapshot,
-                                 onSourcesTapped: onSourcesTapped, onEditModels: onEditModels)
+                                 onSourcesTapped: onSourcesTapped,
+                                 onChaptersTapped: snapshot.chapters.isEmpty ? nil : { onChaptersTapped(snapshot) },
+                                 onEditModels: onEditModels)
                     .padding(14)
                     .background(Theme.agentBubble, in: .rect(cornerRadius: 22))
             }
@@ -902,12 +912,16 @@ private struct PlanEditBubble: View {
 extension PlanSnapshot {
     /// Memberwise initializer for previews/tests (the production type only ships
     /// `init(discussion:)`).
-    init(title: String, topic: String, background: String,
+    init(title: String, topic: String, isAudioBook: Bool = false, style: String = "", background: String,
+         chapters: [PlanChapterSnapshot] = [],
          people: [PlanPersonSnapshot], sources: [PlanSourceSnapshot])
     {
         self.title = title
         self.topic = topic
+        self.isAudioBook = isAudioBook
+        self.style = style
         self.background = background
+        self.chapters = chapters
         self.people = people
         self.sources = sources
     }

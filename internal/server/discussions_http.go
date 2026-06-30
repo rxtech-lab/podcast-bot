@@ -200,8 +200,11 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	contentType := strings.TrimSpace(settings.Type)
-	if contentType != "" && contentType != config.ContentTypeDiscussion {
-		http.Error(w, "only discussion creation is supported", http.StatusBadRequest)
+	if contentType == "" {
+		contentType = config.ContentTypeDiscussion
+	}
+	if contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeAudioBook {
+		http.Error(w, "only discussion and audio-book creation are supported", http.StatusBadRequest)
 		return
 	}
 	language := strings.TrimSpace(settings.Language)
@@ -229,7 +232,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		reference = ref
 	}
 	template := strings.TrimSpace(settings.Template)
-	if _, ok := planner.TemplateByID(config.ContentTypeDiscussion, template); !ok {
+	if _, ok := planner.TemplateByID(contentType, template); !ok {
 		template = planner.DefaultTemplateID
 	}
 	d, err := s.d.Discussions.CreatePlaceholder(r.Context(), user.ID, topic, language, template)
@@ -252,7 +255,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	if s.d.Planning != nil {
 		plan := planner.PlanRequest{
-			Type:        config.ContentTypeDiscussion,
+			Type:        contentType,
 			Topic:       topic,
 			Language:    language,
 			Discussants: settings.Discussants,
@@ -994,6 +997,10 @@ func (s *Server) applyDiscussionSummaryMeta(ctx context.Context, d *Discussion) 
 	if d == nil || s.d.Discussions == nil {
 		return
 	}
+	if discussionIsAudioBook(d) {
+		d.Summary = nil
+		return
+	}
 	meta, err := s.d.Discussions.SummaryMetaFor(ctx, d.ID, SummaryDocTypeSummary)
 	if err != nil {
 		s.logger().Warn("summary meta lookup failed", "discussion", d.ID, "err", err)
@@ -1030,6 +1037,10 @@ func (s *Server) handleDiscussionSummaryGenerate(w http.ResponseWriter, r *http.
 		http.Error(w, "discussion is not ready", http.StatusConflict)
 		return
 	}
+	if discussionIsAudioBook(d) {
+		http.Error(w, "summary generation is not available for audio books", http.StatusConflict)
+		return
+	}
 	input := SummaryGenerationInputFromDiscussion(d)
 	if _, err := StartSummaryGeneration(r.Context(), SummaryGenerationDeps{
 		Env:         s.d.Env,
@@ -1058,6 +1069,10 @@ func (s *Server) handleDiscussionSummaryGenerate(w http.ResponseWriter, r *http.
 	s.applyDiscussionSummaryMeta(r.Context(), updated)
 	s.logDiscussionSummaryReturn("discussions.summary.generate", updated)
 	writeJSON(w, updated)
+}
+
+func discussionIsAudioBook(d *Discussion) bool {
+	return d != nil && d.Script != nil && strings.TrimSpace(d.Script.Type) == config.ContentTypeAudioBook
 }
 
 // handleDiscussionSummary serves the generated summary document's Markdown body

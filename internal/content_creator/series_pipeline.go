@@ -67,12 +67,24 @@ type naturalMarker struct {
 // false, cleanText == sent and segments has exactly one narrator entry
 // — the caller can shortcut to the single-voice TTS path.
 func splitCharacterSpans(sent string) (clean string, segments []charSpan, had bool) {
+	clean, segments, had, _ = splitCharacterSpansFrom(sent, -1)
+	return clean, segments, had
+}
+
+// splitCharacterSpansFrom is splitCharacterSpans with an explicit starting
+// character index so an open `<char-N>` span can continue across sentence
+// boundaries within a turn. start is the index in effect at the beginning of
+// sent (-1 = narrator); end is the index still in effect after it, to feed the
+// next sentence. When start >= 0 the sentence is inside a guest span, so `had`
+// is reported true even with no markers of its own — that keeps the multi-voice
+// TTS envelope and the per-speaker transcript attribution consistent.
+func splitCharacterSpansFrom(sent string, start int) (clean string, segments []charSpan, had bool, end int) {
 	if !charOpenRe.MatchString(sent) && !charCloseRe.MatchString(sent) {
-		return sent, []charSpan{{idx: -1, text: sent}}, false
+		return sent, []charSpan{{idx: start, text: sent}}, start >= 0, start
 	}
 	var cleanB strings.Builder
 	cleanB.Grow(len(sent))
-	current := -1
+	current := start
 	pos := 0
 	flush := func(end int) {
 		if end <= pos {
@@ -130,7 +142,7 @@ func splitCharacterSpans(sent string) (clean string, segments []charSpan, had bo
 	if len(segments) == 0 {
 		segments = append(segments, charSpan{idx: -1, text: ""})
 	}
-	return cleanB.String(), segments, had
+	return cleanB.String(), segments, had, current
 }
 
 func splitNaturalSpeech(spans []charSpan) (clean string, chunks []naturalChunk, hadPause, hadBreath bool) {

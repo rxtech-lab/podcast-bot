@@ -10,14 +10,17 @@ import (
 // update_plan. It mirrors create_plan (agent_loop.go) but, unlike create_plan,
 // these tools are NOT terminal — the conversation continues so the user can keep
 // refining the plan.
-func conversationPlanSchema(template string) map[string]any {
-	return TemplateSchema(config.ContentTypeDiscussion, template)
+func conversationPlanSchema(contentType, template string) map[string]any {
+	if contentType == "" {
+		contentType = config.ContentTypeDiscussion
+	}
+	return TemplateSchema(contentType, template)
 }
 
 // conversationTools is the tool set for the conversational planner loop.
-func conversationTools(template string) []openai.ChatCompletionToolParam {
+func conversationTools(contentType, template string) []openai.ChatCompletionToolParam {
 	tools := []openai.ChatCompletionToolParam{}
-	if IsResearchTemplate(template) {
+	if contentType != config.ContentTypeAudioBook && IsResearchTemplate(template) {
 		tools = append(tools,
 			toolDef("search_research_papers", "Search Firecrawl Research Index for ranked scientific or engineering papers. Use this before general web search for the research template.", map[string]any{
 				"type": "object",
@@ -55,8 +58,8 @@ func conversationTools(template string) []openai.ChatCompletionToolParam {
 			},
 			"required": []string{"urls"},
 		}),
-		toolDef("write_plan", "Write and save the initial panel-discussion plan internally. This does not show the plan to the user; call show_plan after this when the plan is ready to display.", conversationPlanSchema(template)),
-		toolDef("update_plan", "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display.", conversationPlanSchema(template)),
+		toolDef("write_plan", "Write and save the initial plan internally. This does not show the plan to the user; call show_plan after this when the plan is ready to display.", conversationPlanSchema(contentType, template)),
+		toolDef("update_plan", "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display.", conversationPlanSchema(contentType, template)),
 		toolDef("show_plan", "Show the current saved plan in the app. Call only after write_plan or update_plan, and only when the plan should be visible to the user. After this tool returns, acknowledge briefly instead of summarizing the plan.", map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

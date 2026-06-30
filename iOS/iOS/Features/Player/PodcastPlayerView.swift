@@ -1,3 +1,5 @@
+import AVKit
+import Photos
 import PhotosUI
 import RxAuthSwift
 import SwiftUI
@@ -24,6 +26,8 @@ struct PodcastPlayerView: View {
     @State private var message = ""
     @State private var showingPlan = false
     @State private var showingSummary = false
+    @State private var showingText = false
+    @State private var audioBookVideoURL: IdentifiableURL?
     @State private var showingFullPlayer = false
     @State private var showingImporter = false
     @State private var showingPhotos = false
@@ -79,6 +83,12 @@ struct PodcastPlayerView: View {
         }
         .sheet(isPresented: $showingSummary) {
             summarySheet
+        }
+        .sheet(isPresented: $showingText) {
+            textSheet
+        }
+        .fullScreenCover(item: $audioBookVideoURL) { item in
+            AudioBookVideoView(url: item.url)
         }
         .sheet(item: $selectedTranscriptSources) { selection in
             SourcesSheet(
@@ -242,6 +252,15 @@ struct PodcastPlayerView: View {
                     api: APIClient(tokens: auth))
     }
 
+    /// The audiobook "text-based content" book view (narration + illustrations).
+    /// Kept out of `body` for the same type-checker reason as
+    /// `summarySheet`.
+    private var textSheet: some View {
+        TextContentView(discussionID: currentDiscussion.id,
+                        title: currentDiscussion.displayTitle,
+                        api: APIClient(tokens: auth))
+    }
+
     private func loadUIActions() async {
         let api = APIClient(tokens: auth)
         do {
@@ -267,12 +286,17 @@ struct PodcastPlayerView: View {
     }
 
     private func performDocumentAction(_ item: DiscussionUIActionItem) {
+        if openVideoAction(item) {
+            return
+        }
         guard let path = validatedDiscussionActionPath(item) else { return }
         switch path {
         case ["sheet", "plan"]:
             showingPlan = true
         case ["sheet", "summary"]:
             showingSummary = true
+        case ["sheet", "text"]:
+            showingText = true
         case ["action", "summary-generate"]:
             generateSummary()
         default:
@@ -281,6 +305,9 @@ struct PodcastPlayerView: View {
     }
 
     private func performPodcastAction(_ item: DiscussionUIActionItem) {
+        if openVideoAction(item) {
+            return
+        }
         guard let path = validatedDiscussionActionPath(item) else { return }
         switch path {
         case ["sheet", "points"]:
@@ -306,6 +333,16 @@ struct PodcastPlayerView: View {
         default:
             break
         }
+    }
+
+    private func openVideoAction(_ item: DiscussionUIActionItem) -> Bool {
+        // The video action carries a raw playback URL (not a debatepod deep
+        // link), so handle it before the path-based routing.
+        guard item.action.type == "play-video" else { return false }
+        if let url = URL(string: item.action.link) {
+            audioBookVideoURL = IdentifiableURL(url: url)
+        }
+        return true
     }
 
     private func validatedDiscussionActionPath(_ item: DiscussionUIActionItem) -> [String]? {
@@ -525,7 +562,11 @@ struct PodcastPlayerView: View {
     private func transcriptRow(_ item: TranscriptListItem) -> some View {
         switch item {
         case .line(let line, let isMine):
-            TranscriptBubble(line: line, isMine: isMine) { sources in
+            TranscriptBubble(
+                line: line,
+                isMine: isMine,
+                speakerColor: SpeakerPalette.color(for: line.speaker, in: model?.lines ?? [line])
+            ) { sources in
                 selectedTranscriptSources = TranscriptSourcesSelection(sources: sources)
             }
         case .usage(_, let points):
@@ -1158,6 +1199,7 @@ private struct PlanSheetView: View {
     @State private var discussion: Discussion
     @State private var showingSources = false
     @State private var showingSpeakerModels = false
+    @State private var selectedChapters: PlanChaptersPresentation?
     @State private var isLoadingFullPlan = false
     @State private var loadError: String?
 
@@ -1175,6 +1217,10 @@ private struct PlanSheetView: View {
                             label: "Plan",
                             snapshot: PlanSnapshot(discussion: discussion),
                             onSourcesTapped: { showingSources = true },
+                            onChaptersTapped: {
+                                let snapshot = PlanSnapshot(discussion: discussion)
+                                selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+                            },
                             onEditModels: { showingSpeakerModels = true }
                         )
                         if isLoadingFullPlan && discussion.script == nil {
@@ -1215,6 +1261,9 @@ private struct PlanSheetView: View {
             }
             .sheet(isPresented: $showingSpeakerModels) {
                 SpeakerModelsSheet(discussion: $discussion, allowsEditing: false)
+            }
+            .sheet(item: $selectedChapters) { presentation in
+                AudioBookChaptersSheet(presentation: presentation)
             }
         }
     }
@@ -1284,13 +1333,35 @@ enum SpeakerPalette {
     ]
 
     static func color(for speaker: String) -> Color {
-        guard !speaker.isEmpty else { return colors[0] }
+        colors[index(for: speaker)]
+    }
+
+    static func color(for speaker: String, in lines: [LiveLine]) -> Color {
+        colors[index(for: speaker, in: lines)]
+    }
+
+    static func index(for speaker: String) -> Int {
+        guard !normalizedSpeaker(speaker).isEmpty else { return 0 }
         // djb2 — stable across launches so a speaker keeps the same color.
         var hash = 5381
         for scalar in speaker.unicodeScalars {
             hash = (hash &* 33) &+ Int(scalar.value)
         }
-        return colors[abs(hash) % colors.count]
+        return abs(hash) % colors.count
+    }
+
+    static func index(for speaker: String, in lines: [LiveLine]) -> Int {
+        let target = normalizedSpeaker(speaker)
+        guard !target.isEmpty else { return index(for: speaker) }
+        var seen: [String: Int] = [:]
+        var nextIndex = 0
+        for line in lines {
+            let key = normalizedSpeaker(line.speaker)
+            guard !key.isEmpty, seen[key] == nil else { continue }
+            seen[key] = nextIndex
+            nextIndex += 1
+        }
+        return seen[target].map { $0 % colors.count } ?? index(for: speaker)
     }
 
     static func initials(for speaker: String) -> String {
@@ -1323,15 +1394,20 @@ enum SpeakerPalette {
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private static func normalizedSpeaker(_ speaker: String) -> String {
+        speaker.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
 }
 
 /// A small gradient avatar with the speaker's initials in their palette color.
 private struct SpeakerAvatar: View {
     let speaker: String
+    var color: Color? = nil
     var size: CGFloat = 32
 
     var body: some View {
-        let color = SpeakerPalette.color(for: speaker)
+        let color = color ?? SpeakerPalette.color(for: speaker)
         Circle()
             .fill(LinearGradient(
                 colors: [color.opacity(0.95), color.opacity(0.55)],
@@ -1360,19 +1436,29 @@ private struct TranscriptBubble: View {
     let line: LiveLine
     /// True only when this line was authored by the current participant.
     let isMine: Bool
+    let speakerColor: Color
     var onSourcesTapped: ([SourceDTO]) -> Void = { _ in }
 
-    private var speakerColor: Color { SpeakerPalette.color(for: line.speaker) }
     private var sources: [SourceDTO] { line.sources ?? [] }
     private var judgementComment: String {
         line.judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    init(line: LiveLine,
+         isMine: Bool,
+         speakerColor: Color? = nil,
+         onSourcesTapped: @escaping ([SourceDTO]) -> Void = { _ in }) {
+        self.line = line
+        self.isMine = isMine
+        self.speakerColor = speakerColor ?? SpeakerPalette.color(for: line.speaker)
+        self.onSourcesTapped = onSourcesTapped
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if isMine { Spacer(minLength: 40) }
             if !isMine {
-                SpeakerAvatar(speaker: line.speaker)
+                SpeakerAvatar(speaker: line.speaker, color: speakerColor)
             }
             VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
                 if !isMine {
@@ -1397,6 +1483,28 @@ private struct TranscriptBubble: View {
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 8) {
                     if let audioURL = line.audioURL, !audioURL.isEmpty {
                         VoiceMessageControl(urlString: audioURL, isUser: isMine)
+                    }
+                    if line.hasImage, let urlStr = line.imageURL, let url = URL(string: urlStr) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFit()
+                            case .empty:
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(speakerColor.opacity(0.12))
+                                    .frame(height: 160)
+                                    .overlay { ProgressView() }
+                            case .failure:
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(speakerColor.opacity(0.12))
+                                    .frame(height: 160)
+                                    .overlay { Image(systemName: "photo").foregroundStyle(speakerColor) }
+                            @unknown default:
+                                EmptyView()
+                            }
+                        }
+                        .frame(maxWidth: 280)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     if line.hasDisplayText {
                         bubbleText
@@ -1789,3 +1897,220 @@ private struct TranscriptJudgementSourcesPreview: View {
     TranscriptJudgementSourcesPreview()
 }
 #endif
+
+/// A small Identifiable wrapper so a bare URL can drive `.fullScreenCover(item:)`.
+struct IdentifiableURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Renders an audiobook's "text-based content" — the book version of the
+/// narration with the generated illustrations inline. The body is Markdown
+/// (images embedded as `![](url)`), so it renders through the shared
+/// `MarkdownText` view, which already displays remote images.
+struct TextContentView: View {
+    let discussionID: String
+    let title: String
+    let api: APIClient
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var markdown: String = ""
+    @State private var isLoading = true
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let errorText {
+                    ContentUnavailableView(
+                        "Text unavailable",
+                        systemImage: "book.closed",
+                        description: Text(errorText)
+                    )
+                } else {
+                    ScrollView {
+                        MarkdownText(markdown)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task { await loadText() }
+        }
+    }
+
+    private func loadText() async {
+        isLoading = true
+        errorText = nil
+        do {
+            let doc = try await api.summary(id: discussionID, docType: "text")
+            markdown = doc.markdown
+        } catch {
+            errorText = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+/// Full-screen player for an audiobook's rendered 1080p video (the illustration
+/// slideshow with narration audio + captions). Presented from the context menu's
+/// "View Video" action once the post-audio render has finished.
+struct AudioBookVideoView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var localFile: URL?
+    @State private var isDownloading = false
+    @State private var message: String?
+    @State private var showingShareSheet = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+            VideoPlayer(player: player)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 30))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.white)
+                    }
+                    .accessibilityLabel("Close")
+
+                    Spacer()
+
+                    Button {
+                        shareVideo()
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                    }
+                    .disabled(isDownloading)
+                    .accessibilityLabel("Save to Files")
+
+                    Button {
+                        saveToCameraRoll()
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                    }
+                    .disabled(isDownloading)
+                    .accessibilityLabel("Save to Camera Roll")
+                }
+                .padding()
+
+                if isDownloading || message != nil {
+                    HStack(spacing: 10) {
+                        if isDownloading {
+                            ProgressView().tint(.white)
+                        }
+                        if let message {
+                            Text(message)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.62), in: .capsule)
+                }
+
+                Spacer()
+            }
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            if let localFile {
+                FileShareSheet(url: localFile)
+            }
+        }
+        .onAppear {
+            let p = AVPlayer(url: url)
+            player = p
+            p.play()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
+        }
+    }
+
+    private func shareVideo() {
+        Task {
+            if let file = await localVideoFile() {
+                localFile = file
+                showingShareSheet = true
+            }
+        }
+    }
+
+    private func saveToCameraRoll() {
+        Task {
+            guard let file = await localVideoFile() else { return }
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                showMessage("Photo access was not granted.")
+                return
+            }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: file)
+                }
+                showMessage("Saved to Camera Roll.")
+            } catch {
+                showMessage("Could not save video.")
+            }
+        }
+    }
+
+    @MainActor
+    private func localVideoFile() async -> URL? {
+        if let localFile { return localFile }
+        isDownloading = true
+        message = "Preparing video..."
+        defer { isDownloading = false }
+        do {
+            let (downloaded, _) = try await URLSession.shared.download(from: url)
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("audiobook-video-\(UUID().uuidString).mp4")
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(at: downloaded, to: destination)
+            localFile = destination
+            message = nil
+            return destination
+        } catch {
+            showMessage("Could not download video.")
+            return nil
+        }
+    }
+
+    private func showMessage(_ text: String) {
+        message = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if message == text {
+                message = nil
+            }
+        }
+    }
+}

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/content_creator"
 )
@@ -50,7 +51,7 @@ func (s *Server) handleDiscussionUIActions(w http.ResponseWriter, r *http.Reques
 	resp := discussionUIActionsResponse{ID: surface}
 	switch surface {
 	case "podcast-documents":
-		resp.Items = s.podcastDocumentActions(d, lang)
+		resp.Items = s.podcastDocumentActions(r, d, lang)
 	case "podcast-actions":
 		resp.Items = s.podcastMenuActions(r, d, lang)
 	case "summary-actions":
@@ -62,9 +63,29 @@ func (s *Server) handleDiscussionUIActions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, resp)
 }
 
-func (s *Server) podcastDocumentActions(d *Discussion, lang contentcreator.Lang) []discussionUIActionItem {
+func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang contentcreator.Lang) []discussionUIActionItem {
 	items := []discussionUIActionItem{
 		actionItem("open-plan", phrase(lang, "Plan", "计划", "計劃"), "", "doc.text", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "plan")),
+	}
+	// Audiobook video belongs with the generated documents, next to Plan/Text,
+	// rather than in the generic podcast actions menu.
+	if videoKey, _ := s.d.Discussions.VideoKeyFor(r.Context(), d.ID); strings.TrimSpace(videoKey) != "" &&
+		s.d.Uploader != nil && s.d.Uploader.Enabled() {
+		if url, err := s.d.Uploader.DownloadURL(r.Context(), videoKey, time.Hour); err == nil && strings.TrimSpace(url) != "" {
+			items = append(items, actionItem("view-video", phrase(lang, "View Video", "查看视频", "查看影片"), "", "film", "", true, "play-video", url))
+		}
+	}
+	if discussionIsAudioBook(d) {
+		// Audiobooks expose the "text-based content" book document instead of
+		// the discussion summary. It is generated after the audio finishes.
+		textMeta, _ := s.d.Discussions.SummaryMetaFor(r.Context(), d.ID, SummaryDocTypeText)
+		switch {
+		case textMeta != nil && textMeta.Available:
+			items = append(items, actionItem("open-text", phrase(lang, "Text", "文字版", "文字版"), "", "book", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "text")))
+		case textMeta != nil && textMeta.Pending:
+			items = append(items, actionItem("text-pending", phrase(lang, "Generating text", "正在生成文字版", "正在產生文字版"), "", "hourglass", "", false, "none", discussionActionLink(d.ID, "text", "pending")))
+		}
+		return items
 	}
 	if d.Summary != nil && d.Summary.Available {
 		items = append(items, actionItem("open-summary", phrase(lang, "Summary", "总结", "摘要"), "", "doc.richtext", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "summary")))

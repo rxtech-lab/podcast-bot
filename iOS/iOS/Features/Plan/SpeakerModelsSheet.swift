@@ -31,6 +31,13 @@ struct SpeakerModelsSheet: View {
 
     private var speakers: [Speaker] {
         var out: [Speaker] = []
+        if discussion.script?.type == "audio-book" {
+            if let host = discussion.script?.audioBookHost, !host.name.isEmpty {
+                out.append(Speaker(id: host.name, name: host.name,
+                                   role: "Narrator", isHost: true, model: host.model))
+            }
+            return out
+        }
         if let host = discussion.script?.host, !host.name.isEmpty {
             out.append(Speaker(id: host.name, name: host.name,
                                role: "Moderator", isHost: true, model: host.model))

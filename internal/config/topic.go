@@ -51,6 +51,11 @@ const (
 	// research tools (firecrawl MCP + a data-store scratchpad). See
 	// discussion_planner.go / discussion_director.go / discussion_stage.go.
 	ContentTypeDiscussion = "discussion"
+	// ContentTypeAudioBook turns uploaded long-form source material into a
+	// chaptered narrated audiobook. Planning produces a high-level outline
+	// (speakers, overall summary, chapters) while generation narrates the
+	// chapter plan as an audio-only feed.
+	ContentTypeAudioBook = "audio-book"
 	// ContentTypeSeries is a host-only narrated TV-style episode. Episodes
 	// declare show + season + episode in frontmatter; the pipeline writes
 	// every episode's assets (scene plan, generated PNGs, music, recap-
@@ -75,6 +80,43 @@ const (
 	// built-in store tool is registered, so discussants persist findings
 	// through the MongoDB MCP tools instead.
 	StorageMongo = "mongodb"
+)
+
+// AudioBookSpeaker is one voice role in an audiobook plan. The narrator is
+// stored separately in AudioBookHost; these entries represent optional quoted
+// characters or recurring voices the narration can switch to.
+type AudioBookSpeaker struct {
+	Name        string `yaml:"name" json:"name"`
+	Gender      string `yaml:"gender,omitempty" json:"gender,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+}
+
+// AudioBookChapter is one proposed chapter in an audiobook plan.
+//
+// Mode is the narration style the planner chose for this chapter:
+// "narration" (single narrator prose, the default) or "dialogue" (a
+// conversational exchange where the listed Speakers take turns, each
+// rendered in their own neural voice via <char-N> markers). Empty is
+// treated as "narration". Speakers is the subset of AudioBookSpeakers
+// (by name) that talk in this chapter — surfaced to the host so it knows
+// which voices to alternate between for a dialogue chapter.
+type AudioBookChapter struct {
+	Title    string   `yaml:"title" json:"title"`
+	Summary  string   `yaml:"summary" json:"summary"`
+	Mode     string   `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Speakers []string `yaml:"speakers,omitempty" json:"speakers,omitempty"`
+}
+
+// Audiobook style and chapter narration modes.
+const (
+	AudioBookStyleNews           = "news"
+	AudioBookStyleConversational = "conversational"
+	AudioBookStyleAudioBook      = "audiobook"
+	AudioBookStylePodcast        = "podcast"
+	AudioBookStyleMeeting        = "meeting"
+
+	AudioBookModeNarration = "narration"
+	AudioBookModeDialogue  = "dialogue"
 )
 
 // DebateTopic is the full topic.md content: YAML frontmatter + named markdown
@@ -116,6 +158,16 @@ type DebateTopic struct {
 	Season     int       `yaml:"season,omitempty" json:"season,omitempty"`
 	Episode    int       `yaml:"episode,omitempty" json:"episode,omitempty"`
 	SeriesHost AgentSpec `yaml:"series_host,omitempty" json:"series_host,omitempty"`
+
+	// Audio-book-only roster + outline. AudioBookHost is the narrator; optional
+	// AudioBookSpeakers are voice roles for quoted material; AudioBookChapters
+	// is the chapter plan generated from long source content. AudioBookStyle is
+	// the high-level format chosen during planning (news, conversational,
+	// audiobook, podcast, or meeting).
+	AudioBookHost     AgentSpec          `yaml:"audio_book_host,omitempty" json:"audio_book_host,omitempty"`
+	AudioBookStyle    string             `yaml:"audio_book_style,omitempty" json:"audio_book_style,omitempty"`
+	AudioBookSpeakers []AudioBookSpeaker `yaml:"audio_book_speakers,omitempty" json:"audio_book_speakers,omitempty"`
+	AudioBookChapters []AudioBookChapter `yaml:"audio_book_chapters,omitempty" json:"audio_book_chapters,omitempty"`
 
 	// Discussion-only roster. Discussants each carry an Aspect (the angle
 	// they speak from) and respond to one another; Host moderates; Commander
@@ -272,10 +324,10 @@ func validateTopic(t *DebateTopic) error {
 		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
 	switch t.Type {
-	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion:
+	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook:
 	default:
-		return fmt.Errorf("type must be one of %q, %q, %q, %q (got %q)",
-			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, t.Type)
+		return fmt.Errorf("type must be one of %q, %q, %q, %q, %q (got %q)",
+			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, t.Type)
 	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:
@@ -303,6 +355,49 @@ func validateTopic(t *DebateTopic) error {
 		return validateSeries(t)
 	case ContentTypeDiscussion:
 		return validateDiscussion(t)
+	case ContentTypeAudioBook:
+		return validateAudioBook(t)
+	}
+	return nil
+}
+
+func validateAudioBook(t *DebateTopic) error {
+	if len(t.Affirmative) > 0 || len(t.Negative) > 0 || t.Judge.Model != "" {
+		return fmt.Errorf("type=audio-book must not declare affirmative/negative/judge — use audio_book_host")
+	}
+	if t.PuzzleHost.Model != "" || len(t.Players) > 0 || t.SeriesHost.Model != "" {
+		return fmt.Errorf("type=audio-book must not declare puzzle_host/players/series_host — use audio_book_host")
+	}
+	if len(t.Discussants) > 0 || t.Host.Model != "" || t.Commander.Model != "" {
+		return fmt.Errorf("type=audio-book must not declare discussion host/discussants/commander — use audio_book_host and audio_book_speakers")
+	}
+	if t.AudioBookHost.Model == "" {
+		return fmt.Errorf("audio_book_host.model is required for type=audio-book")
+	}
+	switch strings.TrimSpace(t.AudioBookStyle) {
+	case "", AudioBookStyleNews, AudioBookStyleConversational, AudioBookStyleAudioBook, AudioBookStylePodcast, AudioBookStyleMeeting:
+	default:
+		return fmt.Errorf("audio_book_style must be one of %q, %q, %q, %q, %q (got %q)",
+			AudioBookStyleNews, AudioBookStyleConversational, AudioBookStyleAudioBook, AudioBookStylePodcast, AudioBookStyleMeeting, t.AudioBookStyle)
+	}
+	for _, s := range t.AudioBookSpeakers {
+		if strings.TrimSpace(s.Name) == "" {
+			return fmt.Errorf("audio_book_speakers entries need name")
+		}
+	}
+	if len(t.AudioBookChapters) == 0 {
+		return fmt.Errorf("type=audio-book requires at least one audio_book_chapters entry")
+	}
+	for _, ch := range t.AudioBookChapters {
+		if strings.TrimSpace(ch.Title) == "" || strings.TrimSpace(ch.Summary) == "" {
+			return fmt.Errorf("audio_book_chapters entries need title and summary")
+		}
+	}
+	if strings.TrimSpace(t.Background) == "" {
+		return fmt.Errorf("type=audio-book requires an overall summary in `## Background`")
+	}
+	if strings.TrimSpace(t.Surface) == "" {
+		return fmt.Errorf("type=audio-book requires a chapter outline in `## Surface`")
 	}
 	return nil
 }

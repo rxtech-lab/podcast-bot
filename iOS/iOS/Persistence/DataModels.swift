@@ -229,6 +229,20 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
 
     var sortedPeople: [PlanPersonSnapshot] {
         var people: [PlanPersonSnapshot] = []
+        if script?.type == "audio-book" {
+            var seenNames = Set<String>()
+            if let host = script?.audioBookHost, !host.name.isEmpty {
+                people.append(PlanPersonSnapshot(name: host.name, aspect: "Narrator", isHost: true))
+                seenNames.insert(Self.normalizedPersonName(host.name))
+            }
+            for speaker in script?.audioBookSpeakers ?? [] {
+                let key = Self.normalizedPersonName(speaker.name)
+                guard !key.isEmpty, !seenNames.contains(key) else { continue }
+                people.append(PlanPersonSnapshot(name: speaker.name, aspect: speaker.description ?? speaker.gender ?? "", isHost: false))
+                seenNames.insert(key)
+            }
+            return people
+        }
         if let host = script?.host, !host.name.isEmpty {
             people.append(PlanPersonSnapshot(name: host.name, aspect: "Moderator", isHost: true))
         }
@@ -236,6 +250,11 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
             PlanPersonSnapshot(name: $0.name, aspect: $0.aspect ?? "", isHost: false)
         })
         return people
+    }
+
+    private static func normalizedPersonName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     var sortedSources: [PlanSourceSnapshot] {
@@ -370,6 +389,9 @@ struct DiscussionLineDTO: Codable, Hashable, Sendable {
     /// Ephemeral playback URL for a voice message, re-signed by the server on each
     /// read. Nil for normal text lines.
     var audioURL: String? = nil
+    /// Inline audiobook illustration URL. Image-only rows have empty text but
+    /// still render as their own transcript bubble.
+    var imageURL: String? = nil
     var sources: [SourceDTO]? = nil
     var judgementComment: String? = nil
 
@@ -382,6 +404,7 @@ struct DiscussionLineDTO: Codable, Hashable, Sendable {
         case isUser = "is_user"
         case senderUserID = "sender_user_id"
         case audioURL = "audio_url"
+        case imageURL = "image_url"
         case sources
         case judgementComment = "judgement_comment"
     }

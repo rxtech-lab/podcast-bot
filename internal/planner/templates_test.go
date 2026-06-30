@@ -64,12 +64,89 @@ func TestDefaultTemplateSchemaAvoidsGatewayUnsupportedKeywords(t *testing.T) {
 	}
 }
 
+func TestAudioBookTemplateSchema(t *testing.T) {
+	templates := TemplatesByType(config.ContentTypeAudioBook)
+	if len(templates) != 6 {
+		t.Fatalf("audio-book templates length = %d, want 6", len(templates))
+	}
+	wantIDs := []string{
+		DefaultTemplateID,
+		AudioBookNewsTemplateID,
+		AudioBookConversationalTemplateID,
+		AudioBookAudioBookTemplateID,
+		AudioBookPodcastTemplateID,
+		AudioBookMeetingTemplateID,
+	}
+	for i, want := range wantIDs {
+		if templates[i].ID != want {
+			t.Fatalf("audio-book template %d id = %q, want %q", i, templates[i].ID, want)
+		}
+	}
+	raw, err := json.Marshal(TemplateSchema(config.ContentTypeAudioBook, DefaultTemplateID))
+	if err != nil {
+		t.Fatalf("marshal audio-book schema: %v", err)
+	}
+	text := string(raw)
+	for _, field := range []string{"style", "overall_summary", "narrator", "speakers", "chapters"} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("audio-book schema missing %s: %s", field, text)
+		}
+	}
+	for _, style := range []string{"news", "conversational", "audiobook", "podcast", "meeting"} {
+		if !strings.Contains(text, style) {
+			t.Fatalf("audio-book schema missing style %q: %s", style, text)
+		}
+	}
+	for _, expected := range []string{"Prefer 3 chapters", "never provide more than 5", "do not duplicate chapters in overall_summary"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("audio-book schema missing chapter guidance %q: %s", expected, text)
+		}
+	}
+}
+
+func TestAudioBookTemplateInstructionsSetStyle(t *testing.T) {
+	got := TemplateInstructions(AudioBookPodcastTemplateID)
+	if !strings.Contains(got, "`style` to `podcast`") {
+		t.Fatalf("podcast template instructions missing style guidance: %q", got)
+	}
+}
+
+func TestConversationInitialTextConstrainsAudioBookChapters(t *testing.T) {
+	got := ConversationInitialText(PlanRequest{
+		Type:     config.ContentTypeAudioBook,
+		Topic:    "Turn this document into an audiobook",
+		Language: "zh-Hans",
+	})
+	for _, expected := range []string{
+		"dedicated ordered chapter sections in `chapters`",
+		"Style must be one of news, conversational, audiobook, podcast, or meeting",
+		"Prefer 3 chapters",
+		"never produce more than 5",
+		"do not repeat the chapter list in the summary",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("audio-book initial prompt missing %q: %s", expected, got)
+		}
+	}
+}
+
+func TestAudioBookAttachmentPromptUsesBoundedDigest(t *testing.T) {
+	long := "# Chapter One\n\n" + strings.Repeat("very long source text ", 1000)
+	got := audioBookAttachmentsPrompt([]Attachment{{Filename: "book.pdf", Markdown: long}})
+	if len(got) > 3500 {
+		t.Fatalf("audio-book prompt too large: %d chars", len(got))
+	}
+	if !strings.Contains(got, "Converted length:") || !strings.Contains(got, "# Chapter One") {
+		t.Fatalf("audio-book prompt missing digest metadata: %s", got)
+	}
+}
+
 func TestConversationToolsUseDefaultTemplateSchema(t *testing.T) {
 	want, err := json.Marshal(TemplateSchema(config.ContentTypeDiscussion, DefaultTemplateID))
 	if err != nil {
 		t.Fatalf("marshal want schema: %v", err)
 	}
-	for _, tool := range conversationTools(DefaultTemplateID) {
+	for _, tool := range conversationTools(config.ContentTypeDiscussion, DefaultTemplateID) {
 		if tool.Function.Name != "write_plan" {
 			continue
 		}
@@ -87,7 +164,7 @@ func TestConversationToolsUseDefaultTemplateSchema(t *testing.T) {
 
 func TestConversationToolsResearchTemplateAddsPaperTools(t *testing.T) {
 	var sawSearchPapers, sawReadPaper, sawWritePlan bool
-	for _, tool := range conversationTools(ResearchTemplateID) {
+	for _, tool := range conversationTools(config.ContentTypeDiscussion, ResearchTemplateID) {
 		switch tool.Function.Name {
 		case "search_research_papers":
 			sawSearchPapers = true

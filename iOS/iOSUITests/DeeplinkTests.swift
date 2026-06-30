@@ -22,7 +22,7 @@ final class DeeplinkTests: E2ETestCase {
     func testOngoingPlanShareAndJoinViaDeepLink() throws {
         let token = try createShareToken(discussionID: "test-ongoing")
         let app = launch(deepLink: "debatepod://s/\(token)")
-        XCTAssertFalse(playerOpened(app, timeout: 25), "joining a shared ongoing podcast did not open the player")
+        XCTAssertTrue(playerOpened(app, timeout: 25), "joining a shared ongoing podcast did not open the player")
     }
 
     // MARK: - 6. Deep link to a private podcast not owned by the user → denied

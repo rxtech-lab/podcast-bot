@@ -530,7 +530,8 @@ func normalizedTranscriptLines(lines []agent.TranscriptLine) []agent.TranscriptL
 		line.Speaker = strings.TrimSpace(line.Speaker)
 		line.Side = strings.TrimSpace(line.Side)
 		line.Text = strings.TrimSpace(line.Text)
-		if line.Text == "" {
+		line.ImageURL = strings.TrimSpace(line.ImageURL)
+		if line.Text == "" && line.ImageURL == "" {
 			continue
 		}
 		out = append(out, line)
@@ -579,7 +580,8 @@ func sameTranscriptLine(a, b agent.TranscriptLine) bool {
 	return strings.TrimSpace(a.Speaker) == strings.TrimSpace(b.Speaker) &&
 		strings.TrimSpace(string(a.Role)) == strings.TrimSpace(string(b.Role)) &&
 		strings.TrimSpace(a.Side) == strings.TrimSpace(b.Side) &&
-		strings.TrimSpace(a.Text) == strings.TrimSpace(b.Text)
+		strings.TrimSpace(a.Text) == strings.TrimSpace(b.Text) &&
+		strings.TrimSpace(a.ImageURL) == strings.TrimSpace(b.ImageURL)
 }
 
 // subtitlesS3URL resolves a presigned URL for a job's subtitles sidecar. It uses

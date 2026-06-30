@@ -21,6 +21,10 @@ const (
 const (
 	SummaryDocTypeSummary = "summary"
 	SummaryDocTypePPT     = "ppt"
+	// SummaryDocTypeText is the audiobook "text-based content": a readable
+	// book rendering of the narration with the generated illustrations inline
+	// and a link to the audio at the bottom.
+	SummaryDocTypeText = "text"
 )
 
 // SummaryMeta is the content-free descriptor returned on the discussion detail

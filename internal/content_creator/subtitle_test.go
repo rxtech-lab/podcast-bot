@@ -69,6 +69,20 @@ func TestPipeline_VTTBiasZeroForAudioOnly(t *testing.T) {
 	}
 }
 
+func TestPipeline_VTTBiasAddsAudioBookDelay(t *testing.T) {
+	// Audiobooks are generated through the audio-only path, but their VTT cues
+	// have been observed to land early in both the synced player captions and
+	// the post-rendered video. Keep the correction scoped to the audiobook
+	// content type instead of changing every audio-only feed.
+	audiobook := NewPipeline(Deps{
+		ContentType: config.ContentTypeAudioBook,
+		AudioOnly:   true,
+	}).vttBias()
+	if got, want := audiobook, 2*time.Second; got != want {
+		t.Fatalf("audio-book vtt bias = %v, want %v", got, want)
+	}
+}
+
 func TestVTTWriter_AppendIgnoresEmpty(t *testing.T) {
 	w := newVTTWriter()
 	w.Append("", 0, 5*time.Second)

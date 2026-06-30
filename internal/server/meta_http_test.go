@@ -97,11 +97,14 @@ func TestHandleDiscussionTypes(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(out.Types) != 1 {
-		t.Fatalf("types length = %d, want 1", len(out.Types))
+	if len(out.Types) != 2 {
+		t.Fatalf("types length = %d, want 2", len(out.Types))
 	}
 	if out.Types[0].ID != config.ContentTypeDiscussion {
 		t.Fatalf("type id = %q, want %q", out.Types[0].ID, config.ContentTypeDiscussion)
+	}
+	if out.Types[1].ID != config.ContentTypeAudioBook {
+		t.Fatalf("type id = %q, want %q", out.Types[1].ID, config.ContentTypeAudioBook)
 	}
 }
 
@@ -178,6 +181,24 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 			t.Fatalf("settings.properties missing %q", key)
 		}
 	}
+	template := settingsProps["template"].(map[string]any)
+	templateEnumByType := template["x-enum-by-type"].(map[string]any)
+	audioBookTemplateIDs := templateEnumByType[config.ContentTypeAudioBook].([]any)
+	expectedAudioBookTemplates := []any{
+		planner.DefaultTemplateID,
+		planner.AudioBookNewsTemplateID,
+		planner.AudioBookConversationalTemplateID,
+		planner.AudioBookAudioBookTemplateID,
+		planner.AudioBookPodcastTemplateID,
+		planner.AudioBookMeetingTemplateID,
+	}
+	if !reflect.DeepEqual(audioBookTemplateIDs, expectedAudioBookTemplates) {
+		t.Fatalf("audio-book template enum = %#v, want %#v", audioBookTemplateIDs, expectedAudioBookTemplates)
+	}
+	discussionTemplateIDs := templateEnumByType[config.ContentTypeDiscussion].([]any)
+	if !reflect.DeepEqual(discussionTemplateIDs, []any{planner.DefaultTemplateID, planner.ResearchTemplateID}) {
+		t.Fatalf("discussion template enum = %#v, want default and research", discussionTemplateIDs)
+	}
 	prompt := props["prompt"].(map[string]any)
 	promptProps := prompt["properties"].(map[string]any)
 	if _, ok := promptProps["topic"]; !ok {
@@ -208,6 +229,19 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 	settingsUI := form.UISchema["settings"].(map[string]any)
 	if settingsUI["ui:objectTemplate"] != "card" {
 		t.Fatalf("settings.ui:objectTemplate = %v, want card", settingsUI["ui:objectTemplate"])
+	}
+	templateUI := settingsUI["template"].(map[string]any)
+	templateUIOptions := templateUI["ui:options"].(map[string]any)
+	templateOptionsByType := templateUIOptions["options_by_type"].(map[string]any)
+	audioBookTemplateOptions := templateOptionsByType[config.ContentTypeAudioBook].([]any)
+	if len(audioBookTemplateOptions) != len(expectedAudioBookTemplates) {
+		t.Fatalf("audio-book template options length = %d, want %d", len(audioBookTemplateOptions), len(expectedAudioBookTemplates))
+	}
+	for i, expected := range expectedAudioBookTemplates {
+		option := audioBookTemplateOptions[i].(map[string]any)
+		if option["id"] != expected {
+			t.Fatalf("audio-book template option %d id = %v, want %v", i, option["id"], expected)
+		}
 	}
 	languageUI := settingsUI["language"].(map[string]any)
 	if languageUI["ui:widget"] != "glassMenu" {

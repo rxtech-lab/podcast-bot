@@ -111,7 +111,11 @@ type DiscussionLine struct {
 	// AudioURL is a (re-signed, ephemeral) playback URL for a voice message; the
 	// agent only ever sees Text, but other participants can replay the audio. It is
 	// always derived server-side from AudioKey on read — never trusted from clients.
-	AudioURL         string                   `json:"audio_url,omitempty"`
+	AudioURL string `json:"audio_url,omitempty"`
+	// ImageURL is an inline illustration (audiobook content) rendered as its own
+	// bubble. Such a line carries no spoken Text; it survives reload because it is
+	// persisted like any other line. Empty for ordinary spoken/user lines.
+	ImageURL         string                   `json:"image_url,omitempty"`
 	Sources          []agent.TranscriptSource `json:"sources,omitempty"`
 	JudgementComment string                   `json:"judgement_comment,omitempty"`
 	// AudioKey is the durable storage key behind AudioURL. It is server-internal
@@ -311,6 +315,7 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			sender_user_id TEXT NOT NULL DEFAULT '',
 			audio_url TEXT NOT NULL DEFAULT '',
 			audio_key TEXT NOT NULL DEFAULT '',
+			image_url TEXT NOT NULL DEFAULT '',
 			sources_json TEXT NOT NULL DEFAULT '',
 			judgement_comment TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
@@ -459,6 +464,10 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"cover_prompt", "cover_prompt TEXT NOT NULL DEFAULT ''"},
 		{"reference_discussion_id", "reference_discussion_id TEXT NOT NULL DEFAULT ''"},
 		{"plan_template", "plan_template TEXT NOT NULL DEFAULT 'default'"},
+		// video_key is the object-storage key of an audiobook's rendered 1080p
+		// video; the playback URL is presigned on demand. Empty until the
+		// post-audio render finishes (or when video isn't produced).
+		{"video_key", "video_key TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
@@ -500,6 +509,7 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 	}{
 		{"audio_url", "audio_url TEXT NOT NULL DEFAULT ''"},
 		{"audio_key", "audio_key TEXT NOT NULL DEFAULT ''"},
+		{"image_url", "image_url TEXT NOT NULL DEFAULT ''"},
 		{"sender_user_id", "sender_user_id TEXT NOT NULL DEFAULT ''"},
 		{"sources_json", "sources_json TEXT NOT NULL DEFAULT ''"},
 		{"judgement_comment", "judgement_comment TEXT NOT NULL DEFAULT ''"},
@@ -1631,6 +1641,7 @@ func speakerModelsFromTopic(topic *config.DebateTopic) map[string]string {
 	for _, d := range topic.Discussants {
 		add(d.Name, d.Model)
 	}
+	add(topic.AudioBookHost.Name, topic.AudioBookHost.Model)
 	return out
 }
 
@@ -1641,6 +1652,9 @@ func applySpeakerModelOverridesToTopic(topic *config.DebateTopic, overrides map[
 	if model := overrides[strings.TrimSpace(topic.Host.Name)]; model != "" {
 		topic.Host.Model = model
 	}
+	if model := overrides[strings.TrimSpace(topic.AudioBookHost.Name)]; model != "" {
+		topic.AudioBookHost.Model = model
+	}
 	for i := range topic.Discussants {
 		if model := overrides[strings.TrimSpace(topic.Discussants[i].Name)]; model != "" {
 			topic.Discussants[i].Model = model
@@ -1648,11 +1662,12 @@ func applySpeakerModelOverridesToTopic(topic *config.DebateTopic, overrides map[
 	}
 }
 
-// SetSpeakerModel changes the LLM model override for a single speaker (the host
-// or a discussant, matched by name) in the discussion's plan. The override lives
-// outside script_json so later plan regenerations that add/remove speakers keep
-// the user's existing per-speaker assignments by speaker name. Returns nil
-// (→ 404) when the discussion has no plan or no speaker matches the given name.
+// SetSpeakerModel changes the LLM model override for a single speaker (the
+// discussion host/discussant, or the audiobook narrator, matched by name) in the
+// plan. The override lives outside script_json so later plan regenerations that
+// add/remove speakers keep the user's existing per-speaker assignments by
+// speaker name. Returns nil (→ 404) when the discussion has no plan or no
+// speaker matches the given name.
 func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speaker, model string) (*Discussion, error) {
 	speaker = strings.TrimSpace(speaker)
 	model = strings.TrimSpace(model)
@@ -1668,6 +1683,9 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 	}
 	matched := false
 	if d.Script.Host.Name == speaker {
+		matched = true
+	}
+	if d.Script.AudioBookHost.Name == speaker {
 		matched = true
 	}
 	for i := range d.Script.Discussants {
@@ -1719,6 +1737,28 @@ func (s *DiscussionStore) SetJobResult(ctx context.Context, id string, status Di
 	_, err := s.exec(ctx, `UPDATE native_discussions SET status = ?, download_url = ?, updated_at = ?
 		WHERE id = ?`, status, downloadURL, time.Now().UnixMilli(), id)
 	return err
+}
+
+// SetVideoKey records the object-storage key of an audiobook's rendered video
+// so the context menu can presign a playback URL on demand.
+func (s *DiscussionStore) SetVideoKey(ctx context.Context, id, key string) error {
+	_, err := s.exec(ctx, `UPDATE native_discussions SET video_key = ?, updated_at = ?
+		WHERE id = ?`, key, time.Now().UnixMilli(), id)
+	return err
+}
+
+// VideoKeyFor returns the stored video object key for a discussion, or "" when
+// none has been rendered yet.
+func (s *DiscussionStore) VideoKeyFor(ctx context.Context, id string) (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	var key string
+	err := s.db.QueryRowContext(ctx, `SELECT video_key FROM native_discussions WHERE id = ?`, id).Scan(&key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return key, err
 }
 
 func (s *DiscussionStore) SetUsage(ctx context.Context, id string, promptTokens, completionTokens, totalTokens int64, costUSD float64, costKnown bool, ttsCostUSD, musicCostUSD float64) error {
@@ -1893,7 +1933,10 @@ func (s *DiscussionStore) replaceTranscriptOnce(ctx context.Context, id string, 
 	}
 	for _, l := range lines {
 		text := strings.TrimSpace(l.Text)
-		if text == "" {
+		imageURL := strings.TrimSpace(l.ImageURL)
+		// Keep image-only illustration lines (empty spoken text) so audiobook
+		// pictures survive reload; only drop genuinely empty lines.
+		if text == "" && imageURL == "" {
 			continue
 		}
 		// Preserve each line's real speak time as created_at. This batch deletes
@@ -1911,10 +1954,10 @@ func (s *DiscussionStore) replaceTranscriptOnce(ctx context.Context, id string, 
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
-			(discussion_id, speaker, role, side, text, start_ms, is_user, sources_json, judgement_comment, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(discussion_id, speaker, role, side, text, start_ms, is_user, image_url, sources_json, judgement_comment, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0,
-			sourcesJSON, strings.TrimSpace(l.JudgementComment), createdAt)
+			imageURL, sourcesJSON, strings.TrimSpace(l.JudgementComment), createdAt)
 		if err != nil {
 			return err
 		}
@@ -1955,7 +1998,7 @@ func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLin
 	// re-inserts every agent line, giving them fresh (higher) ids than user
 	// messages appended earlier, so id-order clumped all user messages ahead of
 	// the agent transcript on reload. id is the stable tiebreak for equal stamps.
-	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, sources_json, judgement_comment
+	rows, err := s.db.QueryContext(ctx, `SELECT speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, image_url, sources_json, judgement_comment
 		FROM native_discussion_lines WHERE discussion_id = ? ORDER BY created_at, id`, id)
 	if err != nil {
 		return nil, err
@@ -1966,7 +2009,7 @@ func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLin
 		var line DiscussionLine
 		var isUser int
 		var sourcesJSON string
-		if err := rows.Scan(&line.Speaker, &line.Role, &line.Side, &line.Text, &line.StartMS, &isUser, &line.SenderUserID, &line.AudioURL, &line.AudioKey, &sourcesJSON, &line.JudgementComment); err != nil {
+		if err := rows.Scan(&line.Speaker, &line.Role, &line.Side, &line.Text, &line.StartMS, &isUser, &line.SenderUserID, &line.AudioURL, &line.AudioKey, &line.ImageURL, &sourcesJSON, &line.JudgementComment); err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(sourcesJSON) != "" {
@@ -2060,15 +2103,18 @@ func (s *DiscussionStore) owns(ctx context.Context, owner, id string) (bool, err
 
 func (s *DiscussionStore) appendLine(ctx context.Context, id string, line DiscussionLine) error {
 	text := strings.TrimSpace(line.Text)
-	if text == "" {
+	imageURL := strings.TrimSpace(line.ImageURL)
+	// An image-only line (audiobook illustration) carries no spoken text; keep it
+	// so the picture survives reload. Only genuinely empty lines are dropped.
+	if text == "" && imageURL == "" {
 		return nil
 	}
 	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_lines
-		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, sources_json, judgement_comment, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, image_url, sources_json, judgement_comment, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, strings.TrimSpace(line.Speaker), strings.TrimSpace(line.Role), strings.TrimSpace(line.Side),
 		text, line.StartMS, boolInt(line.IsUser), strings.TrimSpace(line.SenderUserID),
-		strings.TrimSpace(line.AudioURL), strings.TrimSpace(line.AudioKey), "", "",
+		strings.TrimSpace(line.AudioURL), strings.TrimSpace(line.AudioKey), imageURL, "", "",
 		time.Now().UnixMilli())
 	if err != nil {
 		return err

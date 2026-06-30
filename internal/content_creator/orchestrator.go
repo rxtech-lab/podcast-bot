@@ -136,6 +136,14 @@ type Orchestrator struct {
 	// must skip vttBias (which only compensates for that mp4 front-trim).
 	audioOnly bool
 
+	// audioBookImages is the small set of illustration images generated for an
+	// audiobook (one per beat, index-aligned with seriesNarrationPlan). The
+	// pipeline emits each image's URL into the chat transcript when the host
+	// fires the matching `<scene N/>` marker; the text-content + video stages
+	// read the on-disk paths. Empty for non-audiobook runs / when image
+	// generation was disabled or failed.
+	audioBookImages []AudioBookImage
+
 	subtitleCues []SubtitleCue
 
 	// livePipe is the running pipeline, published while Run is in flight so
@@ -346,6 +354,19 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	case agent.RoleJudgement:
 		return agent.NewJudgement(base)
 	case agent.RoleSeriesHost:
+		if o.Topic.Type == config.ContentTypeAudioBook {
+			soundForHost := make([]agent.SoundDirection, len(o.seriesSoundPlan))
+			for i, s := range o.seriesSoundPlan {
+				soundForHost[i] = agent.SoundDirection{
+					Mode:   s.Mode,
+					Prompt: s.Prompt,
+					Anchor: s.Anchor,
+				}
+			}
+			return agent.NewAudioBookHost(base, o.Topic.Title, audioBookOutline(o.Topic),
+				audioBookCharacters(o.Topic),
+				o.seriesNarrationPlan, o.seriesNarrationAnchors, soundForHost)
+		}
 		// Translate the orchestrator-side sound plan to the agent-side
 		// SoundDirection (mirrors the puzzle host construction).
 		soundForHost := make([]agent.SoundDirection, len(o.seriesSoundPlan))
@@ -392,6 +413,8 @@ func (o *Orchestrator) buildAgents() error {
 		return o.buildPuzzleAgents()
 	case config.ContentTypeSeries:
 		return o.buildSeriesAgents()
+	case config.ContentTypeAudioBook:
+		return o.buildAudioBookAgents()
 	case config.ContentTypeDiscussion:
 		return o.buildDiscussionAgents()
 	default:
@@ -411,6 +434,8 @@ func (o *Orchestrator) newPlanner() Planner {
 		return o.newPuzzlePlanner()
 	case config.ContentTypeSeries:
 		return o.newSeriesPlanner()
+	case config.ContentTypeAudioBook:
+		return o.newAudioBookPlanner()
 	case config.ContentTypeDiscussion:
 		return o.newDiscussionPlanner()
 	}
@@ -429,7 +454,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	// dedicated fields (puzzle_music / sound_paths stay empty). Fold them
 	// into the pipeline's existing MusicPaths / SoundPaths surfaces so the
 	// session-mixer + sound-cue dispatch paths can be reused unchanged.
-	if o.Topic.Type == config.ContentTypeSeries {
+	// Series and audio-book both drive the SeriesHost machinery: the music
+	// bed + chapter stinger clips live on the seriesMusicPath / seriesSoundPaths
+	// fields, so fold them into the pipeline's MusicPaths / SoundPaths surfaces
+	// for either type.
+	if o.Topic.Type == config.ContentTypeSeries || o.Topic.Type == config.ContentTypeAudioBook {
 		if o.seriesMusicPath != "" {
 			musicPaths = map[string]string{"session": o.seriesMusicPath}
 		}
@@ -465,7 +494,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		NarrationFrames:  len(o.seriesNarrationPlan),
 		HasSeriesPreviouslyOn: o.Topic.Type == config.ContentTypeSeries &&
 			strings.TrimSpace(o.seriesPreviouslyOn) != "",
-		SoundPaths: soundPaths,
+		SoundPaths:         soundPaths,
+		AudioBookImageURLs: o.audioBookImageURLs(),
 	})
 	o.liveMu.Lock()
 	o.livePipe = pipe

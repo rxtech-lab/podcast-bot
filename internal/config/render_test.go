@@ -117,3 +117,29 @@ func TestRenderMarkdownRoundTripSeries(t *testing.T) {
 		t.Fatalf("round-trip mismatch:\nwant %+v\n got %+v", in, got)
 	}
 }
+
+func TestRenderMarkdownRoundTripAudioBook(t *testing.T) {
+	in := &DebateTopic{
+		Title:             "A Long Book",
+		Type:              ContentTypeAudioBook,
+		Language:          "en-US",
+		TotalMinutes:      20,
+		SegmentMaxSeconds: 60,
+		TTSProvider:       TTSProviderAzure,
+		Resolution:        Resolution1080p,
+		Channel:           "default",
+		AudioBookHost:     AgentSpec{Name: "Narrator", Model: "openai/gpt-4o"},
+		AudioBookStyle:    AudioBookStylePodcast,
+		AudioBookSpeakers: []AudioBookSpeaker{{Name: "Author", Gender: "neutral", Description: "quoted source passages"}},
+		AudioBookChapters: []AudioBookChapter{
+			{Title: "Origins", Summary: "How the story begins."},
+			{Title: "Consequences", Summary: "What follows from the opening ideas."},
+		},
+		Background: "A concise overall summary.",
+		Surface:    "### Chapter 1: Origins\n\nHow the story begins.\n\n### Chapter 2: Consequences\n\nWhat follows.",
+	}
+	got := writeAndLoad(t, in)
+	if !reflect.DeepEqual(in, got) {
+		t.Fatalf("round-trip mismatch:\nwant %+v\n got %+v", in, got)
+	}
+}

@@ -1175,6 +1175,9 @@
         }
       }
     },
+    "Chapters" : {
+
+    },
     "Checking Notion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2361,6 +2364,7 @@
       }
     },
     "Document type" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2495,6 +2499,7 @@
       }
     },
     "Download Markdown" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2517,6 +2522,7 @@
       }
     },
     "Download PDF" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3387,6 +3393,7 @@
       }
     },
     "Generate summary" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3497,6 +3504,7 @@
       }
     },
     "Generating summary" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3879,6 +3887,9 @@
           }
         }
       }
+    },
+    "Loading" : {
+
     },
     "Loading %@" : {
       "localizations" : {
@@ -5781,9 +5792,6 @@
         }
       }
     },
-    "PPTX" : {
-
-    },
     "Preparing a question…" : {
       "comment" : "Progress while preparing a question",
       "localizations" : {
@@ -6685,6 +6693,12 @@
           }
         }
       }
+    },
+    "Save to Camera Roll" : {
+
+    },
+    "Save to Files" : {
+
     },
     "Search %@" : {
       "localizations" : {
@@ -7645,6 +7659,9 @@
         }
       }
     },
+    "Style" : {
+
+    },
     "Subscription" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7690,6 +7707,7 @@
       }
     },
     "Summary document" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -7868,6 +7886,9 @@
           }
         }
       }
+    },
+    "Text unavailable" : {
+
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {
@@ -8801,6 +8822,9 @@
           }
         }
       }
+    },
+    "Voices" : {
+
     },
     "Welcome to %@" : {
       "localizations" : {

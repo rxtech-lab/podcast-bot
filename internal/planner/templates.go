@@ -8,6 +8,13 @@ import (
 
 const DefaultTemplateID = "default"
 const ResearchTemplateID = "research"
+const (
+	AudioBookNewsTemplateID           = config.AudioBookStyleNews
+	AudioBookConversationalTemplateID = config.AudioBookStyleConversational
+	AudioBookAudioBookTemplateID      = config.AudioBookStyleAudioBook
+	AudioBookPodcastTemplateID        = config.AudioBookStylePodcast
+	AudioBookMeetingTemplateID        = config.AudioBookStyleMeeting
+)
 
 // Template is a named JSON schema for a planner output shape. The current
 // decoder/assembler still expects the default discussion shape; divergent
@@ -38,6 +45,50 @@ var templateRegistry = map[string][]Template{
 			Schema:      defaultDiscussionPlanSchema(),
 		},
 	},
+	config.ContentTypeAudioBook: {
+		{
+			ID:          DefaultTemplateID,
+			Type:        config.ContentTypeAudioBook,
+			Name:        "Auto",
+			Description: "Let the agent choose the best audiobook style for the source.",
+			Schema:      defaultAudioBookPlanSchema(),
+		},
+		{
+			ID:          AudioBookNewsTemplateID,
+			Type:        config.ContentTypeAudioBook,
+			Name:        "News",
+			Description: "A news-style audiobook with a lead presenter and supporting voices.",
+			Schema:      defaultAudioBookPlanSchema(),
+		},
+		{
+			ID:          AudioBookConversationalTemplateID,
+			Type:        config.ContentTypeAudioBook,
+			Name:        "Conversational",
+			Description: "A conversational audiobook where one main voice leads and guests ask questions.",
+			Schema:      defaultAudioBookPlanSchema(),
+		},
+		{
+			ID:          AudioBookAudioBookTemplateID,
+			Type:        config.ContentTypeAudioBook,
+			Name:        "Audiobook",
+			Description: "A classic narrated audiobook with light character or quote voices.",
+			Schema:      defaultAudioBookPlanSchema(),
+		},
+		{
+			ID:          AudioBookPodcastTemplateID,
+			Type:        config.ContentTypeAudioBook,
+			Name:        "Podcast",
+			Description: "A podcast-style audiobook with a host-led discussion format.",
+			Schema:      defaultAudioBookPlanSchema(),
+		},
+		{
+			ID:          AudioBookMeetingTemplateID,
+			Type:        config.ContentTypeAudioBook,
+			Name:        "Meeting",
+			Description: "A meeting-style audiobook with a facilitator and participant questions.",
+			Schema:      defaultAudioBookPlanSchema(),
+		},
+	},
 }
 
 func IsResearchTemplate(id string) bool {
@@ -45,15 +96,35 @@ func IsResearchTemplate(id string) bool {
 }
 
 func TemplateInstructions(id string) string {
-	if !IsResearchTemplate(id) {
-		return ""
-	}
-	return strings.TrimSpace(`Template: Research
+	if IsResearchTemplate(id) {
+		return strings.TrimSpace(`Template: Research
 - Produce a school-style discussion plan suitable for students, teachers, or classroom debate.
 - Prefer research papers and academic evidence over general web snippets when live research is enabled.
 - Ground the background in concrete findings, methods, datasets, tradeoffs, or limitations from the sources.
 - Make each discussant's aspect useful for learning: e.g. evidence, methods, ethics, policy, classroom impact, history, or counterargument.
 - Keep the plan understandable for a school audience without making it casual or shallow.`)
+	}
+	if style := AudioBookStyleForTemplate(id); style != "" {
+		return "Template: " + style + "\n- Set `style` to `" + style + "` unless the user explicitly asks for a different style.\n- Shape the narrator, speakers, chapter modes, and summaries around that style."
+	}
+	return ""
+}
+
+func AudioBookStyleForTemplate(id string) string {
+	switch strings.TrimSpace(id) {
+	case AudioBookNewsTemplateID:
+		return config.AudioBookStyleNews
+	case AudioBookConversationalTemplateID:
+		return config.AudioBookStyleConversational
+	case AudioBookAudioBookTemplateID:
+		return config.AudioBookStyleAudioBook
+	case AudioBookPodcastTemplateID:
+		return config.AudioBookStylePodcast
+	case AudioBookMeetingTemplateID:
+		return config.AudioBookStyleMeeting
+	default:
+		return ""
+	}
 }
 
 func defaultDiscussionPlanSchema() map[string]any {
@@ -80,6 +151,47 @@ func defaultDiscussionPlanSchema() map[string]any {
 			},
 		},
 		"required": []string{"title", "background", "host", "discussants"},
+	}
+}
+
+func defaultAudioBookPlanSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title":           map[string]any{"type": "string"},
+			"style":           map[string]any{"type": "string", "enum": []string{config.AudioBookStyleNews, config.AudioBookStyleConversational, config.AudioBookStyleAudioBook, config.AudioBookStylePodcast, config.AudioBookStyleMeeting}, "description": "The high-level production style the agent selected for this audiobook."},
+			"overall_summary": map[string]any{"type": "string", "description": "A concise Markdown summary of the full source material and audiobook direction."},
+			"narrator": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+				"required":   []string{"name"},
+			},
+			"speakers": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":        map[string]any{"type": "string"},
+						"gender":      map[string]any{"type": "string"},
+						"description": map[string]any{"type": "string"},
+					},
+					"required": []string{"name", "description"},
+				},
+			},
+			"chapters": map[string]any{
+				"type":        "array",
+				"description": "Dedicated chapter sections for the audiobook. Prefer 3 chapters for most sources and never provide more than 5. Keep chapter summaries brief and do not duplicate chapters in overall_summary.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"title":   map[string]any{"type": "string", "description": "Chapter title only; do not include a chapter number prefix."},
+						"summary": map[string]any{"type": "string", "description": "One or two concise sentences describing what this chapter narrates."},
+					},
+					"required": []string{"title", "summary"},
+				},
+			},
+		},
+		"required": []string{"title", "style", "overall_summary", "narrator", "chapters"},
 	}
 }
 
