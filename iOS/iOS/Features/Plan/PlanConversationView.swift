@@ -19,6 +19,7 @@ struct PlanConversationView: View {
     @State private var selectedAttachment: AttachmentPreviewItem?
     @State private var selectedReference: PodcastReference?
     @State private var selectedSourcesDiscussion: Discussion?
+    @State private var selectedChapters: PlanChaptersPresentation?
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
@@ -94,6 +95,9 @@ struct PlanConversationView: View {
         }
         .sheet(item: $selectedSourcesDiscussion) { discussion in
             SourcesSheet(discussion: discussion, allowsAddingSources: false)
+        }
+        .sheet(item: $selectedChapters) { presentation in
+            AudioBookChaptersSheet(presentation: presentation)
         }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingSpeakerModels) {
@@ -276,12 +280,14 @@ struct PlanConversationView: View {
         let turn = DiscussionEditTurnDTO(id: nil, role: "plan", text: nil,
                                          script: part.script, sources: part.sources,
                                          markdown: part.markdown, createdAt: nil)
+        let snapshot = PlanSnapshot(turn: turn, topic: discussion.topic)
         let showsGenerateButton = part.id == latestPlanPartID
         HStack {
             VStack(spacing: 0) {
                 PlanSnapshotCard(label: String(localized: "Plan", comment: "Label for a plan card in the conversation"),
-                                 snapshot: PlanSnapshot(turn: turn, topic: discussion.topic),
+                                 snapshot: snapshot,
                                  onSourcesTapped: { openSources(for: part) },
+                                 onChaptersTapped: snapshot.chapters.isEmpty ? nil : { openChapters(snapshot) },
                                  onEditModels: part.script == nil ? nil : { openSpeakerModels(for: part) })
                     .padding(14)
 
@@ -609,6 +615,10 @@ struct PlanConversationView: View {
         sourceDiscussion.markdown = part.markdown
         sourceDiscussion.sources = part.sources
         selectedSourcesDiscussion = sourceDiscussion
+    }
+
+    private func openChapters(_ snapshot: PlanSnapshot) {
+        selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
     }
 
     private func syncVisiblePlanCards(from updated: Discussion) {

@@ -52,20 +52,8 @@ func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
-	templates := planner.TemplatesByType(config.ContentTypeDiscussion)
-	templateIDs := make([]any, 0, len(templates))
-	templateOptions := make([]any, 0, len(templates))
-	templateLabels := make([]any, 0, len(templates))
-	for _, tmpl := range templates {
-		label := templateLabel(tmpl.ID, lang)
-		templateIDs = append(templateIDs, tmpl.ID)
-		templateLabels = append(templateLabels, label)
-		templateOptions = append(templateOptions, map[string]any{
-			"id":          tmpl.ID,
-			"label":       label,
-			"description": templateDescription(tmpl.ID, lang),
-		})
-	}
+	templateIDs, templateOptions, templateLabels := templateMetadata(config.ContentTypeDiscussion, lang)
+	audioBookTemplateIDs, audioBookTemplateOptions, _ := templateMetadata(config.ContentTypeAudioBook, lang)
 
 	languages := []precheckOption{
 		{ID: "en-US", Label: phrase(lang, "English", "英语", "英語")},
@@ -85,6 +73,19 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 		languageLabels = append(languageLabels, opt.Label)
 		languageOptions = append(languageOptions, map[string]any{"id": opt.ID, "label": opt.Label})
 	}
+	settingsSchema := newDiscussionSettingsSchema(lang, templateIDs, templateOptions, languageIDs, languageOptions)
+	templateOptionsByType := map[string]any{
+		config.ContentTypeDiscussion: templateOptions,
+		config.ContentTypeAudioBook:  audioBookTemplateOptions,
+	}
+	templateIDsByType := map[string]any{
+		config.ContentTypeDiscussion: templateIDs,
+		config.ContentTypeAudioBook:  audioBookTemplateIDs,
+	}
+	settingsProps := settingsSchema["properties"].(map[string]any)
+	templateSchema := settingsProps["template"].(map[string]any)
+	templateSchema["x-enum-by-type"] = templateIDsByType
+	templateSchema["x-options-by-type"] = templateOptionsByType
 
 	return precheckForm{
 		Title:        phrase(lang, "New Station", "新建频道", "新增頻道"),
@@ -137,54 +138,7 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 						},
 					},
 				},
-				"settings": map[string]any{
-					"type":                 "object",
-					"title":                phrase(lang, "Settings", "设置", "設定"),
-					"additionalProperties": false,
-					"properties": map[string]any{
-						"type": map[string]any{
-							"type":        "string",
-							"title":       phrase(lang, "Type", "类型", "類型"),
-							"description": phrase(lang, "The kind of station to plan.", "要规划的频道类型。", "要規劃的頻道類型。"),
-							"enum":        []any{config.ContentTypeDiscussion},
-							"default":     config.ContentTypeDiscussion,
-							"x-options": []any{
-								map[string]any{"id": config.ContentTypeDiscussion, "label": phrase(lang, "Discussion", "讨论", "討論")},
-							},
-						},
-						"template": map[string]any{
-							"type":        "string",
-							"title":       phrase(lang, "Template", "模板", "範本"),
-							"description": phrase(lang, "Choose how the planner should structure the discussion.", "选择规划器组织讨论的方式。", "選擇規劃器組織討論的方式。"),
-							"enum":        templateIDs,
-							"default":     planner.DefaultTemplateID,
-							"x-options":   templateOptions,
-						},
-						"discussants": map[string]any{
-							"type":        "integer",
-							"title":       phrase(lang, "Panelists", "嘉宾", "來賓"),
-							"description": phrase(lang, "How many people should join the conversation.", "参与讨论的人数。", "參與討論的人數。"),
-							"minimum":     2,
-							"maximum":     6,
-							"default":     3,
-						},
-						"language": map[string]any{
-							"type":        "string",
-							"title":       phrase(lang, "Language", "语言", "語言"),
-							"description": phrase(lang, "The language used for planning and generation.", "规划和生成使用的语言。", "規劃和生成使用的語言。"),
-							"enum":        languageIDs,
-							"default":     "en-US",
-							"x-options":   languageOptions,
-						},
-						"generate_cover": map[string]any{
-							"type":        "boolean",
-							"title":       phrase(lang, "Generate cover", "生成封面", "生成封面"),
-							"description": phrase(lang, "Create AI cover art in the background after the station is created.", "频道创建后在后台生成 AI 封面。", "頻道建立後在背景生成 AI 封面。"),
-							"default":     false,
-						},
-					},
-					"required": []any{"type", "template", "discussants", "language"},
-				},
+				"settings": settingsSchema,
 			},
 			"required": []any{"prompt", "settings"},
 		},
@@ -222,13 +176,16 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 				"ui:order":          []any{"type", "template", "discussants", "language", "generate_cover"},
 				"type": map[string]any{
 					"ui:widget":    "glassMenu",
-					"ui:enumNames": []any{phrase(lang, "Discussion", "讨论", "討論")},
-					"ui:options":   map[string]any{"icon": "bubble.left.and.bubble.right.fill"},
+					"ui:enumNames": []any{phrase(lang, "Discussion", "讨论", "討論"), phrase(lang, "Audio Book", "有声书", "有聲書")},
+					"ui:options":   map[string]any{"icon": "book.pages.fill"},
 				},
 				"template": map[string]any{
 					"ui:widget":    "glassMenu",
 					"ui:enumNames": templateLabels,
-					"ui:options":   map[string]any{"icon": "square.grid.2x2"},
+					"ui:options": map[string]any{
+						"icon":            "square.grid.2x2",
+						"options_by_type": templateOptionsByType,
+					},
 				},
 				"discussants": map[string]any{
 					"ui:widget":  "glassStepper",
@@ -264,6 +221,76 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 	}
 }
 
+func templateMetadata(contentType string, lang contentcreator.Lang) (ids, options, labels []any) {
+	templates := planner.TemplatesByType(contentType)
+	ids = make([]any, 0, len(templates))
+	options = make([]any, 0, len(templates))
+	labels = make([]any, 0, len(templates))
+	for _, tmpl := range templates {
+		label := templateLabel(tmpl.ID, lang)
+		ids = append(ids, tmpl.ID)
+		labels = append(labels, label)
+		options = append(options, map[string]any{
+			"id":          tmpl.ID,
+			"label":       label,
+			"description": templateDescription(contentType, tmpl.ID, lang),
+		})
+	}
+	return ids, options, labels
+}
+
+func newDiscussionSettingsSchema(lang contentcreator.Lang, templateIDs, templateOptions, languageIDs, languageOptions []any) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"title":                phrase(lang, "Settings", "设置", "設定"),
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"type": map[string]any{
+				"type":        "string",
+				"title":       phrase(lang, "Type", "类型", "類型"),
+				"description": phrase(lang, "The kind of station to plan.", "要规划的频道类型。", "要規劃的頻道類型。"),
+				"enum":        []any{config.ContentTypeDiscussion, config.ContentTypeAudioBook},
+				"default":     config.ContentTypeDiscussion,
+				"x-options": []any{
+					map[string]any{"id": config.ContentTypeDiscussion, "label": phrase(lang, "Discussion", "讨论", "討論")},
+					map[string]any{"id": config.ContentTypeAudioBook, "label": phrase(lang, "Audio Book", "有声书", "有聲書")},
+				},
+			},
+			"template": map[string]any{
+				"type":        "string",
+				"title":       phrase(lang, "Template", "模板", "範本"),
+				"description": phrase(lang, "Choose how the planner should structure the discussion.", "选择规划器组织讨论的方式。", "選擇規劃器組織討論的方式。"),
+				"enum":        templateIDs,
+				"default":     planner.DefaultTemplateID,
+				"x-options":   templateOptions,
+			},
+			"discussants": map[string]any{
+				"type":        "integer",
+				"title":       phrase(lang, "Panelists", "嘉宾", "來賓"),
+				"description": phrase(lang, "How many people should join the conversation.", "参与讨论的人数。", "參與討論的人數。"),
+				"minimum":     2,
+				"maximum":     6,
+				"default":     3,
+			},
+			"language": map[string]any{
+				"type":        "string",
+				"title":       phrase(lang, "Language", "语言", "語言"),
+				"description": phrase(lang, "The language used for planning and generation.", "规划和生成使用的语言。", "規劃和生成使用的語言。"),
+				"enum":        languageIDs,
+				"default":     "en-US",
+				"x-options":   languageOptions,
+			},
+			"generate_cover": map[string]any{
+				"type":        "boolean",
+				"title":       phrase(lang, "Generate cover", "生成封面", "生成封面"),
+				"description": phrase(lang, "Create AI cover art in the background after the station is created.", "频道创建后在后台生成 AI 封面。", "頻道建立後在背景生成 AI 封面。"),
+				"default":     false,
+			},
+		},
+		"required": []any{"type", "template", "discussants", "language"},
+	}
+}
+
 func phrase(lang contentcreator.Lang, en, hans, hant string) string {
 	switch lang {
 	case contentcreator.LangHans:
@@ -279,12 +306,38 @@ func templateLabel(id string, lang contentcreator.Lang) string {
 	switch id {
 	case planner.ResearchTemplateID:
 		return phrase(lang, "Research", "研究", "研究")
+	case planner.AudioBookNewsTemplateID:
+		return phrase(lang, "News", "新闻", "新聞")
+	case planner.AudioBookConversationalTemplateID:
+		return phrase(lang, "Conversational", "对话", "對話")
+	case planner.AudioBookAudioBookTemplateID:
+		return phrase(lang, "Audiobook", "有声书", "有聲書")
+	case planner.AudioBookPodcastTemplateID:
+		return phrase(lang, "Podcast", "播客", "Podcast")
+	case planner.AudioBookMeetingTemplateID:
+		return phrase(lang, "Meeting", "会议", "會議")
 	default:
-		return phrase(lang, "Default", "默认", "預設")
+		return phrase(lang, "Auto", "自动", "自動")
 	}
 }
 
-func templateDescription(id string, lang contentcreator.Lang) string {
+func templateDescription(contentType, id string, lang contentcreator.Lang) string {
+	if contentType == config.ContentTypeAudioBook {
+		switch id {
+		case planner.AudioBookNewsTemplateID:
+			return phrase(lang, "A news-style audiobook with a main presenter and supporting voices.", "新闻风格有声书，包含主讲人和辅助声音。", "新聞風格有聲書，包含主講人和輔助聲音。")
+		case planner.AudioBookConversationalTemplateID:
+			return phrase(lang, "A conversational audiobook with one main voice and question-asking guests.", "对话式有声书，一个主讲声音，其他人提问或补充。", "對話式有聲書，一個主講聲音，其他人提問或補充。")
+		case planner.AudioBookAudioBookTemplateID:
+			return phrase(lang, "A classic narrated audiobook with light character or quote voices.", "经典旁白有声书，可少量加入角色或引用声音。", "經典旁白有聲書，可少量加入角色或引用聲音。")
+		case planner.AudioBookPodcastTemplateID:
+			return phrase(lang, "A podcast-style audiobook led by a host with supporting speakers.", "播客风格有声书，由主持人主导并加入辅助说话人。", "Podcast 風格有聲書，由主持人主導並加入輔助說話人。")
+		case planner.AudioBookMeetingTemplateID:
+			return phrase(lang, "A meeting-style audiobook with a facilitator and participant questions.", "会议风格有声书，包含主持人和参会者提问。", "會議風格有聲書，包含主持人和參與者提問。")
+		default:
+			return phrase(lang, "Let the agent choose the best audiobook style for the source.", "让智能体根据素材选择最合适的有声书风格。", "讓智能體根據素材選擇最合適的有聲書風格。")
+		}
+	}
 	switch id {
 	case planner.ResearchTemplateID:
 		return phrase(lang,

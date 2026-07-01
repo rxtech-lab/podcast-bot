@@ -26,6 +26,7 @@ type MessageRow struct {
 	Role             string `gorm:"index;size:32;not null"`
 	Side             string `gorm:"size:32"`
 	Text             string `gorm:"type:text;not null"`
+	ImageURL         string `gorm:"type:text"`
 	At               time.Time
 	SourcesJSON      string `gorm:"type:text"`
 	JudgementComment string `gorm:"type:text"`
@@ -77,12 +78,15 @@ func OpenStore(path string, log *slog.Logger) (*Store, error) {
 	return &Store{db: db, log: log}, nil
 }
 
-// Append persists one transcript line. Failures are logged and dropped —
-// the in-memory transcript remains the source of truth for the live UI;
-// the DB is for reload-after-end and post-mortem inspection.
-func (s *Store) Append(line agent.TranscriptLine) {
+// Append persists one transcript line and returns the new row id (0 on
+// failure). Failures are logged and dropped — the in-memory transcript remains
+// the source of truth for the live UI; the DB is for reload-after-end and
+// post-mortem inspection. The returned id lets a streaming caller grow one
+// speaker's line in place via UpdateText/UpdateMeta as more of the same turn
+// arrives, instead of writing a fresh row per sentence.
+func (s *Store) Append(line agent.TranscriptLine) uint {
 	if s == nil {
-		return
+		return 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,12 +101,50 @@ func (s *Store) Append(line agent.TranscriptLine) {
 		Role:             string(line.Role),
 		Side:             line.Side,
 		Text:             line.Text,
+		ImageURL:         line.ImageURL,
 		At:               line.At,
 		SourcesJSON:      sourcesJSON,
 		JudgementComment: line.JudgementComment,
 	}
 	if err := s.db.Create(&row).Error; err != nil {
 		s.log.Warn("sqlite append failed", "speaker", line.Speaker, "err", err)
+		return 0
+	}
+	return row.ID
+}
+
+// UpdateText rewrites the spoken text of an existing row. Used to grow a
+// streaming speaker line in place as more sentences of the same turn+speaker
+// arrive. No-op on a nil store or zero id.
+func (s *Store) UpdateText(id uint, text string) {
+	if s == nil || id == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.db.Model(&MessageRow{}).Where("id = ?", id).Update("text", text).Error; err != nil {
+		s.log.Warn("sqlite update text failed", "id", id, "err", err)
+	}
+}
+
+// UpdateMeta attaches the turn-level sources / judgement comment to an existing
+// row once the turn closes (they are only known after the whole turn is
+// produced). No-op on a nil store or zero id.
+func (s *Store) UpdateMeta(id uint, sources []agent.TranscriptSource, judgement string) {
+	if s == nil || id == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var sourcesJSON string
+	if len(sources) > 0 {
+		if b, err := json.Marshal(sources); err == nil {
+			sourcesJSON = string(b)
+		}
+	}
+	if err := s.db.Model(&MessageRow{}).Where("id = ?", id).
+		Updates(map[string]any{"sources_json": sourcesJSON, "judgement_comment": judgement}).Error; err != nil {
+		s.log.Warn("sqlite update meta failed", "id", id, "err", err)
 	}
 }
 
@@ -129,6 +171,7 @@ func (s *Store) Snapshot() ([]agent.TranscriptLine, error) {
 			Role:             agent.Role(r.Role),
 			Side:             r.Side,
 			Text:             r.Text,
+			ImageURL:         r.ImageURL,
 			At:               r.At,
 			Sources:          sources,
 			JudgementComment: r.JudgementComment,

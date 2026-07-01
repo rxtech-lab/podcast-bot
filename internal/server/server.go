@@ -282,6 +282,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/plan/stream", s.handleDiscussionPlanStreamForID)
 		s.mux.HandleFunc("POST /api/discussions/{id}/create/plan", s.handleDiscussionCreateFromPlan)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
+		s.mux.HandleFunc("GET /api/discussions/{id}/ui-actions", s.handleDiscussionUIActions)
 		s.mux.HandleFunc("GET /api/discussions/{id}/parent-podcast", s.handleDiscussionParentPodcastGet)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary", s.handleDiscussionSummary)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pdf", s.handleDiscussionSummaryPDF)
@@ -496,6 +497,7 @@ type transcriptDTO struct {
 	Role             string                   `json:"role"`
 	Side             string                   `json:"side"`
 	Text             string                   `json:"text"`
+	ImageURL         string                   `json:"image_url,omitempty"`
 	At               time.Time                `json:"at"`
 	Sources          []agent.TranscriptSource `json:"sources,omitempty"`
 	JudgementComment string                   `json:"judgement_comment,omitempty"`
@@ -504,7 +506,7 @@ type transcriptDTO struct {
 func toDTO(l agent.TranscriptLine) transcriptDTO {
 	return transcriptDTO{
 		Speaker: l.Speaker, Role: string(l.Role), Side: l.Side,
-		Text: l.Text, At: l.At, Sources: l.Sources,
+		Text: l.Text, ImageURL: l.ImageURL, At: l.At, Sources: l.Sources,
 		JudgementComment: l.JudgementComment,
 	}
 }
@@ -674,6 +676,9 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 		}
 		if m.AudioURL != "" {
 			payload["audio_url"] = m.AudioURL
+		}
+		if m.ImageURL != "" {
+			payload["image_url"] = m.ImageURL
 		}
 		return eventEnvelope{"transcript", payload}, true
 	case contentcreator.TickMsg:

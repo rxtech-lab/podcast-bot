@@ -81,7 +81,7 @@ func TestGenerateGeminiImageUsesNativeInteractionsAPI(t *testing.T) {
 	if string(raw) != "image-bytes" {
 		t.Fatalf("raw = %q", string(raw))
 	}
-	if got["model"] != "gemini-3.1-flash-image" {
+	if got["model"] != "gemini-3.1-flash-lite-image" {
 		t.Fatalf("model = %v", got["model"])
 	}
 	format, ok := got["response_format"].(map[string]any)

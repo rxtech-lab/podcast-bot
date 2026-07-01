@@ -12,19 +12,20 @@ enum NewDiscussionFormUI {
     /// Glass leaf widgets keyed by the `ui:widget` names emitted by the backend.
     @MainActor
     static func widgets(
+        rootFormData: Binding<FormData>,
         coordinator: NewDiscussionFormCoordinator,
         attachmentsCoordinator: NewDiscussionAttachmentsCoordinator
     ) -> [String: JSONSchemaFormWidget] {
         [
             "glassText": { context in AnyView(GlassTextWidget(context: context)) },
-            "glassMenu": { context in AnyView(GlassMenuWidget(context: context)) },
+            "glassMenu": { context in AnyView(GlassMenuWidget(context: context, rootFormData: rootFormData)) },
             "glassStepper": { context in AnyView(GlassStepperWidget(context: context)) },
             "glassToggle": { context in AnyView(GlassToggleWidget(context: context)) },
             "discussionPicker": { context in
-                AnyView(DiscussionPickerWidget(context: context, coordinator: coordinator))
+                AnyView(DiscussionPickerWidget(context: context, rootFormData: rootFormData, coordinator: coordinator))
             },
             "attachmentsPicker": { context in
-                AnyView(AttachmentsPickerWidget(context: context, coordinator: attachmentsCoordinator))
+                AnyView(AttachmentsPickerWidget(context: context, rootFormData: rootFormData, coordinator: attachmentsCoordinator))
             },
         ]
     }
@@ -70,6 +71,22 @@ extension JSONSchemaFormWidgetContext {
             }
             return (raw, label)
         }
+    }
+
+    /// Type-scoped enum options supplied by the backend in `ui:options`.
+    func enumOptions(forType type: String) -> [(value: String, label: String)]? {
+        guard let groups = options?["options_by_type"] as? [String: Any],
+              let rawOptions = groups[type] as? [Any] else {
+            return nil
+        }
+        let parsed = rawOptions.compactMap { value -> (value: String, label: String)? in
+            guard let option = value as? [String: Any],
+                  let id = option["id"] as? String else {
+                return nil
+            }
+            return (id, (option["label"] as? String) ?? id)
+        }
+        return parsed.isEmpty ? nil : parsed
     }
 
     var stringValue: Binding<String> {
@@ -173,8 +190,24 @@ private struct GlassTextWidget: View {
 /// Enum row rendered as a menu picker inside a glass row (no empty/null option).
 private struct GlassMenuWidget: View {
     let context: JSONSchemaFormWidgetContext
+    let rootFormData: Binding<FormData>
 
-    private var options: [(value: String, label: String)] { context.enumOptions }
+    private var options: [(value: String, label: String)] {
+        if let selectedType, let scoped = context.enumOptions(forType: selectedType) {
+            return scoped
+        }
+        return context.enumOptions
+    }
+
+    private var selectedType: String? {
+        guard context.propertyName == "template",
+              case .object(let root) = rootFormData.wrappedValue,
+              case .object(let settings)? = root["settings"],
+              case .string(let type)? = settings["type"] else {
+            return nil
+        }
+        return type
+    }
 
     private var currentLabel: String {
         let selected = context.stringValue.wrappedValue
@@ -205,6 +238,15 @@ private struct GlassMenuWidget: View {
             .padding(12)
         }
         .tint(Theme.accent)
+        .onAppear(perform: normalizeSelection)
+        .onChange(of: selectedType) { _, _ in normalizeSelection() }
+    }
+
+    private func normalizeSelection() {
+        guard let first = options.first else { return }
+        if !options.contains(where: { $0.value == context.stringValue.wrappedValue }) {
+            context.stringValue.wrappedValue = first.value
+        }
     }
 }
 
@@ -266,6 +308,7 @@ private struct GlassToggleWidget: View {
 /// picker sheet through the form coordinator using the backend-declared deep link.
 private struct DiscussionPickerWidget: View {
     let context: JSONSchemaFormWidgetContext
+    let rootFormData: Binding<FormData>
     let coordinator: NewDiscussionFormCoordinator
     @Environment(AuthManager.self) private var auth
     @State private var isResolving = false
@@ -288,7 +331,7 @@ private struct DiscussionPickerWidget: View {
             Spacer()
             if !selectedID.isEmpty {
                 Button {
-                    context.formData.wrappedValue = .string("")
+                    writeSelection("")
                     coordinator.clear(fieldID: context.id)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -320,8 +363,16 @@ private struct DiscussionPickerWidget: View {
     private func present() {
         guard let deepLink = context.deepLink else { return }
         coordinator.open(deepLink: deepLink, fieldID: context.id) { reference in
-            context.formData.wrappedValue = .string(reference?.id ?? "")
+            writeSelection(reference?.id ?? "")
         }
+    }
+
+    private func writeSelection(_ id: String) {
+        var root = rootFormData.wrappedValue.object ?? [:]
+        var reference = root["reference"]?.object ?? [:]
+        reference[context.propertyName ?? "discussion_id"] = .string(id)
+        root["reference"] = .object(properties: reference)
+        rootFormData.wrappedValue = .object(properties: root)
     }
 
     /// When a parent id is present but its title isn't cached (pre-filled or
@@ -344,6 +395,7 @@ private struct DiscussionPickerWidget: View {
 /// back into the form value here.
 private struct AttachmentsPickerWidget: View {
     let context: JSONSchemaFormWidgetContext
+    let rootFormData: Binding<FormData>
     let coordinator: NewDiscussionAttachmentsCoordinator
     @Environment(AuthManager.self) private var auth
 
@@ -390,7 +442,7 @@ private struct AttachmentsPickerWidget: View {
         .task {
             coordinator.configure(api: APIClient(tokens: auth))
             coordinator.bind(fieldID: context.id) { ready in
-                context.formData.wrappedValue = AttachmentsPickerWidget.formData(from: ready)
+                writeReadyAttachments(ready)
             }
             await coordinator.loadNotionStatus()
         }
@@ -459,5 +511,15 @@ private struct AttachmentsPickerWidget: View {
             return .array(items: [])
         }
         return decoded
+    }
+
+    private func writeReadyAttachments(_ attachments: [Attachment]) {
+        guard let propertyName = context.propertyName else {
+            context.formData.wrappedValue = Self.formData(from: attachments)
+            return
+        }
+        var root = rootFormData.wrappedValue.object ?? [:]
+        root[propertyName] = Self.formData(from: attachments)
+        rootFormData.wrappedValue = .object(properties: root)
     }
 }

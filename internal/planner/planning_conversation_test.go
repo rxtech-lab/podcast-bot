@@ -74,6 +74,59 @@ func TestConversationDispatchWritePlanHiddenUntilShowPlan(t *testing.T) {
 	}
 }
 
+func TestConversationDispatchAudioBookCapsChapters(t *testing.T) {
+	s := testConversationSession()
+	s.opts.Type = config.ContentTypeAudioBook
+	draft := `{"title":"Compact Book","style":"podcast","overall_summary":"A concise summary.","narrator":{"name":"Narrator"},"chapters":[{"title":"One","summary":"First."},{"title":"Two","summary":"Second."},{"title":"Three","summary":"Third."},{"title":"Four","summary":"Fourth."},{"title":"Five","summary":"Fifth."},{"title":"Six","summary":"Sixth."}]}`
+	output, kind, res, _, isErr := s.dispatch(context.Background(), llm.ToolCall{ID: "c-audio", Name: "write_plan", Arguments: draft})
+	if isErr {
+		t.Fatalf("write_plan errored: %q", output)
+	}
+	if kind != dispatchTool {
+		t.Fatalf("expected hidden dispatchTool, got %v", kind)
+	}
+	if res == nil || res.Script == nil {
+		t.Fatalf("write_plan should produce an assembled audiobook plan")
+	}
+	if got := len(res.Script.AudioBookChapters); got != audioBookMaxChapters {
+		t.Fatalf("audio-book chapters = %d, want %d", got, audioBookMaxChapters)
+	}
+	if res.Script.AudioBookChapters[audioBookMaxChapters-1].Title != "Five" {
+		t.Fatalf("last retained chapter = %+v, want Five", res.Script.AudioBookChapters[audioBookMaxChapters-1])
+	}
+	if res.Script.AudioBookStyle != config.AudioBookStylePodcast {
+		t.Fatalf("audio-book style = %q, want podcast", res.Script.AudioBookStyle)
+	}
+}
+
+func TestConversationDispatchAudioBookDedupesNarratorSpeaker(t *testing.T) {
+	s := testConversationSession()
+	s.opts.Type = config.ContentTypeAudioBook
+	draft := `{"title":"Conversation Book","style":"conversational","overall_summary":"A concise summary.","narrator":{"name":"Main Host"},"speakers":[{"name":" Main Host ","description":"duplicate host"},{"name":"Guest","description":"asks questions"}],"chapters":[{"title":"One","summary":"First chapter.","mode":"dialogue","speakers":["Main Host","Guest"]}]}`
+	output, kind, res, _, isErr := s.dispatch(context.Background(), llm.ToolCall{ID: "c-audio-dedupe", Name: "write_plan", Arguments: draft})
+	if isErr {
+		t.Fatalf("write_plan errored: %q", output)
+	}
+	if kind != dispatchTool {
+		t.Fatalf("expected hidden dispatchTool, got %v", kind)
+	}
+	if res == nil || res.Script == nil {
+		t.Fatalf("write_plan should produce an assembled audiobook plan")
+	}
+	if got := len(res.Script.AudioBookSpeakers); got != 1 {
+		t.Fatalf("audio-book speakers = %d, want 1: %+v", got, res.Script.AudioBookSpeakers)
+	}
+	if res.Script.AudioBookSpeakers[0].Name != "Guest" {
+		t.Fatalf("remaining speaker = %+v, want Guest", res.Script.AudioBookSpeakers[0])
+	}
+	if got := res.Script.AudioBookChapters[0].Speakers; len(got) != 1 || got[0] != "Guest" {
+		t.Fatalf("chapter speakers = %+v, want [Guest]", got)
+	}
+	if !strings.Contains(res.Script.Surface, "main speaker: Main Host; guest speakers: Guest") {
+		t.Fatalf("surface should describe narrator plus guest dialogue, got %q", res.Script.Surface)
+	}
+}
+
 func TestConversationDispatchUpdatePlanReassembles(t *testing.T) {
 	s := testConversationSession()
 	draft := `{"title":"Revised","background":"Para one here. Para two here.","host":{"name":"Mod"},"discussants":[{"name":"X","aspect":"tech"},{"name":"Y","aspect":"policy"}]}`
@@ -100,7 +153,7 @@ func TestConversationDispatchEnforcesExactDiscussantCount(t *testing.T) {
 }
 
 func TestConversationToolsAvoidGatewayUnsupportedSchemaKeywords(t *testing.T) {
-	for _, tool := range conversationTools(DefaultTemplateID) {
+	for _, tool := range conversationTools(config.ContentTypeDiscussion, DefaultTemplateID) {
 		raw, err := json.Marshal(tool.Function.Parameters)
 		if err != nil {
 			t.Fatalf("marshal %s parameters: %v", tool.Function.Name, err)

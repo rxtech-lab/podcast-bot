@@ -20,6 +20,19 @@ struct AgentDTO: Codable, Hashable, Sendable {
     var aspect: String?
 }
 
+struct AudioBookSpeakerDTO: Codable, Hashable, Sendable {
+    var name: String
+    var gender: String?
+    var description: String?
+}
+
+struct AudioBookChapterDTO: Codable, Hashable, Sendable {
+    var title: String
+    var summary: String
+    var mode: String?
+    var speakers: [String]?
+}
+
 struct SourceDTO: Codable, Hashable, Sendable {
     var title: String
     var url: String
@@ -149,8 +162,23 @@ struct ScriptDTO: Codable, Hashable, Sendable {
     var host: AgentDTO?
     var discussants: [AgentDTO]?
     var commander: AgentDTO?
+    var audioBookHost: AgentDTO?
+    var audioBookStyle: String?
+    var audioBookSpeakers: [AudioBookSpeakerDTO]?
+    var audioBookChapters: [AudioBookChapterDTO]?
     var background: String?
+    var surface: String?
     var sources: [SourceDTO]?
+
+    enum CodingKeys: String, CodingKey {
+        case title, type, language, channel
+        case total_minutes, segment_max_seconds, tts_provider, resolution, storage
+        case host, discussants, commander, background, surface, sources
+        case audioBookHost = "audio_book_host"
+        case audioBookStyle = "audio_book_style"
+        case audioBookSpeakers = "audio_book_speakers"
+        case audioBookChapters = "audio_book_chapters"
+    }
 }
 
 /// A user-uploaded reference file. Documents carry markdown parsed by
@@ -376,6 +404,36 @@ struct NotionExportResponse: Codable, Sendable {
         case url
         case pageID = "page_id"
     }
+}
+
+struct DiscussionUIActionsResponse: Codable, Sendable {
+    var id: String
+    var items: [DiscussionUIActionItem]
+}
+
+struct DiscussionUIActionItem: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var loadingTitle: String?
+    var systemImage: String?
+    var role: String?
+    var enabled: Bool
+    var action: DiscussionUIAction
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case loadingTitle = "loading_title"
+        case systemImage = "system_image"
+        case role
+        case enabled
+        case action
+    }
+}
+
+struct DiscussionUIAction: Codable, Hashable, Sendable {
+    var type: String
+    var link: String
 }
 
 /// POST /api/transcribe request body — asks the server to transcribe an
@@ -642,6 +700,7 @@ struct TranscriptDTO: Codable, Hashable, Sendable {
     var at: String?
     var sources: [SourceDTO]? = nil
     var judgementComment: String? = nil
+    var imageURL: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case speaker
@@ -651,6 +710,7 @@ struct TranscriptDTO: Codable, Hashable, Sendable {
         case at
         case sources
         case judgementComment = "judgement_comment"
+        case imageURL = "image_url"
     }
 }
 
@@ -669,6 +729,9 @@ struct JobEventData: Decodable, Sendable {
     var isUserMessage: Bool?
     var sender_user_id: String?
     var audio_url: String?
+    /// Carried by an audiobook's image-only transcript event: a generated
+    /// illustration to render inline in the chat at this point in the stream.
+    var image_url: String?
     var sources: [SourceDTO]?
     var judgement_comment: String?
     var agent: String?

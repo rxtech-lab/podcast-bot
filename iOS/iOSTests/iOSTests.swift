@@ -575,6 +575,37 @@ final class iOSTests: XCTestCase {
         ))
     }
 
+    func testPersistedMetadataCarriesAudiobookImageURL() {
+        var reloadedLine = LiveLine(speaker: "Narrator",
+                                    role: "host",
+                                    text: "",
+                                    isUser: false,
+                                    done: true)
+        let persistedLine = DiscussionLineDTO(speaker: "Narrator",
+                                              role: "host",
+                                              side: nil,
+                                              text: "",
+                                              startMS: nil,
+                                              isUser: false,
+                                              imageURL: "https://cdn.example/chapter-1.webp")
+
+        PlayerModel.applyPersistedMetadata(to: &reloadedLine, from: persistedLine)
+
+        XCTAssertEqual(reloadedLine.imageURL, "https://cdn.example/chapter-1.webp")
+        XCTAssertTrue(reloadedLine.hasImage)
+    }
+
+    func testSpeakerPaletteUsesTranscriptOrderToAvoidHashCollision() {
+        let lines = [
+            LiveLine(speaker: "Host", role: "host", text: "Welcome.", isUser: false, done: true),
+            LiveLine(speaker: "Guest", role: "discussant", text: "Thanks.", isUser: false, done: true)
+        ]
+
+        XCTAssertEqual(SpeakerPalette.index(for: "Host"), SpeakerPalette.index(for: "Guest"))
+        XCTAssertNotEqual(SpeakerPalette.index(for: "Host", in: lines),
+                          SpeakerPalette.index(for: "Guest", in: lines))
+    }
+
     func testDiscussionPointsTextWaitsForReadyStatus() throws {
         let generating = try decodeDiscussion(status: "generating", pointsCharged: 21)
         let ready = try decodeDiscussion(status: "ready", pointsCharged: 21)

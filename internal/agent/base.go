@@ -142,12 +142,15 @@ func (b *Base) Transcript() []tools.TranscriptLine {
 		return nil
 	}
 	src := b.transcript.Snapshot()
-	out := make([]tools.TranscriptLine, len(src))
-	for i, l := range src {
-		out[i] = tools.TranscriptLine{
+	out := make([]tools.TranscriptLine, 0, len(src))
+	for _, l := range src {
+		if strings.TrimSpace(l.Text) == "" {
+			continue
+		}
+		out = append(out, tools.TranscriptLine{
 			Speaker: l.Speaker, Role: string(l.Role), Side: l.Side,
 			Text: l.Text, At: l.At,
-		}
+		})
 	}
 	return out
 }
@@ -169,6 +172,9 @@ func (b *Base) ListenSelf(ctx context.Context, line TranscriptLine) error {
 
 func (b *Base) recordLine(line TranscriptLine) error {
 	if b.mem == nil {
+		return nil
+	}
+	if strings.TrimSpace(line.Text) == "" {
 		return nil
 	}
 	tag := line.Speaker
@@ -298,7 +304,7 @@ func latestUserLine(recent []TranscriptLine) *TranscriptLine {
 func formatRecent(lines []TranscriptLine) string {
 	var b strings.Builder
 	for _, l := range lines {
-		if l.Pending {
+		if l.Pending || strings.TrimSpace(l.Text) == "" {
 			continue
 		}
 		tag := l.Speaker

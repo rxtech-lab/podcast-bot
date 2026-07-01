@@ -400,6 +400,20 @@ func decodeDraft(raw string) (*draft, error) {
 	return &d, nil
 }
 
+func decodeAudioBookDraft(raw string) (*audioBookDraft, error) {
+	var d audioBookDraft
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		return nil, fmt.Errorf("decode audiobook plan args: %w", err)
+	}
+	if strings.TrimSpace(d.Title) == "" ||
+		strings.TrimSpace(d.OverallSummary) == "" ||
+		strings.TrimSpace(d.Narrator.Name) == "" ||
+		len(d.Chapters) == 0 {
+		return nil, fmt.Errorf("audiobook plan returned an incomplete draft")
+	}
+	return &d, nil
+}
+
 func stringArg(raw, key string) (string, error) {
 	var args map[string]string
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {

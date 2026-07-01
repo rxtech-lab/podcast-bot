@@ -20,9 +20,10 @@ import (
 // beat, the renderer paints that prior episode's archived PNG.
 type SeriesHost struct {
 	*Base
-	show    string
-	season  int
-	episode int
+	audioBook bool
+	show      string
+	season    int
+	episode   int
 	// synopsis is the per-episode pitch the host narrates from. Sourced from
 	// topic.md's `## Surface` section (we deliberately reuse that section
 	// name rather than introducing a new one — the parser at
@@ -118,6 +119,29 @@ func NewSeriesHost(b *Base, show string, season, episode int, synopsis, previous
 	}
 }
 
+// NewAudioBookHost wires the same narrator/character-voice machinery as
+// SeriesHost, but with an audiobook-specific system prompt. narrationPlan /
+// narrationAnchors drive the `<scene N/>` illustration markers (a few
+// generated images surfaced in the companion text + video); pass nil to
+// disable imagery. soundPlan drives the `<sound-overlapped-N/>` chapter
+// stingers layered over the music bed; pass nil to disable stingers.
+func NewAudioBookHost(b *Base, title, outline string, characters []SeriesCharacter,
+	narrationPlan, narrationAnchors []string, soundPlan []SoundDirection,
+) *SeriesHost {
+	return &SeriesHost{
+		Base:             b,
+		audioBook:        true,
+		show:             title,
+		season:           1,
+		episode:          1,
+		synopsis:         outline,
+		characters:       characters,
+		narrationPlan:    narrationPlan,
+		narrationAnchors: narrationAnchors,
+		soundPlan:        soundPlan,
+	}
+}
+
 // Characters returns the per-episode cast roster (without the narrator).
 // The pipeline reads this in synthSentence to map `<char-N>...</char-N>`
 // markers to Azure voice ShortNames when building multi-voice SSML.
@@ -169,6 +193,17 @@ Directives:
 
 // Speak emits one series-host turn for the supplied directive.
 func (h *SeriesHost) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, error) {
+	if h.audioBook {
+		system := fmt.Sprintf(audioBookHostSystemTemplate,
+			h.show,
+			strings.TrimSpace(h.synopsis),
+			audioBookSceneBlock(h.narrationPlan, h.narrationAnchors),
+			audioBookLengthContract(p),
+			seriesCharacterBlock(h.characters),
+			seriesSoundBlock(h.soundPlan),
+		)
+		return h.runStream(ctx, system, p)
+	}
 	system := fmt.Sprintf(seriesHostSystemTemplate,
 		h.show, h.season, h.episode,
 		strings.TrimSpace(h.synopsis),
@@ -181,6 +216,61 @@ func (h *SeriesHost) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, err
 		seriesCharacterBlock(h.characters),
 	)
 	return h.runStream(ctx, system, p)
+}
+
+const audioBookHostSystemTemplate = `You are the narrator of a chaptered audio book. Speak in warm, clear, long-form prose. The listener should hear a polished audiobook, not a panel discussion, not a summary, and not stage directions.
+
+Natural speech markers — these are silent controls for the audio engine and never visible to the audience:
+- Use <pause time="300ms"/>, <pause time="500ms"/>, or <pause time="800ms"/> at natural breath points.
+- Use <breath/> only rarely before emotionally heavy sentences.
+- The markers are not words. Do not explain them or quote them.
+
+Audiobook title:
+%s
+
+Source-derived audiobook outline. This is the source of truth for the narration. Follow the chapter order, keep facts and names intact, and do not invent contradictions:
+%s
+
+Directive:
+- "narrate" — narrate the audiobook chapter by chapter. Open each chapter with its chapter title. Expand the outline into complete audiobook prose with connective narration, examples, and careful transitions, but do not claim access to details not present in the outline.
+  Chapter modes — the outline marks each chapter's style:
+  * A normal (narration) chapter is the narrator reading alone. Keep speaker dialogue minimal; use a character voice only for a literal quoted line.
+  * A chapter marked "_Dialogue chapter — main speaker: …; guest speakers: …_" must read as a real back-and-forth conversation between the narrator/main speaker and the listed guest speakers, NOT a monologue summarizing what they said. The narrator/main speaker speaks in the normal narrator voice without a character marker. Wrap each guest speaker's spoken words in their <char-N> markers (see the cast list below for each guest speaker's index), and keep only brief connective narration ("she paused, then", "he leaned in") between turns. Give the narrator/main speaker and every listed guest several turns so the listener clearly hears distinct voices trading lines.
+  * A legacy chapter marked "_Dialogue chapter — speakers: …_" must read as a real back-and-forth conversation between the listed speakers. Alternate turns between those speakers, wrapping each speaker's spoken words in their <char-N> markers from the cast list.
+
+%s
+
+%s
+
+%s
+
+%s`
+
+func audioBookLengthContract(p SpeakPrompt) string {
+	if p.SecondsBudget <= 0 || !strings.HasPrefix(p.Instructions, "narrate") {
+		return ""
+	}
+	minMinutes := p.SecondsBudget / 60
+	if minMinutes < 1 {
+		minMinutes = 1
+	}
+	return fmt.Sprintf("Length contract: target at least %d minute(s) of spoken audio. Do not collapse chapters into a short summary; give each chapter enough developed narration to stand on its own.", minMinutes)
+}
+
+// audioBookSceneBlock builds the illustration-marker instructions for the
+// audiobook host. Empty / nil plan → empty string (no `<scene N/>`
+// instructions reach the LLM, so the host never emits image markers when no
+// imagery was generated). When a plan is present it explains the marker
+// protocol and reuses the series narration beat list so the host emits one
+// marker per generated image, locked to the planner's anchors.
+func audioBookSceneBlock(plan, anchors []string) string {
+	if len(plan) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Illustration markers — a few images have been generated to illustrate this audiobook. Emit `<scene N/>` on its own line, IMMEDIATELY BEFORE the sentence that begins the matching beat, so the image appears in the chat transcript, the companion text, and the video at that moment. N is the 0-based beat index. Frame 0 shows automatically at the opening, so begin with `<scene 1/>`. Markers are silent — never spoken, never shown in subtitles.\n")
+	sb.WriteString(seriesNarrationBlock(plan, anchors))
+	return sb.String()
 }
 
 func seriesLengthContract(p SpeakPrompt) string {

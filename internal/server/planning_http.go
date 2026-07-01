@@ -374,10 +374,11 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 		"last_role", planningLastTurnRole(turns),
 	)
 	opts := planner.ConversationOptions{
+		Type:             planningContentType(d, turns),
 		Language:         planningLanguage(d, languageOverride),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
-		Template:         planningTemplate(d),
+		Template:         planningTemplate(d, planningContentType(d, turns)),
 		AgentModel:       planningAgentModel(d),
 		ExistingSources:  d.Sources,
 		ExistingPlan:     d.Script,
@@ -483,10 +484,11 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 		"last_role", planningLastTurnRole(turns),
 	)
 	opts := planner.ConversationOptions{
+		Type:             planningContentType(d, turns),
 		Language:         planningLanguage(d, languageOverride),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
-		Template:         planningTemplate(d),
+		Template:         planningTemplate(d, planningContentType(d, turns)),
 		AgentModel:       planningAgentModel(d),
 		ExistingSources:  d.Sources,
 		ExistingPlan:     d.Script,
@@ -728,18 +730,35 @@ func planningDiscussants(d *Discussion) int {
 	return 0
 }
 
-func planningTemplate(d *Discussion) string {
+func planningTemplate(d *Discussion, contentType string) string {
 	if d == nil {
 		return planner.DefaultTemplateID
 	}
 	tmpl := strings.TrimSpace(d.Template)
-	if _, ok := planner.TemplateByID(config.ContentTypeDiscussion, tmpl); ok {
+	if contentType == "" {
+		contentType = config.ContentTypeDiscussion
+	}
+	if _, ok := planner.TemplateByID(contentType, tmpl); ok {
 		if tmpl == "" {
 			return planner.DefaultTemplateID
 		}
 		return tmpl
 	}
 	return planner.DefaultTemplateID
+}
+
+func planningContentType(d *Discussion, turns []planningTurnRow) string {
+	if d != nil && d.Script != nil && strings.TrimSpace(d.Script.Type) != "" {
+		return strings.TrimSpace(d.Script.Type)
+	}
+	for _, turn := range turns {
+		text := strings.TrimSpace(turn.Text)
+		if strings.Contains(text, "- Content type: "+config.ContentTypeAudioBook) ||
+			strings.Contains(text, "Content type: "+config.ContentTypeAudioBook) {
+			return config.ContentTypeAudioBook
+		}
+	}
+	return config.ContentTypeDiscussion
 }
 
 func planningAgentModel(d *Discussion) string {

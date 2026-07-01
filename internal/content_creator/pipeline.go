@@ -82,6 +82,13 @@ type Deps struct {
 	// dropped at dispatch time with a warning rather than failing the
 	// turn.
 	SoundPaths []string
+
+	// AudioBookImageURLs maps scene-beat index → illustration URL for an
+	// audiobook run. When the host fires `<scene N/>`, the pipeline emits an
+	// image-only TranscriptMsg carrying AudioBookImageURLs[N] so the chat
+	// transcript shows the picture at that point in the narration. Nil/empty
+	// for non-audiobook runs; an empty entry means "no image for this beat".
+	AudioBookImageURLs []string
 }
 
 // surfaceTTSScale is the multiplier applied to the mixer's default
@@ -118,6 +125,7 @@ const postProducerGrace = 20 * time.Second
 
 const vttBaseBias = 1 * time.Second
 const vttPreviouslyOnBias = 1 * time.Second
+const vttAudioBookBias = 2 * time.Second
 
 // vttDiscussionBias is an extra sidecar-subtitle delay applied only to
 // discussion content. The cue offset is anchored to LiveStream's first
@@ -202,6 +210,9 @@ func (p *Pipeline) SubtitleCues() []SubtitleCue {
 }
 
 func (p *Pipeline) vttBias() time.Duration {
+	if p != nil && p.d.ContentType == config.ContentTypeAudioBook {
+		return vttAudioBookBias
+	}
 	// Audio-only feeds record audio.mp3 straight from the LiveStream at t=0
 	// with no stitch StartOffset trim. vttBias exists only to realign the
 	// sidecar .vtt against that front-trimmed mp4, so it would push captions
@@ -638,6 +649,7 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	// threshold. Long debate prose is unaffected — its sentences are
 	// already long enough to emit on their own.
 	splitter := &audio.SentenceSplitter{MinChars: 6}
+	t.curCharIdx = -1
 	defer close(t.TextOut)
 	for d := range stream.Deltas() {
 		if d.Done {
@@ -700,6 +712,85 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	return nil
 }
 
+// emitSceneImage sends an image-only TranscriptMsg for the illustration
+// anchored to scene-beat idx, so an audiobook's chat transcript shows the
+// generated picture at the moment the host advances to that beat. No-op when
+// there's no image for idx (non-audiobook runs, out-of-range, or empty URL).
+func (p *Pipeline) emitSceneImage(t *Turn, idx int) {
+	if idx < 0 || idx >= len(p.d.AudioBookImageURLs) {
+		return
+	}
+	url := p.d.AudioBookImageURLs[idx]
+	if url == "" {
+		return
+	}
+	p.d.Transcript.AppendLine(agent.TranscriptLine{
+		Speaker:  t.Speaker.Name(),
+		Role:     t.Speaker.Role(),
+		Side:     t.Speaker.Side(),
+		ImageURL: url,
+		At:       time.Now(),
+	})
+	p.d.Send(TranscriptMsg{
+		Speaker:  t.Speaker.Name(),
+		Role:     t.Speaker.Role(),
+		ImageURL: url,
+		Done:     true,
+	})
+}
+
+// transcriptSegment is one contiguous run of a sentence spoken by a single
+// voice (the narrator or a named guest), resolved from the parsed <char-N>
+// spans.
+type transcriptSegment struct {
+	speaker string
+	role    agent.Role
+	side    string
+	text    string
+}
+
+// resolveTranscriptSegments maps the parsed character spans of one sentence to
+// per-speaker transcript segments. Narrator spans (idx < 0) use the turn's own
+// speaker; a span pointing at a valid cast member uses that guest's display
+// name. Adjacent spans by the same speaker are merged, and whitespace-only
+// spans attach to the running segment so spacing is preserved. This is what
+// lets a dialogue turn render as distinct speaker bubbles instead of one
+// narrator line quoting everyone.
+func (p *Pipeline) resolveTranscriptSegments(t *Turn, spans []charSpan) []transcriptSegment {
+	var cast []agent.SeriesCharacter
+	if host, ok := t.Speaker.(*agent.SeriesHost); ok {
+		cast = host.Characters()
+	}
+	narrator := t.Speaker.Name()
+	narratorRole := t.Speaker.Role()
+	narratorSide := t.Speaker.Side()
+	out := make([]transcriptSegment, 0, len(spans))
+	for _, s := range spans {
+		speaker, role, side := narrator, narratorRole, narratorSide
+		if s.idx >= 0 && s.idx < len(cast) && strings.TrimSpace(cast[s.idx].Name) != "" {
+			speaker, role, side = strings.TrimSpace(cast[s.idx].Name), narratorRole, ""
+		}
+		if strings.TrimSpace(s.text) == "" {
+			if n := len(out); n > 0 {
+				out[n-1].text += s.text
+			}
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].speaker == speaker {
+			out[n-1].text += s.text
+			continue
+		}
+		out = append(out, transcriptSegment{speaker: speaker, role: role, side: side, text: s.text})
+	}
+	filtered := out[:0]
+	for _, s := range out {
+		if s.text = strings.TrimSpace(s.text); s.text != "" {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
 func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink io.Writer) (int64, error) {
 	if sent == "" {
 		return 0, nil
@@ -733,7 +824,8 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// path uses to build a multi-voice SSML envelope below. The
 	// returned cleanText (markers removed, inner text retained) is
 	// what the transcript / subtitle / TTS see.
-	charClean, charSpans, hadCharMarkers := splitCharacterSpans(cleaned)
+	charClean, charSpans, hadCharMarkers, endCharIdx := splitCharacterSpansFrom(cleaned, t.curCharIdx)
+	t.curCharIdx = endCharIdx
 	if hadCharMarkers {
 		cleaned = charClean
 	}
@@ -785,9 +877,11 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		// no audio gap to defer trailing advances against.
 		for _, idx := range leadAdvances {
 			p.d.Send(SceneAdvanceMsg{Index: idx})
+			p.emitSceneImage(t, idx)
 		}
 		for _, idx := range trailAdvances {
 			p.d.Send(SceneAdvanceMsg{Index: idx})
+			p.emitSceneImage(t, idx)
 		}
 		for _, m := range leadSounds {
 			p.d.Send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
@@ -883,25 +977,57 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		p.vtt.Append(sent, cueStart, audioDuration)
 	}
 
-	msg := TranscriptMsg{
-		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
-		Side: t.Speaker.Side(), Text: sent,
-		AudioDuration: audioDuration,
+	// Split the sentence into per-speaker segments so a dialogue turn shows each
+	// guest's words as their own attributed bubble instead of one narrator line
+	// that merely quotes them. A sentence with no <char-N> markers yields a
+	// single narrator segment — identical to the previous single-message path.
+	// Segments are persisted as they stream (per-speaker rows, in order), and
+	// the live transcript messages carry the resolved speaker name.
+	segs := p.resolveTranscriptSegments(t, charSpans)
+	segMsgs := make([]TranscriptMsg, 0, len(segs))
+	if len(segs) > 0 {
+		totalRunes := 0
+		for _, s := range segs {
+			totalRunes += len([]rune(s.text))
+		}
+		emittedAt := time.Now()
+		for _, s := range segs {
+			// Apportion the sentence's measured audio duration across segments by
+			// text length so caption scrolling stays roughly aligned per speaker.
+			segDur := audioDuration
+			if totalRunes > 0 && len(segs) > 1 {
+				segDur = time.Duration(float64(audioDuration) * float64(len([]rune(s.text))) / float64(totalRunes))
+			}
+			segMsgs = append(segMsgs, TranscriptMsg{
+				Speaker: s.speaker, Role: s.role, Side: s.side, Text: s.text,
+				AudioDuration: segDur,
+			})
+			t.SetLastSpeaker(s.speaker, s.role, s.side)
+			p.d.Transcript.AppendAgentSegment(t.ID, agent.TranscriptLine{
+				Speaker: s.speaker, Role: s.role, Side: s.side, Text: s.text, At: emittedAt,
+			})
+		}
 	}
 	send := p.d.Send
 	subtitleAt := targetSend
-	fireSubtitle := func() { send(msg) }
+	fireSubtitle := func() {
+		for _, m := range segMsgs {
+			send(m)
+		}
+	}
 	fireLeadingScenes := func() {
 		for _, idx := range leadAdvances {
 			send(SceneAdvanceMsg{Index: idx})
+			p.emitSceneImage(t, idx)
 		}
 	}
 	fireTrailing := func() {
 		for _, idx := range trailAdvances {
 			send(SceneAdvanceMsg{Index: idx})
+			p.emitSceneImage(t, idx)
 		}
 	}
-	if sent != "" {
+	if len(segMsgs) > 0 {
 		if remaining := time.Until(subtitleAt); remaining <= 50*time.Millisecond {
 			fireSubtitle()
 		} else {
@@ -1087,7 +1213,22 @@ func (p *Pipeline) phaseFrameCount(t *Turn) int {
 // only show up via the recent-transcript window in the prompt body).
 func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 	p.maybeJudgeTurn(ctx, t)
-	full := p.d.Transcript.AppendFromTurn(t)
+	// The turn's spoken text was already persisted per-speaker as it streamed
+	// (AppendAgentSegment). Close the open line and stamp the now-final
+	// turn-level sources / judgement onto it — no consolidated line is appended
+	// here, which would double the transcript.
+	p.d.Transcript.CloseTurn(t.ID, t.Sources(), t.JudgementComment())
+	// Agent memory still sees one consolidated entry per turn (markers stripped),
+	// built from the accumulated full text rather than a persisted line.
+	full := agent.TranscriptLine{
+		Speaker:          t.Speaker.Name(),
+		Role:             t.Speaker.Role(),
+		Side:             t.Speaker.Side(),
+		Text:             t.FullText(),
+		At:               time.Now(),
+		Sources:          t.Sources(),
+		JudgementComment: t.JudgementComment(),
+	}
 	for _, a := range p.d.Registry.All() {
 		if a == t.Speaker {
 			if t.Speaker.Role() == agent.RoleHost {
@@ -1101,10 +1242,11 @@ func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 		}
 		_ = a.Listen(ctx, full)
 	}
-	// Final transcript event (completes the running line in the TUI / web).
+	// Final transcript event completes the last-emitted speaker's running line
+	// (a dialogue turn may end on a guest, not the narrator).
+	lastName, lastRole, lastSide := t.LastSpeaker()
 	p.d.Send(TranscriptMsg{
-		Speaker: t.Speaker.Name(), Role: t.Speaker.Role(),
-		Side: t.Speaker.Side(), Text: "", Done: true,
+		Speaker: lastName, Role: lastRole, Side: lastSide, Text: "", Done: true,
 		Sources: t.Sources(), JudgementComment: t.JudgementComment(),
 	})
 }

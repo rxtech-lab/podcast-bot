@@ -12,6 +12,14 @@ private let newDiscussionLog = Logger(subsystem: "com.debatebot.ios", category: 
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("newDiscussion.settings.type") private var storedType = ""
+    @AppStorage("newDiscussion.settings.template") private var storedTemplate = ""
+    @AppStorage("newDiscussion.settings.discussants") private var storedDiscussants = 0
+    @AppStorage("newDiscussion.settings.language") private var storedLanguage = ""
+    @AppStorage("newDiscussion.settings.generateCover") private var storedGenerateCover = false
+    @AppStorage("newDiscussion.settings.hasStoredValues") private var hasStoredSettings = false
+    @AppStorage("newDiscussion.discussants") private var legacyStoredDiscussants = 0
+    @AppStorage("newDiscussion.language") private var legacyStoredLanguage = ""
     /// Called once the placeholder discussion and its first planning turn are
     /// created. The plan page resumes that server-seeded turn.
     var onPlanned: (Discussion) -> Void = { _ in }
@@ -96,6 +104,9 @@ struct NewDiscussionView: View {
         .task {
             await loadPrecheck()
         }
+        .onChange(of: formData) { _, newValue in
+            persistSettings(from: newValue)
+        }
     }
 
     /// Two-way binding into a coordinator presentation flag, keeping the picker
@@ -147,6 +158,7 @@ struct NewDiscussionView: View {
                         schemaJSON: formSchemaJSON,
                         showSubmitButton: false,
                         widgets: NewDiscussionFormUI.widgets(
+                            rootFormData: $formData,
                             coordinator: pickerCoordinator,
                             attachmentsCoordinator: attachmentsCoordinator
                         ),
@@ -203,13 +215,14 @@ struct NewDiscussionView: View {
         formSchemaJSON = jsonString(from: form.schema)
         formSchema = formSchemaJSON.flatMap { try? JSONSchema(jsonString: $0) }
         formUISchema = foundationDictionary(from: form.uiSchema)
-        formData = decodedFormData(from: form.initialData)
+        formData = restoringStoredSettings(in: decodedFormData(from: form.initialData), form: form)
         // When planning from an existing podcast, pre-fill the parent into the form
         // and cache it so the picker row shows its title.
         if let initialReference {
             setFormReferenceID(initialReference.id)
             pickerCoordinator.cache(initialReference, for: referenceFieldID)
         }
+        persistSettings(from: formData)
     }
 
     /// Writes a parent discussion id into the form's `reference.discussion_id` value.
@@ -247,6 +260,56 @@ struct NewDiscussionView: View {
         return decoded
     }
 
+    private func restoringStoredSettings(in data: FormData, form: PrecheckFormDTO) -> FormData {
+        var root = data.object ?? [:]
+        var settings = root["settings"]?.object ?? [:]
+        let defaults = settings
+        let metadata = SettingsMetadata(form: form)
+
+        let type = metadata.validType(storedType) ?? defaults.stringValue("type") ?? metadata.firstType
+        if let type {
+            settings["type"] = .string(type)
+        }
+
+        let template = metadata.validTemplate(storedTemplate, for: type)
+            ?? metadata.validTemplate(defaults.stringValue("template"), for: type)
+            ?? metadata.firstTemplate(for: type)
+        if let template {
+            settings["template"] = .string(template)
+        }
+
+        let discussants = metadata.clampedDiscussants(
+            storedDiscussants > 0
+                ? storedDiscussants
+                : (legacyStoredDiscussants > 0 ? legacyStoredDiscussants : defaults.intValue("discussants"))
+        )
+        settings["discussants"] = .number(Double(discussants))
+
+        let language = metadata.validLanguage(storedLanguage)
+            ?? metadata.validLanguage(legacyStoredLanguage)
+            ?? metadata.validLanguage(defaults.stringValue("language"))
+            ?? metadata.firstLanguage
+        if let language {
+            settings["language"] = .string(language)
+        }
+
+        let generateCover = hasStoredSettings ? storedGenerateCover : (defaults.boolValue("generate_cover") ?? false)
+        settings["generate_cover"] = .boolean(generateCover)
+
+        root["settings"] = .object(properties: settings)
+        return .object(properties: root)
+    }
+
+    private func persistSettings(from data: FormData) {
+        guard let settings = data.object?["settings"]?.object else { return }
+        storedType = settings.stringValue("type") ?? ""
+        storedTemplate = settings.stringValue("template") ?? ""
+        storedDiscussants = settings.intValue("discussants")
+        storedLanguage = settings.stringValue("language") ?? ""
+        storedGenerateCover = settings.boolValue("generate_cover") ?? false
+        hasStoredSettings = true
+    }
+
     /// Creates the placeholder discussion (fast), then hands it to the caller,
     /// which navigates to the plan page where the plan is streamed in. Creating
     /// the row first means the discussion is saved even if the planning stream is
@@ -275,3 +338,122 @@ struct NewDiscussionView: View {
     }
 }
 
+private struct SettingsMetadata {
+    private let types: [String]
+    private let templates: [String]
+    private let templatesByType: [String: [String]]
+    private let languages: [String]
+    private let discussantsRange: ClosedRange<Int>
+
+    var firstType: String? { types.first }
+    var firstLanguage: String? { languages.first }
+
+    init(form: PrecheckFormDTO) {
+        let settingsProperties = Self.settingsProperties(from: form.schema)
+        let typeSchema = settingsProperties["type"]?.objectValue
+        let templateSchema = settingsProperties["template"]?.objectValue
+        let discussantsSchema = settingsProperties["discussants"]?.objectValue
+        let languageSchema = settingsProperties["language"]?.objectValue
+
+        types = Self.stringArray(typeSchema?["enum"])
+        templates = Self.stringArray(templateSchema?["enum"])
+        templatesByType = Self.stringArrayMap(templateSchema?["x-enum-by-type"])
+        languages = Self.stringArray(languageSchema?["enum"])
+
+        let lower = Self.intValue(discussantsSchema?["minimum"]) ?? 2
+        let upper = Self.intValue(discussantsSchema?["maximum"]) ?? 6
+        discussantsRange = lower <= upper ? lower...upper : 2...6
+    }
+
+    func validType(_ value: String?) -> String? {
+        valid(value, in: types)
+    }
+
+    func validLanguage(_ value: String?) -> String? {
+        valid(value, in: languages)
+    }
+
+    func validTemplate(_ value: String?, for type: String?) -> String? {
+        valid(value, in: templateOptions(for: type))
+    }
+
+    func firstTemplate(for type: String?) -> String? {
+        templateOptions(for: type).first
+    }
+
+    func clampedDiscussants(_ value: Int) -> Int {
+        min(max(value, discussantsRange.lowerBound), discussantsRange.upperBound)
+    }
+
+    private func templateOptions(for type: String?) -> [String] {
+        if let type, let scoped = templatesByType[type], !scoped.isEmpty {
+            return scoped
+        }
+        return templates
+    }
+
+    private func valid(_ value: String?, in options: [String]) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        guard !options.isEmpty else { return trimmed }
+        return options.contains(trimmed) ? trimmed : nil
+    }
+
+    private static func settingsProperties(from schema: [String: AnyCodable]) -> [String: AnyCodable] {
+        guard case let .object(rootProperties)? = schema["properties"],
+              case let .object(settingsSchema)? = rootProperties["settings"],
+              case let .object(settingsProperties)? = settingsSchema["properties"] else {
+            return [:]
+        }
+        return settingsProperties
+    }
+
+    private static func stringArray(_ value: AnyCodable?) -> [String] {
+        guard case let .array(values)? = value else { return [] }
+        return values.compactMap {
+            guard case let .string(value) = $0 else { return nil }
+            return value
+        }
+    }
+
+    private static func stringArrayMap(_ value: AnyCodable?) -> [String: [String]] {
+        guard case let .object(groups)? = value else { return [:] }
+        var result: [String: [String]] = [:]
+        for (key, value) in groups {
+            result[key] = stringArray(value)
+        }
+        return result
+    }
+
+    private static func intValue(_ value: AnyCodable?) -> Int? {
+        switch value {
+        case let .int(value):
+            return value
+        case let .double(value):
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+}
+
+private extension AnyCodable {
+    var objectValue: [String: AnyCodable]? {
+        guard case let .object(value) = self else { return nil }
+        return value
+    }
+}
+
+private extension [String: FormData] {
+    func stringValue(_ key: String) -> String? {
+        self[key]?.string
+    }
+
+    func intValue(_ key: String) -> Int {
+        Int(self[key]?.number ?? 0)
+    }
+
+    func boolValue(_ key: String) -> Bool? {
+        self[key]?.boolean
+    }
+}

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/audio"
+	"github.com/sirily11/debate-bot/internal/audiobook"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/discussion"
@@ -94,10 +95,11 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 	// flags early with a clear message rather than silently ignoring
 	// them.
 	supportsSoftSubs := topic.Type == config.ContentTypeSeries ||
-		topic.Type == config.ContentTypeDiscussion
+		topic.Type == config.ContentTypeDiscussion ||
+		topic.Type == config.ContentTypeAudioBook
 	if !supportsSoftSubs {
 		if sub.SoftSubs || len(sub.SubtitleLanguages) > 0 {
-			return errors.New("subtitle options (soft_subs) are only valid for type=series or type=discussion")
+			return errors.New("subtitle options (soft_subs) are only valid for type=series, type=discussion, or type=audio-book")
 		}
 	}
 	if topic.Type != config.ContentTypeSeries {
@@ -107,6 +109,9 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 		if sub.PriorsZipPath != "" {
 			return errors.New("priors zip is only valid for type=series")
 		}
+	}
+	if topic.Type == config.ContentTypeAudioBook {
+		sub.AudioOnly = true
 	}
 	if len(sub.SubtitleLanguages) > 0 && !sub.SoftSubs {
 		return errors.New("translated subtitle languages require soft_subs=true")
@@ -400,6 +405,21 @@ func run(ctx context.Context, deps Deps, jobID string,
 			time.Since(t0).Round(time.Second)))
 	}
 
+	// Audiobook: generate the music bed + chapter stingers and the small set
+	// of illustration images before the orchestrator runs, so the host's
+	// prompt carries the scene/sound markers and the pipeline has the bed
+	// installed under every turn.
+	if topic.Type == config.ContentTypeAudioBook && !jobEnv.E2EMode {
+		t0 := time.Now()
+		status("preparing audiobook assets (music, illustrations)…")
+		audiobook.PrepareAudio(ctx, logger, &jobEnv, topic, orch)
+		audiobook.PrepareImages(ctx, logger, &jobEnv, topic, orch, deps.Uploader)
+		logger.Info("audiobook asset prep done",
+			"elapsed", time.Since(t0).Round(time.Millisecond))
+		status(fmt.Sprintf("audiobook assets ready (%s)",
+			time.Since(t0).Round(time.Second)))
+	}
+
 	status("running orchestrator…")
 	tRun := time.Now()
 	if err := orch.Run(ctx); err != nil {
@@ -474,8 +494,14 @@ func run(ctx context.Context, deps Deps, jobID string,
 				} else {
 					logger.Warn("s3 audio download url failed", "key", key, "err", err)
 				}
-				if err := os.Remove(audioPath); err != nil {
-					logger.Warn("remove staged audio after S3 upload failed", "path", audioPath, "err", err)
+				// Audiobooks render a video post-pass that reads this local
+				// audio.mp3, so keep the staged file for them (the render task
+				// cleans up nothing critical — it's a per-job temp dir). Other
+				// audio-only jobs remove it now that S3 has the copy.
+				if topic.Type != config.ContentTypeAudioBook {
+					if err := os.Remove(audioPath); err != nil {
+						logger.Warn("remove staged audio after S3 upload failed", "path", audioPath, "err", err)
+					}
 				}
 				status("uploaded to S3")
 			}
@@ -498,6 +524,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 			}
 		}
 
+		// Audiobook companion "text-based content": a readable book of the
+		// narration with the generated illustrations inline. Best-effort.
+		if topic.Type == config.ContentTypeAudioBook {
+			status("building text-based content…")
+			generateAudioBookTextDoc(ctx, deps, jobID, topic, orch, downloadURL)
+		}
+
 		status("done")
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.Status = server.JobDone
@@ -510,6 +543,14 @@ func run(ctx context.Context, deps Deps, jobID string,
 		})
 		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
 		notifyPodcastReady(ctx, deps, logger)
+
+		// Audiobook video: render the 1080p video reusing the series renderer
+		// now that the audio + illustrations + VTT are final, then surface it in
+		// the context menu when done. Runs through the queue so encoders stay
+		// bounded; the job is already marked done for audio playback.
+		if topic.Type == config.ContentTypeAudioBook {
+			scheduleAudioBookVideo(deps, jobID, sub, topic, orch, audioPath, jobOutDir)
+		}
 		return
 	}
 
@@ -880,6 +921,13 @@ func buildTopicMsg(topic *config.DebateTopic, jobID string) contentcreator.Topic
 		Total: 1,
 	}
 	switch topic.Type {
+	case config.ContentTypeAudioBook:
+		hostName := topic.AudioBookHost.Name
+		if hostName == "" {
+			hostName = "Narrator"
+		}
+		msg.AffNames = []string{hostName}
+		msg.AffPosition = topic.Background
 	case config.ContentTypeSeries:
 		hostName := topic.SeriesHost.Name
 		if hostName == "" {

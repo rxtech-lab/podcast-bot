@@ -54,9 +54,43 @@ type Turn struct {
 	played bool
 	err    error
 
+	// curCharIdx carries the open `<char-N>` index across sentence boundaries
+	// within this turn (-1 = narrator). A guest's spoken words can span several
+	// sentences under one marker pair; without carrying the index the sentences
+	// after the first would fall back to the narrator. Mutated only inside the
+	// single produce() goroutine, so it needs no lock. produce() seeds it to -1.
+	curCharIdx int
+
 	metaMu           sync.Mutex
 	sources          []agent.TranscriptSource
 	judgementComment string
+	// lastSpeaker is the display name of the most recent transcript segment
+	// emitted for this turn, so the turn-end Done marker closes the right
+	// speaker's bubble (a dialogue turn can end on a guest, not the narrator).
+	lastSpeaker string
+	lastRole    agent.Role
+	lastSide    string
+}
+
+// SetLastSpeaker records the most recently emitted transcript segment's
+// speaker so the turn-end Done marker targets it.
+func (t *Turn) SetLastSpeaker(name string, role agent.Role, side string) {
+	t.metaMu.Lock()
+	defer t.metaMu.Unlock()
+	t.lastSpeaker = name
+	t.lastRole = role
+	t.lastSide = side
+}
+
+// LastSpeaker returns the most recently emitted segment's speaker/role/side.
+// Falls back to the turn's own speaker when nothing has been emitted yet.
+func (t *Turn) LastSpeaker() (string, agent.Role, string) {
+	t.metaMu.Lock()
+	defer t.metaMu.Unlock()
+	if t.lastSpeaker == "" {
+		return t.Speaker.Name(), t.Speaker.Role(), t.Speaker.Side()
+	}
+	return t.lastSpeaker, t.lastRole, t.lastSide
 }
 
 var toolURLRe = regexp.MustCompile(`https?://[^\s\]\)"'<>]+`)

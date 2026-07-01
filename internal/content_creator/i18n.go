@@ -142,6 +142,15 @@ func PhaseLabelLang(contentType string, p agent.Phase, lang Lang) string {
 		case agent.PhaseEnded, agent.PhaseConclusion:
 			return phaseTriple{"End", "完", "完"}.pick(lang)
 		}
+	case config.ContentTypeAudioBook:
+		switch p {
+		case agent.PhaseSetup, agent.PhaseOpening:
+			return phaseTriple{"Opening", "开篇", "開篇"}.pick(lang)
+		case agent.PhaseFreeSpeech:
+			return phaseTriple{"Chapter", "章节", "章節"}.pick(lang)
+		case agent.PhaseEnded, agent.PhaseConclusion:
+			return phaseTriple{"End", "完", "完"}.pick(lang)
+		}
 	default:
 		// Debate (and unknown types — match the existing on-frame chip).
 		switch p {

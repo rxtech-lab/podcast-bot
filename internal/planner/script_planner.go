@@ -29,6 +29,8 @@ type Planner struct {
 	usageRecorder func(llm.Usage)
 }
 
+const audioBookMaxChapters = 5
+
 // New builds a Planner from engine env. Returns an error when env is nil so
 // the HTTP layer can 503 cleanly rather than panic.
 func New(env *config.Env) (*Planner, error) {
@@ -122,8 +124,39 @@ type draft struct {
 	} `json:"discussants"`
 }
 
+type audioBookDraft struct {
+	Title          string `json:"title"`
+	Style          string `json:"style"`
+	OverallSummary string `json:"overall_summary"`
+	Narrator       struct {
+		Name string `json:"name"`
+	} `json:"narrator"`
+	Speakers []struct {
+		Name        string `json:"name"`
+		Gender      string `json:"gender"`
+		Description string `json:"description"`
+	} `json:"speakers"`
+	Chapters []struct {
+		Title    string   `json:"title"`
+		Summary  string   `json:"summary"`
+		Mode     string   `json:"mode"`
+		Speakers []string `json:"speakers"`
+	} `json:"chapters"`
+}
+
 // Generate drafts a brand-new script from a topic.
 func (p *Planner) Generate(ctx context.Context, req PlanRequest) (*Result, error) {
+	switch strings.TrimSpace(req.Type) {
+	case "", config.ContentTypeDiscussion:
+		return p.generateDiscussion(ctx, req)
+	case config.ContentTypeAudioBook:
+		return p.generateAudioBook(ctx, req)
+	default:
+		return nil, fmt.Errorf("only %q or %q planning is supported (got %q)", config.ContentTypeDiscussion, config.ContentTypeAudioBook, req.Type)
+	}
+}
+
+func (p *Planner) generateDiscussion(ctx context.Context, req PlanRequest) (*Result, error) {
 	if req.Type != "" && req.Type != config.ContentTypeDiscussion {
 		return nil, fmt.Errorf("only %q planning is supported (got %q)", config.ContentTypeDiscussion, req.Type)
 	}
@@ -167,6 +200,50 @@ Each discussant must have a DISTINCT aspect (e.g. economic, ethical, technical, 
 		return nil, err
 	}
 	return p.assemble(d, lang, req.Channel, sources)
+}
+
+func (p *Planner) generateAudioBook(ctx context.Context, req PlanRequest) (*Result, error) {
+	if strings.TrimSpace(req.Topic) == "" {
+		return nil, fmt.Errorf("topic is required")
+	}
+	lang := req.Language
+	if lang == "" {
+		lang = "en-US"
+	}
+	user := fmt.Sprintf(`Design a narrated audiobook plan from the user's source material.
+
+Topic or instruction: %s
+Language for all names and text: %s
+
+Return STRICT JSON with this exact shape:
+{
+  "title": "a concise audiobook title",
+  "style": "news" | "conversational" | "audiobook" | "podcast" | "meeting",
+  "overall_summary": "Compact Markdown summary of the source and the proposed audiobook direction. Do not include the chapter list here.",
+  "narrator": { "name": "narrator/main host display name" },
+  "speakers": [ { "name": "additional guest or character voice; never repeat the narrator/main host", "gender": "optional male/female", "description": "how this voice should sound or what role it covers" } ],
+  "chapters": [ { "title": "chapter title without a Chapter 1 prefix", "summary": "one or two concise sentences describing what this chapter should narrate", "mode": "narration" | "dialogue", "speakers": ["additional guest/character speakers who talk in this chapter; do not list the narrator"] } ]
+}
+
+Use dedicated chapter objects instead of embedding chapters in overall_summary. Prefer 3 chapters for most sources. Use 4 or 5 only when the source is genuinely long or split into major distinct parts. Never produce more than %d chapters.
+Style direction: choose one style from news, conversational, audiobook, podcast, or meeting. Record the user's requested style when they ask for one, or infer the best fit from the source. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose "conversational". In conversational, podcast, meeting, and news styles the piece is a genuine multi-voice conversation: the narrator/main host anchors it, but the other speakers actively talk in their own turns — asking, answering, clarifying, challenging, adding — not merely being quoted by the narrator. Do not add the narrator/main host again to "speakers". In audiobook style, keep the narrator primary and use other speakers only for characters or quoted voices.
+Multi-speaker direction:
+- For "conversational", "podcast", "meeting", and "news" styles you MUST define at least one additional speaker (aim for 1-2), and MOST chapters (at least all but one) MUST use "mode": "dialogue" with those speakers listed in the chapter "speakers". This is not conditional on the source already being a conversation — reframe prose sources into a back-and-forth discussion between the narrator and the guest(s). A conversational plan whose chapters are all "narration" is wrong.
+- For "audiobook" style, keep chapters mostly "narration"; only mark a chapter "dialogue" when the source contains actual character conversation or a Q&A exchange.
+- A "dialogue" chapter is a real exchange where the narrator/main host and the listed guest speakers each get several turns — never a monologue that quotes the others. Leave "speakers" empty only for "narration" chapters the narrator reads alone.
+- Only reference speaker names that appear in the top-level "speakers" list, and never list the narrator in chapter "speakers".
+For long uploaded documents, use only the bounded source digests supplied below. Do not ask for or require the full document in the prompt. Keep chapter summaries concise while still giving the generation stage enough direction to narrate each chapter in order.%s%s`,
+		req.Topic, lang, audioBookMaxChapters, templatePrompt(req.Template), audioBookAttachmentsPrompt(req.Attachments))
+
+	raw, sources, err := p.draftAudioBookJSON(ctx, user, planningAgentOptions{
+		ResearchRequired: req.Research,
+		RequiredURLs:     extractURLs(req.Topic),
+		Template:         req.Template,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return p.assembleAudioBookWithModel(raw, lang, req.Channel, sources, p.agentModel())
 }
 
 // Improve revises an existing script per a free-text instruction. pastMessages
@@ -297,6 +374,71 @@ func attachmentsPrompt(attachments []Attachment) string {
 	return sb.String()
 }
 
+func attachmentsPromptForType(contentType string, attachments []Attachment) string {
+	if contentType == config.ContentTypeAudioBook {
+		return audioBookAttachmentsPrompt(attachments)
+	}
+	return attachmentsPrompt(attachments)
+}
+
+func audioBookAttachmentsPrompt(attachments []Attachment) string {
+	var rendered []Attachment
+	for _, a := range attachments {
+		if a.isImage() || strings.TrimSpace(a.Markdown) == "" {
+			continue
+		}
+		rendered = append(rendered, a)
+	}
+	if len(rendered) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\nUploaded source digests for audiobook planning. The full converted documents remain server-side; use these bounded digests to avoid overloading context:\n")
+	for i, a := range rendered {
+		name := strings.TrimSpace(a.Filename)
+		if name == "" {
+			name = fmt.Sprintf("document %d", i+1)
+		}
+		fmt.Fprintf(&sb, "\n--- %s ---\n%s\n", name, audioBookSourceDigest(a.Markdown))
+	}
+	return sb.String()
+}
+
+func audioBookSourceDigest(markdown string) string {
+	text := strings.TrimSpace(markdown)
+	if text == "" {
+		return "(empty document)"
+	}
+	lines := strings.Split(text, "\n")
+	var headings []string
+	for _, line := range lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "#") {
+			headings = append(headings, trim)
+			if len(headings) >= 20 {
+				break
+			}
+		}
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Converted length: %d characters.\n", len(text))
+	if len(headings) > 0 {
+		sb.WriteString("Detected headings:\n")
+		for _, h := range headings {
+			sb.WriteString("- ")
+			sb.WriteString(truncate(h, 180))
+			sb.WriteByte('\n')
+		}
+	}
+	cleaned := strings.Join(strings.Fields(text), " ")
+	if cleaned != "" {
+		sb.WriteString("Bounded excerpt for orientation:\n")
+		sb.WriteString(truncate(cleaned, 2400))
+		sb.WriteByte('\n')
+	}
+	return strings.TrimSpace(sb.String())
+}
+
 func templatePrompt(template string) string {
 	instructions := TemplateInstructions(template)
 	if instructions == "" {
@@ -396,6 +538,45 @@ func (p *Planner) draftJSON(ctx context.Context, user string, attachments []Atta
 	return d, sources, nil
 }
 
+func (p *Planner) draftAudioBookJSON(ctx context.Context, user string, opts planningAgentOptions) (*audioBookDraft, []config.Source, error) {
+	client := llm.New(p.env.OpenAIBaseURL, p.env.OpenAIKey, p.scriptModel())
+	if p.usageRecorder != nil {
+		client = client.
+			WithUsageRecorder(p.usageRecorder).
+			WithPricing(p.env.LLMInputCostPerMillion, p.env.LLMOutputCostPerMillion)
+	}
+	p.emit("thinking", "Outlining the audiobook…")
+	stream, err := client.Stream(ctx, `You are an audiobook planning agent. Return one strict JSON object matching the user's requested schema. Do not wrap it in markdown.`, []llm.Message{{Role: llm.RoleUser, Content: user}}, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("audiobook planning: %w", err)
+	}
+	var text strings.Builder
+	for d := range stream.Deltas() {
+		if d.Done {
+			break
+		}
+		text.WriteString(d.TextChunk)
+	}
+	if err := stream.Err(); err != nil {
+		return nil, nil, fmt.Errorf("audiobook planning: %w", err)
+	}
+	raw := strings.TrimSpace(text.String())
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	var d audioBookDraft
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &d); err != nil {
+		return nil, nil, fmt.Errorf("decode audiobook plan: %w", err)
+	}
+	if strings.TrimSpace(d.Title) == "" || strings.TrimSpace(d.OverallSummary) == "" || len(d.Chapters) == 0 {
+		return nil, nil, fmt.Errorf("audiobook plan returned an incomplete draft")
+	}
+	if strings.TrimSpace(d.Style) == "" {
+		d.Style = inferAudioBookStyle(&d)
+	}
+	return &d, nil, nil
+}
+
 // assemble turns a creative draft into a full, validated DebateTopic, filling
 // the non-creative scaffolding (type, language, channel, models, defaults).
 func (p *Planner) assemble(d *draft, lang, channel string, sources []config.Source) (*Result, error) {
@@ -449,6 +630,160 @@ func (p *Planner) assembleWithModel(d *draft, lang, channel string, sources []co
 		return nil, fmt.Errorf("render planned script: %w", err)
 	}
 	return &Result{Script: topic, Markdown: md, Sources: sources, Researched: len(sources) > 0}, nil
+}
+
+func (p *Planner) assembleAudioBookWithModel(d *audioBookDraft, lang, channel string, sources []config.Source, model string) (*Result, error) {
+	if strings.TrimSpace(model) == "" {
+		model = p.agentModel()
+	}
+	narrator := config.AgentSpec{Name: d.Narrator.Name, Model: model}
+	if strings.TrimSpace(narrator.Name) == "" {
+		narrator.Name = "Narrator"
+	}
+	narrator.Name = strings.TrimSpace(narrator.Name)
+	narratorKey := normalizedSpeakerName(narrator.Name)
+	speakers := make([]config.AudioBookSpeaker, 0, len(d.Speakers))
+	speakerNames := make(map[string]string, len(d.Speakers))
+	for _, s := range d.Speakers {
+		name := strings.TrimSpace(s.Name)
+		key := normalizedSpeakerName(name)
+		if name == "" || key == narratorKey || speakerNames[key] != "" {
+			continue
+		}
+		speakers = append(speakers, config.AudioBookSpeaker{
+			Name:        name,
+			Gender:      strings.TrimSpace(s.Gender),
+			Description: strings.TrimSpace(s.Description),
+		})
+		speakerNames[key] = name
+	}
+	chapters := make([]config.AudioBookChapter, 0, len(d.Chapters))
+	for _, ch := range d.Chapters {
+		if strings.TrimSpace(ch.Title) == "" || strings.TrimSpace(ch.Summary) == "" {
+			continue
+		}
+		mode := strings.ToLower(strings.TrimSpace(ch.Mode))
+		// Keep only known speaker names; a dialogue chapter needs at least
+		// one valid speaker, otherwise it collapses back to narration.
+		var chSpeakers []string
+		chSpeakerSeen := make(map[string]bool, len(ch.Speakers))
+		for _, name := range ch.Speakers {
+			key := normalizedSpeakerName(name)
+			if key == "" || key == narratorKey || chSpeakerSeen[key] {
+				continue
+			}
+			if canonical := speakerNames[key]; canonical != "" {
+				chSpeakers = append(chSpeakers, canonical)
+				chSpeakerSeen[key] = true
+			}
+		}
+		if mode == config.AudioBookModeDialogue && len(chSpeakers) == 0 {
+			mode = config.AudioBookModeNarration
+		}
+		if mode != config.AudioBookModeDialogue {
+			mode = config.AudioBookModeNarration
+			chSpeakers = nil
+		}
+		chapters = append(chapters, config.AudioBookChapter{
+			Title:    strings.TrimSpace(ch.Title),
+			Summary:  strings.TrimSpace(ch.Summary),
+			Mode:     mode,
+			Speakers: chSpeakers,
+		})
+		if len(chapters) == audioBookMaxChapters {
+			break
+		}
+	}
+	totalMinutes := len(chapters) * 8
+	if totalMinutes < 15 {
+		totalMinutes = 15
+	}
+	if p.env.E2EMode {
+		totalMinutes = 1
+	}
+	topic := &config.DebateTopic{
+		Title:             strings.TrimSpace(d.Title),
+		Type:              config.ContentTypeAudioBook,
+		Language:          lang,
+		TotalMinutes:      totalMinutes,
+		SegmentMaxSeconds: 60,
+		TTSProvider:       config.TTSProviderAzure,
+		Resolution:        config.Resolution1080p,
+		Channel:           defaultChannel(channel),
+		AudioBookHost:     narrator,
+		AudioBookStyle:    normalizeAudioBookStyle(d.Style),
+		AudioBookSpeakers: speakers,
+		AudioBookChapters: chapters,
+		Background:        strings.TrimSpace(d.OverallSummary),
+		Surface:           renderAudioBookOutline(d.OverallSummary, chapters, narrator.Name),
+		Sources:           sources,
+	}
+	if err := config.ValidateTopic(topic); err != nil {
+		return nil, fmt.Errorf("planner produced an invalid audiobook script: %w", err)
+	}
+	md, err := topic.RenderMarkdown()
+	if err != nil {
+		return nil, fmt.Errorf("render planned audiobook script: %w", err)
+	}
+	return &Result{Script: topic, Markdown: md, Sources: sources, Researched: len(sources) > 0}, nil
+}
+
+func normalizeAudioBookStyle(style string) string {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case config.AudioBookStyleNews:
+		return config.AudioBookStyleNews
+	case config.AudioBookStyleConversational:
+		return config.AudioBookStyleConversational
+	case config.AudioBookStylePodcast:
+		return config.AudioBookStylePodcast
+	case config.AudioBookStyleMeeting:
+		return config.AudioBookStyleMeeting
+	case "audio_book", "audio-book", config.AudioBookStyleAudioBook:
+		return config.AudioBookStyleAudioBook
+	default:
+		return config.AudioBookStyleAudioBook
+	}
+}
+
+func normalizedSpeakerName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+}
+
+func inferAudioBookStyle(d *audioBookDraft) string {
+	if d == nil {
+		return config.AudioBookStyleAudioBook
+	}
+	if len(d.Speakers) >= 2 {
+		return config.AudioBookStyleConversational
+	}
+	for _, ch := range d.Chapters {
+		if strings.EqualFold(strings.TrimSpace(ch.Mode), config.AudioBookModeDialogue) || len(ch.Speakers) > 0 {
+			return config.AudioBookStyleConversational
+		}
+	}
+	return config.AudioBookStyleAudioBook
+}
+
+func renderAudioBookOutline(summary string, chapters []config.AudioBookChapter, narratorName string) string {
+	var sb strings.Builder
+	sb.WriteString("# Audiobook Outline\n\n")
+	if strings.TrimSpace(summary) != "" {
+		sb.WriteString("## Overall Summary\n\n")
+		sb.WriteString(strings.TrimSpace(summary))
+		sb.WriteString("\n\n")
+	}
+	for i, ch := range chapters {
+		fmt.Fprintf(&sb, "### Chapter %d: %s\n\n", i+1, strings.TrimSpace(ch.Title))
+		if ch.Mode == config.AudioBookModeDialogue && len(ch.Speakers) > 0 {
+			mainSpeaker := strings.TrimSpace(narratorName)
+			if mainSpeaker == "" {
+				mainSpeaker = "the narrator"
+			}
+			fmt.Fprintf(&sb, "_Dialogue chapter — main speaker: %s; guest speakers: %s_\n\n", mainSpeaker, strings.Join(ch.Speakers, ", "))
+		}
+		fmt.Fprintf(&sb, "%s\n\n", strings.TrimSpace(ch.Summary))
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func (p *Planner) scriptModel() string {

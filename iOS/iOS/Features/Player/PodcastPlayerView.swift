@@ -1,3 +1,5 @@
+import AVKit
+import Photos
 import PhotosUI
 import RxAuthSwift
 import SwiftUI
@@ -24,6 +26,8 @@ struct PodcastPlayerView: View {
     @State private var message = ""
     @State private var showingPlan = false
     @State private var showingSummary = false
+    @State private var showingText = false
+    @State private var audioBookVideoURL: IdentifiableURL?
     @State private var showingFullPlayer = false
     @State private var showingImporter = false
     @State private var showingPhotos = false
@@ -42,6 +46,9 @@ struct PodcastPlayerView: View {
     @State private var createFromPlanError: String?
     @State private var isGeneratingSummary = false
     @State private var summaryGenerateError: String?
+    @State private var documentActionItems: [DiscussionUIActionItem] = []
+    @State private var podcastActionItems: [DiscussionUIActionItem] = []
+    @State private var showingForceStopConfirm = false
     @State private var transcriptIsAtBottom = true
     @State private var transcriptShouldScrollToBottom = false
     @State private var transcriptScrollRequestTask: Task<Void, Never>?
@@ -76,6 +83,12 @@ struct PodcastPlayerView: View {
         }
         .sheet(isPresented: $showingSummary) {
             summarySheet
+        }
+        .sheet(isPresented: $showingText) {
+            textSheet
+        }
+        .fullScreenCover(item: $audioBookVideoURL) { item in
+            AudioBookVideoView(url: item.url)
         }
         .sheet(item: $selectedTranscriptSources) { selection in
             SourcesSheet(
@@ -113,11 +126,26 @@ struct PodcastPlayerView: View {
         .task {
             await loadPlayerIfNeeded()
         }
+        .task(id: uiActionsRefreshKey) {
+            await loadUIActions()
+        }
         .onDisappear {
             stopPlayerIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
             handleScenePhaseChange(phase)
+        }
+        .confirmationDialog(
+            "Force stop this \(AppStringLiteral.stationNameRaw)?",
+            isPresented: $showingForceStopConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Force Stop", role: .destructive) {
+                model?.forceStop()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The current generation will stop after finalising audio that has already been created. New turns will not be generated.")
         }
         .preventsIdleSleep()
     }
@@ -135,62 +163,29 @@ struct PodcastPlayerView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button {
-                    showingPlan = true
-                } label: {
-                    Label("Plan", systemImage: "doc.text")
-                }
-                if summaryAvailable {
-                    Button {
-                        showingSummary = true
-                    } label: {
-                        Label("Summary", systemImage: "doc.richtext")
-                    }
-                } else if summaryPending || isGeneratingSummary {
-                    Button {
-                    } label: {
-                        Label("Generating summary", systemImage: "hourglass")
-                    }
-                    .disabled(true)
-                } else if summaryGenerationAvailable {
-                    Button {
-                        generateSummary()
-                    } label: {
-                        Label("Generate summary", systemImage: "sparkles")
-                    }
-                    .accessibilityIdentifier("player.generateSummary")
-                } else {
-                    Button {
-                    } label: {
-                        Label("Summary", systemImage: "doc.richtext")
-                    }
-                    .disabled(true)
-                }
-            } label: {
-                Image(systemName: "doc.text")
-            }
+            DiscussionActionsMenu(
+                items: documentActionItems,
+                labelSystemImage: "doc.text",
+                accessibilityLabel: "Documents",
+                isBusy: isDocumentActionBusy,
+                perform: performDocumentAction
+            )
             .accessibilityIdentifier("player.documents")
-            .accessibilityLabel("Documents")
             .popoverTip(PodcastPlanTip(), arrowEdge: .top)
         }
         if showsActionsMenu {
             ToolbarItem(placement: .topBarTrailing) {
                 if let model {
-                    PodcastActionsMenu(
-                        model: model,
-                        showsPoints: purchases.isConfigured,
-                        pointsMenuLabel: pointsMenuLabel,
-                        onShowPoints: { showingPointsHistory = true },
-                        onPublish: { showingPublishSheet = true },
-                        onEditCover: { showingCoverEditor = true },
-                        onMakePrivate: { makePrivate(model) },
-                        onShare: { showingShareSheet = true },
-                        onCreateFollowUp: createFollowUpAction,
-                        isCreatingFromPlan: isCreatingFromPlan,
-                        onCreateFromPlan: createFromPlanAction,
-                        onSignOut: onSignOut
+                    DiscussionActionsMenu(
+                        items: podcastActionItems,
+                        labelSystemImage: "ellipsis",
+                        accessibilityLabel: "\(AppStringLiteral.stationNameRaw) actions",
+                        titleOverride: podcastActionTitle,
+                        isBusy: isPodcastActionBusy,
+                        perform: performPodcastAction
                     )
+                    .accessibilityIdentifier("player.more")
+                    .popoverTip(podcastActionsTip(for: model), arrowEdge: .top)
                 } else {
                     PodcastLoadingMenu(
                         showsPoints: purchases.isConfigured,
@@ -229,6 +224,25 @@ struct PodcastPlayerView: View {
             && currentDiscussion.canGenerateSummary
     }
 
+    private var uiActionsRefreshKey: String {
+        let d = currentDiscussion
+        return [
+            d.id,
+            d.status.rawValue,
+            d.visibility?.rawValue ?? "",
+            d.isOwner == true ? "owner" : "viewer",
+            d.summary?.status?.rawValue ?? "",
+            d.summary?.available == true ? "summary-ready" : "summary-not-ready",
+            d.summary?.pending == true ? "summary-pending" : "summary-not-pending",
+            d.summary?.generation == true ? "summary-generation" : "summary-no-generation",
+            d.jobID ?? "",
+            d.downloadURLString ?? "",
+            onCreatedFollowUp == nil ? "no-follow-up" : "follow-up",
+            onCreatedFromPlan == nil ? "no-create-from-plan" : "create-from-plan",
+            onSignOut == nil ? "no-sign-out" : "sign-out"
+        ].joined(separator: "|")
+    }
+
     /// Extracted so the construction of `SummaryView` (and its `APIClient`) stays
     /// out of the main `body` modifier chain, which is large enough that inlining
     /// it pushes the SwiftUI type-checker past its time budget.
@@ -236,6 +250,139 @@ struct PodcastPlayerView: View {
         SummaryView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
                     api: APIClient(tokens: auth))
+    }
+
+    /// The audiobook "text-based content" book view (narration + illustrations).
+    /// Kept out of `body` for the same type-checker reason as
+    /// `summarySheet`.
+    private var textSheet: some View {
+        TextContentView(discussionID: currentDiscussion.id,
+                        title: currentDiscussion.displayTitle,
+                        api: APIClient(tokens: auth))
+    }
+
+    private func loadUIActions() async {
+        let api = APIClient(tokens: auth)
+        do {
+            let documents = try await api.discussionUIActions(id: currentDiscussion.id,
+                                                              surface: "podcast-documents")
+            documentActionItems = documents.items
+        } catch {
+            documentActionItems = []
+        }
+        do {
+            let actions = try await api.discussionUIActions(
+                id: currentDiscussion.id,
+                surface: "podcast-actions",
+                supportsPoints: purchases.isConfigured,
+                supportsFollowUp: onCreatedFollowUp != nil,
+                supportsCreateFromPlan: onCreatedFromPlan != nil,
+                supportsSignOut: onSignOut != nil
+            )
+            podcastActionItems = actions.items
+        } catch {
+            podcastActionItems = []
+        }
+    }
+
+    private func performDocumentAction(_ item: DiscussionUIActionItem) {
+        if openVideoAction(item) {
+            return
+        }
+        guard let path = validatedDiscussionActionPath(item) else { return }
+        switch path {
+        case ["sheet", "plan"]:
+            showingPlan = true
+        case ["sheet", "summary"]:
+            showingSummary = true
+        case ["sheet", "text"]:
+            showingText = true
+        case ["action", "summary-generate"]:
+            generateSummary()
+        default:
+            break
+        }
+    }
+
+    private func performPodcastAction(_ item: DiscussionUIActionItem) {
+        if openVideoAction(item) {
+            return
+        }
+        guard let path = validatedDiscussionActionPath(item) else { return }
+        switch path {
+        case ["sheet", "points"]:
+            showingPointsHistory = true
+        case ["sheet", "publish"]:
+            showingPublishSheet = true
+        case ["sheet", "cover"]:
+            showingCoverEditor = true
+        case ["sheet", "share"]:
+            showingShareSheet = true
+        case ["sheet", "follow-up"]:
+            showingFollowUpForm = true
+        case ["action", "create-from-plan"]:
+            createFromPlan()
+        case ["action", "make-private"]:
+            if let model { makePrivate(model) }
+        case ["action", "download-podcast"]:
+            model?.downloadPodcast()
+        case ["action", "force-stop"]:
+            showingForceStopConfirm = true
+        case ["action", "sign-out"]:
+            onSignOut?()
+        default:
+            break
+        }
+    }
+
+    private func openVideoAction(_ item: DiscussionUIActionItem) -> Bool {
+        // The video action carries a raw playback URL (not a debatepod deep
+        // link), so handle it before the path-based routing.
+        guard item.action.type == "play-video" else { return false }
+        if let url = URL(string: item.action.link) {
+            audioBookVideoURL = IdentifiableURL(url: url)
+        }
+        return true
+    }
+
+    private func validatedDiscussionActionPath(_ item: DiscussionUIActionItem) -> [String]? {
+        guard let url = URL(string: item.action.link),
+              url.scheme == "debatepod",
+              url.host == "discussion" else { return nil }
+        let components = url.pathComponents.filter { $0 != "/" }
+        guard components.first == currentDiscussion.id else { return nil }
+        return Array(components.dropFirst())
+    }
+
+    private func isDocumentActionBusy(_ item: DiscussionUIActionItem) -> Bool {
+        item.id == "generate-summary" && isGeneratingSummary
+    }
+
+    private func isPodcastActionBusy(_ item: DiscussionUIActionItem) -> Bool {
+        switch item.id {
+        case "create-from-plan":
+            return isCreatingFromPlan
+        case "download-podcast":
+            return model?.isDownloadingPodcast == true
+        case "force-stop":
+            return model?.isForceStopping == true
+        default:
+            return false
+        }
+    }
+
+    private func podcastActionTitle(_ item: DiscussionUIActionItem) -> String? {
+        item.id == "points" ? pointsMenuLabel : nil
+    }
+
+    private func podcastActionsTip(for model: PlayerModel) -> (any Tip)? {
+        if model.discussion.isPublic {
+            return ShareStationTip()
+        }
+        if model.discussion.isOwner != false {
+            return PublishToMarketTip()
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -323,6 +470,7 @@ struct PodcastPlayerView: View {
     private var showsActionsMenu: Bool {
         purchases.isConfigured
             || model?.showsPodcastActions == true
+            || !podcastActionItems.isEmpty
             || onCreatedFromPlan != nil
             || onCreatedFollowUp != nil
             || onSignOut != nil
@@ -414,7 +562,11 @@ struct PodcastPlayerView: View {
     private func transcriptRow(_ item: TranscriptListItem) -> some View {
         switch item {
         case .line(let line, let isMine):
-            TranscriptBubble(line: line, isMine: isMine) { sources in
+            TranscriptBubble(
+                line: line,
+                isMine: isMine,
+                speakerColor: SpeakerPalette.color(for: line.speaker, in: model?.lines ?? [line])
+            ) { sources in
                 selectedTranscriptSources = TranscriptSourcesSelection(sources: sources)
             }
         case .usage(_, let points):
@@ -758,6 +910,64 @@ private struct SummaryGenerateErrorAlert: ViewModifier {
     }
 }
 
+struct DiscussionActionsMenu: View {
+    let items: [DiscussionUIActionItem]
+    let labelSystemImage: String
+    let accessibilityLabel: String
+    var titleOverride: (DiscussionUIActionItem) -> String? = { _ in nil }
+    let isBusy: (DiscussionUIActionItem) -> Bool
+    let perform: (DiscussionUIActionItem) -> Void
+
+    var body: some View {
+        Menu {
+            if items.isEmpty {
+                Label("Loading", systemImage: "hourglass")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(items) { item in
+                    actionRow(item)
+                }
+            }
+        } label: {
+            Image(systemName: labelSystemImage)
+        }
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private func actionRow(_ item: DiscussionUIActionItem) -> some View {
+        let busy = isBusy(item)
+        let disabled = !item.enabled || busy
+        if item.action.type == "share-link", let url = URL(string: item.action.link) {
+            ShareLink(item: url) {
+                rowLabel(item, busy: busy)
+            }
+            .disabled(disabled)
+        } else {
+            Button(role: buttonRole(for: item)) {
+                perform(item)
+            } label: {
+                rowLabel(item, busy: busy)
+            }
+            .disabled(disabled)
+        }
+    }
+
+    @ViewBuilder
+    private func rowLabel(_ item: DiscussionUIActionItem, busy: Bool) -> some View {
+        let title = busy ? (item.loadingTitle ?? titleOverride(item) ?? item.title) : (titleOverride(item) ?? item.title)
+        if let systemImage = item.systemImage, !systemImage.isEmpty {
+            Label(title, systemImage: busy && item.loadingTitle != nil ? "hourglass" : systemImage)
+        } else {
+            Text(title)
+        }
+    }
+
+    private func buttonRole(for item: DiscussionUIActionItem) -> ButtonRole? {
+        item.role == "destructive" ? .destructive : nil
+    }
+}
+
 struct PodcastActionsMenu: View {
     @Bindable var model: PlayerModel
     @State private var showingForceStopConfirm = false
@@ -989,6 +1199,7 @@ private struct PlanSheetView: View {
     @State private var discussion: Discussion
     @State private var showingSources = false
     @State private var showingSpeakerModels = false
+    @State private var selectedChapters: PlanChaptersPresentation?
     @State private var isLoadingFullPlan = false
     @State private var loadError: String?
 
@@ -1006,6 +1217,10 @@ private struct PlanSheetView: View {
                             label: "Plan",
                             snapshot: PlanSnapshot(discussion: discussion),
                             onSourcesTapped: { showingSources = true },
+                            onChaptersTapped: {
+                                let snapshot = PlanSnapshot(discussion: discussion)
+                                selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+                            },
                             onEditModels: { showingSpeakerModels = true }
                         )
                         if isLoadingFullPlan && discussion.script == nil {
@@ -1046,6 +1261,9 @@ private struct PlanSheetView: View {
             }
             .sheet(isPresented: $showingSpeakerModels) {
                 SpeakerModelsSheet(discussion: $discussion, allowsEditing: false)
+            }
+            .sheet(item: $selectedChapters) { presentation in
+                AudioBookChaptersSheet(presentation: presentation)
             }
         }
     }
@@ -1115,13 +1333,35 @@ enum SpeakerPalette {
     ]
 
     static func color(for speaker: String) -> Color {
-        guard !speaker.isEmpty else { return colors[0] }
+        colors[index(for: speaker)]
+    }
+
+    static func color(for speaker: String, in lines: [LiveLine]) -> Color {
+        colors[index(for: speaker, in: lines)]
+    }
+
+    static func index(for speaker: String) -> Int {
+        guard !normalizedSpeaker(speaker).isEmpty else { return 0 }
         // djb2 — stable across launches so a speaker keeps the same color.
         var hash = 5381
         for scalar in speaker.unicodeScalars {
             hash = (hash &* 33) &+ Int(scalar.value)
         }
-        return colors[abs(hash) % colors.count]
+        return abs(hash) % colors.count
+    }
+
+    static func index(for speaker: String, in lines: [LiveLine]) -> Int {
+        let target = normalizedSpeaker(speaker)
+        guard !target.isEmpty else { return index(for: speaker) }
+        var seen: [String: Int] = [:]
+        var nextIndex = 0
+        for line in lines {
+            let key = normalizedSpeaker(line.speaker)
+            guard !key.isEmpty, seen[key] == nil else { continue }
+            seen[key] = nextIndex
+            nextIndex += 1
+        }
+        return seen[target].map { $0 % colors.count } ?? index(for: speaker)
     }
 
     static func initials(for speaker: String) -> String {
@@ -1154,15 +1394,20 @@ enum SpeakerPalette {
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private static func normalizedSpeaker(_ speaker: String) -> String {
+        speaker.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
 }
 
 /// A small gradient avatar with the speaker's initials in their palette color.
 private struct SpeakerAvatar: View {
     let speaker: String
+    var color: Color? = nil
     var size: CGFloat = 32
 
     var body: some View {
-        let color = SpeakerPalette.color(for: speaker)
+        let color = color ?? SpeakerPalette.color(for: speaker)
         Circle()
             .fill(LinearGradient(
                 colors: [color.opacity(0.95), color.opacity(0.55)],
@@ -1191,19 +1436,29 @@ private struct TranscriptBubble: View {
     let line: LiveLine
     /// True only when this line was authored by the current participant.
     let isMine: Bool
+    let speakerColor: Color
     var onSourcesTapped: ([SourceDTO]) -> Void = { _ in }
 
-    private var speakerColor: Color { SpeakerPalette.color(for: line.speaker) }
     private var sources: [SourceDTO] { line.sources ?? [] }
     private var judgementComment: String {
         line.judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    init(line: LiveLine,
+         isMine: Bool,
+         speakerColor: Color? = nil,
+         onSourcesTapped: @escaping ([SourceDTO]) -> Void = { _ in }) {
+        self.line = line
+        self.isMine = isMine
+        self.speakerColor = speakerColor ?? SpeakerPalette.color(for: line.speaker)
+        self.onSourcesTapped = onSourcesTapped
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if isMine { Spacer(minLength: 40) }
             if !isMine {
-                SpeakerAvatar(speaker: line.speaker)
+                SpeakerAvatar(speaker: line.speaker, color: speakerColor)
             }
             VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
                 if !isMine {
@@ -1228,6 +1483,28 @@ private struct TranscriptBubble: View {
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 8) {
                     if let audioURL = line.audioURL, !audioURL.isEmpty {
                         VoiceMessageControl(urlString: audioURL, isUser: isMine)
+                    }
+                    if line.hasImage, let urlStr = line.imageURL, let url = URL(string: urlStr) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFit()
+                            case .empty:
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(speakerColor.opacity(0.12))
+                                    .frame(height: 160)
+                                    .overlay { ProgressView() }
+                            case .failure:
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(speakerColor.opacity(0.12))
+                                    .frame(height: 160)
+                                    .overlay { Image(systemName: "photo").foregroundStyle(speakerColor) }
+                            @unknown default:
+                                EmptyView()
+                            }
+                        }
+                        .frame(maxWidth: 280)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     if line.hasDisplayText {
                         bubbleText
@@ -1620,3 +1897,220 @@ private struct TranscriptJudgementSourcesPreview: View {
     TranscriptJudgementSourcesPreview()
 }
 #endif
+
+/// A small Identifiable wrapper so a bare URL can drive `.fullScreenCover(item:)`.
+struct IdentifiableURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Renders an audiobook's "text-based content" — the book version of the
+/// narration with the generated illustrations inline. The body is Markdown
+/// (images embedded as `![](url)`), so it renders through the shared
+/// `MarkdownText` view, which already displays remote images.
+struct TextContentView: View {
+    let discussionID: String
+    let title: String
+    let api: APIClient
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var markdown: String = ""
+    @State private var isLoading = true
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let errorText {
+                    ContentUnavailableView(
+                        "Text unavailable",
+                        systemImage: "book.closed",
+                        description: Text(errorText)
+                    )
+                } else {
+                    ScrollView {
+                        MarkdownText(markdown)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task { await loadText() }
+        }
+    }
+
+    private func loadText() async {
+        isLoading = true
+        errorText = nil
+        do {
+            let doc = try await api.summary(id: discussionID, docType: "text")
+            markdown = doc.markdown
+        } catch {
+            errorText = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+/// Full-screen player for an audiobook's rendered 1080p video (the illustration
+/// slideshow with narration audio + captions). Presented from the context menu's
+/// "View Video" action once the post-audio render has finished.
+struct AudioBookVideoView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var localFile: URL?
+    @State private var isDownloading = false
+    @State private var message: String?
+    @State private var showingShareSheet = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+            VideoPlayer(player: player)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 30))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.white)
+                    }
+                    .accessibilityLabel("Close")
+
+                    Spacer()
+
+                    Button {
+                        shareVideo()
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                    }
+                    .disabled(isDownloading)
+                    .accessibilityLabel("Save to Files")
+
+                    Button {
+                        saveToCameraRoll()
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                    }
+                    .disabled(isDownloading)
+                    .accessibilityLabel("Save to Camera Roll")
+                }
+                .padding()
+
+                if isDownloading || message != nil {
+                    HStack(spacing: 10) {
+                        if isDownloading {
+                            ProgressView().tint(.white)
+                        }
+                        if let message {
+                            Text(message)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.62), in: .capsule)
+                }
+
+                Spacer()
+            }
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            if let localFile {
+                FileShareSheet(url: localFile)
+            }
+        }
+        .onAppear {
+            let p = AVPlayer(url: url)
+            player = p
+            p.play()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
+        }
+    }
+
+    private func shareVideo() {
+        Task {
+            if let file = await localVideoFile() {
+                localFile = file
+                showingShareSheet = true
+            }
+        }
+    }
+
+    private func saveToCameraRoll() {
+        Task {
+            guard let file = await localVideoFile() else { return }
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                showMessage("Photo access was not granted.")
+                return
+            }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: file)
+                }
+                showMessage("Saved to Camera Roll.")
+            } catch {
+                showMessage("Could not save video.")
+            }
+        }
+    }
+
+    @MainActor
+    private func localVideoFile() async -> URL? {
+        if let localFile { return localFile }
+        isDownloading = true
+        message = "Preparing video..."
+        defer { isDownloading = false }
+        do {
+            let (downloaded, _) = try await URLSession.shared.download(from: url)
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("audiobook-video-\(UUID().uuidString).mp4")
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(at: downloaded, to: destination)
+            localFile = destination
+            message = nil
+            return destination
+        } catch {
+            showMessage("Could not download video.")
+            return nil
+        }
+    }
+
+    private func showMessage(_ text: String) {
+        message = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if message == text {
+                message = nil
+            }
+        }
+    }
+}

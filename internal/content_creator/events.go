@@ -44,6 +44,11 @@ type TranscriptMsg struct {
 	AudioDuration    time.Duration
 	Sources          []agent.TranscriptSource
 	JudgementComment string
+	// ImageURL, when set, carries a generated illustration to show inline in
+	// the chat transcript (audiobook content). Such a message has no spoken
+	// Text — it's an image-only bubble the client renders at this point in the
+	// stream. Empty for ordinary sentence messages.
+	ImageURL string
 }
 
 // TickMsg updates the elapsed/remaining clock display.

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	stationCoverImageModel   = "google/gemini-3.1-flash-image"
+	stationCoverImageModel   = "google/gemini-3.1-flash-lite-image"
 	stationCoverImageSize    = "1024x1024"
 	stationCoverImageCostUSD = 0.067
 	stationCoverURLTTL       = 30 * 24 * time.Hour

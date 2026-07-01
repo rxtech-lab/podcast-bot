@@ -46,6 +46,13 @@ func (t *DebateTopic) RenderMarkdown() (string, error) {
 		fm.add("season", t.Season)
 		fm.add("episode", t.Episode)
 		fm.add("series_host", t.SeriesHost)
+	case ContentTypeAudioBook:
+		fm.add("audio_book_host", t.AudioBookHost)
+		fm.addIf("audio_book_style", t.AudioBookStyle, t.AudioBookStyle != "")
+		if len(t.AudioBookSpeakers) > 0 {
+			fm.add("audio_book_speakers", t.AudioBookSpeakers)
+		}
+		fm.add("audio_book_chapters", t.AudioBookChapters)
 	case ContentTypeDiscussion:
 		fm.add("host", t.Host)
 		fm.add("discussants", t.Discussants)

@@ -17,8 +17,7 @@ type modelsResponse struct {
 }
 
 // discussionTypeMeta describes a plan type the native clients can offer in the
-// new-discussion sheet. Planning only supports round-table discussions today,
-// so the endpoint intentionally returns a single option.
+// new-discussion sheet.
 type discussionTypeMeta struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
@@ -35,6 +34,7 @@ type templatesResponse struct {
 func (s *Server) handleDiscussionTypes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, discussionTypesResponse{Types: []discussionTypeMeta{
 		{ID: config.ContentTypeDiscussion, Label: "Discussion"},
+		{ID: config.ContentTypeAudioBook, Label: "Audio Book"},
 	}})
 }
 
