@@ -200,6 +200,7 @@ struct LibraryView: View {
                 }
                 Button("Sign Out", role: .destructive) { Task { await auth.signOut() } }
             } label: { Image(systemName: "person.crop.circle") }
+            .accessibilityIdentifier("library.account")
         }
     }
 

@@ -8,7 +8,6 @@
 import XCTest
 
 final class PodcastTests: E2ETestCase {
-
     // MARK: - 1. Create a new plan, accept, podcast becomes ready
 
     func testCreatePlanAcceptReady() throws {
@@ -101,6 +100,8 @@ final class PodcastTests: E2ETestCase {
         input.typeText("Design a podcast about renewable energy")
         app.buttons["plan.send"].tap()
 
+        app.swipeDown()
+
         // Plan card appears; open speaker models.
         let editModels = app.buttons["plan.editModels"]
         XCTAssertTrue(editModels.waitForExistence(timeout: 40), "plan card / edit-models never appeared")
@@ -129,6 +130,38 @@ final class PodcastTests: E2ETestCase {
                       "the changed speaker model did not persist across rounds")
     }
 
+    // MARK: - 6. Planning shortfall → back home → settings still opens
+
+    func testPlanningShortfallDoesNotBlockHomeToolbar() throws {
+        let app = launch()
+        openLibraryRow(app, id: "test-plan")
+
+        let input = app.textFields["plan.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 12), "planner input not found")
+        input.tap()
+        input.typeText("Please trigger e2e insufficient balance")
+        app.buttons["plan.send"].tap()
+
+        let alert = app.alerts["Could not update the plan"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 20), "insufficient-balance alert did not appear")
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS 'need'")).firstMatch.exists,
+                      "shortfall message was not shown")
+        alert.buttons["OK"].tap()
+
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 8), "back button not available after shortfall")
+        back.tap()
+
+        let account = app.buttons["library.account"]
+        XCTAssertTrue(account.waitForExistence(timeout: 8), "home account toolbar button not available")
+        account.tap()
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "account menu did not open after returning home")
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 8),
+                      "settings view did not open after planning shortfall")
+    }
+
     // MARK: - Summary helpers
 
     /// Triggers summary generation directly on the backend (fallback path).
@@ -152,7 +185,8 @@ final class PodcastTests: E2ETestCase {
             req.setValue("Bearer e2e-test-token", forHTTPHeaderField: "Authorization")
             if let (data, http) = try? syncData(req), http.statusCode == 200,
                let body = String(data: data, encoding: .utf8),
-               body.contains("\"status\":\"ready\"") {
+               body.contains("\"status\":\"ready\"")
+            {
                 return true
             }
             Thread.sleep(forTimeInterval: 1.5)

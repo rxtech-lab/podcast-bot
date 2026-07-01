@@ -102,6 +102,18 @@ func TestGenerateGeminiImageUsesNativeInteractionsAPI(t *testing.T) {
 	}
 }
 
+func TestGeminiImageSizeTierCapsLiteModelAt1K(t *testing.T) {
+	if got := geminiImageSizeTier(PuzzleSceneModel, "1920x1080"); got != geminiImageSize1K {
+		t.Fatalf("lite 1920x1080 tier = %q, want %q", got, geminiImageSize1K)
+	}
+}
+
+func TestGeminiImageSizeTierAllows2KForNonLiteModel(t *testing.T) {
+	if got := geminiImageSizeTier("google/gemini-3.1-flash-image", "1920x1080"); got != geminiImageSize2K {
+		t.Fatalf("flash 1920x1080 tier = %q, want %q", got, geminiImageSize2K)
+	}
+}
+
 func TestGeminiImageDataFallsBackToStepContent(t *testing.T) {
 	raw := []byte(`{
 		"steps": [

@@ -125,7 +125,6 @@ const postProducerGrace = 20 * time.Second
 
 const vttBaseBias = 1 * time.Second
 const vttPreviouslyOnBias = 1 * time.Second
-const vttAudioBookBias = 2 * time.Second
 
 // vttDiscussionBias is an extra sidecar-subtitle delay applied only to
 // discussion content. The cue offset is anchored to LiveStream's first
@@ -210,9 +209,6 @@ func (p *Pipeline) SubtitleCues() []SubtitleCue {
 }
 
 func (p *Pipeline) vttBias() time.Duration {
-	if p != nil && p.d.ContentType == config.ContentTypeAudioBook {
-		return vttAudioBookBias
-	}
 	// Audio-only feeds record audio.mp3 straight from the LiveStream at t=0
 	// with no stitch StartOffset trim. vttBias exists only to realign the
 	// sidecar .vtt against that front-trimmed mp4, so it would push captions
