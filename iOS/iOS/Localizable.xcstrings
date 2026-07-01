@@ -1951,28 +1951,6 @@
         }
       }
     },
-    "Create Audio Books" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "创建有声书"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "建立有聲書"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "建立有聲書"
-          }
-        }
-      }
-    },
     "Create AI cover art in the background" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1992,6 +1970,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在背景建立 AI 封面圖"
+          }
+        }
+      }
+    },
+    "Create Audio Books" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建有声书"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立有聲書"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立有聲書"
           }
         }
       }
@@ -8590,6 +8590,9 @@
         }
       }
     },
+    "Top Up" : {
+
+    },
     "Topic" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -8680,28 +8683,6 @@
         }
       }
     },
-    "Turn this plan into a live podcast when the outline is ready." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大纲准备好后，将此计划转为实时播客。"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大綱準備好後，將此計劃轉為即時播客。"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大綱準備好後，將此計劃轉為即時播客。"
-          }
-        }
-      }
-    },
     "Turn sources into narrated audio books with chapters, voices, illustrations, and a rendered video." : {
       "localizations" : {
         "zh-Hans" : {
@@ -8720,6 +8701,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "將素材轉成帶章節、角色聲音、插圖和渲染影片的旁白有聲書。"
+          }
+        }
+      }
+    },
+    "Turn this plan into a live podcast when the outline is ready." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大纲准备好后，将此计划转为实时播客。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大綱準備好後，將此計劃轉為即時播客。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大綱準備好後，將此計劃轉為即時播客。"
           }
         }
       }

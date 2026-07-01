@@ -14,6 +14,7 @@ struct PlanConversationView: View {
     @State private var isStreaming = false
     @State private var progressText: String?
     @State private var errorMessage: String?
+    @State private var showingErrorAlert = false
     @State private var pendingQuestion: QuestionPayload?
     @State private var selectedToolPart: PlanningPart?
     @State private var selectedAttachment: AttachmentPreviewItem?
@@ -23,6 +24,7 @@ struct PlanConversationView: View {
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
+    @State private var errorOffersTopUp = false
     @State private var showingSpeakerModels = false
     @State private var didStart = false
     @State private var didLoadHistory = false
@@ -103,8 +105,14 @@ struct PlanConversationView: View {
         .sheet(isPresented: $showingSpeakerModels) {
             SpeakerModelsSheet(discussion: speakerModelsDiscussionBinding)
         }
-        .alert("Could not update the plan", isPresented: errorBinding) {
-            Button("OK", role: .cancel) { errorMessage = nil }
+        .alert("Could not update the plan", isPresented: errorAlertBinding) {
+            if errorOffersTopUp {
+                Button("Top Up") {
+                    clearPlanningError()
+                    showingPaywall = true
+                }
+            }
+            Button("OK", role: .cancel) { clearPlanningError() }
         } message: {
             Text(errorMessage ?? "")
         }
@@ -126,6 +134,7 @@ struct PlanConversationView: View {
         .onDisappear {
             streamTask?.cancel()
             initialScrollTask?.cancel()
+            showingPaywall = false
         }
     }
 
@@ -542,10 +551,15 @@ struct PlanConversationView: View {
         .disabled(isGenerating)
     }
 
-    private var errorBinding: Binding<Bool> {
+    private var errorAlertBinding: Binding<Bool> {
         Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
+            get: { showingErrorAlert },
+            set: {
+                showingErrorAlert = $0
+                if !$0 {
+                    clearPlanningError()
+                }
+            }
         )
     }
 
@@ -730,7 +744,7 @@ struct PlanConversationView: View {
     }
 
     private func send(prompt: String, attachments: [Attachment]) {
-        errorMessage = nil
+        clearPlanningError()
         // Optimistic user bubble; the server echoes it back in the final parts.
         parts.append(PlanningPart(kind: "text",
                                   id: "local-user-\(UUID().uuidString)",
@@ -746,7 +760,7 @@ struct PlanConversationView: View {
 
     private func answer(question: QuestionPayload, answers: [[String: AnyCodable]]) {
         pendingQuestion = nil
-        errorMessage = nil
+        clearPlanningError()
         beginStream {
             APIClient(tokens: auth).answerPlanningQuestion(id: discussion.id, questionId: question.questionId,
                                                            action: "answered", language: selectedLanguage,
@@ -756,7 +770,7 @@ struct PlanConversationView: View {
 
     private func reject(question: QuestionPayload) {
         pendingQuestion = nil
-        errorMessage = nil
+        clearPlanningError()
         beginStream {
             APIClient(tokens: auth).answerPlanningQuestion(id: discussion.id, questionId: question.questionId,
                                                            action: "rejected", language: selectedLanguage,
@@ -794,19 +808,22 @@ struct PlanConversationView: View {
                 if case let APIError.insufficientPoints(required, balance) = error {
                     isStreaming = false
                     progressText = nil
-                    errorMessage = String(localized: "You need \(required) points but have \(balance).",
-                                          comment: "Shown when the user lacks enough points; values are point amounts")
+                    presentPlanningError(
+                        String(localized: "You need \(required) points but have \(balance).",
+                               comment: "Shown when the user lacks enough points; values are point amounts"),
+                        offersTopUp: true
+                    )
                     await purchases.refreshBalance()
-                    showingPaywall = true
                     return
                 }
                 isStreaming = false
                 progressText = nil
-                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                presentPlanningError((error as? APIError)?.errorDescription ?? error.localizedDescription,
+                                     offersTopUp: false)
                 if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id),
                    view.isRunning == true {
                     parts = view.parts
-                    errorMessage = nil
+                    clearPlanningError()
                     streamTask = nil
                     beginStream {
                         APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
@@ -943,7 +960,7 @@ struct PlanConversationView: View {
 
     private func generate() {
         isGenerating = true
-        errorMessage = nil
+        clearPlanningError()
         Task {
             do {
                 discussion = try await APIClient(tokens: auth).generateDiscussion(id: discussion.id, language: selectedLanguage)
@@ -951,15 +968,31 @@ struct PlanConversationView: View {
                 onGenerated(discussion)
             } catch let APIError.insufficientPoints(required, balance) {
                 isGenerating = false
-                errorMessage = String(localized: "You need \(required) points but have \(balance).",
-                                      comment: "Shown when the user lacks enough points; values are point amounts")
+                presentPlanningError(
+                    String(localized: "You need \(required) points but have \(balance).",
+                           comment: "Shown when the user lacks enough points; values are point amounts"),
+                    offersTopUp: true
+                )
                 await purchases.refreshBalance()
-                showingPaywall = true
             } catch {
                 isGenerating = false
-                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                presentPlanningError((error as? APIError)?.errorDescription ?? error.localizedDescription,
+                                     offersTopUp: false)
             }
         }
+    }
+
+    private func presentPlanningError(_ message: String, offersTopUp: Bool) {
+        inputFocused = false
+        errorMessage = message
+        errorOffersTopUp = offersTopUp
+        showingErrorAlert = true
+    }
+
+    private func clearPlanningError() {
+        errorMessage = nil
+        errorOffersTopUp = false
+        showingErrorAlert = false
     }
 }
 

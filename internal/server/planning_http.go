@@ -48,6 +48,10 @@ type planningStreamSink struct {
 	conversationID string
 }
 
+func e2ePlanningInsufficientBalancePrompt(prompt string) bool {
+	return strings.Contains(strings.ToLower(prompt), "e2e insufficient balance")
+}
+
 func (s planningStreamSink) send(event string, payload any) error {
 	_, err := s.store.Append(s.ctx, s.conversationID, s.runID, event, payload)
 	return err
@@ -149,6 +153,10 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 		"prompt_chars", len(req.Prompt),
 		"attachments", len(req.Attachments),
 	)
+	if s.e2eMode() && e2ePlanningInsufficientBalancePrompt(req.Prompt) {
+		writeInsufficientPoints(w, 50, 0)
+		return
+	}
 	conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, id)
 	if err != nil || conv == nil {
 		http.Error(w, "could not start planning conversation", http.StatusInternalServerError)

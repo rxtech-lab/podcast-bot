@@ -109,6 +109,13 @@ func (c *Client) Generate(ctx context.Context, req Request) ([]byte, error) {
 // blocking the orchestrator for too long on a sustained outage.
 const maxRetryAttempts = 4
 
+const (
+	geminiImageSize512 = "512"
+	geminiImageSize1K  = "1K"
+	geminiImageSize2K  = "2K"
+	geminiImageSize4K  = "4K"
+)
+
 // retryBackoff is the wait before the (attempt+1)-th try: 750 ms, 1.5 s,
 // 3 s. A linear-exponential schedule rather than full jitter — the upstream
 // is a single Vercel gateway, so spreading retries across many goroutines
@@ -263,7 +270,7 @@ func geminiResponseFormat(req Request) map[string]any {
 	if ratio := aspectRatioFromSize(req.Size); ratio != "" {
 		format["aspect_ratio"] = ratio
 	}
-	if tier := geminiImageSizeTier(req.Size); tier != "" {
+	if tier := geminiImageSizeTier(req.Model, req.Size); tier != "" {
 		format["image_size"] = tier
 	}
 	return format
@@ -310,24 +317,33 @@ func aspectRatioFromSize(size string) string {
 	return fmt.Sprintf("%d:%d", w/g, h/g)
 }
 
-func geminiImageSizeTier(size string) string {
+func geminiImageSizeTier(model, size string) string {
 	w, h, ok := parsePixelSize(size)
 	if !ok {
 		return ""
 	}
 	longest := max(w, h)
+	// Gemini Flash Lite image generation supports the 1K tier, so keep the Lite
+	// model but cap larger requested sizes instead of asking it for 2K/4K output.
+	if isGeminiLiteImageModel(model) && longest > 1024 {
+		return geminiImageSize1K
+	}
 	switch {
 	case longest <= 512:
-		return "512"
+		return geminiImageSize512
 	case longest <= 1024:
-		return "1K"
+		return geminiImageSize1K
 	case longest <= 2048:
-		return "2K"
+		return geminiImageSize2K
 	case longest <= 4096:
-		return "4K"
+		return geminiImageSize4K
 	default:
 		return ""
 	}
+}
+
+func isGeminiLiteImageModel(model string) bool {
+	return strings.Contains(model, "flash-lite-image")
 }
 
 func parsePixelSize(size string) (int, int, bool) {
