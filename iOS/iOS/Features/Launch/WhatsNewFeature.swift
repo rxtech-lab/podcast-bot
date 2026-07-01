@@ -51,5 +51,11 @@ struct WhatsNewFeature: Identifiable, Equatable {
             subtitle: "Choose templates for new \(AppStringLiteral.stationNameRaw)s, including a research template for academic-style topics.",
             icon: "square.grid.2x2.fill"
         ),
+        WhatsNewFeature(
+            id: "audio-book-generation",
+            title: "Create Audio Books",
+            subtitle: "Turn sources into narrated audio books with chapters, voices, illustrations, and a rendered video.",
+            icon: "book.closed.fill"
+        ),
     ]
 }
