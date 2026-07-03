@@ -1463,6 +1463,9 @@
         }
       }
     },
+    "Close image" : {
+
+    },
     "Connect Notion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1616,6 +1619,9 @@
           }
         }
       }
+    },
+    "Could not generate video" : {
+
     },
     "Could not load %@" : {
       "localizations" : {
@@ -4952,6 +4958,9 @@
           }
         }
       }
+    },
+    "Open image" : {
+
     },
     "Open in Notion" : {
       "localizations" : {

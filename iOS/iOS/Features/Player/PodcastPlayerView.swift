@@ -1,4 +1,5 @@
 import AVKit
+import Kingfisher
 import Photos
 import PhotosUI
 import RxAuthSwift
@@ -6,6 +7,9 @@ import SwiftUI
 import TipKit
 import UIKit
 import UniformTypeIdentifiers
+import os
+
+private let transcriptImageLog = Logger(subsystem: "com.debatebot.ios", category: "TranscriptImage")
 
 /// The live podcast screen: streaming per-agent transcript bubbles, a synced
 /// caption, a Liquid Glass music-player bar, and a message input — matching the
@@ -40,12 +44,15 @@ struct PodcastPlayerView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingRecorder = false
     @State private var selectedTranscriptSources: TranscriptSourcesSelection?
+    @State private var selectedTranscriptImageURL: IdentifiableURL?
     @State private var resumePlaybackAfterRecorder = false
     @State private var isUploadingAttachment = false
     @State private var isCreatingFromPlan = false
     @State private var createFromPlanError: String?
     @State private var isGeneratingSummary = false
     @State private var summaryGenerateError: String?
+    @State private var isGeneratingVideo = false
+    @State private var videoGenerateError: String?
     @State private var documentActionItems: [DiscussionUIActionItem] = []
     @State private var podcastActionItems: [DiscussionUIActionItem] = []
     @State private var showingForceStopConfirm = false
@@ -78,6 +85,7 @@ struct PodcastPlayerView: View {
         .toolbar { podcastToolbar }
         .modifier(CreateFromPlanErrorAlert(error: $createFromPlanError))
         .modifier(SummaryGenerateErrorAlert(error: $summaryGenerateError))
+        .modifier(VideoGenerateErrorAlert(error: $videoGenerateError))
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: currentDiscussion)
         }
@@ -89,6 +97,9 @@ struct PodcastPlayerView: View {
         }
         .fullScreenCover(item: $audioBookVideoURL) { item in
             AudioBookVideoView(url: item.url)
+        }
+        .fullScreenCover(item: $selectedTranscriptImageURL) { item in
+            TranscriptImageFullScreenView(url: item.url)
         }
         .sheet(item: $selectedTranscriptSources) { selection in
             SourcesSheet(
@@ -299,6 +310,8 @@ struct PodcastPlayerView: View {
             showingText = true
         case ["action", "summary-generate"]:
             generateSummary()
+        case ["action", "video-generate"]:
+            generateVideo()
         default:
             break
         }
@@ -355,7 +368,14 @@ struct PodcastPlayerView: View {
     }
 
     private func isDocumentActionBusy(_ item: DiscussionUIActionItem) -> Bool {
-        item.id == "generate-summary" && isGeneratingSummary
+        switch item.id {
+        case "generate-summary":
+            return isGeneratingSummary
+        case "generate-video":
+            return isGeneratingVideo
+        default:
+            return false
+        }
     }
 
     private func isPodcastActionBusy(_ item: DiscussionUIActionItem) -> Bool {
@@ -568,6 +588,8 @@ struct PodcastPlayerView: View {
                 speakerColor: SpeakerPalette.color(for: line.speaker, in: model?.lines ?? [line])
             ) { sources in
                 selectedTranscriptSources = TranscriptSourcesSelection(sources: sources)
+            } onImageTapped: { url in
+                selectedTranscriptImageURL = IdentifiableURL(url: url)
             }
         case .usage(_, let points):
             PointsSummaryBubble(points: points)
@@ -834,6 +856,28 @@ struct PodcastPlayerView: View {
         }
     }
 
+    private func generateVideo() {
+        guard !isGeneratingVideo else { return }
+        isGeneratingVideo = true
+        Task { @MainActor in
+            defer { isGeneratingVideo = false }
+            do {
+                let updated = try await APIClient(tokens: auth).generateVideo(id: currentDiscussion.id)
+                if let model {
+                    model.discussion = PlayerModel.mergingLocalDiscussionState(
+                        current: model.discussion,
+                        fresh: updated
+                    )
+                    model.listenForJobUpdatesIfNeeded()
+                }
+                await loadUIActions()
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                videoGenerateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
     private func createFromPlan() {
         guard !isCreatingFromPlan else { return }
         isCreatingFromPlan = true
@@ -903,6 +947,26 @@ private struct SummaryGenerateErrorAlert: ViewModifier {
     func body(content: Content) -> some View {
         content
             .alert("Could not generate summary", isPresented: isPresented) {
+                Button("OK", role: .cancel) { error = nil }
+            } message: {
+                Text(error ?? "")
+            }
+    }
+}
+
+private struct VideoGenerateErrorAlert: ViewModifier {
+    @Binding var error: String?
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { error != nil },
+            set: { if !$0 { error = nil } }
+        )
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Could not generate video", isPresented: isPresented) {
                 Button("OK", role: .cancel) { error = nil }
             } message: {
                 Text(error ?? "")
@@ -1438,6 +1502,7 @@ private struct TranscriptBubble: View {
     let isMine: Bool
     let speakerColor: Color
     var onSourcesTapped: ([SourceDTO]) -> Void = { _ in }
+    var onImageTapped: (URL) -> Void = { _ in }
 
     private var sources: [SourceDTO] { line.sources ?? [] }
     private var judgementComment: String {
@@ -1447,11 +1512,13 @@ private struct TranscriptBubble: View {
     init(line: LiveLine,
          isMine: Bool,
          speakerColor: Color? = nil,
-         onSourcesTapped: @escaping ([SourceDTO]) -> Void = { _ in }) {
+         onSourcesTapped: @escaping ([SourceDTO]) -> Void = { _ in },
+         onImageTapped: @escaping (URL) -> Void = { _ in }) {
         self.line = line
         self.isMine = isMine
         self.speakerColor = speakerColor ?? SpeakerPalette.color(for: line.speaker)
         self.onSourcesTapped = onSourcesTapped
+        self.onImageTapped = onImageTapped
     }
 
     var body: some View {
@@ -1484,27 +1551,20 @@ private struct TranscriptBubble: View {
                     if let audioURL = line.audioURL, !audioURL.isEmpty {
                         VoiceMessageControl(urlString: audioURL, isUser: isMine)
                     }
-                    if line.hasImage, let urlStr = line.imageURL, let url = URL(string: urlStr) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFit()
-                            case .empty:
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(speakerColor.opacity(0.12))
-                                    .frame(height: 160)
-                                    .overlay { ProgressView() }
-                            case .failure:
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(speakerColor.opacity(0.12))
-                                    .frame(height: 160)
-                                    .overlay { Image(systemName: "photo").foregroundStyle(speakerColor) }
-                            @unknown default:
-                                EmptyView()
+                    if line.hasImage {
+                        let urlStr = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        if let url = URL(string: urlStr) {
+                            TranscriptImageBubble(url: url, line: line, speakerColor: speakerColor) {
+                                onImageTapped(url)
                             }
+                        } else {
+                            transcriptImagePlaceholder(speakerColor: speakerColor)
+                                .onAppear {
+                                    transcriptImageLog.error(
+                                        "Transcript image URL invalid line=\(line.id.uuidString, privacy: .public) speaker=\(line.speaker, privacy: .public) rawLength=\(urlStr.count, privacy: .public)"
+                                    )
+                                }
                         }
-                        .frame(maxWidth: 280)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     if line.hasDisplayText {
                         bubbleText
@@ -1580,6 +1640,132 @@ private struct TranscriptBubble: View {
             MarkdownText(line.text)
         }
     }
+}
+
+private struct TranscriptImageBubble: View {
+    let url: URL
+    let line: LiveLine
+    let speakerColor: Color
+    var onTap: () -> Void = {}
+    @State private var didFail = false
+
+    var body: some View {
+        Group {
+            if didFail {
+                transcriptImagePlaceholder(speakerColor: speakerColor)
+                    .overlay { Image(systemName: "photo").foregroundStyle(speakerColor) }
+            } else {
+                KFImage.url(url)
+                    .placeholder {
+                        transcriptImagePlaceholder(speakerColor: speakerColor)
+                            .overlay { ProgressView() }
+                    }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .onSuccess { _ in
+                        didFail = false
+                        transcriptImageLog.info(
+                            "Transcript image loaded line=\(line.id.uuidString, privacy: .public) speaker=\(line.speaker, privacy: .public) url=\(redactedURLDescription(url), privacy: .public)"
+                        )
+                    }
+                    .onFailure { error in
+                        didFail = true
+                        transcriptImageLog.error(
+                            "Transcript image failed line=\(line.id.uuidString, privacy: .public) speaker=\(line.speaker, privacy: .public) url=\(redactedURLDescription(url), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .onAppear {
+            transcriptImageLog.info(
+                "Transcript image requested line=\(line.id.uuidString, privacy: .public) speaker=\(line.speaker, privacy: .public) url=\(redactedURLDescription(url), privacy: .public)"
+            )
+        }
+        .onChange(of: url.absoluteString) { _, _ in
+            didFail = false
+        }
+        .frame(maxWidth: 280)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onTapGesture(perform: onTap)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Open image")
+    }
+}
+
+private struct TranscriptImageFullScreenView: View {
+    @Environment(\.dismiss) private var dismiss
+    let url: URL
+    @State private var didFail = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            Group {
+                if didFail {
+                    Image(systemName: "photo")
+                        .font(.system(size: 52, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                } else {
+                    KFImage.url(url)
+                        .placeholder {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        .cancelOnDisappear(false)
+                        .retry(maxCount: 3, interval: .seconds(1))
+                        .onSuccess { _ in
+                            didFail = false
+                        }
+                        .onFailure { error in
+                            didFail = true
+                            transcriptImageLog.error(
+                                "Transcript image fullscreen failed url=\(redactedURLDescription(url), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                            )
+                        }
+                        .resizable()
+                        .scaledToFit()
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close image")
+            .padding(20)
+        }
+        .presentationBackground(.black)
+    }
+}
+
+private func transcriptImagePlaceholder(speakerColor: Color) -> some View {
+    RoundedRectangle(cornerRadius: 12)
+        .fill(speakerColor.opacity(0.12))
+        .frame(height: 160)
+}
+
+private func redactedURLDescription(_ url: URL) -> String {
+    let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    let queryNames = components?.queryItems?
+        .map(\.name)
+        .sorted()
+        .joined(separator: ",") ?? ""
+    let base = "\(url.scheme ?? "unknown")://\(url.host ?? "no-host")\(url.path)"
+    if queryNames.isEmpty {
+        return base
+    }
+    return "\(base)?[\(queryNames)]"
 }
 
 /// Trailing accessory row showing only the points this podcast consumed. The
@@ -1694,6 +1880,7 @@ private struct MusicPlayerBar: View {
     }
 
     private var titleLine: String {
+        if !model.currentAudioBookChapterTitle.isEmpty { return model.currentAudioBookChapterTitle }
         if !model.phaseLabel.isEmpty { return model.phaseLabel }
         if !model.statusText.isEmpty { return model.statusText }
         return model.discussion.displayTitle

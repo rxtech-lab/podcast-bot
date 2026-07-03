@@ -19,6 +19,14 @@ type AudioBookImage struct {
 	Caption string
 }
 
+// AudioBookAvatar is one generated speaker portrait for the conversational
+// audiobook video layout. Path points at a local alpha PNG after chroma-key
+// removal.
+type AudioBookAvatar struct {
+	Name string
+	Path string
+}
+
 // SetAudioBookImages records the generated illustration set (ordered by Beat).
 // Called by the audiobook prepare step before Run.
 func (o *Orchestrator) SetAudioBookImages(imgs []AudioBookImage) {
@@ -29,6 +37,16 @@ func (o *Orchestrator) SetAudioBookImages(imgs []AudioBookImage) {
 // video stages read it after Run to embed/paint the images.
 func (o *Orchestrator) AudioBookImages() []AudioBookImage {
 	return append([]AudioBookImage(nil), o.audioBookImages...)
+}
+
+// SetAudioBookAvatars records generated transparent speaker portraits.
+func (o *Orchestrator) SetAudioBookAvatars(avatars []AudioBookAvatar) {
+	o.audioBookAvatars = append([]AudioBookAvatar(nil), avatars...)
+}
+
+// AudioBookAvatars returns generated speaker portraits for the video post-pass.
+func (o *Orchestrator) AudioBookAvatars() []AudioBookAvatar {
+	return append([]AudioBookAvatar(nil), o.audioBookAvatars...)
 }
 
 // audioBookImageURLs returns the per-beat URL slice (index = beat) the

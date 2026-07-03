@@ -300,6 +300,17 @@ final class PlayerModel {
     /// a large script feel laggy.
     private(set) var activeLyricGroupID: Int?
 
+    /// Audiobook generation has one long narration phase whose localized label is
+    /// just "Chapter". For playback surfaces, recover the current chapter title
+    /// from the structured plan by looking back through captions already heard.
+    var currentAudioBookChapterTitle: String {
+        Self.audioBookChapterTitle(
+            at: captionLookupTime(playbackTime: currentTime),
+            in: cues,
+            script: discussion.script
+        ) ?? ""
+    }
+
     /// Recomputes the active lyric group at `time` and publishes it only when it
     /// changes. Cheap: `lyricCueGroups` is memoized, so this is an O(groups) scan.
     private func updateActiveLyricGroup(at time: Double) {
@@ -1068,6 +1079,29 @@ final class PlayerModel {
         return lines.last(where: { line in
             !line.isUser && normalizedCaptionMatchText(line.text).contains(needle)
         })?.speaker
+    }
+
+    nonisolated static func audioBookChapterTitle(at time: Double,
+                                                  in cues: [VTTCue],
+                                                  script: ScriptDTO?) -> String? {
+        guard script?.type == "audio-book" else { return nil }
+        let titles = (script?.audioBookChapters ?? []).compactMap { chapter -> (raw: String, key: String)? in
+            let raw = chapter.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalizedCaptionMatchText(raw)
+            guard !raw.isEmpty, !key.isEmpty else { return nil }
+            return (raw, key)
+        }
+        guard !titles.isEmpty,
+              let cueIndex = cues.lastIndex(where: { $0.start <= time }) else { return nil }
+
+        for cue in cues[...cueIndex].reversed() {
+            let cueKey = normalizedCaptionMatchText(cue.text)
+            guard !cueKey.isEmpty else { continue }
+            if let match = titles.first(where: { cueKey.contains($0.key) }) {
+                return match.raw
+            }
+        }
+        return nil
     }
 
     private nonisolated static func normalizedCaptionMatchText(_ raw: String) -> String {

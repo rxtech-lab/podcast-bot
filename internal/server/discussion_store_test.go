@@ -163,6 +163,42 @@ func TestDiscussionStoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreSetVideoKeyByJob(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-video"
+	created, err := store.Create(ctx, owner, "Audiobook video", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-video"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+
+	key := "podcasts/job-video-video.mp4"
+	if err := store.SetVideoKeyForJob(ctx, "job-video", key); err != nil {
+		t.Fatalf("SetVideoKeyForJob: %v", err)
+	}
+	got, err := store.VideoKeyFor(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("VideoKeyFor: %v", err)
+	}
+	if got != key {
+		t.Fatalf("video key = %q, want %q", got, key)
+	}
+	if err := store.SetVideoKey(ctx, "missing-discussion", "podcasts/missing.mp4"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("SetVideoKey missing err = %v, want sql.ErrNoRows", err)
+	}
+	if err := store.SetVideoKeyForJob(ctx, "missing-job", "podcasts/missing.mp4"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("SetVideoKeyForJob missing err = %v, want sql.ErrNoRows", err)
+	}
+}
+
 func TestDiscussionStoreListOrderingAndPagination(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")

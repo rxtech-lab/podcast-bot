@@ -21,6 +21,42 @@ import (
 // subtitles. The output is an H.264/AAC mp4 with +faststart for progressive
 // playback.
 func RenderAudioBookVideo(outPath, audioPath, vttPath string, imagePaths []string, res Resolution) error {
+	return RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath, imagePaths, res, AudioBookVideoOptions{})
+}
+
+// AudioBookVideoLine is one spoken transcript line available to the
+// audiobook post-pass renderer.
+type AudioBookVideoLine struct {
+	Speaker string
+	Text    string
+}
+
+// AudioBookVideoAvatar is a local speaker cutout image. Path should point to a
+// PNG with alpha; missing paths are ignored and the renderer falls back to its
+// generated geometric avatar.
+type AudioBookVideoAvatar struct {
+	Name string
+	Path string
+}
+
+// AudioBookVideoOptions lets the audiobook post-pass pick a visual treatment
+// from planner metadata. The zero value preserves the original illustration
+// slideshow renderer.
+type AudioBookVideoOptions struct {
+	Style    string
+	Title    string
+	Host     string
+	Speakers []string
+	Lines    []AudioBookVideoLine
+	Avatars  []AudioBookVideoAvatar
+}
+
+// RenderAudioBookVideoWithOptions composes a finished audiobook into a
+// downloadable video. Narration-style audiobooks keep the original generated
+// illustration slideshow; conversational-style audiobooks render each spoken
+// transcript segment with left/right speaker avatars and a central content
+// panel over the generated backgrounds.
+func RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath string, imagePaths []string, res Resolution, opts AudioBookVideoOptions) error {
 	if len(imagePaths) == 0 {
 		return fmt.Errorf("render audiobook video: no images")
 	}
@@ -30,6 +66,9 @@ func RenderAudioBookVideo(outPath, audioPath, vttPath string, imagePaths []strin
 	dur, err := probeDurationSeconds(audioPath)
 	if err != nil || dur <= 0 {
 		return fmt.Errorf("render audiobook video: probe audio duration: %w", err)
+	}
+	if isConversationalAudioBookStyle(opts.Style) {
+		return renderConversationalAudioBookVideo(outPath, audioPath, vttPath, imagePaths, res, opts, dur)
 	}
 	perImage := dur / float64(len(imagePaths))
 
@@ -92,6 +131,15 @@ func RenderAudioBookVideo(outPath, audioPath, vttPath string, imagePaths []strin
 	return nil
 }
 
+func isConversationalAudioBookStyle(style string) bool {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case "conversational", "podcast", "meeting", "news":
+		return true
+	default:
+		return false
+	}
+}
+
 // probeDurationSeconds returns the container duration of a media file via
 // ffprobe (shipped alongside ffmpeg).
 func probeDurationSeconds(path string) (float64, error) {
@@ -107,7 +155,7 @@ func probeDurationSeconds(path string) (float64, error) {
 }
 
 // concatEscape escapes single quotes for the concat demuxer's `file '...'`
-// syntax (quote → '\''), so paths with apostrophes don't break the playlist.
+// syntax, so paths with apostrophes don't break the playlist.
 func concatEscape(p string) string {
 	return strings.ReplaceAll(p, "'", `'\''`)
 }

@@ -1,5 +1,5 @@
 {
-  "originHash" : "2e08dda3fd70eeef9ad1764d0f410ecde12e3d35c199c65c482763e4228da8bd",
+  "originHash" : "59da49e5caca4482bf7f13d879558bc1b6bc1a3c4c7a524995cad1ffce9f08fc",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -42,6 +42,15 @@
       "location" : "https://github.com/maitbayev/iosMath",
       "state" : {
         "revision" : "066ba2f8353782a644889efe9ceb884ea844180b"
+      }
+    },
+    {
+      "identity" : "kingfisher",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/onevcat/kingfisher",
+      "state" : {
+        "revision" : "ac632bd26a1c00f139ff62fd01806f21cf67325e",
+        "version" : "8.10.0"
       }
     },
     {

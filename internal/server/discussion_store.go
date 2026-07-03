@@ -1742,9 +1742,30 @@ func (s *DiscussionStore) SetJobResult(ctx context.Context, id string, status Di
 // SetVideoKey records the object-storage key of an audiobook's rendered video
 // so the context menu can presign a playback URL on demand.
 func (s *DiscussionStore) SetVideoKey(ctx context.Context, id, key string) error {
-	_, err := s.exec(ctx, `UPDATE native_discussions SET video_key = ?, updated_at = ?
-		WHERE id = ?`, key, time.Now().UnixMilli(), id)
-	return err
+	res, err := s.exec(ctx, `UPDATE native_discussions SET video_key = ?, updated_at = ?
+		WHERE id = ?`, strings.TrimSpace(key), time.Now().UnixMilli(), strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetVideoKeyForJob records an audiobook video key using the durable job link.
+// This is the recovery path for post-audio video renders where the object was
+// uploaded under the job id but the discussion id was missing or stale.
+func (s *DiscussionStore) SetVideoKeyForJob(ctx context.Context, jobID, key string) error {
+	res, err := s.exec(ctx, `UPDATE native_discussions SET video_key = ?, updated_at = ?
+		WHERE job_id = ?`, strings.TrimSpace(key), time.Now().UnixMilli(), strings.TrimSpace(jobID))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // VideoKeyFor returns the stored video object key for a discussion, or "" when
