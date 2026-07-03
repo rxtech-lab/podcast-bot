@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 
+	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/server"
@@ -23,7 +25,12 @@ import (
 func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	topic *config.DebateTopic, orch *contentcreator.Orchestrator, audioPath, jobOutDir string,
 ) {
+	logger := slog.Default().With("job", jobID)
+	if deps.Log != nil {
+		logger = deps.Log.With("job", jobID)
+	}
 	if deps.Queue == nil || orch == nil {
+		logger.Info("audiobook video skipped", "queue_configured", deps.Queue != nil, "orchestrator_configured", orch != nil)
 		return
 	}
 	imgs := orch.AudioBookImages()
@@ -37,8 +44,10 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	if len(paths) == 0 {
 		// No illustrations → no slideshow to render. The audio + text doc still
 		// stand on their own.
+		logger.Info("audiobook video skipped", "reason", "no illustrations")
 		return
 	}
+	opts := audioBookVideoOptions(topic, orch.Transcript.Snapshot(), orch.AudioBookAvatars())
 
 	res := video.Resolution(topic.Resolution)
 	if sub.Resolution != "" {
@@ -49,38 +58,138 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	}
 	vttPath := filepath.Join(jobOutDir, "subtitles.vtt")
 	outPath := filepath.Join(jobOutDir, "video.mp4")
-	logger := deps.Log.With("job", jobID)
 
+	deps.Jobs.Update(jobID, func(j *server.Job) {
+		j.Phase = "video-queued"
+		j.PhaseLabel = "Video queued"
+	})
 	deps.Queue.Add(context.Background(), func(runCtx context.Context) {
 		defer func() {
 			if v := recover(); v != nil {
 				logger.Error("audiobook video render panic", "panic", v)
+				deps.Jobs.Update(jobID, func(j *server.Job) {
+					j.Phase = "video-failed"
+					j.PhaseLabel = "Video failed"
+				})
 			}
 		}()
-		logger.Info("audiobook video render starting", "images", len(paths), "resolution", string(res))
-		if err := video.RenderAudioBookVideo(outPath, audioPath, vttPath, paths, res); err != nil {
+		logger.Info("audiobook video render starting", "images", len(paths), "resolution", string(res), "style", opts.Style)
+		deps.Jobs.Update(jobID, func(j *server.Job) {
+			j.Phase = "video-rendering"
+			j.PhaseLabel = "Rendering video"
+		})
+		if err := video.RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath, paths, res, opts); err != nil {
 			logger.Warn("audiobook video render failed", "err", err)
+			deps.Jobs.Update(jobID, func(j *server.Job) {
+				j.Phase = "video-failed"
+				j.PhaseLabel = "Video failed"
+			})
 			return
 		}
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.VideoPath = outPath
 			j.HasVideo = true
 		})
-		if deps.Uploader.Enabled() {
+		if !deps.Uploader.Enabled() {
+			logger.Info("audiobook video upload skipped", "reason", "s3 uploader disabled", "path", outPath)
+		} else {
 			key := deps.Uploader.Key(jobID + "-video.mp4")
+			logger.Info("audiobook video upload starting", "key", key, "path", outPath)
+			deps.Jobs.Update(jobID, func(j *server.Job) {
+				j.Phase = "video-uploading"
+				j.PhaseLabel = "Uploading video"
+			})
 			if err := deps.Uploader.Upload(runCtx, outPath, key); err != nil {
 				logger.Warn("audiobook video upload failed", "key", key, "err", err)
+				deps.Jobs.Update(jobID, func(j *server.Job) {
+					j.Phase = "video-failed"
+					j.PhaseLabel = "Video upload failed"
+				})
 				return
 			}
-			if deps.Discussions != nil && deps.DiscussionID != "" {
-				if err := deps.Discussions.SetVideoKey(runCtx, deps.DiscussionID, key); err != nil {
-					logger.Warn("audiobook video key persist failed", "err", err)
-				}
-			}
+			logger.Info("audiobook video uploaded", "key", key)
+			persistAudioBookVideoKey(runCtx, deps, logger, jobID, key)
 		}
+		deps.Jobs.Update(jobID, func(j *server.Job) {
+			j.Phase = "video-ready"
+			j.PhaseLabel = "Video ready"
+		})
 		logger.Info("audiobook video ready", "path", outPath)
 		notifyAudioBookVideoReady(runCtx, deps, logger)
 	})
+}
+
+func persistAudioBookVideoKey(ctx context.Context, deps Deps, logger *slog.Logger, jobID, key string) {
+	if deps.Discussions == nil {
+		logger.Warn("audiobook video key persist skipped", "discussion_configured", false)
+		return
+	}
+	if deps.DiscussionID != "" {
+		if err := deps.Discussions.SetVideoKey(ctx, deps.DiscussionID, key); err == nil {
+			logger.Info("audiobook video key persisted", "discussion", deps.DiscussionID, "key", key, "method", "discussion_id")
+			return
+		} else {
+			logger.Warn("audiobook video key persist by discussion failed", "discussion", deps.DiscussionID, "err", err)
+		}
+	}
+	if err := deps.Discussions.SetVideoKeyForJob(ctx, jobID, key); err != nil {
+		logger.Warn("audiobook video key persist by job failed", "job", jobID, "err", err)
+		return
+	}
+	logger.Info("audiobook video key persisted", "job", jobID, "key", key, "method", "job_id")
+}
+
+func audioBookVideoOptions(topic *config.DebateTopic, lines []agent.TranscriptLine,
+	avatars []contentcreator.AudioBookAvatar,
+) video.AudioBookVideoOptions {
+	if topic == nil {
+		return video.AudioBookVideoOptions{}
+	}
+	host := strings.TrimSpace(topic.AudioBookHost.Name)
+	if host == "" {
+		host = "Narrator"
+	}
+	speakers := make([]string, 0, 1+len(topic.AudioBookSpeakers))
+	speakers = append(speakers, host)
+	for _, s := range topic.AudioBookSpeakers {
+		if name := strings.TrimSpace(s.Name); name != "" {
+			speakers = append(speakers, name)
+		}
+	}
+	outLines := make([]video.AudioBookVideoLine, 0, len(lines))
+	for _, line := range lines {
+		text := strings.TrimSpace(line.Text)
+		if text == "" {
+			continue
+		}
+		speaker := strings.TrimSpace(line.Speaker)
+		if speaker == "" {
+			speaker = host
+		}
+		outLines = append(outLines, video.AudioBookVideoLine{
+			Speaker: speaker,
+			Text:    text,
+		})
+	}
+	outAvatars := make([]video.AudioBookVideoAvatar, 0, len(avatars))
+	for _, avatar := range avatars {
+		name := strings.TrimSpace(avatar.Name)
+		if name == "" || avatar.Path == "" {
+			continue
+		}
+		outAvatars = append(outAvatars, video.AudioBookVideoAvatar{
+			Name: name,
+			Path: avatar.Path,
+		})
+	}
+	return video.AudioBookVideoOptions{
+		Style:    topic.AudioBookStyle,
+		Title:    topic.Title,
+		Host:     host,
+		Speakers: speakers,
+		Lines:    outLines,
+		Avatars:  outAvatars,
+	}
 }
 
 // notifyAudioBookVideoReady pushes a "video ready" notification so the owner

@@ -143,6 +143,11 @@ type Orchestrator struct {
 	// read the on-disk paths. Empty for non-audiobook runs / when image
 	// generation was disabled or failed.
 	audioBookImages []AudioBookImage
+	// audioBookAvatars is the optional speaker portrait set generated with a
+	// chroma-key background and converted to alpha PNGs for the conversational
+	// audiobook video layout. Empty means the renderer uses its fallback
+	// geometric avatars.
+	audioBookAvatars []AudioBookAvatar
 
 	subtitleCues []SubtitleCue
 

@@ -226,14 +226,21 @@ struct FullScreenPlayerView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(foregroundPalette.primary)
                 .lineLimit(1)
-            if !model.phaseLabel.isEmpty || !model.statusText.isEmpty {
-                Text(model.phaseLabel.isEmpty ? model.statusText : model.phaseLabel)
+            if !headerSubtitle.isEmpty {
+                Text(headerSubtitle)
                     .font(.caption2)
                     .foregroundStyle(foregroundPalette.secondary)
                     .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
+    }
+
+    private var headerSubtitle: String {
+        if !model.currentAudioBookChapterTitle.isEmpty { return model.currentAudioBookChapterTitle }
+        if !model.phaseLabel.isEmpty { return model.phaseLabel }
+        if !model.statusText.isEmpty { return model.statusText }
+        return ""
     }
 
     @ViewBuilder

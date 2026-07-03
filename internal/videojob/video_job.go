@@ -498,7 +498,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 				// audio.mp3, so keep the staged file for them (the render task
 				// cleans up nothing critical — it's a per-job temp dir). Other
 				// audio-only jobs remove it now that S3 has the copy.
-				if topic.Type != config.ContentTypeAudioBook {
+				if topic.Type == config.ContentTypeAudioBook {
+					audioPathForJob = audioPath
+				} else {
 					if err := os.Remove(audioPath); err != nil {
 						logger.Warn("remove staged audio after S3 upload failed", "path", audioPath, "err", err)
 					}

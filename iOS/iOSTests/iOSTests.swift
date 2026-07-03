@@ -710,6 +710,29 @@ final class iOSTests: XCTestCase {
         XCTAssertNil(PlayerModel.captionSpeaker(for: "not in the transcript", in: lines))
     }
 
+    func testAudioBookChapterTitleTracksLatestHeardCaptionTitle() throws {
+        let script = try decodeScript("""
+        {
+          "title": "云间的送信人",
+          "type": "audio-book",
+          "language": "zh-Hans",
+          "audio_book_chapters": [
+            { "title": "晓峰的来信", "summary": "开篇。" },
+            { "title": "雨后的归途", "summary": "结尾。" }
+          ]
+        }
+        """)
+        let cues = [
+            VTTCue(start: 0, end: 3, text: "第一章：晓峰的来信"),
+            VTTCue(start: 12, end: 18, text: "陈奶奶是村里年纪最大的长辈。"),
+            VTTCue(start: 90, end: 94, text: "第二章，雨后的归途"),
+            VTTCue(start: 100, end: 106, text: "他们沿着山路慢慢走回去。")
+        ]
+
+        XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 20, in: cues, script: script), "晓峰的来信")
+        XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 101, in: cues, script: script), "雨后的归途")
+    }
+
     func testLiveCaptionHasNoManualLead() {
         // The backend now emits zero-bias VTT for audio-only feeds, so cues align
         // with the recording and the frontend must not advance the lookup time —
@@ -807,6 +830,10 @@ private func decodeDiscussion(status: String, pointsCharged: Int, showUsageSumma
     }
     """
     return try JSONDecoder().decode(Discussion.self, from: Data(json.utf8))
+}
+
+private func decodeScript(_ json: String) throws -> ScriptDTO {
+    try JSONDecoder().decode(ScriptDTO.self, from: Data(json.utf8))
 }
 
 private struct StaticTokenProvider: TokenProviding {

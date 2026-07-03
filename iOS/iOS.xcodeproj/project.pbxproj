@@ -10,6 +10,8 @@
 		AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000002 /* BeautifulMermaid */; };
 		AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000012 /* BeautifulMermaid */; };
 		DF0DA35D2FE8459500A02339 /* SwiftStreamingMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */; };
+		DF6A0AB22FF7CF890045484F /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = DF6A0AB12FF7CF890045484F /* Kingfisher */; };
+		DF6A0AB42FF7CF890045484F /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = DF6A0AB32FF7CF890045484F /* Kingfisher */; };
 		DF6AD85C2FE9E5530045484F /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85B2FE9E5530045484F /* ReceiptParser */; };
 		DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85D2FE9E5530045484F /* RevenueCat */; };
 		DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85F2FE9E5530045484F /* RevenueCatUI */; };
@@ -221,6 +223,7 @@
 				AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */,
 				DF6AF75C2FEE6A380045484F /* JSONSchemaValidator in Frameworks */,
 				DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */,
+				DF6A0AB22FF7CF890045484F /* Kingfisher in Frameworks */,
 				DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */,
 				DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */,
 				DF6AD85C2FE9E5530045484F /* ReceiptParser in Frameworks */,
@@ -254,6 +257,7 @@
 				DF6AF83A2FEEE6FE0045484F /* JSONSchemaForm in Frameworks */,
 				DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */,
 				AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */,
+				DF6A0AB42FF7CF890045484F /* Kingfisher in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -356,6 +360,7 @@
 				DF6AF75B2FEE6A380045484F /* JSONSchemaValidator */,
 				DF6AF8352FEEE6F00045484F /* JSONSchemaForm */,
 				DF6AF8372FEEE6F00045484F /* JSONSchemaValidator */,
+				DF6A0AB12FF7CF890045484F /* Kingfisher */,
 			);
 			productName = iOS;
 			productReference = DF0DA32F2FE8445500A02339 /* iOS.app */;
@@ -432,6 +437,7 @@
 				AABBCCDD0000000000000012 /* BeautifulMermaid */,
 				DF6AF8392FEEE6FE0045484F /* JSONSchemaForm */,
 				DF6AF83B2FEEE6FE0045484F /* JSONSchemaValidator */,
+				DF6A0AB32FF7CF890045484F /* Kingfisher */,
 			);
 			productName = iosClip;
 			productReference = DF6ADD9E2FEAF2CB0045484F /* iosClip.app */;
@@ -536,6 +542,7 @@
 				DF6AE9CD2FEC0E850045484F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				AABBCCDD0000000000000001 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */,
 				DF6AF8342FEEE6F00045484F /* XCRemoteSwiftPackageReference "swift-jsonschema-form" */,
+				DF6A0AB02FF7CF890045484F /* XCRemoteSwiftPackageReference "kingfisher" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF0DA3302FE8445500A02339 /* Products */;
@@ -1245,6 +1252,14 @@
 				kind = branch;
 			};
 		};
+		DF6A0AB02FF7CF890045484F /* XCRemoteSwiftPackageReference "kingfisher" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/onevcat/kingfisher";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.10.0;
+			};
+		};
 		DF6AD85A2FE9E5530045484F /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
@@ -1294,6 +1309,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DF0DA35B2FE8459500A02339 /* XCRemoteSwiftPackageReference "SwiftStreamingMarkdown" */;
 			productName = SwiftStreamingMarkdown;
+		};
+		DF6A0AB12FF7CF890045484F /* Kingfisher */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6A0AB02FF7CF890045484F /* XCRemoteSwiftPackageReference "kingfisher" */;
+			productName = Kingfisher;
+		};
+		DF6A0AB32FF7CF890045484F /* Kingfisher */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF6A0AB02FF7CF890045484F /* XCRemoteSwiftPackageReference "kingfisher" */;
+			productName = Kingfisher;
 		};
 		DF6AD85B2FE9E5530045484F /* ReceiptParser */ = {
 			isa = XCSwiftPackageProductDependency;

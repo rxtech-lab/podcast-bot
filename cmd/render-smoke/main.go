@@ -11,6 +11,9 @@
 //	  fetched (and disk-cached). Otherwise the smoke test falls back to a
 //	  procedural noise bg so the layout is still reviewable. Output goes to
 //	  out/puzzle-render-smoke/.
+//	--mode audiobook: emits an mp4 for the audiobook conversational
+//	  post-pass renderer: left/right characters, content centered, generated
+//	  backgrounds behind it. Output goes to out/audiobook-render-smoke/.
 //	--mode puzzle-fade: emits an mp4 that demonstrates the cinematic name-
 //	  plate fade-in / hold / fade-out so we can eyeball the smoothstep
 //	  curve without having to wait the full 22 s hold in real time. Output
@@ -39,7 +42,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "debate", "render mode: debate | puzzle")
+	mode := flag.String("mode", "debate", "render mode: debate | puzzle | puzzle-fade | audiobook")
 	out := flag.String("out", "", "output directory (default: out/render-smoke for debate, out/puzzle-render-smoke for puzzle)")
 	flag.Parse()
 
@@ -68,6 +71,15 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "audiobook":
+		dir := *out
+		if dir == "" {
+			dir = "out/audiobook-render-smoke"
+		}
+		if err := runAudioBook(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "debate", "":
 		dir := *out
 		if dir == "" {
@@ -78,7 +90,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown mode %q (expected debate | puzzle | puzzle-fade)\n", *mode)
+		fmt.Fprintf(os.Stderr, "unknown mode %q (expected debate | puzzle | puzzle-fade | audiobook)\n", *mode)
 		os.Exit(1)
 	}
 }
@@ -604,6 +616,212 @@ func clip(v int) uint8 {
 		return 255
 	}
 	return uint8(v)
+}
+
+// ---------- audiobook mode ----------
+
+func runAudioBook(out string) error {
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return err
+	}
+	bgDir := filepath.Join(out, "bgs")
+	if err := os.MkdirAll(bgDir, 0o755); err != nil {
+		return err
+	}
+	bgSpecs := []struct {
+		name string
+		top  color.RGBA
+		bot  color.RGBA
+		seed int64
+	}{
+		{"bg-01.png", color.RGBA{0x1b, 0x32, 0x46, 0xff}, color.RGBA{0x06, 0x08, 0x10, 0xff}, 501},
+		{"bg-02.png", color.RGBA{0x37, 0x25, 0x47, 0xff}, color.RGBA{0x08, 0x06, 0x10, 0xff}, 502},
+		{"bg-03.png", color.RGBA{0x2b, 0x3e, 0x2f, 0xff}, color.RGBA{0x05, 0x0a, 0x08, 0xff}, 503},
+	}
+	imagePaths := make([]string, 0, len(bgSpecs))
+	for _, spec := range bgSpecs {
+		p := filepath.Join(bgDir, spec.name)
+		if err := writeSmokePNG(p, proceduralBg(spec.top, spec.bot, spec.seed)); err != nil {
+			return fmt.Errorf("write audiobook bg %s: %w", spec.name, err)
+		}
+		imagePaths = append(imagePaths, p)
+	}
+
+	audioPath := filepath.Join(out, "audio.m4a")
+	if err := writeSmokeAudio(audioPath, 9*time.Second); err != nil {
+		return err
+	}
+	avatars, err := writeSmokeAvatars(out)
+	if err != nil {
+		return err
+	}
+
+	videoPath := filepath.Join(out, "video.mp4")
+	opts := video.AudioBookVideoOptions{
+		Style:    "conversational",
+		Title:    "The Future of Human Creativity",
+		Host:     "Mina",
+		Speakers: []string{"Mina", "Jordan"},
+		Avatars:  avatars,
+		Lines: []video.AudioBookVideoLine{
+			{Speaker: "Mina", Text: "When a book becomes a conversation, the narrator should still anchor the scene, but the guest needs a visible place in the frame."},
+			{Speaker: "Jordan", Text: "Right. Put the characters on the left and right, keep the content in the middle, and let the generated art stay as the background."},
+			{Speaker: "Mina", Text: "That way a conversational audiobook feels like a staged exchange instead of a static slideshow."},
+		},
+	}
+	if err := video.RenderAudioBookVideoWithOptions(videoPath, audioPath, "", imagePaths, video.Resolution1080p, opts); err != nil {
+		return err
+	}
+
+	previewPath := filepath.Join(out, "preview.png")
+	if err := extractPreviewFrame(videoPath, previewPath); err != nil {
+		return err
+	}
+	absVideo, _ := filepath.Abs(videoPath)
+	absPreview, _ := filepath.Abs(previewPath)
+	fmt.Println("wrote", absVideo)
+	fmt.Println("wrote", absPreview)
+	return nil
+}
+
+func writeSmokePNG(path string, img image.Image) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return png.Encode(f, img)
+}
+
+func writeSmokeAvatars(out string) ([]video.AudioBookVideoAvatar, error) {
+	dir := filepath.Join(out, "avatars")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	specs := []struct {
+		name        string
+		role        string
+		description string
+		asset       string
+	}{
+		{"Mina", "main host and narrator", "calm, confident audiobook host", "smoke-test/audiobook/avatars/audiobook_avatar_mina.png"},
+		{"Jordan", "guest speaker", "thoughtful creative technologist", "smoke-test/audiobook/avatars/audiobook_avatar_jordan.png"},
+	}
+	client, clientErr := imagegen.New("")
+	if clientErr != nil {
+		fmt.Fprintln(os.Stderr, "audiobook smoke avatar API unavailable; using smoke-test assets:", clientErr)
+	}
+	avatars := make([]video.AudioBookVideoAvatar, 0, len(specs))
+	for i, spec := range specs {
+		greenPath := filepath.Join(dir, fmt.Sprintf("%02d-%s-green.png", i, spec.name))
+		alphaPath := filepath.Join(dir, fmt.Sprintf("%02d-%s.png", i, spec.name))
+		raw, source, keyed, err := generateSmokeAvatar(context.Background(), client, spec.name, spec.role, spec.description, spec.asset)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Printf("audiobook smoke avatar %s: %s\n", spec.name, source)
+		if keyed {
+			if err := os.WriteFile(alphaPath, raw, 0o644); err != nil {
+				return nil, err
+			}
+			avatars = append(avatars, video.AudioBookVideoAvatar{Name: spec.name, Path: alphaPath})
+			continue
+		}
+		if err := os.WriteFile(greenPath, raw, 0o644); err != nil {
+			return nil, err
+		}
+		if err := chromaKeySmokeAvatar(greenPath, alphaPath); err != nil {
+			return nil, err
+		}
+		avatars = append(avatars, video.AudioBookVideoAvatar{Name: spec.name, Path: alphaPath})
+	}
+	return avatars, nil
+}
+
+func generateSmokeAvatar(ctx context.Context, client *imagegen.Client,
+	name, role, description, fallbackAsset string,
+) ([]byte, string, bool, error) {
+	if client != nil {
+		raw, err := client.Generate(ctx, imagegen.Request{
+			Model:  imagegen.PuzzleSceneModel,
+			Prompt: smokeAvatarPrompt(name, role, description),
+			Size:   "1024x1024",
+		})
+		if err == nil {
+			return raw, "imagegen API", false, nil
+		}
+		fmt.Fprintf(os.Stderr, "audiobook smoke avatar API failed for %s; using smoke-test asset: %v\n", name, err)
+	}
+	raw, err := os.ReadFile(fallbackAsset)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("read smoke avatar asset %s: %w", fallbackAsset, err)
+	}
+	return raw, "smoke-test asset", true, nil
+}
+
+func smokeAvatarPrompt(name, role, description string) string {
+	return fmt.Sprintf(`Create a cartoon-style speaker avatar for an audiobook conversation video.
+Subject: %s. Role: %s. Description: %s.
+Style: polished 2D cartoon or cel-shaded character avatar, clean vector-like shapes, simple readable silhouette, waist-up or full-body framing, facing camera, expressive but natural, bold clean outline, flat color regions, no props that touch the frame edge.
+Hair: simplified cartoon hair made from solid opaque shapes with clean edges. No individual hair strands, no wispy flyaway hair, no semi-transparent hair, no green rim light, no green highlights.
+Background: perfectly flat solid #00ff00 chroma-key background.
+Constraints: the background must be one uniform #00ff00 color with no shadows, gradients, texture, floor plane, reflections, or lighting variation. Keep the subject fully separated from the background with crisp edges and generous padding. Do not use #00ff00 or any green hue in the subject, clothing, hair, outline, shadows, or highlights. No photorealism, no photographic texture, no cast shadow, no contact shadow, no reflection, no text, no captions, no watermark.`,
+		name, role, description)
+}
+
+func chromaKeySmokeAvatar(inPath, outPath string) error {
+	args := []string{
+		"-y",
+		"-loglevel", "error",
+		"-i", inPath,
+		"-vf", "chromakey=0x00ff00:0.22:0.10,format=rgba",
+		outPath,
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("chromakey smoke avatar: %w\n%s", err, stderr.String())
+	}
+	return nil
+}
+
+func writeSmokeAudio(path string, dur time.Duration) error {
+	args := []string{
+		"-y",
+		"-loglevel", "error",
+		"-f", "lavfi",
+		"-i", "anullsrc=r=24000:cl=mono",
+		"-t", fmt.Sprintf("%.3f", dur.Seconds()),
+		"-c:a", "aac",
+		"-b:a", "96k",
+		path,
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("write audiobook smoke audio: %w\n%s", err, stderr.String())
+	}
+	return nil
+}
+
+func extractPreviewFrame(videoPath, outPath string) error {
+	args := []string{
+		"-y",
+		"-loglevel", "error",
+		"-ss", "2",
+		"-i", videoPath,
+		"-frames:v", "1",
+		outPath,
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("extract audiobook preview frame: %w\n%s", err, stderr.String())
+	}
+	return nil
 }
 
 // ---------- puzzle-fade mode ----------

@@ -80,9 +80,10 @@ const (
 // styleCase is one golden frame: a content type, a name, and the renderer
 // setup that produces a deterministic, animation-settled frame.
 type styleCase struct {
-	kind  string // subdir under smoke-test/ (debate|puzzle|series|discussion)
-	name  string // file stem
-	setup func(r *Renderer)
+	kind   string // subdir under smoke-test/ (debate|puzzle|series|discussion)
+	name   string // file stem
+	setup  func(r *Renderer)
+	render func(t *testing.T, r *Renderer) *image.RGBA
 }
 
 // settle pushes every wall-clock-anchored animation far past its end so the
@@ -204,6 +205,27 @@ func styleCases() []styleCase {
 			r.SetState("Diego", "discussant", "", "真正能收費的是雲端執行與協作。", 5*time.Second)
 			settle(r)
 		}},
+
+		// ---- audiobook conversation (left/right speaker avatars + center panel) ----
+		{kind: "audiobook", name: "01-conversation", setup: func(r *Renderer) {
+			r.SetTopic("The Future of Human Creativity")
+			settle(r)
+		}, render: func(t *testing.T, r *Renderer) *image.RGBA {
+			avatars := map[string]*image.RGBA{
+				"mina":   readSmokeAvatarFixture(t, "audiobook_avatar_mina.png"),
+				"jordan": readSmokeAvatarFixture(t, "audiobook_avatar_jordan.png"),
+			}
+			return r.renderAudioBookConversationFrame(
+				gradientPlate(color.RGBA{0x1b, 0x32, 0x46, 0xff}, color.RGBA{0x06, 0x08, 0x10, 0xff}, 501),
+				audioBookConversationCastView{Left: "Mina", Right: "Jordan"},
+				avatars,
+				audioBookConversationSegment{
+					Speaker: "Mina",
+					Text:    "When a book becomes a conversation, the narrator should still anchor the scene, but the guest needs a visible place in the frame.",
+					Seconds: 3,
+				},
+			)
+		}},
 	}
 }
 
@@ -254,6 +276,9 @@ func renderStyleFrame(t *testing.T, c styleCase) *image.RGBA {
 	t.Helper()
 	r := renderForTest(t)
 	c.setup(r)
+	if c.render != nil {
+		return c.render(t, r)
+	}
 	pix := r.Frame()
 	return &image.RGBA{
 		Pix:    pix,
@@ -316,6 +341,28 @@ func dumpActual(t *testing.T, c styleCase, img *image.RGBA) string {
 		return "(failed to write actual: " + err.Error() + ")"
 	}
 	return path
+}
+
+func readSmokeAvatarFixture(t *testing.T, name string) *image.RGBA {
+	t.Helper()
+	path := filepath.Join(goldenDir, "audiobook", "avatars", name)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open audiobook smoke avatar fixture %s: %v", path, err)
+	}
+	defer f.Close()
+	src, err := png.Decode(f)
+	if err != nil {
+		t.Fatalf("decode audiobook smoke avatar fixture %s: %v", path, err)
+	}
+	b := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			dst.Set(x, y, src.At(b.Min.X+x, b.Min.Y+y))
+		}
+	}
+	return dst
 }
 
 func writePNG(path string, img image.Image) error {

@@ -162,6 +162,11 @@ final class APIClient: Sendable {
         try await send("POST", "/api/discussions/\(id)/summary/generate", body: EmptyRequest())
     }
 
+    /// Starts or retries the backend-owned audiobook companion video render.
+    func generateVideo(id: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/video/generate", body: EmptyRequest())
+    }
+
     func discussionUIActions(id: String,
                              surface: String,
                              docType: String? = nil,

@@ -94,9 +94,9 @@ style-font:
 	./scripts/fetch-style-font.sh
 
 # Style regression guard: re-render one frame per content-type layout (debate,
-# situation puzzle, series, discussion) and assert it still matches the golden
-# PNGs committed under smoke-test/. Fails the moment a renderer change shifts the
-# pixels of any layout.
+# situation puzzle, series, discussion, audiobook) and assert it still matches
+# the golden PNGs committed under smoke-test/. Fails the moment a renderer
+# change shifts the pixels of any layout.
 style-test: style-font
 	go test ./internal/video -run TestStyleGolden
 

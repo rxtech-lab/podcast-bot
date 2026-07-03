@@ -69,11 +69,8 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 	}
 	// Audiobook video belongs with the generated documents, next to Plan/Text,
 	// rather than in the generic podcast actions menu.
-	if videoKey, _ := s.d.Discussions.VideoKeyFor(r.Context(), d.ID); strings.TrimSpace(videoKey) != "" &&
-		s.d.Uploader != nil && s.d.Uploader.Enabled() {
-		if url, err := s.d.Uploader.DownloadURL(r.Context(), videoKey, time.Hour); err == nil && strings.TrimSpace(url) != "" {
-			items = append(items, actionItem("view-video", phrase(lang, "View Video", "查看视频", "查看影片"), "", "film", "", true, "play-video", url))
-		}
+	if item, ok := s.audioBookVideoAction(r, d, lang); ok {
+		items = append(items, item)
 	}
 	if discussionIsAudioBook(d) {
 		// Audiobooks expose the "text-based content" book document instead of
@@ -97,6 +94,58 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 		items = append(items, actionItem("summary-unavailable", phrase(lang, "Summary", "总结", "摘要"), "", "doc.richtext", "", false, "none", discussionActionLink(d.ID, "summary", "unavailable")))
 	}
 	return items
+}
+
+func (s *Server) audioBookVideoAction(r *http.Request, d *Discussion, lang contentcreator.Lang) (discussionUIActionItem, bool) {
+	if !discussionIsAudioBook(d) || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return discussionUIActionItem{}, false
+	}
+	videoKey := s.discussionVideoKey(r, d)
+	if strings.TrimSpace(videoKey) != "" {
+		if url, err := s.d.Uploader.DownloadURL(r.Context(), videoKey, time.Hour); err == nil && strings.TrimSpace(url) != "" {
+			return actionItem("view-video", phrase(lang, "View Video", "查看视频", "查看影片"), "", "film", "", true, "play-video", url), true
+		}
+	}
+	if s.audioBookVideoRendering(d) {
+		return actionItem("video-rendering", phrase(lang, "Generating Video", "正在生成视频", "正在產生影片"), "", "hourglass", "", false, "none", discussionActionLink(d.ID, "video", "rendering")), true
+	}
+	if d.IsOwner && d.Status == DiscussionReady && strings.TrimSpace(d.JobID) != "" && s.d.Jobs != nil && s.d.UploadRoot != "" {
+		return actionItem("generate-video", phrase(lang, "Generate Video", "生成视频", "產生影片"), phrase(lang, "Generating Video", "正在生成视频", "正在產生影片"), "film.badge.plus", "", true, "request", discussionActionLink(d.ID, "action", "video-generate")), true
+	}
+	return discussionUIActionItem{}, false
+}
+
+func (s *Server) discussionVideoKey(r *http.Request, d *Discussion) string {
+	videoKey, _ := s.d.Discussions.VideoKeyFor(r.Context(), d.ID)
+	if strings.TrimSpace(videoKey) != "" || strings.TrimSpace(d.JobID) == "" || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return videoKey
+	}
+	repairKey := s.d.Uploader.Key(d.JobID + "-video.mp4")
+	if info, err := s.d.Uploader.Head(r.Context(), repairKey); err == nil && info.ContentLength > 0 {
+		if err := s.d.Discussions.SetVideoKey(r.Context(), d.ID, repairKey); err != nil {
+			s.logger().Warn("discussion video key repair failed", "discussion", d.ID, "job", d.JobID, "key", repairKey, "err", err)
+		} else {
+			s.logger().Info("discussion video key repaired from storage", "discussion", d.ID, "job", d.JobID, "key", repairKey)
+			videoKey = repairKey
+		}
+	}
+	return videoKey
+}
+
+func (s *Server) audioBookVideoRendering(d *Discussion) bool {
+	if s.d.Jobs == nil || strings.TrimSpace(d.JobID) == "" {
+		return false
+	}
+	j := s.d.Jobs.Get(d.JobID)
+	if j == nil {
+		return false
+	}
+	switch strings.TrimSpace(j.Phase) {
+	case "video-queued", "video-rendering", "video-uploading":
+		return !j.HasVideo
+	default:
+		return false
+	}
 }
 
 func (s *Server) podcastMenuActions(r *http.Request, d *Discussion, lang contentcreator.Lang) []discussionUIActionItem {
