@@ -1,15 +1,20 @@
 package contentcreator
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/tts"
 )
 
@@ -32,7 +37,17 @@ const (
 	defaultPauseMS = 500
 	minPauseMS     = 150
 	maxPauseMS     = 1200
+
+	audiobookDropoutSampleRate      = 24000
+	audiobookDropoutWindow          = 10 * time.Millisecond
+	audiobookDropoutMergeGap        = 50 * time.Millisecond
+	audiobookDropoutMinDuration     = 320 * time.Millisecond
+	audiobookDropoutMinEdgeDistance = 200 * time.Millisecond
+	audiobookDropoutExpectedBreak   = 450 * time.Millisecond
+	audiobookDropoutPCMThreshold    = 64
 )
+
+var inspectSynthAudioDropout = inspectMP3SynthAudioDropout
 
 // charSpan is one inner span captured between an open and close marker.
 // idx is the character index from the open tag; text is the literal
@@ -195,6 +210,19 @@ func splitNaturalSpeech(spans []charSpan) (clean string, chunks []naturalChunk, 
 	return cleanB.String(), chunks, hadPause, hadBreath
 }
 
+func transcriptSpansFromNaturalChunks(chunks []naturalChunk) []charSpan {
+	out := make([]charSpan, 0, len(chunks))
+	for _, chunk := range chunks {
+		for _, span := range chunk.spans {
+			if span.text == "" {
+				continue
+			}
+			out = append(out, span)
+		}
+	}
+	return out
+}
+
 func parseNaturalMarker(raw string) naturalMarker {
 	lower := strings.ToLower(raw)
 	if strings.Contains(lower, "breath") {
@@ -277,23 +305,16 @@ func (p *Pipeline) synthNaturalChunks(ctx context.Context, t *Turn, sent string,
 	var total int64
 	for _, chunk := range chunks {
 		if naturalChunkHasSpeech(chunk) {
-			chunkText := naturalChunkText(chunk)
-			body, err := p.synthVoice(ctx, t, chunkText,
-				naturalChunkHasCharVoiceMarker(chunk), chunk.spans, naturalChunkHasBreak(chunk))
-			if err != nil {
-				return total, err
-			}
-			n, err := io.Copy(sink, body)
-			closeErr := body.Close()
+			n, err := p.synthAndWriteNaturalChunk(ctx, t, chunk, sink)
 			total += n
 			if err != nil {
 				return total, err
 			}
-			if closeErr != nil {
-				return total, closeErr
-			}
 		}
 		if chunk.breathAfter {
+			if p != nil && p.d.ContentType == config.ContentTypeAudioBook {
+				continue
+			}
 			n, err := sink.Write(seriesBreathMP3)
 			total += int64(n)
 			if err != nil {
@@ -302,6 +323,218 @@ func (p *Pipeline) synthNaturalChunks(ctx context.Context, t *Turn, sent string,
 		}
 	}
 	return total, nil
+}
+
+func (p *Pipeline) synthAndWriteNaturalChunk(ctx context.Context, t *Turn, chunk naturalChunk, sink io.Writer) (int64, error) {
+	chunkText := naturalChunkText(chunk)
+	hadCharMarkers := naturalChunkHasCharVoiceMarker(chunk)
+	hadBreak := naturalChunkHasBreak(chunk)
+	if !p.shouldInspectSynthChunk() {
+		body, err := p.synthVoice(ctx, t, chunkText, hadCharMarkers, chunk.spans, hadBreak)
+		if err != nil {
+			return 0, err
+		}
+		n, err := io.Copy(sink, body)
+		closeErr := body.Close()
+		if err != nil {
+			return n, err
+		}
+		if closeErr != nil {
+			return n, closeErr
+		}
+		return n, nil
+	}
+
+	const maxAttempts = 2
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		body, err := p.synthVoice(ctx, t, chunkText, hadCharMarkers, chunk.spans, hadBreak)
+		if err != nil {
+			return 0, err
+		}
+		data, readErr := io.ReadAll(body)
+		closeErr := body.Close()
+		if readErr != nil {
+			return 0, readErr
+		}
+		if closeErr != nil {
+			return 0, closeErr
+		}
+		dropout, inspectErr := inspectSynthAudioDropout(ctx, data, hadBreak)
+		if inspectErr != nil {
+			if p != nil && p.d.Log != nil {
+				p.d.Log.Warn("audiobook audio QA skipped",
+					"turn", turnIDForLog(t),
+					"attempt", attempt,
+					"err", inspectErr)
+			}
+			n, err := io.Copy(sink, bytes.NewReader(data))
+			return n, err
+		}
+		if !dropout.Found {
+			n, err := io.Copy(sink, bytes.NewReader(data))
+			return n, err
+		}
+		lastErr = fmt.Errorf("detected silent dropout %.0f-%.0fms",
+			float64(dropout.Start)/float64(time.Millisecond),
+			float64(dropout.End)/float64(time.Millisecond))
+		if p != nil && p.d.Log != nil {
+			p.d.Log.Warn("audiobook audio QA retry",
+				"turn", turnIDForLog(t),
+				"attempt", attempt,
+				"start_ms", dropout.Start.Milliseconds(),
+				"duration_ms", dropout.Duration().Milliseconds())
+		}
+		if attempt == maxAttempts {
+			n, err := io.Copy(sink, bytes.NewReader(data))
+			if err != nil {
+				return n, err
+			}
+			if p != nil && p.d.Log != nil {
+				p.d.Log.Warn("audiobook audio QA kept final attempt",
+					"turn", turnIDForLog(t),
+					"err", lastErr)
+			}
+			return n, nil
+		}
+	}
+	return 0, lastErr
+}
+
+func (p *Pipeline) shouldInspectSynthChunk() bool {
+	return p != nil && p.d.ContentType == config.ContentTypeAudioBook && inspectSynthAudioDropout != nil
+}
+
+func turnIDForLog(t *Turn) int {
+	if t == nil {
+		return 0
+	}
+	return t.ID
+}
+
+type synthAudioDropout struct {
+	Found bool
+	Start time.Duration
+	End   time.Duration
+}
+
+func (d synthAudioDropout) Duration() time.Duration {
+	if !d.Found || d.End <= d.Start {
+		return 0
+	}
+	return d.End - d.Start
+}
+
+func inspectMP3SynthAudioDropout(ctx context.Context, mp3 []byte, hasExplicitBreak bool) (synthAudioDropout, error) {
+	if len(mp3) == 0 {
+		return synthAudioDropout{}, nil
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-v", "error",
+		"-i", "pipe:0",
+		"-f", "s16le",
+		"-acodec", "pcm_s16le",
+		"-ar", strconv.Itoa(audiobookDropoutSampleRate),
+		"-ac", "1",
+		"pipe:1",
+	)
+	cmd.Stdin = bytes.NewReader(mp3)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return synthAudioDropout{}, fmt.Errorf("decode synthesized mp3: %w: %s", err, msg)
+		}
+		return synthAudioDropout{}, fmt.Errorf("decode synthesized mp3: %w", err)
+	}
+	return detectPCMZeroDropout(out.Bytes(), audiobookDropoutSampleRate, hasExplicitBreak), nil
+}
+
+func detectPCMZeroDropout(pcm []byte, sampleRate int, hasExplicitBreak bool) synthAudioDropout {
+	if sampleRate <= 0 || len(pcm) < 2 {
+		return synthAudioDropout{}
+	}
+	samples := len(pcm) / 2
+	windowSamples := int(audiobookDropoutWindow * time.Duration(sampleRate) / time.Second)
+	if windowSamples <= 0 {
+		windowSamples = 1
+	}
+	type silentRun struct {
+		start time.Duration
+		end   time.Duration
+	}
+	var runs []silentRun
+	var runStart = -1
+	for offset := 0; offset < samples; offset += windowSamples {
+		end := offset + windowSamples
+		if end > samples {
+			end = samples
+		}
+		silent := true
+		for i := offset; i < end; i++ {
+			j := i * 2
+			v := int(int16(uint16(pcm[j]) | uint16(pcm[j+1])<<8))
+			if v < 0 {
+				v = -v
+			}
+			if v > audiobookDropoutPCMThreshold {
+				silent = false
+				break
+			}
+		}
+		if silent {
+			if runStart < 0 {
+				runStart = offset
+			}
+			continue
+		}
+		if runStart >= 0 {
+			runs = append(runs, silentRun{
+				start: samplesToDuration(runStart, sampleRate),
+				end:   samplesToDuration(offset, sampleRate),
+			})
+			runStart = -1
+		}
+	}
+	if runStart >= 0 {
+		runs = append(runs, silentRun{
+			start: samplesToDuration(runStart, sampleRate),
+			end:   samplesToDuration(samples, sampleRate),
+		})
+	}
+	if len(runs) == 0 {
+		return synthAudioDropout{}
+	}
+	merged := runs[:0]
+	for _, run := range runs {
+		if len(merged) == 0 || run.start-merged[len(merged)-1].end > audiobookDropoutMergeGap {
+			merged = append(merged, run)
+			continue
+		}
+		merged[len(merged)-1].end = run.end
+	}
+	total := samplesToDuration(samples, sampleRate)
+	for _, run := range merged {
+		dur := run.end - run.start
+		if dur < audiobookDropoutMinDuration {
+			continue
+		}
+		if run.start < audiobookDropoutMinEdgeDistance || total-run.end < audiobookDropoutMinEdgeDistance {
+			continue
+		}
+		if hasExplicitBreak && dur >= audiobookDropoutExpectedBreak {
+			continue
+		}
+		return synthAudioDropout{Found: true, Start: run.start, End: run.end}
+	}
+	return synthAudioDropout{}
+}
+
+func samplesToDuration(samples, sampleRate int) time.Duration {
+	return time.Duration(float64(samples) / float64(sampleRate) * float64(time.Second))
 }
 
 func isSeriesNaturalTurn(t *Turn) bool {

@@ -2036,10 +2036,22 @@ func (s *DiscussionStore) lines(ctx context.Context, id string) ([]DiscussionLin
 		if strings.TrimSpace(sourcesJSON) != "" {
 			_ = json.Unmarshal([]byte(sourcesJSON), &line.Sources)
 		}
+		if !discussionLineHasDisplayablePayload(line) {
+			continue
+		}
 		line.IsUser = isUser != 0
 		out = append(out, line)
 	}
 	return out, rows.Err()
+}
+
+func discussionLineHasDisplayablePayload(line DiscussionLine) bool {
+	return strings.TrimSpace(line.Text) != "" ||
+		strings.TrimSpace(line.AudioURL) != "" ||
+		strings.TrimSpace(line.AudioKey) != "" ||
+		strings.TrimSpace(line.ImageURL) != "" ||
+		len(line.Sources) > 0 ||
+		strings.TrimSpace(line.JudgementComment) != ""
 }
 
 func (s *DiscussionStore) EditTurns(ctx context.Context, owner, id string) ([]DiscussionEditTurn, error) {
@@ -2125,9 +2137,12 @@ func (s *DiscussionStore) owns(ctx context.Context, owner, id string) (bool, err
 func (s *DiscussionStore) appendLine(ctx context.Context, id string, line DiscussionLine) error {
 	text := strings.TrimSpace(line.Text)
 	imageURL := strings.TrimSpace(line.ImageURL)
-	// An image-only line (audiobook illustration) carries no spoken text; keep it
-	// so the picture survives reload. Only genuinely empty lines are dropped.
-	if text == "" && imageURL == "" {
+	audioURL := strings.TrimSpace(line.AudioURL)
+	audioKey := strings.TrimSpace(line.AudioKey)
+	// Image-only audiobook illustrations and transcriptless voice messages carry
+	// no spoken text; keep them so they survive reload. Only genuinely empty
+	// lines are dropped.
+	if text == "" && imageURL == "" && audioURL == "" && audioKey == "" {
 		return nil
 	}
 	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_lines
@@ -2135,7 +2150,7 @@ func (s *DiscussionStore) appendLine(ctx context.Context, id string, line Discus
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, strings.TrimSpace(line.Speaker), strings.TrimSpace(line.Role), strings.TrimSpace(line.Side),
 		text, line.StartMS, boolInt(line.IsUser), strings.TrimSpace(line.SenderUserID),
-		strings.TrimSpace(line.AudioURL), strings.TrimSpace(line.AudioKey), imageURL, "", "",
+		audioURL, audioKey, imageURL, "", "",
 		time.Now().UnixMilli())
 	if err != nil {
 		return err

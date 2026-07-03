@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"image"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -79,7 +80,7 @@ type Music struct {
 type musicRecorder = func()
 
 func PrepareAssets(ctx context.Context, log *slog.Logger, outDir string,
-	stage PaletteStage, topic *config.DebateTopic, orch AudioSink, rec musicRecorder) {
+	stage PaletteStage, topic *config.DebateTopic, orch AudioSink, rec musicRecorder) Music {
 	// Palette: stream frames onto the stage; signal as soon as the first lands.
 	firstReady := make(chan struct{})
 	go GeneratePalette(ctx, log, stage, topic, firstReady)
@@ -92,13 +93,14 @@ func PrepareAssets(ctx context.Context, log *slog.Logger, outDir string,
 	select {
 	case <-firstReady:
 	case <-ctx.Done():
-		return
+		return Music{}
 	}
 	music := <-musicCh
 	if len(music.Beds) > 0 || len(music.Sounds) > 0 {
 		orch.SetDiscussionAudio(music.Beds, music.Sounds, music.Moods)
 		log.Info("discussion music ready", "beds", len(music.Sounds), "title", topic.Title)
 	}
+	return music
 }
 
 // PrepareAudioOnly is the image-free variant of PrepareAssets for the
@@ -109,13 +111,14 @@ func PrepareAssets(ctx context.Context, log *slog.Logger, outDir string,
 // against. Degrades gracefully: failed music gen just means the discussion
 // plays dry.
 func PrepareAudioOnly(ctx context.Context, log *slog.Logger, outDir string,
-	topic *config.DebateTopic, orch AudioSink, rec musicRecorder) {
+	topic *config.DebateTopic, orch AudioSink, rec musicRecorder) Music {
 	music := GenerateMusic(ctx, log, topic, outDir, rec)
 	if len(music.Beds) > 0 || len(music.Sounds) > 0 {
 		orch.SetDiscussionAudio(music.Beds, music.Sounds, music.Moods)
 		log.Info("discussion music ready (audio-only)",
 			"beds", len(music.Sounds), "title", topic.Title)
 	}
+	return music
 }
 
 // GeneratePalette renders the mood palette concurrently, attaching each frame
@@ -183,7 +186,7 @@ func GenerateMusic(ctx context.Context, log *slog.Logger,
 		return Music{}
 	}
 	client = client.WithUsageRecorder(rec)
-	cacheDir := outDir + "/discussion-music"
+	cacheDir := filepath.Join(outDir, "raw-music", "discussion")
 	t0 := time.Now()
 	paths := make([]string, len(bedSpecs))
 	var wg sync.WaitGroup

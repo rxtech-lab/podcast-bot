@@ -31,6 +31,13 @@ const (
 	JobError   JobStatus = "error"
 )
 
+const (
+	PodcastAudioDir          = "podcast-audio"
+	PodcastAudioFilename     = "audio.mp3"
+	PodcastSubtitlesFilename = "subtitles.vtt"
+	PodcastRawMusicObjectDir = "raw-music"
+)
+
 // JobLog is one persisted progress/log line for a video-mode job.
 type JobLog struct {
 	TS   int64  `json:"ts"`
@@ -238,6 +245,10 @@ func NewJobRegistry(dbPath, primaryURL, authToken string) (*JobRegistry, error) 
 		// libSQL is single-writer; keep one conn to serialise writes and avoid
 		// "database is locked" churn, mirroring the local SQLite tuning.
 		sqlDB.SetMaxOpenConns(1)
+		// Turso/libSQL keeps a long-lived stream per connection. Recycle it
+		// before an idle production stream is likely to be closed remotely.
+		sqlDB.SetConnMaxIdleTime(30 * time.Second)
+		sqlDB.SetConnMaxLifetime(5 * time.Minute)
 		db, err = gorm.Open(sqlite.New(sqlite.Config{Conn: sqlDB}), &gorm.Config{Logger: gormLogger})
 	} else {
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {

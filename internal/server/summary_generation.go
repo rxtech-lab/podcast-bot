@@ -107,7 +107,7 @@ func StartSummaryGeneration(ctx context.Context, deps SummaryGenerationDeps, inp
 	if err != nil {
 		return nil, err
 	}
-	publishSummaryEvent(deps, input.JobID, docType, string(SummaryGenerating))
+	publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryGenerating))
 	go runSummaryGeneration(deps, input, owner, model)
 	return meta, nil
 }
@@ -131,7 +131,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		if !ok {
 			logger.Info("summary skipped: insufficient points")
 			_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "insufficient points for summary")
-			publishSummaryEvent(deps, input.JobID, docType, string(SummaryFailed))
+			publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
 			return
 		}
 		reserved, reserveLedgerID = r, ledgerID
@@ -150,7 +150,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		}
 		logger.Warn("summary generation failed", "err", err)
 		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, err.Error())
-		publishSummaryEvent(deps, input.JobID, docType, string(SummaryFailed))
+		publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
 		return
 	}
 
@@ -175,7 +175,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 	}); err != nil {
 		logger.Warn("summary persist failed", "err", err)
 		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "failed to store summary")
-		publishSummaryEvent(deps, input.JobID, docType, string(SummaryFailed))
+		publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
 		return
 	}
 
@@ -186,7 +186,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		"total_tokens", sum.TotalTokens,
 		"cost_usd", sum.CostUSD)
 	notifySummaryReady(ctx, deps, input.DiscussionID)
-	publishSummaryEvent(deps, input.JobID, docType, string(SummaryReadyState))
+	publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryReadyState))
 }
 
 func notifySummaryReady(ctx context.Context, deps SummaryGenerationDeps, discussionID string) {
@@ -209,7 +209,7 @@ func notifySummaryReady(ctx context.Context, deps SummaryGenerationDeps, discuss
 	}, deps.Log)
 }
 
-func publishSummaryEvent(deps SummaryGenerationDeps, jobID, docType, status string) {
+func publishSummaryEvent(deps SummaryGenerationDeps, jobID, discussionID, docType, status string) {
 	if deps.Bus == nil {
 		return
 	}
@@ -217,6 +217,7 @@ func publishSummaryEvent(deps SummaryGenerationDeps, jobID, docType, status stri
 		DocType: docType,
 		Status:  status,
 	}, jobID))
+	PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, discussionID, "Summary "+status, "summary")
 }
 
 type summaryUsageMeter struct {

@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -301,10 +302,15 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// starts at the stream's t=0 (the same anchor the subtitles.vtt cues use).
 	// The subscriber channel closes when CloseInput drains ffmpeg, after which
 	// recDone fires.
-	audioPath := filepath.Join(jobOutDir, "audio.mp3")
+	audioDir := filepath.Join(jobOutDir, server.PodcastAudioDir)
+	audioPath := filepath.Join(audioDir, server.PodcastAudioFilename)
 	var recDone chan struct{}
 	var hlsWait func()
 	if audioOnly {
+		if err := os.MkdirAll(audioDir, 0o755); err != nil {
+			fail(deps, jobID, logger, fmt.Errorf("create podcast audio dir: %w", err))
+			return
+		}
 		recFile, ferr := os.Create(audioPath)
 		if ferr != nil {
 			fail(deps, jobID, logger, fmt.Errorf("create audio file: %w", ferr))
@@ -389,15 +395,17 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// the orchestrator runs (the session bed must be installed pre-Run, and
 	// the stage paints the first background as soon as it lands). Without this
 	// the show rendered over a bare background with no imagery.
+	var discussionMusic discussion.Music
 	if topic.Type == config.ContentTypeDiscussion && !jobEnv.E2EMode {
 		t0 := time.Now()
 		if audioOnly {
 			status("preparing discussion audio (music)…")
-			discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch, orch.RecordMusicGeneration)
+			discussionMusic = discussion.PrepareAudioOnly(ctx, logger, jobOutDir, topic, orch, orch.RecordMusicGeneration)
 		} else {
 			status("preparing discussion assets (backgrounds, music)…")
-			discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch, orch.RecordMusicGeneration)
+			discussionMusic = discussion.PrepareAssets(ctx, logger, jobOutDir, discussionStage, topic, orch, orch.RecordMusicGeneration)
 		}
+		uploadRawPodcastMusic(ctx, deps, logger, jobID, discussionMusic)
 		logger.Info("discussion asset prep done",
 			"audio_only", audioOnly,
 			"elapsed", time.Since(t0).Round(time.Millisecond))
@@ -413,7 +421,11 @@ func run(ctx context.Context, deps Deps, jobID string,
 		t0 := time.Now()
 		status("preparing audiobook assets (music, illustrations)…")
 		audiobook.PrepareAudio(ctx, logger, &jobEnv, topic, orch)
-		audiobook.PrepareImages(ctx, logger, &jobEnv, topic, orch, deps.Uploader)
+		audioBookID := strings.TrimSpace(deps.DiscussionID)
+		if audioBookID == "" {
+			audioBookID = jobID
+		}
+		audiobook.PrepareImages(ctx, logger, &jobEnv, topic, orch, deps.Uploader, audioBookID)
 		logger.Info("audiobook asset prep done",
 			"elapsed", time.Since(t0).Round(time.Millisecond))
 		status(fmt.Sprintf("audiobook assets ready (%s)",
@@ -475,13 +487,14 @@ func run(ctx context.Context, deps Deps, jobID string,
 			return
 		}
 		status(fmt.Sprintf("audio ready · %.1f MB", float64(info.Size())/(1024*1024)))
+		subtitlesPath := stagePodcastSubtitles(jobOutDir, logger)
 
 		var s3Key string
 		var downloadURL string
 		audioPathForJob := audioPath
 		if deps.Uploader.Enabled() {
 			status("uploading to S3...")
-			key := deps.Uploader.Key(jobID + ".mp3")
+			key := deps.Uploader.Key(podcastAudioObjectName(jobID, "mp3"))
 			if err := deps.Uploader.Upload(ctx, audioPath, key); err != nil {
 				logger.Error("s3 upload failed", "err", err)
 				fail(deps, jobID, logger, fmt.Errorf("s3 audio upload: %w", err))
@@ -515,10 +528,9 @@ func run(ctx context.Context, deps Deps, jobID string,
 		// local copy as a fallback and never fail the job over captions.
 		var subtitlesS3Key string
 		if deps.Uploader.Enabled() {
-			subPath := filepath.Join(jobOutDir, "subtitles.vtt")
-			if info, statErr := os.Stat(subPath); statErr == nil && info.Size() > 0 {
-				key := deps.Uploader.Key(jobID + ".vtt")
-				if err := deps.Uploader.Upload(ctx, subPath, key); err != nil {
+			if info, statErr := os.Stat(subtitlesPath); statErr == nil && info.Size() > 0 {
+				key := deps.Uploader.Key(podcastAudioObjectName(jobID, "vtt"))
+				if err := deps.Uploader.Upload(ctx, subtitlesPath, key); err != nil {
 					logger.Warn("s3 subtitles upload failed", "key", key, "err", err)
 				} else {
 					subtitlesS3Key = key
@@ -533,7 +545,11 @@ func run(ctx context.Context, deps Deps, jobID string,
 			generateAudioBookTextDoc(ctx, deps, jobID, topic, orch, downloadURL)
 		}
 
-		status("done")
+		if topic.Type == config.ContentTypeAudioBook {
+			status("audio ready")
+		} else {
+			status("done")
+		}
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.Status = server.JobDone
 			j.AudioPath = audioPathForJob
@@ -544,7 +560,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 			j.DownloadURL = downloadURL
 		})
 		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
-		notifyPodcastReady(ctx, deps, logger)
+		if topic.Type == config.ContentTypeAudioBook {
+			server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Audio ready", "audio", "status")
+			notifyPodcastAudioReady(ctx, deps, logger)
+		} else {
+			server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Podcast ready", "podcast", "audio", "status")
+			notifyPodcastReady(ctx, deps, logger)
+		}
 
 		// Audiobook video: render the 1080p video reusing the series renderer
 		// now that the audio + illustrations + VTT are final, then surface it in
@@ -728,7 +750,108 @@ func run(ctx context.Context, deps Deps, jobID string,
 		}
 	})
 	persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
+	server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Podcast ready", "podcast", "video", "status")
 	notifyPodcastReady(ctx, deps, logger)
+}
+
+func podcastAudioObjectName(jobID, ext string) string {
+	ext = strings.TrimPrefix(strings.TrimSpace(ext), ".")
+	if ext == "" {
+		ext = "mp3"
+	}
+	return path.Join(server.PodcastAudioDir, jobID+"."+ext)
+}
+
+func rawMusicObjectName(jobID, filename string) string {
+	return path.Join(server.PodcastRawMusicObjectDir, jobID, filepath.Base(filename))
+}
+
+func podcastSubtitlesPath(jobOutDir string) string {
+	return filepath.Join(jobOutDir, server.PodcastAudioDir, server.PodcastSubtitlesFilename)
+}
+
+func legacyPodcastSubtitlesPath(jobOutDir string) string {
+	return filepath.Join(jobOutDir, server.PodcastSubtitlesFilename)
+}
+
+func existingPodcastSubtitlesPath(jobOutDir string) string {
+	dst := podcastSubtitlesPath(jobOutDir)
+	if info, err := os.Stat(dst); err == nil && info.Size() > 0 {
+		return dst
+	}
+	src := legacyPodcastSubtitlesPath(jobOutDir)
+	if info, err := os.Stat(src); err == nil && info.Size() > 0 {
+		return src
+	}
+	return dst
+}
+
+func stagePodcastSubtitles(jobOutDir string, log *slog.Logger) string {
+	dst := podcastSubtitlesPath(jobOutDir)
+	src := legacyPodcastSubtitlesPath(jobOutDir)
+	if info, err := os.Stat(dst); err == nil && info.Size() > 0 {
+		return dst
+	}
+	if info, err := os.Stat(src); err != nil || info.Size() == 0 {
+		return dst
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		log.Warn("podcast subtitles dir create failed", "path", filepath.Dir(dst), "err", err)
+		return src
+	}
+	if err := os.Rename(src, dst); err == nil {
+		return dst
+	}
+	if err := copyFile(src, dst); err != nil {
+		log.Warn("podcast subtitles move failed", "src", src, "dst", dst, "err", err)
+		return src
+	}
+	if err := os.Remove(src); err != nil {
+		log.Warn("remove legacy subtitles after move failed", "path", src, "err", err)
+	}
+	return dst
+}
+
+func uploadRawPodcastMusic(ctx context.Context, deps Deps, log *slog.Logger, jobID string, music discussion.Music) {
+	if !deps.Uploader.Enabled() {
+		return
+	}
+	seen := map[string]bool{}
+	paths := make([]string, 0, len(music.Beds)+len(music.Sounds))
+	for _, p := range music.Beds {
+		paths = append(paths, p)
+	}
+	paths = append(paths, music.Sounds...)
+	for _, localPath := range paths {
+		localPath = strings.TrimSpace(localPath)
+		if localPath == "" || seen[localPath] {
+			continue
+		}
+		seen[localPath] = true
+		key := deps.Uploader.Key(rawMusicObjectName(jobID, filepath.Base(localPath)))
+		if err := deps.Uploader.Upload(ctx, localPath, key); err != nil {
+			log.Warn("raw podcast music upload failed", "path", localPath, "key", key, "err", err)
+			continue
+		}
+		log.Info("raw podcast music uploaded", "path", localPath, "key", key)
+	}
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func fail(deps Deps, jobID string, log *slog.Logger, err error) {
@@ -777,6 +900,27 @@ func notifyPodcastReady(ctx context.Context, deps Deps, log *slog.Logger) {
 		DiscussionID: d.ID,
 		Title:        "Podcast finished",
 		Body:         pushDiscussionTitle(d, "Your podcast is ready to play."),
+		URL:          server.DiscussionDeepLink(server.FrontendBaseURL(deps.Env), d.ID),
+	}, log)
+}
+
+func notifyPodcastAudioReady(ctx context.Context, deps Deps, log *slog.Logger) {
+	if deps.APNS == nil || deps.Discussions == nil || deps.DiscussionID == "" {
+		return
+	}
+	d, err := deps.Discussions.GetForNotification(ctx, deps.DiscussionID)
+	if err != nil {
+		log.Warn("podcast audio ready push discussion lookup failed", "discussion_id", deps.DiscussionID, "err", err)
+		return
+	}
+	if d == nil {
+		return
+	}
+	server.SendPushNotification(ctx, deps.Discussions, deps.APNS, d.OwnerUserID, server.PushNotification{
+		Kind:         server.PushKindPodcastAudioReady,
+		DiscussionID: d.ID,
+		Title:        "Audio ready",
+		Body:         pushDiscussionTitle(d, "Your audiobook audio is ready to play."),
 		URL:          server.DiscussionDeepLink(server.FrontendBaseURL(deps.Env), d.ID),
 	}, log)
 }

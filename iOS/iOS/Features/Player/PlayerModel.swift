@@ -37,8 +37,29 @@ struct LiveLine: Identifiable, Equatable {
         !(imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
+    var displayText: String {
+        Self.displayText(from: text)
+    }
+
     var hasDisplayText: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !displayText.isEmpty
+    }
+
+    var hasRenderablePayload: Bool {
+        hasDisplayText ||
+            hasAudio ||
+            hasImage ||
+            !(sources?.isEmpty ?? true) ||
+            !(judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    static func displayText(from raw: String) -> String {
+        raw.replacingOccurrences(
+            of: #"(?i)<\s*(?:pause\b[^>]*|breath\b[^>]*)/?\s*>|\[\s*(?:pause\b[^\]]*|breath\b[^\]]*)\]"#,
+            with: " ",
+            options: .regularExpression
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @discardableResult
@@ -153,6 +174,7 @@ final class PlayerModel {
     // the untrimmed recording), so no manual lead is needed. A non-zero value
     // here would make live captions appear early.
     nonisolated static let liveCaptionLeadSeconds = 0.0
+    nonisolated static let audioBookChapterTitleLeadSeconds = 2.0
     nonisolated private static let lyricGroupMinRunes = 28
     nonisolated private static let lyricGroupMaxRunes = 96
     nonisolated private static let lyricGroupMaxLines = 3
@@ -161,6 +183,7 @@ final class PlayerModel {
     nonisolated static let minimumTranscriptLoadingSeconds = 1.0
 
     var discussion: Discussion
+    var uiActionsRefreshVersion = 0
     /// Exposed (read-only use) so views like the share sheet can reuse the same
     /// authenticated client instead of constructing another.
     let api: APIClient
@@ -1070,7 +1093,45 @@ final class PlayerModel {
     /// state. Role-only user echoes are still hidden so the WebSocket cannot
     /// duplicate an optimistic send as a second transcript row.
     nonisolated static func isVisibleTranscriptLine(_ line: LiveLine) -> Bool {
-        line.isUser || !isUserRole(line.role)
+        line.hasRenderablePayload && (line.isUser || !isUserRole(line.role))
+    }
+
+    nonisolated static func visibleTranscriptLines(_ lines: [LiveLine]) -> [LiveLine] {
+        let visible = lines.filter { isVisibleTranscriptLine($0) }
+        guard visible.count > 1 else { return visible }
+        var out: [LiveLine] = []
+        for index in visible.indices {
+            if index < visible.index(before: visible.endIndex),
+               isRedundantPrefixLine(visible[index], before: visible[visible.index(after: index)]) {
+                continue
+            }
+            out.append(visible[index])
+        }
+        return out
+    }
+
+    private nonisolated static func isRedundantPrefixLine(_ line: LiveLine, before next: LiveLine) -> Bool {
+        guard !line.isUser,
+              !next.isUser,
+              line.speaker == next.speaker,
+              line.role == next.role,
+              line.done,
+              (line.audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+              (line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+              (line.sources?.isEmpty ?? true),
+              (line.judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) else {
+            return false
+        }
+        let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextText = next.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != nextText, nextText.hasPrefix(text) else { return false }
+        let suffix = nextText.dropFirst(text.count)
+        guard let boundary = suffix.first else { return false }
+        return boundary.isWhitespace || isTranscriptBoundary(boundary) || text.last.map(isTranscriptBoundary) == true
+    }
+
+    private nonisolated static func isTranscriptBoundary(_ char: Character) -> Bool {
+        ".。!！?？，,;；:：、".contains(char)
     }
 
     nonisolated static func captionSpeaker(for caption: String, in lines: [LiveLine]) -> String? {
@@ -1092,7 +1153,7 @@ final class PlayerModel {
             return (raw, key)
         }
         guard !titles.isEmpty,
-              let cueIndex = cues.lastIndex(where: { $0.start <= time }) else { return nil }
+              let cueIndex = cues.lastIndex(where: { $0.start <= time + audioBookChapterTitleLeadSeconds }) else { return nil }
 
         for cue in cues[...cueIndex].reversed() {
             let cueKey = normalizedCaptionMatchText(cue.text)
@@ -1138,7 +1199,7 @@ final class PlayerModel {
         // have changed while disconnected.
         if env.event == JobSocket.reconnectEvent {
             refreshTranscriptAfterReconnect()
-            refreshDiscussionForSummary()
+            refreshPodcastFromServer()
             return
         }
         guard let data = env.data else { return }
@@ -1205,15 +1266,36 @@ final class PlayerModel {
             // pending/manual/available states; the body itself is fetched later
             // by the summary view when it mounts.
             applySummaryEvent(data)
-            refreshDiscussionForSummary()
+            refreshPodcastFromServer()
+        case "resource_updated":
+            if shouldRefreshForResourceUpdate(data) {
+                uiActionsRefreshVersion += 1
+                refreshPodcastFromServer()
+            }
         default:
             break
         }
     }
 
-    /// Re-fetches the discussion detail to pick up updated `summary` metadata
-    /// after a `summary_ready` event, preserving local transcript state.
-    private func refreshDiscussionForSummary() {
+    private func shouldRefreshForResourceUpdate(_ data: JobEventData) -> Bool {
+        let resourceType = data.resource_type?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if !resourceType.isEmpty && resourceType != "podcast" && resourceType != "discussion" {
+            return false
+        }
+        let resourceID = data.resource_id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !resourceID.isEmpty {
+            return resourceID == discussion.id
+        }
+        let link = (data.deep_link ?? data.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return link.isEmpty || link.contains(discussion.id)
+    }
+
+    /// Re-fetches the podcast detail after a websocket invalidation event,
+    /// preserving local transcript/playback state while adopting server-owned
+    /// metadata such as summary, text content, cover, video, and download URLs.
+    private func refreshPodcastFromServer() {
         tasks.append(Task { [weak self] in
             guard let self else { return }
             guard let fresh = try? await self.api.discussion(id: self.discussion.id) else { return }
@@ -1386,6 +1468,7 @@ final class PlayerModel {
         // Reflect persisted lines into the visible transcript: upgrade a matching
         // text line with its audio URL, or append one we don't have yet.
         for dto in persisted {
+            guard Self.hasDisplayablePayload(dto) else { continue }
             if let idx = lines.firstIndex(where: {
                 $0.speaker == dto.speaker && $0.role == dto.role && $0.text == dto.text && $0.isUser == dto.isUser
             }) {
@@ -1399,6 +1482,14 @@ final class PlayerModel {
             }
         }
         hideTranscriptLoadingIfReady()
+    }
+
+    private nonisolated static func hasDisplayablePayload(_ dto: DiscussionLineDTO) -> Bool {
+        !dto.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(dto.audioURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(dto.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(dto.sources?.isEmpty ?? true)
+            || !(dto.judgementComment?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     private func loadTranscriptSnapshot(jobID: String) async {
@@ -1461,7 +1552,23 @@ final class PlayerModel {
                 $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser
             }
             let existingIndex = lines.firstIndex { $0.speaker == item.speaker && $0.role == role && $0.text == text && $0.isUser == isUser }
+                ?? Self.snapshotPrefixReplacementIndex(for: item,
+                                                       text: text,
+                                                       isUser: isUser,
+                                                       in: lines,
+                                                       snapshot: snapshot)
             if let existingIndex {
+                if lines[existingIndex].text != text {
+                    let oldText = lines[existingIndex].text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    lines[existingIndex].text = text
+                    lines[existingIndex].done = true
+                    didChange = true
+                    replaceCachedPrefixLine(speaker: item.speaker,
+                                            role: role,
+                                            oldText: oldText,
+                                            newText: text,
+                                            isUser: isUser)
+                }
                 if let persisted {
                     Self.applyPersistedMetadata(to: &lines[existingIndex], from: persisted)
                 }
@@ -1498,6 +1605,54 @@ final class PlayerModel {
             lines = ordered
         }
         hideTranscriptLoadingIfReady()
+    }
+
+    nonisolated static func snapshotPrefixReplacementIndex(for item: TranscriptDTO,
+                                                           text: String,
+                                                           isUser: Bool,
+                                                           in lines: [LiveLine],
+                                                           snapshot: [TranscriptDTO]) -> Int? {
+        guard !text.isEmpty else { return nil }
+        for index in lines.indices.reversed() {
+            let line = lines[index]
+            guard line.speaker == item.speaker,
+                  line.role == item.role,
+                  line.isUser == isUser,
+                  !line.hasImage,
+                  !line.hasAudio else { continue }
+            let localText = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !localText.isEmpty,
+                  localText != text,
+                  text.hasPrefix(localText) else { continue }
+            let localIsAuthoritative = snapshot.contains { snapshotItem in
+                let role = snapshotItem.role
+                let snapshotIsUser = role == "user" || role == "viewer"
+                return snapshotItem.speaker == line.speaker &&
+                    role == line.role &&
+                    snapshotIsUser == line.isUser &&
+                    snapshotItem.text.trimmingCharacters(in: .whitespacesAndNewlines) == localText
+            }
+            if !localIsAuthoritative {
+                return index
+            }
+        }
+        return nil
+    }
+
+    private func replaceCachedPrefixLine(speaker: String,
+                                         role: String,
+                                         oldText: String,
+                                         newText: String,
+                                         isUser: Bool) {
+        guard var cachedLines = discussion.lines else { return }
+        guard let index = cachedLines.lastIndex(where: {
+            $0.speaker == speaker &&
+                $0.role == role &&
+                $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == oldText &&
+                $0.isUser == isUser
+        }) else { return }
+        cachedLines[index].text = newText
+        discussion.lines = cachedLines
     }
 
     private func transcriptSnapshotOrder(for line: LiveLine, in snapshot: [TranscriptDTO]) -> Int {

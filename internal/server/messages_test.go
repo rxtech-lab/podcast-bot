@@ -61,6 +61,50 @@ func TestTranscriptEnvelopeIncludesUserMessageMetadata(t *testing.T) {
 	}
 }
 
+func TestResourceUpdatedEnvelopeIncludesRefreshTarget(t *testing.T) {
+	env, ok := envelope(contentcreator.ResourceUpdatedMsg{
+		ChannelID:    "job-a",
+		ResourceType: "podcast",
+		ResourceID:   "discussion-a",
+		DeepLink:     "https://podcast.rxlab.app/d/discussion-a",
+		Action:       "update",
+		Text:         "Video ready",
+		Changes:      []string{"video"},
+	}, contentcreator.LangEN)
+	if !ok {
+		t.Fatal("envelope returned ok=false")
+	}
+	if env.tag != "resource_updated" {
+		t.Fatalf("event tag = %q, want resource_updated", env.tag)
+	}
+	payload, ok := env.payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", env.payload)
+	}
+	if got := payload["action"]; got != "update" {
+		t.Fatalf("action = %#v, want update", got)
+	}
+	if got := payload["resource_type"]; got != "podcast" {
+		t.Fatalf("resource_type = %#v, want podcast", got)
+	}
+	if got := payload["resource_id"]; got != "discussion-a" {
+		t.Fatalf("resource_id = %#v, want discussion-a", got)
+	}
+	if got := payload["deep_link"]; got != "https://podcast.rxlab.app/d/discussion-a" {
+		t.Fatalf("deep_link = %#v, want discussion link", got)
+	}
+	if got := payload["id"]; got != "https://podcast.rxlab.app/d/discussion-a" {
+		t.Fatalf("id = %#v, want discussion link alias", got)
+	}
+	changes, ok := payload["changes"].([]string)
+	if !ok {
+		t.Fatalf("changes type = %T, want []string", payload["changes"])
+	}
+	if len(changes) != 1 || changes[0] != "video" {
+		t.Fatalf("changes = %#v, want [video]", changes)
+	}
+}
+
 // newTestServer wires up a real Bus + SessionRegistry + Server, and registers
 // a single non-off-air channel "tech" backed by a NewForTest orchestrator
 // whose Send is wrapped to publish channel-stamped events on the bus
