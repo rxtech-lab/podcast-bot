@@ -15,7 +15,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -212,7 +211,7 @@ func buildAudioBookCueSpecs(topic *config.DebateTopic) []audioBookCueSpec {
 // failure (no image creds, generation error, upload error) is logged and the
 // run continues without that image.
 func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
-	topic *config.DebateTopic, orch *contentcreator.Orchestrator, uploader *storage.Uploader,
+	topic *config.DebateTopic, orch *contentcreator.Orchestrator, uploader *storage.Uploader, audioBookID string,
 ) {
 	status := func(text string) {
 		if orch != nil && orch.Send != nil {
@@ -272,14 +271,17 @@ func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 			}
 			img := contentcreator.AudioBookImage{Beat: i, Path: path, Caption: beats[i]}
 			if uploader.Enabled() {
-				key := uploader.Key(fmt.Sprintf("%s-illustration-%d.png", topicSlug(topic), i))
-				ct := http.DetectContentType(raw)
-				if uerr := uploader.UploadBytes(ctx, key, ct, raw); uerr != nil {
-					log.Warn("audiobook illustration upload failed", "beat", i, "err", uerr)
-				} else if url, derr := uploader.DownloadURL(ctx, key, illustrationURLTTL); derr == nil {
-					img.URL = url
-				} else {
-					log.Warn("audiobook illustration url failed", "beat", i, "err", derr)
+				webp, werr := imagegen.ToWebP(raw)
+				if werr != nil {
+					log.Warn("audiobook illustration webp encode failed", "beat", i, "err", werr)
+				} else if key := uploader.Key(audioBookIllustrationObjectName(audioBookID, i)); key != "" {
+					if uerr := uploader.UploadBytes(ctx, key, "image/webp", webp); uerr != nil {
+						log.Warn("audiobook illustration upload failed", "beat", i, "err", uerr)
+					} else if url, derr := uploader.DownloadURL(ctx, key, illustrationURLTTL); derr == nil {
+						img.URL = url
+					} else {
+						log.Warn("audiobook illustration url failed", "beat", i, "err", derr)
+					}
 				}
 			}
 			imgs[i] = img
@@ -616,11 +618,35 @@ func usesConversationalAudioBookLayout(style string) bool {
 	}
 }
 
-// topicSlug builds a filesystem/url-safe slug from the audiobook title so
-// uploaded illustration keys are human-recognisable.
-func topicSlug(topic *config.DebateTopic) string {
-	s := strings.ToLower(strings.TrimSpace(topic.Title))
-	return slugText(s, "audiobook", 48)
+func audioBookIllustrationObjectName(audioBookID string, beat int) string {
+	if beat < 0 {
+		beat = 0
+	}
+	id := objectKeySegment(audioBookID, "audiobook")
+	return fmt.Sprintf("audiobooks/%s/image-%d.webp", id, beat+1)
+}
+
+func objectKeySegment(s, fallback string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	segment := strings.Trim(b.String(), "-")
+	if segment == "" {
+		return fallback
+	}
+	for strings.Contains(segment, "--") {
+		segment = strings.ReplaceAll(segment, "--", "-")
+	}
+	return segment
 }
 
 func speakerSlug(name string) string {

@@ -486,6 +486,98 @@ final class iOSTests: XCTestCase {
         XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(panelLine))
     }
 
+    func testVisibleTranscriptLinesSuppressesAdjacentRepeatedPrefix() {
+        let intro = "欢迎收听由我为您播讲的长篇有声书，《一滴水的威力：极简冷笑话》。"
+        let lines = [
+            LiveLine(speaker: "小雅",
+                     role: "host",
+                     text: intro,
+                     isUser: false,
+                     done: true),
+            LiveLine(speaker: "小雅",
+                     role: "host",
+                     text: "\(intro)\n\n生活，有时像是一场严谨的实验。",
+                     isUser: false,
+                     done: true),
+            LiveLine(speaker: "小雅",
+                     role: "host",
+                     text: "Yes.",
+                     isUser: false,
+                     done: true),
+            LiveLine(speaker: "小雅",
+                     role: "host",
+                     text: "Yes.",
+                     isUser: false,
+                     done: true)
+        ]
+
+        let visible = PlayerModel.visibleTranscriptLines(lines)
+
+        XCTAssertEqual(visible.map(\.text), [
+            "\(intro)\n\n生活，有时像是一场严谨的实验。",
+            "Yes.",
+            "Yes."
+        ])
+    }
+
+    func testVisibleTranscriptLinesSuppressesEmptyHistoricalRows() {
+        let lines = [
+            LiveLine(speaker: "路人甲",
+                     role: "host",
+                     text: "那个，各位老师，我就想问一句，你们平时淋过雨吗？",
+                     isUser: false,
+                     done: true),
+            LiveLine(speaker: "小雅",
+                     role: "host",
+                     text: "   ",
+                     isUser: false,
+                     done: true),
+            LiveLine(speaker: "张博士",
+                     role: "discussant",
+                     text: "是啊，原来我们都淋过雨。",
+                     isUser: false,
+                     done: true),
+            LiveLine(speaker: "小雅",
+                     role: "host",
+                     text: "",
+                     isUser: false,
+                     done: true)
+        ]
+
+        let visible = PlayerModel.visibleTranscriptLines(lines)
+
+        XCTAssertEqual(visible.map(\.speaker), ["路人甲", "张博士"])
+        XCTAssertTrue(visible.allSatisfy(\.hasRenderablePayload))
+    }
+
+    func testTranscriptDisplayTextStripsNaturalSpeechMarkers() {
+        let line = LiveLine(speaker: "小雅",
+                            role: "series-host",
+                            text: #"""
+<pause time="800ms"/>
+这条消息发出来的瞬间，那个飞速滚动的学术群突然停滞了。
+"""#,
+                            isUser: false,
+                            done: true)
+
+        XCTAssertTrue(line.hasDisplayText)
+        XCTAssertEqual(line.displayText, "这条消息发出来的瞬间，那个飞速滚动的学术群突然停滞了。")
+        XCTAssertEqual(PlayerModel.visibleTranscriptLines([line]).map(\.displayText), [
+            "这条消息发出来的瞬间，那个飞速滚动的学术群突然停滞了。"
+        ])
+    }
+
+    func testMarkerOnlyTranscriptLineIsNotVisible() {
+        let line = LiveLine(speaker: "小雅",
+                            role: "series-host",
+                            text: #"<pause time="500ms"/>"#,
+                            isUser: false,
+                            done: true)
+
+        XCTAssertFalse(line.hasDisplayText)
+        XCTAssertFalse(PlayerModel.isVisibleTranscriptLine(line))
+    }
+
     func testAudioOnlyVoiceMessageDoesNotRequireDisplayText() {
         let voiceLine = LiveLine(speaker: "Qiwei",
                                  role: "user",
@@ -593,6 +685,58 @@ final class iOSTests: XCTestCase {
 
         XCTAssertEqual(reloadedLine.imageURL, "https://cdn.example/chapter-1.webp")
         XCTAssertTrue(reloadedLine.hasImage)
+    }
+
+    func testTranscriptSnapshotReplacesLocalPrefixLine() {
+        let local = [
+            LiveLine(speaker: "晓凡 (XIAO FAN)",
+                     role: "host",
+                     text: "欢迎收听音频书，星海的最后回响。",
+                     isUser: false,
+                     done: true)
+        ]
+        let snapshot = [
+            TranscriptDTO(speaker: "晓凡 (XIAO FAN)",
+                          role: "host",
+                          side: nil,
+                          text: "欢迎收听音频书，星海的最后回响。 在遥远的未来，当星际航行的辉煌逐渐褪色。",
+                          at: nil)
+        ]
+
+        XCTAssertEqual(PlayerModel.snapshotPrefixReplacementIndex(for: snapshot[0],
+                                                                  text: snapshot[0].text,
+                                                                  isUser: false,
+                                                                  in: local,
+                                                                  snapshot: snapshot),
+                       0)
+    }
+
+    func testTranscriptSnapshotKeepsPrefixLineWhenAuthoritative() {
+        let local = [
+            LiveLine(speaker: "晓凡 (XIAO FAN)",
+                     role: "host",
+                     text: "欢迎收听音频书，星海的最后回响。",
+                     isUser: false,
+                     done: true)
+        ]
+        let snapshot = [
+            TranscriptDTO(speaker: "晓凡 (XIAO FAN)",
+                          role: "host",
+                          side: nil,
+                          text: "欢迎收听音频书，星海的最后回响。",
+                          at: nil),
+            TranscriptDTO(speaker: "晓凡 (XIAO FAN)",
+                          role: "host",
+                          side: nil,
+                          text: "欢迎收听音频书，星海的最后回响。 在遥远的未来，当星际航行的辉煌逐渐褪色。",
+                          at: nil)
+        ]
+
+        XCTAssertNil(PlayerModel.snapshotPrefixReplacementIndex(for: snapshot[1],
+                                                                text: snapshot[1].text,
+                                                                isUser: false,
+                                                                in: local,
+                                                                snapshot: snapshot))
     }
 
     func testSpeakerPaletteUsesTranscriptOrderToAvoidHashCollision() {
@@ -731,6 +875,27 @@ final class iOSTests: XCTestCase {
 
         XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 20, in: cues, script: script), "晓峰的来信")
         XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 101, in: cues, script: script), "雨后的归途")
+    }
+
+    func testAudioBookChapterTitleUsesLeadForDelayedTitleCue() throws {
+        let script = try decodeScript("""
+        {
+          "title": "云间的送信人",
+          "type": "audio-book",
+          "language": "zh-Hans",
+          "audio_book_chapters": [
+            { "title": "晓峰的来信", "summary": "开篇。" },
+            { "title": "雨后的归途", "summary": "结尾。" }
+          ]
+        }
+        """)
+        let cues = [
+            VTTCue(start: 0, end: 3, text: "第一章：晓峰的来信"),
+            VTTCue(start: 86, end: 89, text: "陈奶奶望向山路。"),
+            VTTCue(start: 90, end: 94, text: "第二章，雨后的归途")
+        ]
+
+        XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 88.2, in: cues, script: script), "雨后的归途")
     }
 
     func testLiveCaptionHasNoManualLead() {

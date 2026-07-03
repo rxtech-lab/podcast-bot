@@ -634,6 +634,7 @@ func writeDiscussionTranscript(w http.ResponseWriter, lines []DiscussionLine) {
 			Role:             l.Role,
 			Side:             l.Side,
 			Text:             l.Text,
+			ImageURL:         l.ImageURL,
 			Sources:          l.Sources,
 			JudgementComment: l.JudgementComment,
 		}
@@ -738,6 +739,24 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 			"doc_type":   m.DocType,
 			"status":     m.Status,
 		}}, true
+	case contentcreator.ResourceUpdatedMsg:
+		action := m.Action
+		if action == "" {
+			action = "update"
+		}
+		payload := map[string]any{
+			"channel_id":    m.ChannelID,
+			"action":        action,
+			"resource_type": m.ResourceType,
+			"resource_id":   m.ResourceID,
+			"deep_link":     m.DeepLink,
+			"id":            m.DeepLink,
+			"text":          m.Text,
+		}
+		if len(m.Changes) > 0 {
+			payload["changes"] = m.Changes
+		}
+		return eventEnvelope{"resource_updated", payload}, true
 	case contentcreator.TopicsChangedMsg:
 		_ = m
 		// Empty payload — clients re-fetch /api/topics on receipt.

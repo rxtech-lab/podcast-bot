@@ -56,7 +56,7 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	if res == "" {
 		res = video.Resolution1080p
 	}
-	vttPath := filepath.Join(jobOutDir, "subtitles.vtt")
+	vttPath := existingPodcastSubtitlesPath(jobOutDir)
 	outPath := filepath.Join(jobOutDir, "video.mp4")
 
 	deps.Jobs.Update(jobID, func(j *server.Job) {
@@ -115,6 +115,7 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 			j.PhaseLabel = "Video ready"
 		})
 		logger.Info("audiobook video ready", "path", outPath)
+		server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Video ready", "video")
 		notifyAudioBookVideoReady(runCtx, deps, logger)
 	})
 }
@@ -203,7 +204,7 @@ func notifyAudioBookVideoReady(ctx context.Context, deps Deps, log *slog.Logger)
 		return
 	}
 	server.SendPushNotification(ctx, deps.Discussions, deps.APNS, d.OwnerUserID, server.PushNotification{
-		Kind:         server.PushKindPodcastReady,
+		Kind:         server.PushKindPodcastVideoReady,
 		DiscussionID: d.ID,
 		Title:        "Video ready",
 		Body:         pushDiscussionTitle(d, "Your audiobook video is ready to watch."),

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -517,6 +518,7 @@ func (s *Server) nativeDiscussionTranscript(r *http.Request, jobID string) []age
 			Role:             agent.Role(strings.TrimSpace(line.Role)),
 			Side:             strings.TrimSpace(line.Side),
 			Text:             line.Text,
+			ImageURL:         line.ImageURL,
 			Sources:          line.Sources,
 			JudgementComment: line.JudgementComment,
 		})
@@ -598,9 +600,15 @@ func (s *Server) subtitlesS3URL(ctx context.Context, j *Job) string {
 	}
 	key := j.SubtitlesS3Key
 	if key == "" {
-		candidate := s.d.Uploader.Key(j.ID + ".vtt")
-		if info, err := s.d.Uploader.Head(ctx, candidate); err == nil && info.ContentLength > 0 {
-			key = candidate
+		for _, name := range []string{
+			path.Join(PodcastAudioDir, j.ID+".vtt"),
+			j.ID + ".vtt",
+		} {
+			candidate := s.d.Uploader.Key(name)
+			if info, err := s.d.Uploader.Head(ctx, candidate); err == nil && info.ContentLength > 0 {
+				key = candidate
+				break
+			}
 		}
 	}
 	if key == "" {
@@ -644,7 +652,14 @@ func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	subPath := filepath.Join(jobDir, "subtitles.vtt")
+	subPath := firstExistingNonEmpty(
+		podcastSubtitlesPath(jobDir),
+		legacyPodcastSubtitlesPath(jobDir),
+	)
+	if subPath == "" {
+		http.NotFound(w, r)
+		return
+	}
 	if _, err := os.Stat(subPath); err != nil {
 		http.NotFound(w, r)
 		return
@@ -678,8 +693,11 @@ func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if jobDir := s.jobArtifactDir(id); jobDir != "" {
-		subPath := filepath.Join(jobDir, "subtitles.vtt")
-		if _, err := os.Stat(subPath); err == nil {
+		subPath := firstExistingNonEmpty(
+			podcastSubtitlesPath(jobDir),
+			legacyPodcastSubtitlesPath(jobDir),
+		)
+		if subPath != "" {
 			http.ServeFile(w, r, subPath)
 			return
 		}
@@ -768,6 +786,31 @@ func saveUpload(src io.Reader, dst string) error {
 	return err
 }
 
+func podcastAudioPath(jobDir string) string {
+	return filepath.Join(jobDir, PodcastAudioDir, PodcastAudioFilename)
+}
+
+func legacyPodcastAudioPath(jobDir string) string {
+	return filepath.Join(jobDir, PodcastAudioFilename)
+}
+
+func podcastSubtitlesPath(jobDir string) string {
+	return filepath.Join(jobDir, PodcastAudioDir, PodcastSubtitlesFilename)
+}
+
+func legacyPodcastSubtitlesPath(jobDir string) string {
+	return filepath.Join(jobDir, PodcastSubtitlesFilename)
+}
+
+func firstExistingNonEmpty(paths ...string) string {
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil && info.Size() > 0 {
+			return p
+		}
+	}
+	return ""
+}
+
 func (s *Server) recoverJob(id string) *Job {
 	if s.d.Jobs == nil || s.d.UploadRoot == "" {
 		return nil
@@ -778,11 +821,16 @@ func (s *Server) recoverJob(id string) *Job {
 	}
 	mp4Path := filepath.Join(jobOutDir, "video.mp4")
 	archivePath := filepath.Join(jobOutDir, "archive.zip")
-	audioPath := filepath.Join(jobOutDir, "audio.mp3")
+	audioPath := podcastAudioPath(jobOutDir)
+	legacyAudioPath := legacyPodcastAudioPath(jobOutDir)
 
 	mp4Info, mp4Err := os.Stat(mp4Path)
 	archiveInfo, archiveErr := os.Stat(archivePath)
 	audioInfo, audioErr := os.Stat(audioPath)
+	if audioErr != nil {
+		audioPath = legacyAudioPath
+		audioInfo, audioErr = os.Stat(audioPath)
+	}
 	if mp4Err != nil && archiveErr != nil && audioErr != nil {
 		return nil
 	}
@@ -859,7 +907,10 @@ func (s *Server) jobArtifactDir(id string) string {
 		if _, err := os.Stat(filepath.Join(dir, "video.mp4")); err == nil {
 			return dir
 		}
-		if _, err := os.Stat(filepath.Join(dir, "audio.mp3")); err == nil {
+		if _, err := os.Stat(podcastAudioPath(dir)); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(legacyPodcastAudioPath(dir)); err == nil {
 			return dir
 		}
 		if _, err := os.Stat(filepath.Join(dir, "archive.zip")); err == nil {
@@ -868,7 +919,10 @@ func (s *Server) jobArtifactDir(id string) string {
 		if _, err := os.Stat(filepath.Join(dir, "session.db")); err == nil {
 			return dir
 		}
-		if _, err := os.Stat(filepath.Join(dir, "subtitles.vtt")); err == nil {
+		if _, err := os.Stat(podcastSubtitlesPath(dir)); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(legacyPodcastSubtitlesPath(dir)); err == nil {
 			return dir
 		}
 	}

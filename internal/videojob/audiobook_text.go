@@ -42,6 +42,7 @@ func generateAudioBookTextDoc(ctx context.Context, deps Deps, jobID string,
 			DocType: server.SummaryDocTypeText,
 			Status:  "ready",
 		}, jobID))
+		server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Text content ready", "text_content")
 	}
 }
 

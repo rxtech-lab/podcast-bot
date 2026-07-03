@@ -745,6 +745,14 @@ struct JobEventData: Decodable, Sendable {
     /// matching document kind; the body is fetched separately on refresh.
     var doc_type: String?
     var status: String?
+    /// Carried by `resource_updated`; clients use it as an invalidation signal
+    /// and re-fetch the resource by id.
+    var action: String?
+    var resource_type: String?
+    var resource_id: String?
+    var deep_link: String?
+    var id: String?
+    var changes: [String]?
 }
 
 struct DiscussionLineRequest: Codable, Sendable {

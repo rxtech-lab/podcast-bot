@@ -20,11 +20,11 @@
 // Instead this package mixes at the PCM level inside the Go process
 // so the music side has no dependency on the TTS side's liveness:
 //
-//   musicCmd:  -re -stream_loop -1 -i music.mp3   →  s16le PCM stdout
-//                  (always producing at exactly 1× realtime)
-//   ttsCmd:    -f mp3 -i pipe:0                   →  s16le PCM stdout
-//                  (decodes whatever TTS bytes the producer Writes)
-//   encCmd:    -f s16le -i pipe:0                 →  mp3 stdout → sink
+//	musicCmd:  -re -stream_loop -1 -i music.mp3   →  s16le PCM stdout
+//	               (always producing at exactly 1× realtime)
+//	ttsCmd:    -f mp3 -i pipe:0                   →  s16le PCM stdout
+//	               (decodes whatever TTS bytes the producer Writes)
+//	encCmd:    -f s16le -i pipe:0                 →  mp3 stdout → sink
 //
 // A mix goroutine reads music PCM at its realtime cadence and on
 // every chunk drains whatever TTS PCM is currently buffered (non-
@@ -124,6 +124,13 @@ const chunkBytes = chunkSamples * pcmChannels * pcmSampleBytes
 // channel queues them until the realtime-paced mix loop drains
 // them. ~5 s of headroom matches LiveStream.inputBufferBytes.
 const ttsBufferChunks = 100
+
+// ttsDeClickSamples applies a tiny gain envelope at TTS burst edges. The TTS
+// path is fed by many independently encoded MP3 clips; even when the speech is
+// clean, clip boundaries can decode to a discontinuity that sounds like a
+// digital tick between lines. 8 ms is long enough to hide the discontinuity
+// without making narration attacks feel faded.
+const ttsDeClickSamples = pcmSampleRate * 8 / 1000
 
 // Mixer wraps the three ffmpeg processes plus the Go mix goroutine.
 // The zero value is not usable; construct via NewSession.
@@ -694,6 +701,7 @@ func (m *Mixer) mixLoop() {
 	var fade *fadeState
 	nextChunk := make([]byte, chunkBytes)
 	mixBuf := make([]byte, chunkBytes)
+	ttsActive := false
 
 	// bedScale is the running duck multiplier applied to the music bed
 	// gains. Starts at 1 (no duck) and ramps toward musicDuckFactor
@@ -815,7 +823,16 @@ func (m *Mixer) mixLoop() {
 		// TTS at ttsVolume, plus each in-flight overlay at its own
 		// volume.
 		composeChunk(mixBuf, music, nextChunk, fade != nil, oldGain, newGain)
-		mixInto(mixBuf, residual, 1.0, ttsVolume*m.currentTTSScale())
+		ttsFrame := residual
+		if len(ttsFrame) > len(mixBuf) {
+			ttsFrame = ttsFrame[:len(mixBuf)]
+		}
+		if len(ttsFrame) > 0 {
+			fadeIn := !ttsActive
+			fadeOut := len(residual) <= len(mixBuf) && len(m.ttsCh) == 0
+			applyTTSDeClick(ttsFrame, fadeIn, fadeOut)
+		}
+		mixInto(mixBuf, ttsFrame, 1.0, ttsVolume*m.currentTTSScale())
 		if len(overlays) > 0 {
 			for _, ov := range overlays {
 				ovChunk := drainOverlayChunk(ov, len(mixBuf))
@@ -830,6 +847,7 @@ func (m *Mixer) mixLoop() {
 		} else {
 			residual = nil
 		}
+		ttsActive = len(residual) > 0 || len(m.ttsCh) > 0
 
 		if fade != nil {
 			fade.remaining--
@@ -961,6 +979,48 @@ func mixInto(music, tts []byte, musicVol, ttsVol float32) {
 		}
 		binary.LittleEndian.PutUint16(music[i:], uint16(mixed))
 	}
+}
+
+func applyTTSDeClick(pcm []byte, fadeIn, fadeOut bool) {
+	if len(pcm) < pcmSampleBytes || (!fadeIn && !fadeOut) {
+		return
+	}
+	samples := len(pcm) / pcmSampleBytes
+	if samples == 0 {
+		return
+	}
+	fadeSamples := ttsDeClickSamples
+	if fadeSamples > samples {
+		fadeSamples = samples
+	}
+	if fadeSamples <= 0 {
+		return
+	}
+	for i := 0; i < fadeSamples; i++ {
+		scale := float32(i+1) / float32(fadeSamples)
+		if fadeIn {
+			scalePCMSample(pcm, i, scale)
+		}
+		if fadeOut {
+			idx := samples - 1 - i
+			scalePCMSample(pcm, idx, scale)
+		}
+	}
+}
+
+func scalePCMSample(pcm []byte, sampleIndex int, scale float32) {
+	i := sampleIndex * pcmSampleBytes
+	if i < 0 || i+1 >= len(pcm) {
+		return
+	}
+	v := int16(binary.LittleEndian.Uint16(pcm[i:]))
+	scaled := int32(float32(v) * scale)
+	if scaled > 32767 {
+		scaled = 32767
+	} else if scaled < -32768 {
+		scaled = -32768
+	}
+	binary.LittleEndian.PutUint16(pcm[i:], uint16(int16(scaled)))
 }
 
 func (m *Mixer) pump(sink io.Writer) {

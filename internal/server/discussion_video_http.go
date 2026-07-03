@@ -132,6 +132,7 @@ func (s *Server) renderDiscussionAudioBookVideo(ctx context.Context, jobID, disc
 		j.Phase = "video-ready"
 		j.PhaseLabel = "Video ready"
 	})
+	s.publishDiscussionResourceUpdated(jobID, discussionID, "Video ready", "video")
 }
 
 func (s *Server) ensureAudioBookAudio(ctx context.Context, jobID, jobDir string, job *Job) (string, error) {
@@ -139,7 +140,7 @@ func (s *Server) ensureAudioBookAudio(ctx context.Context, jobID, jobDir string,
 	if job != nil && strings.TrimSpace(job.AudioPath) != "" {
 		candidates = append(candidates, strings.TrimSpace(job.AudioPath))
 	}
-	candidates = append(candidates, filepath.Join(jobDir, "audio.mp3"))
+	candidates = append(candidates, podcastAudioPath(jobDir), legacyPodcastAudioPath(jobDir))
 	for _, path := range candidates {
 		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 			return path, nil
@@ -152,7 +153,8 @@ func (s *Server) ensureAudioBookAudio(ctx context.Context, jobID, jobDir string,
 	if err != nil {
 		return "", fmt.Errorf("download audio artifact: %w", err)
 	}
-	path := filepath.Join(jobDir, "audio.mp3")
+	path := podcastAudioPath(jobDir)
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("write audio artifact: %w", err)
 	}
@@ -160,10 +162,11 @@ func (s *Server) ensureAudioBookAudio(ctx context.Context, jobID, jobDir string,
 }
 
 func (s *Server) ensureAudioBookSubtitles(ctx context.Context, jobDir string, job *Job) string {
-	path := filepath.Join(jobDir, "subtitles.vtt")
-	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+	path := firstExistingNonEmpty(podcastSubtitlesPath(jobDir), legacyPodcastSubtitlesPath(jobDir))
+	if path != "" {
 		return path
 	}
+	path = podcastSubtitlesPath(jobDir)
 	if job == nil || strings.TrimSpace(job.SubtitlesS3Key) == "" {
 		return path
 	}
@@ -171,6 +174,7 @@ func (s *Server) ensureAudioBookSubtitles(ctx context.Context, jobDir string, jo
 	if err != nil || len(data) == 0 {
 		return path
 	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	_ = os.WriteFile(path, data, 0o644)
 	return path
 }

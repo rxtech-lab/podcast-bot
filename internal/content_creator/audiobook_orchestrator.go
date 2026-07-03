@@ -103,7 +103,7 @@ func (o *Orchestrator) buildAudioBookAgents() error {
 }
 
 func (o *Orchestrator) newAudioBookPlanner() Planner {
-	return NewSeriesPlanner(o.Topic, o.Tracker, o.Registry, false)
+	return NewAudioBookPlanner(o.Topic, o.Registry, o.audioBookEnd)
 }
 
 func audioBookOutline(t *config.DebateTopic) string {

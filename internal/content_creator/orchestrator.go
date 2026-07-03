@@ -160,6 +160,8 @@ type Orchestrator struct {
 
 	forceMu            sync.Mutex
 	forceStopRequested bool
+
+	audioBookEnd *audioBookEndState
 }
 
 // SoundCueDirection mirrors scenes.SoundDirection but lives in
@@ -188,6 +190,11 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 	}
 	ttsRegistry := tools.New()
 	tools.RegisterBuiltins(ttsRegistry)
+	var audioBookEnd *audioBookEndState
+	if topic.Type == config.ContentTypeAudioBook {
+		audioBookEnd = &audioBookEndState{}
+		ttsRegistry.Register(endAudioBookTool{state: audioBookEnd})
+	}
 	tracker := NewTracker(time.Duration(topic.TotalMinutes) * time.Minute)
 	tracker.SetMediaPricing(env.AzureTTSCostPerMillionChars, env.LyriaCostPerGeneration)
 	recordUsage := func(u llm.Usage) { tracker.AddLLMUsage(u) }
@@ -224,6 +231,8 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 		Send:       send,
 		Log:        log,
 		LiveStream: liveStream,
+
+		audioBookEnd: audioBookEnd,
 	}
 	return o, nil
 }

@@ -104,3 +104,20 @@ func TestAudioBookIllustrationPromptKeepsAnimatedFilmContinuity(t *testing.T) {
 		t.Fatalf("chapter prompt does not share host avatar look %q:\n%s", avatars[0].Look, prompt)
 	}
 }
+
+func TestAudioBookIllustrationObjectNameUsesPerAudioBookWebPPath(t *testing.T) {
+	got := audioBookIllustrationObjectName("DISCUSSION-123", 0)
+	if want := "audiobooks/discussion-123/image-1.webp"; got != want {
+		t.Fatalf("object name = %q, want %q", got, want)
+	}
+
+	got = audioBookIllustrationObjectName("../same title/a", 2)
+	if want := "audiobooks/same-title-a/image-3.webp"; got != want {
+		t.Fatalf("sanitized object name = %q, want %q", got, want)
+	}
+
+	got = audioBookIllustrationObjectName("", -1)
+	if want := "audiobooks/audiobook/image-1.webp"; got != want {
+		t.Fatalf("fallback object name = %q, want %q", got, want)
+	}
+}

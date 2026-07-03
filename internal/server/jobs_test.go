@@ -400,6 +400,43 @@ func TestRecoverJobFromLegacySessionArtifacts(t *testing.T) {
 	}
 }
 
+func TestRecoverJobFromPodcastAudioSubfolder(t *testing.T) {
+	root := t.TempDir()
+	uploadRoot := filepath.Join(root, "dashboard", "uploads")
+	if err := os.MkdirAll(uploadRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jobOut := filepath.Join(root, "dashboard", "jobs", "job-a")
+	audioPath := filepath.Join(jobOut, PodcastAudioDir, PodcastAudioFilename)
+	if err := os.MkdirAll(filepath.Dir(audioPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audioPath, []byte("mp3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, err := NewJobRegistry(filepath.Join(root, "dashboard", "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	s := &Server{d: Deps{
+		Jobs:       jobs,
+		UploadRoot: uploadRoot,
+		Env:        &config.Env{OutDir: filepath.Join(root, "dashboard"), PersistentRoot: root},
+	}}
+
+	got := s.recoverJob("job-a")
+	if got == nil {
+		t.Fatal("recoverJob podcast audio = nil")
+	}
+	if got.Status != JobDone || !got.HasAudio || !got.AudioOnly {
+		t.Fatalf("recovered podcast audio job = %+v", got)
+	}
+	if got.AudioPath != audioPath {
+		t.Fatalf("audio path = %q, want %q", got.AudioPath, audioPath)
+	}
+}
+
 func TestAudioDownloadRedirectsToCustomS3Domain(t *testing.T) {
 	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
 	if err != nil {
@@ -969,6 +1006,59 @@ func TestJobTranscriptPreservesImageOnlyRows(t *testing.T) {
 		t.Fatalf("image row = %+v", got[0])
 	}
 	if got[1].Text != "Chapter one begins." {
+		t.Fatalf("text row = %+v", got[1])
+	}
+}
+
+func TestJobTranscriptNativeFallbackPreservesImageOnlyRows(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	jobs, err := NewJobRegistry(filepath.Join(root, "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	jobs.Add("job-native")
+	discussions, err := NewDiscussionStore(filepath.Join(root, "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer discussions.Close()
+	d, err := discussions.CreatePlaceholder(ctx, "oauth:owner", "native image transcript", "en-US", "default")
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+	if _, err := discussions.SetJob(ctx, "oauth:owner", d.ID, "job-native"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := discussions.ReplaceTranscript(ctx, d.ID, []agent.TranscriptLine{
+		{Speaker: "Narrator", Role: agent.RoleHost, ImageURL: "https://cdn.example/native-chapter.png", At: time.Now()},
+		{Speaker: "Narrator", Role: agent.RoleHost, Text: "The chapter continues.", At: time.Now().Add(time.Second)},
+	}); err != nil {
+		t.Fatalf("ReplaceTranscript: %v", err)
+	}
+	srv := New(Deps{Mode: ModeDashboard, Jobs: jobs, Discussions: discussions, UploadRoot: filepath.Join(root, "uploads")})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/jobs/job-native/transcript")
+	if err != nil {
+		t.Fatalf("get transcript: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var got []transcriptDTO
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode transcript: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].ImageURL != "https://cdn.example/native-chapter.png" || got[0].Text != "" {
+		t.Fatalf("image row = %+v", got[0])
+	}
+	if got[1].Text != "The chapter continues." {
 		t.Fatalf("text row = %+v", got[1])
 	}
 }

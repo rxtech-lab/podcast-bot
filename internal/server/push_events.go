@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
+	"github.com/sirily11/debate-bot/internal/eventbus"
 )
 
 func (s *Server) watchPushEvents() {
@@ -75,6 +77,27 @@ func (s *Server) notifyPodcastReady(ctx context.Context, d *Discussion) {
 		Body:         pushDiscussionTitle(d, "Your podcast is ready to play."),
 		URL:          s.discussionDeepLink(d.ID),
 	})
+}
+
+func (s *Server) publishDiscussionResourceUpdated(jobID, discussionID, text string, changes ...string) {
+	PublishDiscussionResourceUpdated(s.d.Bus, s.d.Env, jobID, discussionID, text, changes...)
+}
+
+// PublishDiscussionResourceUpdated emits a websocket/SSE invalidation event for
+// a podcast discussion. Connected clients should re-fetch the discussion rather
+// than trusting the event as content state.
+func PublishDiscussionResourceUpdated(bus *eventbus.Bus, env *config.Env, jobID, discussionID, text string, changes ...string) {
+	if bus == nil || strings.TrimSpace(discussionID) == "" {
+		return
+	}
+	bus.Publish(contentcreator.StampChannelID(contentcreator.ResourceUpdatedMsg{
+		ResourceType: "podcast",
+		ResourceID:   strings.TrimSpace(discussionID),
+		DeepLink:     DiscussionDeepLink(FrontendBaseURL(env), discussionID),
+		Action:       "update",
+		Text:         strings.TrimSpace(text),
+		Changes:      changes,
+	}, strings.TrimSpace(jobID)))
 }
 
 func (s *Server) notifySummaryReady(ctx context.Context, d *Discussion) {

@@ -1124,6 +1124,56 @@ func TestDiscussionStoreVoiceMessageLineRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreFiltersContentlessTranscriptRows(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:owner"
+	d, err := store.CreatePlaceholder(ctx, owner, "empty rows", "en-US", planner.DefaultTemplateID)
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+	if _, err := store.exec(ctx, `INSERT INTO native_discussion_lines
+		(discussion_id, speaker, role, side, text, start_ms, is_user, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, "Ghost", "host", "", "", 0, 0, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("insert stale empty row: %v", err)
+	}
+	if err := store.AppendLine(ctx, owner, d.ID, DiscussionLine{
+		Speaker:  "Narrator",
+		Role:     "host",
+		ImageURL: "https://cdn.example/chapter.png",
+	}); err != nil {
+		t.Fatalf("AppendLine image-only: %v", err)
+	}
+	if err := store.AppendLine(ctx, owner, d.ID, DiscussionLine{
+		Speaker:  "Listener",
+		Role:     "user",
+		IsUser:   true,
+		AudioKey: "uploads/oauth-owner/audio.m4a",
+	}); err != nil {
+		t.Fatalf("AppendLine audio-only: %v", err)
+	}
+
+	lines, err := store.Lines(ctx, owner, d.ID)
+	if err != nil {
+		t.Fatalf("Lines: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("lines = %+v, want image-only and audio-only rows", lines)
+	}
+	if lines[0].Speaker != "Narrator" || lines[0].ImageURL == "" || lines[0].Text != "" {
+		t.Fatalf("image-only line = %+v", lines[0])
+	}
+	if lines[1].Speaker != "Listener" || lines[1].AudioKey == "" || lines[1].Text != "" {
+		t.Fatalf("audio-only line = %+v", lines[1])
+	}
+}
+
 func TestDiscussionStoreLineUniquenessMigration(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")

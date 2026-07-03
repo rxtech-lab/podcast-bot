@@ -137,6 +137,19 @@ type SummaryReadyMsg struct {
 	Status    string // "generating", "ready", or "failed"
 }
 
+// ResourceUpdatedMsg is an invalidation event for connected clients. It carries
+// enough routing data for the app to refresh the affected object; the server
+// remains the source of truth for the updated content.
+type ResourceUpdatedMsg struct {
+	ChannelID    string
+	ResourceType string
+	ResourceID   string
+	DeepLink     string
+	Action       string
+	Text         string
+	Changes      []string
+}
+
 // TopicsChangedMsg signals that the channel/debate list has changed (e.g. a
 // new debate.md was discovered by the folder watcher and added to a channel's
 // queue). The frontend reacts by re-fetching /api/topics. Broadcast only —
@@ -243,6 +256,8 @@ func MsgChannelID(v any) string {
 		return m.ChannelID
 	case SummaryReadyMsg:
 		return m.ChannelID
+	case ResourceUpdatedMsg:
+		return m.ChannelID
 	case TopicsChangedMsg:
 		return ""
 	case SceneAdvanceMsg:
@@ -289,6 +304,9 @@ func StampChannelID(v any, id string) any {
 		m.ChannelID = id
 		return m
 	case SummaryReadyMsg:
+		m.ChannelID = id
+		return m
+	case ResourceUpdatedMsg:
 		m.ChannelID = id
 		return m
 	case TopicsChangedMsg:

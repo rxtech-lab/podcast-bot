@@ -938,6 +938,12 @@ func (s *PointsStore) SettleReserved(ctx context.Context, userID, discussionID s
 // discussion-fetch path) and looks up the owner and reserved amount from the
 // discussion row, so callers need only the discussion id and the actual cost.
 func (s *PointsStore) SettleGeneration(ctx context.Context, discussionID string, actual int64, detail PointsUsageDetail) error {
+	return retryTransientDBConnection(ctx, func() error {
+		return s.settleGenerationOnce(ctx, discussionID, actual, detail)
+	})
+}
+
+func (s *PointsStore) settleGenerationOnce(ctx context.Context, discussionID string, actual int64, detail PointsUsageDetail) error {
 	if s == nil || discussionID == "" {
 		return nil
 	}

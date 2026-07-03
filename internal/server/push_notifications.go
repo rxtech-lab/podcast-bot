@@ -32,11 +32,13 @@ const (
 type PushNotificationKind string
 
 const (
-	PushKindPlanReady      PushNotificationKind = "plan_ready"
-	PushKindPodcastStarted PushNotificationKind = "podcast_started"
-	PushKindPodcastReady   PushNotificationKind = "podcast_ready"
-	PushKindSummaryReady   PushNotificationKind = "summary_ready"
-	PushKindMarketLike     PushNotificationKind = "market_like"
+	PushKindPlanReady         PushNotificationKind = "plan_ready"
+	PushKindPodcastStarted    PushNotificationKind = "podcast_started"
+	PushKindPodcastReady      PushNotificationKind = "podcast_ready"
+	PushKindPodcastAudioReady PushNotificationKind = "podcast_audio_ready"
+	PushKindPodcastVideoReady PushNotificationKind = "podcast_video_ready"
+	PushKindSummaryReady      PushNotificationKind = "summary_ready"
+	PushKindMarketLike        PushNotificationKind = "market_like"
 )
 
 type PushNotification struct {

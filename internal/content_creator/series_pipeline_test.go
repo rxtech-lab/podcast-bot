@@ -6,8 +6,10 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/tts"
 )
 
@@ -48,6 +50,27 @@ func TestSplitNaturalSpeechStripsMarkersAndKeepsPunctuation(t *testing.T) {
 	}
 }
 
+func TestTranscriptSpansFromNaturalChunksExcludePauseMarkers(t *testing.T) {
+	_, chunks, hadPause, _ := splitNaturalSpeech([]charSpan{{
+		idx: -1,
+		text: `<pause time="800ms"/>
+這條消息發出來的瞬間，群突然停滯了。`,
+	}})
+	if !hadPause {
+		t.Fatal("expected pause marker")
+	}
+	spans := transcriptSpansFromNaturalChunks(chunks)
+	if len(spans) != 1 {
+		t.Fatalf("spans len = %d, want 1", len(spans))
+	}
+	if got, want := strings.TrimSpace(spans[0].text), "這條消息發出來的瞬間，群突然停滯了。"; got != want {
+		t.Fatalf("span text = %q, want %q", got, want)
+	}
+	if strings.Contains(spans[0].text, "<pause") {
+		t.Fatalf("pause marker leaked into transcript span: %q", spans[0].text)
+	}
+}
+
 func TestNaturalBreathWritesAudioWithoutSpeech(t *testing.T) {
 	chunks := []naturalChunk{{breathAfter: true}}
 	var sink bytes.Buffer
@@ -65,6 +88,23 @@ func TestNaturalBreathWritesAudioWithoutSpeech(t *testing.T) {
 	}
 	if naturalChunkText(chunks[0]) != "" {
 		t.Fatalf("breath-only chunk should not create visible text")
+	}
+}
+
+func TestAudioBookNaturalBreathDoesNotWriteAudibleAsset(t *testing.T) {
+	chunks := []naturalChunk{{breathAfter: true}}
+	var sink bytes.Buffer
+	p := NewPipeline(Deps{ContentType: config.ContentTypeAudioBook})
+
+	n, err := p.synthNaturalChunks(nil, nil, "", chunks, false, &sink)
+	if err != nil {
+		t.Fatalf("synthNaturalChunks: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("bytes = %d, want 0", n)
+	}
+	if sink.Len() != 0 {
+		t.Fatalf("audiobook breath should not write audible bytes, got %d", sink.Len())
 	}
 }
 
@@ -92,6 +132,114 @@ func TestNaturalPauseFallbackProviderDoesNotSpeakMarkers(t *testing.T) {
 	}
 	if strings.Contains(provider.plainText, "<pause") || strings.Contains(provider.plainText, "<breath") {
 		t.Fatalf("marker leaked to fallback provider: %q", provider.plainText)
+	}
+}
+
+func TestAudioBookSynthRetriesDetectedDropoutBeforeWriting(t *testing.T) {
+	provider := &retryTTS{responses: []string{"bad-audio", "clean-audio"}}
+	base := agent.NewBase("Narrator", agent.RoleSeriesHost, nil, nil, nil, nil, nil)
+	base.SetVoice(tts.Voice{ShortName: "narrator"})
+	host := agent.NewSeriesHost(base, "Show", 1, 1, "", "", nil, nil, nil, nil, nil)
+	p := NewPipeline(Deps{
+		ContentType: config.ContentTypeAudioBook,
+		TTS:         provider,
+		Language:    "zh-CN",
+	})
+
+	oldInspect := inspectSynthAudioDropout
+	t.Cleanup(func() { inspectSynthAudioDropout = oldInspect })
+	var inspected int
+	inspectSynthAudioDropout = func(_ context.Context, data []byte, _ bool) (synthAudioDropout, error) {
+		inspected++
+		if string(data) == "bad-audio" {
+			return synthAudioDropout{Found: true, Start: 300 * time.Millisecond, End: 680 * time.Millisecond}, nil
+		}
+		return synthAudioDropout{}, nil
+	}
+
+	chunks := []naturalChunk{{spans: []charSpan{{idx: -1, text: "正当张博士准备抛出他的最终结论。"}}}}
+	var sink bytes.Buffer
+	n, err := p.synthNaturalChunks(context.Background(), &Turn{ID: 7, Speaker: host}, naturalChunkText(chunks[0]), chunks, false, &sink)
+	if err != nil {
+		t.Fatalf("synthNaturalChunks: %v", err)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("tts calls = %d, want retry", provider.calls)
+	}
+	if inspected != 2 {
+		t.Fatalf("inspect calls = %d, want 2", inspected)
+	}
+	if got, want := sink.String(), "clean-audio"; got != want {
+		t.Fatalf("sink = %q, want %q", got, want)
+	}
+	if got, want := n, int64(len("clean-audio")); got != want {
+		t.Fatalf("bytes = %d, want %d", got, want)
+	}
+}
+
+func TestNonAudioBookSynthDoesNotBufferForDropoutInspection(t *testing.T) {
+	provider := &retryTTS{responses: []string{"bad-audio", "clean-audio"}}
+	base := agent.NewBase("Narrator", agent.RoleSeriesHost, nil, nil, nil, nil, nil)
+	base.SetVoice(tts.Voice{ShortName: "narrator"})
+	host := agent.NewSeriesHost(base, "Show", 1, 1, "", "", nil, nil, nil, nil, nil)
+	p := NewPipeline(Deps{
+		ContentType: config.ContentTypeSeries,
+		TTS:         provider,
+		Language:    "zh-CN",
+	})
+
+	oldInspect := inspectSynthAudioDropout
+	t.Cleanup(func() { inspectSynthAudioDropout = oldInspect })
+	inspectSynthAudioDropout = func(context.Context, []byte, bool) (synthAudioDropout, error) {
+		t.Fatal("non-audiobook synthesis should not inspect buffered audio")
+		return synthAudioDropout{}, nil
+	}
+
+	chunks := []naturalChunk{{spans: []charSpan{{idx: -1, text: "普通旁白。"}}}}
+	var sink bytes.Buffer
+	if _, err := p.synthNaturalChunks(context.Background(), &Turn{ID: 8, Speaker: host}, naturalChunkText(chunks[0]), chunks, false, &sink); err != nil {
+		t.Fatalf("synthNaturalChunks: %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("tts calls = %d, want 1", provider.calls)
+	}
+	if got, want := sink.String(), "bad-audio"; got != want {
+		t.Fatalf("sink = %q, want %q", got, want)
+	}
+}
+
+func TestDetectPCMZeroDropoutFlagsMidChunkGap(t *testing.T) {
+	pcm := pcmFixture(
+		300*time.Millisecond,
+		390*time.Millisecond,
+		400*time.Millisecond,
+	)
+	got := detectPCMZeroDropout(pcm, audiobookDropoutSampleRate, false)
+	if !got.Found {
+		t.Fatal("dropout not detected")
+	}
+	if got.Duration() < audiobookDropoutMinDuration {
+		t.Fatalf("duration = %v, want >= %v", got.Duration(), audiobookDropoutMinDuration)
+	}
+}
+
+func TestDetectPCMZeroDropoutIgnoresExpectedPauses(t *testing.T) {
+	leading := pcmFixture(
+		0,
+		800*time.Millisecond,
+		500*time.Millisecond,
+	)
+	if got := detectPCMZeroDropout(leading, audiobookDropoutSampleRate, false); got.Found {
+		t.Fatalf("leading silence detected as dropout: %+v", got)
+	}
+
+	explicitBreak := pcmFixture(
+		300*time.Millisecond,
+		500*time.Millisecond,
+		400*time.Millisecond,
+	)
+	if got := detectPCMZeroDropout(explicitBreak, audiobookDropoutSampleRate, true); got.Found {
+		t.Fatalf("explicit break detected as dropout: %+v", got)
 	}
 }
 
@@ -138,4 +286,52 @@ func (f *fallbackTTS) SynthesizeStream(_ context.Context, _, text, _ string) (io
 
 func (f *fallbackTTS) SynthesizeSSML(context.Context, string) (io.ReadCloser, error) {
 	return nil, tts.ErrSSMLUnsupported
+}
+
+type retryTTS struct {
+	responses []string
+	calls     int
+}
+
+func (f *retryTTS) FetchVoices(context.Context, string) ([]tts.Voice, error) {
+	return nil, nil
+}
+
+func (f *retryTTS) SynthesizeStream(context.Context, string, string, string) (io.ReadCloser, error) {
+	if f.calls >= len(f.responses) {
+		f.calls++
+		return io.NopCloser(strings.NewReader(f.responses[len(f.responses)-1])), nil
+	}
+	out := f.responses[f.calls]
+	f.calls++
+	return io.NopCloser(strings.NewReader(out)), nil
+}
+
+func (f *retryTTS) SynthesizeSSML(context.Context, string) (io.ReadCloser, error) {
+	return nil, tts.ErrSSMLUnsupported
+}
+
+func pcmFixture(audioBefore, silence, audioAfter time.Duration) []byte {
+	var out bytes.Buffer
+	writePCMFixtureTone(&out, audioBefore)
+	writePCMFixtureSilence(&out, silence)
+	writePCMFixtureTone(&out, audioAfter)
+	return out.Bytes()
+}
+
+func writePCMFixtureTone(out *bytes.Buffer, dur time.Duration) {
+	samples := int(dur * time.Duration(audiobookDropoutSampleRate) / time.Second)
+	for i := 0; i < samples; i++ {
+		v := int16(1000)
+		_ = out.WriteByte(byte(v))
+		_ = out.WriteByte(byte(uint16(v) >> 8))
+	}
+}
+
+func writePCMFixtureSilence(out *bytes.Buffer, dur time.Duration) {
+	samples := int(dur * time.Duration(audiobookDropoutSampleRate) / time.Second)
+	for i := 0; i < samples; i++ {
+		_ = out.WriteByte(0)
+		_ = out.WriteByte(0)
+	}
 }

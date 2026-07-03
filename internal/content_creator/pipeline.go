@@ -2,6 +2,7 @@ package contentcreator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -125,6 +126,7 @@ const postProducerGrace = 20 * time.Second
 
 const vttBaseBias = 1 * time.Second
 const vttPreviouslyOnBias = 1 * time.Second
+const vttAudioBookCaptionDelay = 2 * time.Second
 
 // vttDiscussionBias is an extra sidecar-subtitle delay applied only to
 // discussion content. The cue offset is anchored to LiveStream's first
@@ -200,6 +202,14 @@ func (p *Pipeline) ForceStop() {
 	}
 }
 
+func (p *Pipeline) plannerDone() bool {
+	if p == nil || p.d.Planner == nil {
+		return false
+	}
+	done, ok := p.d.Planner.(interface{ Done() bool })
+	return ok && done.Done()
+}
+
 // SubtitleCues returns the timed WebVTT cues accumulated so far.
 func (p *Pipeline) SubtitleCues() []SubtitleCue {
 	if p == nil || p.vtt == nil {
@@ -224,6 +234,13 @@ func (p *Pipeline) vttBias() time.Duration {
 		bias += vttDiscussionBias
 	}
 	return bias
+}
+
+func (p *Pipeline) vttCaptionDelay() time.Duration {
+	if p != nil && p.d.AudioOnly && p.d.ContentType == config.ContentTypeAudioBook {
+		return vttAudioBookCaptionDelay
+	}
+	return 0
 }
 
 // Run boots all stages and blocks until the planner stops emitting turns
@@ -301,6 +318,10 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	go func() {
 		defer close(producedCh)
 		for t := range turnCh {
+			if p.plannerDone() {
+				stopProduce()
+				return
+			}
 			if t.Phase != lastPhase {
 				p.dispatchPhaseMsg(PhaseMsg{
 					Phase: t.Phase,
@@ -346,6 +367,10 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 			select {
 			case producedCh <- t:
 			case <-produceCtx.Done():
+				return
+			}
+			if p.plannerDone() {
+				stopProduce()
 				return
 			}
 		}
@@ -637,6 +662,7 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	}
 	sink := io.MultiWriter(turnFile, liveSink)
 	wroteAny := false
+	closedAfterPlannerDone := false
 
 	// MinChars=6 coalesces sub-6-rune sentences with the next one so the
 	// puzzle host's "是。" / "不是。" / "與此無關。" answer prefix doesn't get
@@ -649,6 +675,11 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	defer close(t.TextOut)
 	for d := range stream.Deltas() {
 		if d.Done {
+			break
+		}
+		if p.plannerDone() {
+			stream.Close()
+			closedAfterPlannerDone = true
 			break
 		}
 		if d.TextChunk == "" {
@@ -681,9 +712,11 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		}
 	}
 	if err := stream.Err(); err != nil {
-		p.d.Log.Warn("llm stream error", "turn", t.ID, "speaker", t.Speaker.Name(), "err", err)
-		t.SetErr(err)
-		p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d %s: %w", t.ID, t.Speaker.Name(), err)})
+		if !(closedAfterPlannerDone && errors.Is(err, context.Canceled)) {
+			p.d.Log.Warn("llm stream error", "turn", t.ID, "speaker", t.Speaker.Name(), "err", err)
+			t.SetErr(err)
+			p.d.Send(ErrorMsg{Err: fmt.Errorf("turn %d %s: %w", t.ID, t.Speaker.Name(), err)})
+		}
 	}
 
 	if !wroteAny {
@@ -967,7 +1000,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// boundary trim already in stitch.go.
 	var cueStart time.Duration
 	if firstWrite := p.d.LiveStream.FirstWriteAt(); !firstWrite.IsZero() {
-		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + p.vttBias()
+		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + p.vttBias() + p.vttCaptionDelay()
 	}
 	if sent != "" {
 		p.vtt.Append(sent, cueStart, audioDuration)
@@ -979,7 +1012,11 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// single narrator segment — identical to the previous single-message path.
 	// Segments are persisted as they stream (per-speaker rows, in order), and
 	// the live transcript messages carry the resolved speaker name.
-	segs := p.resolveTranscriptSegments(t, charSpans)
+	transcriptSpans := charSpans
+	if isSeriesNaturalTurn(t) {
+		transcriptSpans = transcriptSpansFromNaturalChunks(naturalChunks)
+	}
+	segs := p.resolveTranscriptSegments(t, transcriptSpans)
 	segMsgs := make([]TranscriptMsg, 0, len(segs))
 	if len(segs) > 0 {
 		totalRunes := 0
