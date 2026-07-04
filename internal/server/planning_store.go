@@ -251,6 +251,81 @@ func (s *PlanningStore) ConversationByDiscussion(ctx context.Context, owner, dis
 	return scanPlanningConversation(row)
 }
 
+// ConversationWithTurnsByDiscussion loads the discussion ownership check,
+// planning conversation, and ordered turns in one round trip. The returned
+// exists flag is true when the owner can see the discussion, even when no
+// planning conversation has been created yet.
+func (s *PlanningStore) ConversationWithTurnsByDiscussion(ctx context.Context, owner, discussionID string) (bool, *PlanningConversation, []planningTurnRow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,
+		c.id, COALESCE(c.discussion_id, ''), COALESCE(c.owner_user_id, ''), COALESCE(c.status, ''),
+		COALESCE(c.points_charged, 0), COALESCE(c.flat_charged, 0), COALESCE(c.created_at, 0), COALESCE(c.updated_at, 0),
+		t.id, COALESCE(t.seq, 0), COALESCE(t.role, ''), COALESCE(t.text, ''), COALESCE(t.attachments_json, ''),
+		COALESCE(t.references_json, ''), COALESCE(t.tool_calls_json, ''), COALESCE(t.tool_call_id, ''),
+		COALESCE(t.tool_name, ''), COALESCE(t.result_text, ''), COALESCE(t.is_error, 0),
+		COALESCE(t.script_json, ''), COALESCE(t.sources_json, ''), COALESCE(t.markdown, ''),
+		COALESCE(t.question_id, ''), COALESCE(t.questions_json, ''), COALESCE(t.answers_json, ''),
+		COALESCE(t.question_status, ''), COALESCE(t.created_at, 0)
+		FROM native_discussions d
+		LEFT JOIN planning_conversations c
+			ON c.discussion_id = d.id AND c.owner_user_id = d.owner_user_id
+		LEFT JOIN planning_turns t ON t.conversation_id = c.id
+		WHERE d.owner_user_id = ? AND d.id = ?
+		ORDER BY t.seq ASC`, owner, discussionID)
+	if err != nil {
+		return false, nil, nil, err
+	}
+	defer rows.Close()
+
+	exists := false
+	var conv *PlanningConversation
+	turns := make([]planningTurnRow, 0)
+	for rows.Next() {
+		exists = true
+		var (
+			discussionRowID string
+			convID          sql.NullString
+			convDiscussion  string
+			convOwner       string
+			convStatus      string
+			pointsCharged   int64
+			flatCharged     int64
+			convCreated     int64
+			convUpdated     int64
+			turnID          sql.NullInt64
+			turn            planningTurnRow
+			turnIsError     int64
+		)
+		if err := rows.Scan(&discussionRowID,
+			&convID, &convDiscussion, &convOwner, &convStatus, &pointsCharged, &flatCharged, &convCreated, &convUpdated,
+			&turnID, &turn.Seq, &turn.Role, &turn.Text, &turn.AttachmentsJSON, &turn.ReferencesJSON, &turn.ToolCallsJSON,
+			&turn.ToolCallID, &turn.ToolName, &turn.ResultText, &turnIsError, &turn.ScriptJSON, &turn.SourcesJSON,
+			&turn.Markdown, &turn.QuestionID, &turn.QuestionsJSON, &turn.AnswersJSON, &turn.QuestionStatus, &turn.CreatedAt); err != nil {
+			return false, nil, nil, err
+		}
+		if convID.Valid && conv == nil {
+			conv = &PlanningConversation{
+				ID:            convID.String,
+				DiscussionID:  convDiscussion,
+				OwnerUserID:   convOwner,
+				Status:        PlanningConversationStatus(convStatus),
+				PointsCharged: pointsCharged,
+				FlatCharged:   flatCharged != 0,
+				CreatedAt:     time.UnixMilli(convCreated),
+				UpdatedAt:     time.UnixMilli(convUpdated),
+			}
+		}
+		if turnID.Valid {
+			turn.ID = turnID.Int64
+			turn.IsError = turnIsError != 0
+			turns = append(turns, turn)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, nil, nil, err
+	}
+	return exists, conv, turns, nil
+}
+
 func scanPlanningConversation(row interface{ Scan(...any) error }) (*PlanningConversation, error) {
 	var (
 		c          PlanningConversation

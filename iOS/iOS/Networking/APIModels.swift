@@ -27,6 +27,8 @@ struct AudioBookSpeakerDTO: Codable, Hashable, Sendable {
     var name: String
     var gender: String?
     var description: String?
+    var model: String?
+    var voice: String?
 }
 
 struct AudioBookChapterDTO: Codable, Hashable, Sendable {
@@ -208,7 +210,6 @@ struct VoicesResponseDTO: Codable, Sendable {
 struct VoicePreviewRequest: Codable, Sendable {
     var voice: String
     var language: String
-    var text: String
 }
 
 /// Response of POST /api/voices/preview: a short-lived playback URL for the

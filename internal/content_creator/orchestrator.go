@@ -538,6 +538,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			strings.TrimSpace(o.seriesPreviouslyOn) != "",
 		SoundPaths:                 soundPaths,
 		AudioBookImageURLs:         o.audioBookImageURLs(),
+		AudioBookImageCaptions:     o.audioBookImageCaptions(),
 		RecordAudioBookImageOffset: o.recordAudioBookImageOffset,
 	})
 	o.liveMu.Lock()

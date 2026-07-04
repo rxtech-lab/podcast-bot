@@ -60,7 +60,7 @@ for _ in $(seq 1 120); do
   sleep 0.5
 done
 [ "${ok:-}" = 1 ] || { cat "${DATA_ROOT}.server.log" >&2 || true; fail "backend did not become healthy"; }
-log "backend healthy · seeded fixtures: test-ready, test-ongoing, test-plan, test2-private, test2-public"
+log "backend healthy · seeded fixtures: test-ready, test-ongoing, test-plan, test-plan-voice, test2-private, test2-public"
 
 if [ "${E2E_ONLY:-}" = "backend" ]; then
   log "E2E_ONLY=backend · backend running at ${BASE_URL}. Press Ctrl-C to stop."

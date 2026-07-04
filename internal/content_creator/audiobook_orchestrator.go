@@ -102,6 +102,28 @@ func (o *Orchestrator) audioBookImageURLs() []string {
 	return urls
 }
 
+// audioBookImageCaptions returns the per-beat caption slice that parallels
+// audioBookImageURLs. Empty captions are allowed; the client simply omits the
+// artwork caption for those beats.
+func (o *Orchestrator) audioBookImageCaptions() []string {
+	if len(o.audioBookImages) == 0 {
+		return nil
+	}
+	maxBeat := 0
+	for _, img := range o.audioBookImages {
+		if img.Beat > maxBeat {
+			maxBeat = img.Beat
+		}
+	}
+	captions := make([]string, maxBeat+1)
+	for _, img := range o.audioBookImages {
+		if img.Beat >= 0 && img.Beat < len(captions) {
+			captions[img.Beat] = strings.TrimSpace(img.Caption)
+		}
+	}
+	return captions
+}
+
 func (o *Orchestrator) buildAudioBookAgents() error {
 	name := o.Topic.AudioBookHost.Name
 	if strings.TrimSpace(name) == "" {
@@ -127,6 +149,7 @@ func (o *Orchestrator) buildAudioBookAgents() error {
 				Name:        s.Name,
 				Gender:      s.Gender,
 				Description: s.Description,
+				VoiceHint:   s.Voice,
 			})
 		}
 		o.seriesCharacters = cast
@@ -171,6 +194,7 @@ func audioBookCharacters(t *config.DebateTopic) []agent.SeriesCharacter {
 			Name:        s.Name,
 			Gender:      s.Gender,
 			Description: s.Description,
+			AzureVoice:  s.Voice,
 		})
 	}
 	return out

@@ -1,21 +1,18 @@
 import SwiftUI
-import Translation
 
 /// Lets the user pick an Azure TTS voice for one speaker. Pushed from
 /// `SpeakerModelsSheet`; the full catalog (GET /api/voices) is grouped by
 /// language with the plan's own language first. Every row can play a short
-/// sample — the sentence is translated on-device into the plan language via
-/// the Translation framework (falling back to English when no translation is
-/// available) and synthesized server-side, where samples are cached per
-/// (voice, language) so repeat previews are instant.
+/// sample in the plan language. The backend owns the pretranslated sample text
+/// for each supported language and caches rendered previews.
 struct VoicePickerView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
     let speakerName: String
     let currentVoice: String?
-    /// BCP-47 plan language (e.g. "zh-CN") used for sample translation and the
-    /// server-side preview cache key.
+    /// BCP-47 plan language (e.g. "zh-CN") used by the backend to pick the
+    /// preview sample text and cache key.
     let planLanguage: String
     let voices: [VoiceInfoDTO]
     let isLoading: Bool
@@ -23,18 +20,12 @@ struct VoicePickerView: View {
     let onSelect: (String) -> Void
 
     @State private var searchText = ""
-    @State private var translationConfig: TranslationSession.Configuration?
-    @State private var translatedSample: String?
     /// Voice whose preview URL is currently being fetched (shows a spinner).
     @State private var previewingVoice: String?
     /// Voice whose sample is loaded into the player.
     @State private var playingVoice: String?
     @State private var previewPlayer: AudioMessagePlayer?
     @State private var errorMessage: String?
-
-    private static let englishSample = "Hello! Here's a quick preview of how this voice sounds."
-
-    private var sampleText: String { translatedSample ?? Self.englishSample }
 
     /// Lowercased language code of the plan language ("zh-CN" → "zh").
     private var planLanguageCode: String {
@@ -73,18 +64,6 @@ struct VoicePickerView: View {
         .navigationTitle(speakerName)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: Text("Search voices"))
-        .task {
-            guard translatedSample == nil, planLanguageCode != "en" else { return }
-            translationConfig = TranslationSession.Configuration(
-                source: Locale.Language(identifier: "en"),
-                target: Locale.Language(identifier: planLanguage))
-        }
-        .translationTask(translationConfig) { session in
-            // Best-effort: an undownloaded pack or unsupported pair just keeps
-            // the English sample.
-            let translated = try? await session.translate(Self.englishSample).targetText
-            await MainActor.run { translatedSample = translated }
-        }
         .onDisappear { previewPlayer?.pause() }
     }
 
@@ -174,7 +153,7 @@ struct VoicePickerView: View {
             defer { previewingVoice = nil }
             do {
                 let url = try await APIClient(tokens: auth).previewVoice(
-                    voice: voice.name, language: planLanguage, text: sampleText)
+                    voice: voice.name, language: planLanguage)
                 let player = AudioMessagePlayer(urlString: url.absoluteString)
                 previewPlayer = player
                 playingVoice = voice.name

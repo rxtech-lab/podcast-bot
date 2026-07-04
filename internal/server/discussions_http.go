@@ -25,6 +25,19 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
+func boolDefault(s string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return def
+	case "0", "false", "no", "off":
+		return false
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return def
+	}
+}
+
 // discussionCreateRequest creates an empty placeholder discussion so the client
 // gets an id up front, then streams the plan into it via
 // /api/discussions/{id}/plan/stream.
@@ -88,15 +101,17 @@ type discussionSourceSearchRequest struct {
 }
 
 // discussionSpeakerModelRequest changes the LLM model assigned to one speaker
-// (the host or a discussant, matched by name) in a discussion's plan.
+// (host, discussant, audiobook narrator, or audiobook speaker, matched by name)
+// in a discussion's plan.
 type discussionSpeakerModelRequest struct {
 	Speaker string `json:"speaker"`
 	Model   string `json:"model"`
 }
 
 // discussionSpeakerVoiceRequest changes the TTS voice assigned to one speaker
-// (host, discussant, or audiobook narrator, matched by name) in a discussion's
-// plan. An empty voice clears the override back to automatic assignment.
+// (host, discussant, audiobook narrator, or audiobook speaker, matched by name)
+// in a discussion's plan. An empty voice clears the override back to automatic
+// assignment.
 type discussionSpeakerVoiceRequest struct {
 	Speaker string `json:"speaker"`
 	Voice   string `json:"voice"`
@@ -152,11 +167,13 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
+	timer := newStationTimer()
 	editLimit := atoiDefault(r.URL.Query().Get("edit_limit"), 0)
 	editBefore, _ := strconv.ParseInt(r.URL.Query().Get("edit_before"), 10, 64)
+	includeEditTurns := boolDefault(r.URL.Query().Get("include_edit_turns"), true)
 	if editLimit > 0 {
 		user := s.requestUser(r)
-		d, err := s.d.Discussions.GetWithEditTurnPage(r.Context(), user.ID, r.PathValue("id"), editLimit, editBefore)
+		d, err := s.d.Discussions.GetWithEditTurnPageTimed(r.Context(), user.ID, r.PathValue("id"), editLimit, editBefore, timer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -165,29 +182,24 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		s.applyDiscussionJobStatus(r, d, true)
-		s.applyDiscussionProgress(r.Context(), d)
-		s.applyDiscussionSummaryMeta(r.Context(), d)
-		s.refreshDiscussionCoverURL(r.Context(), d)
-		s.refreshDiscussionLineAudioURLs(r.Context(), d)
-		s.sanitizeDiscussionUsage(d)
+		s.prepareDiscussionDetail(r, d, false, timer)
 		s.logDiscussionSummaryReturn("discussions.get", d)
+		writeStart := time.Now()
 		writeJSON(w, d)
+		timer.mark("write_json", writeStart)
+		s.logStationTiming("discussions.get", len(d.Lines), timer)
 		return
 	}
-	d := s.getOwnedDiscussion(w, r)
+	d := s.getOwnedDiscussionWithOptionsTimed(w, r, includeEditTurns, timer)
 	if d == nil {
 		return
 	}
-	s.applyDiscussionJobStatus(r, d, true)
-	s.applyDiscussionProgress(r.Context(), d)
-	s.applyDiscussionSummaryMeta(r.Context(), d)
-	s.refreshDiscussionCoverURL(r.Context(), d)
-	s.refreshDiscussionLineAudioURLs(r.Context(), d)
-	s.sanitizeDiscussionUsage(d)
-	s.applyDiscussionShareURL(d)
+	s.prepareDiscussionDetail(r, d, true, timer)
 	s.logDiscussionSummaryReturn("discussions.get", d)
+	writeStart := time.Now()
 	writeJSON(w, d)
+	timer.mark("write_json", writeStart)
+	s.logStationTiming("discussions.get", len(d.Lines), timer)
 }
 
 // handleDiscussionCreate inserts an empty placeholder discussion (status
@@ -451,10 +463,9 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 	writeJSON(w, updated)
 }
 
-// handleUpdateSpeakerModel changes the LLM model for one speaker (host or a
-// discussant, matched by name) in an owned discussion's plan, persisting only
-// the script so sources/markdown/research stay intact. The updated model is
-// picked up at generation time.
+// handleUpdateSpeakerModel changes the LLM model for one speaker, matched by
+// name, in an owned discussion's plan. The updated model is picked up at
+// generation time.
 func (s *Server) handleUpdateSpeakerModel(w http.ResponseWriter, r *http.Request) {
 	var req discussionSpeakerModelRequest
 	if !decodeJSONBody(w, r, &req) {
@@ -482,10 +493,9 @@ func (s *Server) handleUpdateSpeakerModel(w http.ResponseWriter, r *http.Request
 	writeJSON(w, updated)
 }
 
-// handleUpdateSpeakerVoice changes the TTS voice override for one speaker
-// (host, discussant, or audiobook narrator, matched by name) in an owned
-// discussion's plan. An empty voice clears the override. The voice is picked
-// up at generation time.
+// handleUpdateSpeakerVoice changes the TTS voice override for one speaker,
+// matched by name, in an owned discussion's plan. An empty voice clears the
+// override. The voice is picked up at generation time.
 func (s *Server) handleUpdateSpeakerVoice(w http.ResponseWriter, r *http.Request) {
 	var req discussionSpeakerVoiceRequest
 	if !decodeJSONBody(w, r, &req) {
@@ -1642,7 +1652,21 @@ func (s *Server) handleDiscussionDelete(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) getOwnedDiscussion(w http.ResponseWriter, r *http.Request) *Discussion {
-	d, err := s.d.Discussions.Get(r.Context(), s.requestUser(r).ID, r.PathValue("id"))
+	return s.getOwnedDiscussionTimed(w, r, nil)
+}
+
+func (s *Server) getOwnedDiscussionTimed(w http.ResponseWriter, r *http.Request, timer *stationTimer) *Discussion {
+	return s.getOwnedDiscussionWithOptionsTimed(w, r, true, timer)
+}
+
+func (s *Server) getOwnedDiscussionWithOptionsTimed(w http.ResponseWriter, r *http.Request, includeEditTurns bool, timer *stationTimer) *Discussion {
+	var d *Discussion
+	var err error
+	if includeEditTurns {
+		d, err = s.d.Discussions.GetTimed(r.Context(), s.requestUser(r).ID, r.PathValue("id"), timer)
+	} else {
+		d, err = s.d.Discussions.GetWithoutEditTurnsTimed(r.Context(), s.requestUser(r).ID, r.PathValue("id"), timer)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil
@@ -1652,6 +1676,42 @@ func (s *Server) getOwnedDiscussion(w http.ResponseWriter, r *http.Request) *Dis
 		return nil
 	}
 	return d
+}
+
+func (s *Server) prepareDiscussionDetail(r *http.Request, d *Discussion, includeShareURL bool, timer *stationTimer) {
+	t0 := time.Now()
+	s.applyDiscussionJobStatusTimed(r, d, true, timer)
+	if timer != nil {
+		timer.mark("job_status", t0)
+	}
+	t0 = time.Now()
+	s.applyDiscussionProgress(r.Context(), d)
+	if timer != nil {
+		timer.mark("progress", t0)
+	}
+	t0 = time.Now()
+	s.applyDiscussionSummaryMeta(r.Context(), d)
+	if timer != nil {
+		timer.mark("summary", t0)
+	}
+	t0 = time.Now()
+	s.refreshDiscussionCoverURL(r.Context(), d)
+	if timer != nil {
+		timer.mark("cover", t0)
+	}
+	t0 = time.Now()
+	s.refreshDiscussionLineAudioURLs(r.Context(), d)
+	if timer != nil {
+		timer.mark("line_audio_urls", t0)
+	}
+	t0 = time.Now()
+	s.sanitizeDiscussionUsage(d)
+	if includeShareURL {
+		s.applyDiscussionShareURL(d)
+	}
+	if timer != nil {
+		timer.mark("finalize", t0)
+	}
 }
 
 func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, timer *stationTimer) {
@@ -1705,6 +1765,10 @@ func (s *Server) logDiscussionSummaryReturn(route string, d *Discussion) {
 // settles usage/points. resolveDownloadURL controls whether the (expensive,
 // presigned) audio download URL is resolved.
 func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion, resolveDownloadURL bool) {
+	s.applyDiscussionJobStatusTimed(r, d, resolveDownloadURL, nil)
+}
+
+func (s *Server) applyDiscussionJobStatusTimed(r *http.Request, d *Discussion, resolveDownloadURL bool, timer *stationTimer) {
 	if d == nil {
 		return
 	}
@@ -1712,36 +1776,78 @@ func (s *Server) applyDiscussionJobStatus(r *http.Request, d *Discussion, resolv
 	if d.JobID == "" || s.d.Jobs == nil {
 		return
 	}
-	j := s.d.Jobs.Get(d.JobID)
+	j := d.joinedJob
 	if j == nil {
+		t0 := time.Now()
+		j = s.d.Jobs.GetWithoutLogs(d.JobID)
+		if timer != nil {
+			timer.mark("job_lookup", t0)
+		}
+	} else if timer != nil {
+		timer.add("job_lookup_joined", 0)
+	}
+	if j == nil {
+		t0 := time.Now()
 		j = s.recoverJob(d.JobID)
+		if timer != nil {
+			timer.mark("job_recover", t0)
+		}
 		if j == nil {
 			if d.Status == DiscussionGenerating {
 				d.Status = DiscussionFailed
+				t0 = time.Now()
 				_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionFailed, d.DownloadURL)
+				if timer != nil {
+					timer.mark("job_set_result", t0)
+				}
 			}
 			return
 		}
 	}
-	s.applyDiscussionJob(r, d, j, resolveDownloadURL)
+	s.applyDiscussionJobTimed(r, d, j, resolveDownloadURL, timer)
 }
 
 func (s *Server) applyDiscussionJob(r *http.Request, d *Discussion, j *Job, resolveDownloadURL bool) {
+	s.applyDiscussionJobTimed(r, d, j, resolveDownloadURL, nil)
+}
+
+func (s *Server) applyDiscussionJobTimed(r *http.Request, d *Discussion, j *Job, resolveDownloadURL bool, timer *stationTimer) {
 	if d == nil || j == nil {
 		return
 	}
 	defer d.refreshComputedFields()
 	switch {
 	case j.Status == JobDone:
+		originalStatus := d.Status
+		originalDownloadURL := d.DownloadURL
 		d.Status = DiscussionReady
+		persistDownloadURL := d.DownloadURL
 		if resolveDownloadURL {
+			t0 := time.Now()
 			if url := s.jobDownloadURL(r.Context(), j); url != "" {
 				d.DownloadURL = url
 			} else if d.DownloadURL == "" && j.DownloadURL != "" {
 				d.DownloadURL = j.DownloadURL
+				persistDownloadURL = j.DownloadURL
+			}
+			if timer != nil {
+				timer.mark("job_download_url", t0)
 			}
 		}
-		_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionReady, d.DownloadURL)
+		detail, hasUsageDetail := generationUsageDetail(j, d)
+		needsResultPersist := originalStatus != DiscussionReady || (originalDownloadURL == "" && j.DownloadURL != "")
+		needsUsagePersist := jobHasBillableUsage(j) && !discussionUsageMatchesDetail(d, detail)
+		if needsResultPersist || needsUsagePersist {
+			t0 := time.Now()
+			if needsUsagePersist {
+				_ = s.d.Discussions.SetJobResultAndUsage(r.Context(), d.ID, DiscussionReady, persistDownloadURL, detail)
+			} else {
+				_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionReady, persistDownloadURL)
+			}
+			if timer != nil {
+				timer.mark("job_persist_discussion", t0)
+			}
+		}
 		if jobHasBillableUsage(j) {
 			d.PromptTokens = j.PromptTokens
 			d.CompletionTokens = j.CompletionTokens
@@ -1750,28 +1856,34 @@ func (s *Server) applyDiscussionJob(r *http.Request, d *Discussion, j *Job, reso
 			d.LLMCostKnown = j.LLMCostKnown
 			d.TTSCostUSD = j.TTSCostUSD
 			d.MusicCostUSD = j.MusicCostUSD
-			_ = s.d.Discussions.SetUsage(r.Context(), d.ID,
-				j.PromptTokens, j.CompletionTokens, j.TotalTokens, j.LLMCostUSD, j.LLMCostKnown,
-				j.TTSCostUSD, j.MusicCostUSD)
 		}
 		// Reconcile the generation reservation against actual usage. This is a
 		// lazy fallback (the job-completion path also reconciles); both call the
 		// idempotent SettleGeneration so the charge applies exactly once. Use the
 		// discussion's persisted usage when a recovered/done job has lost its
 		// usage fields.
-		if s.pointsEnabled() {
-			if detail, ok := generationUsageDetail(j, d); ok {
-				if err := s.d.Points.ChargeGeneration(r.Context(), s.d.Env, d.ID, detail); err != nil {
+		if s.pointsEnabled() && d.PointsReserved > 0 {
+			if hasUsageDetail {
+				t0 := time.Now()
+				total, err := s.d.Points.ChargeGenerationKnown(r.Context(), s.d.Env, d.OwnerUserID, d.ID, d.PointsReserved, d.PointsCharged, detail)
+				if err != nil {
 					s.logger().Warn("generation settle failed", "discussion", d.ID, "err", err)
-				}
-				if total, err := s.d.Points.DiscussionPoints(r.Context(), d.ID); err == nil {
+				} else {
 					d.PointsCharged = total
+					d.PointsReserved = 0
+				}
+				if timer != nil {
+					timer.mark("points_charge_generation", t0)
 				}
 			}
 		}
 	case j.Status == JobError:
 		d.Status = DiscussionFailed
+		t0 := time.Now()
 		_ = s.d.Discussions.SetJobResult(r.Context(), d.ID, DiscussionFailed, d.DownloadURL)
+		if timer != nil {
+			timer.mark("job_set_result", t0)
+		}
 	}
 }
 
@@ -1809,4 +1921,15 @@ func jobHasBillableUsage(j *Job) bool {
 
 func discussionHasBillableUsage(d *Discussion) bool {
 	return d != nil && (d.TotalTokens > 0 || d.LLMCostUSD > 0 || d.TTSCostUSD > 0 || d.MusicCostUSD > 0)
+}
+
+func discussionUsageMatchesDetail(d *Discussion, detail PointsUsageDetail) bool {
+	return d != nil &&
+		d.PromptTokens == detail.PromptTokens &&
+		d.CompletionTokens == detail.CompletionTokens &&
+		d.TotalTokens == detail.TotalTokens &&
+		d.LLMCostUSD == detail.LLMCostUSD &&
+		d.LLMCostKnown == detail.LLMCostKnown &&
+		d.TTSCostUSD == detail.TTSCostUSD &&
+		d.MusicCostUSD == detail.MusicCostUSD
 }

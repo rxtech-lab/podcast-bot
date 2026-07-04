@@ -324,7 +324,53 @@ func prepareSQL(kind databaseKind, query string) string {
 	if kind != databasePostgres {
 		return query
 	}
-	return strings.ReplaceAll(query, "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+	query = strings.ReplaceAll(query, "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+	return replaceStandaloneSQLType(query, "INTEGER", "BIGINT")
+}
+
+func replaceStandaloneSQLType(query, from, to string) string {
+	if query == "" || from == "" || !strings.Contains(strings.ToUpper(query), strings.ToUpper(from)) {
+		return query
+	}
+	var b strings.Builder
+	b.Grow(len(query))
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(query); {
+		ch := query[i]
+		if ch == '\'' && !inDouble {
+			b.WriteByte(ch)
+			if inSingle && i+1 < len(query) && query[i+1] == '\'' {
+				i += 2
+				b.WriteByte(query[i-1])
+				continue
+			}
+			inSingle = !inSingle
+			i++
+			continue
+		}
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			b.WriteByte(ch)
+			i++
+			continue
+		}
+		if !inSingle && !inDouble && i+len(from) <= len(query) &&
+			strings.EqualFold(query[i:i+len(from)], from) &&
+			(i == 0 || !isSQLIdentByte(query[i-1])) &&
+			(i+len(from) == len(query) || !isSQLIdentByte(query[i+len(from)])) {
+			b.WriteString(to)
+			i += len(from)
+			continue
+		}
+		b.WriteByte(ch)
+		i++
+	}
+	return b.String()
+}
+
+func isSQLIdentByte(ch byte) bool {
+	return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 func rebindSQL(kind databaseKind, query string) string {

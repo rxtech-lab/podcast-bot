@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -33,6 +35,10 @@ type voicesResponse struct {
 // fetched live from Azure's voices/list endpoint and cached in Redis for 24h.
 // Returns 503 when Azure speech credentials are not configured.
 func (s *Server) handleVoices(w http.ResponseWriter, r *http.Request) {
+	if s.d.Env != nil && s.d.Env.E2EMode {
+		writeJSON(w, voicesResponse{Voices: e2eFakeVoices()})
+		return
+	}
 	if cached, ok := s.d.VoiceCatalog.Get(r.Context()); ok {
 		writeJSON(w, voicesResponse{Voices: voiceMetas(cached)})
 		return
@@ -44,6 +50,15 @@ func (s *Server) handleVoices(w http.ResponseWriter, r *http.Request) {
 	}
 	s.d.VoiceCatalog.Set(r.Context(), voices)
 	writeJSON(w, voicesResponse{Voices: voiceMetas(voices)})
+}
+
+// e2eFakeVoices is the static roster served in hermetic E2E mode, where Azure
+// speech is never configured but the UI tests still exercise the voice picker.
+func e2eFakeVoices() []voiceMeta {
+	return []voiceMeta{
+		{Name: "en-US-E2EAvaNeural", Locale: "en-US", LocaleName: "English (United States)", Gender: "Female", VoiceType: "Neural"},
+		{Name: "en-US-E2ENovaNeural", Locale: "en-US", LocaleName: "English (United States)", Gender: "Male", VoiceType: "Neural"},
+	}
 }
 
 func voiceMetas(voices []tts.Voice) []voiceMeta {
@@ -78,13 +93,12 @@ func (s *Server) fetchAzureVoices(r *http.Request) ([]tts.Voice, error) {
 	return client.FetchVoices(r.Context(), "")
 }
 
-// voicePreviewRequest is the body of POST /api/voices/preview. Text is the
-// (client-translated) sample sentence to speak; voice is the Azure ShortName;
-// language is the BCP-47 plan language used both for SSML and the cache key.
+// voicePreviewRequest is the body of POST /api/voices/preview. Voice is the
+// Azure ShortName; language is the BCP-47 plan language used for SSML, backend
+// sample text selection, and the cache key.
 type voicePreviewRequest struct {
 	Voice    string `json:"voice"`
 	Language string `json:"language"`
-	Text     string `json:"text"`
 }
 
 type voicePreviewResponse struct {
@@ -99,10 +113,10 @@ var voicePreviewKeyPart = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 const voicePreviewMaxTextChars = 300
 
 // handleVoicePreview returns a playable URL for a short sample of one Azure
-// voice. The sample is synthesized at most once per (voice, language): the
-// rendered MP3 lives in S3 under voice-previews/{voice}-{language}.mp3 with
-// the key recorded in the DB, and later requests just re-sign the stored
-// object. 503 when Azure speech or S3 storage is not configured.
+// voice. The sample is synthesized at most once per (voice, language, sample
+// text): the rendered MP3 lives in S3 with a text hash in the key, and later
+// requests just re-sign the stored object. 503 when Azure speech or S3 storage
+// is not configured.
 func (s *Server) handleVoicePreview(w http.ResponseWriter, r *http.Request) {
 	var req voicePreviewRequest
 	if !decodeJSONBody(w, r, &req) {
@@ -110,15 +124,15 @@ func (s *Server) handleVoicePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	voice := strings.TrimSpace(req.Voice)
 	language := strings.TrimSpace(req.Language)
-	text := strings.TrimSpace(req.Text)
-	if voice == "" || language == "" || text == "" {
-		http.Error(w, "voice, language, and text are required", http.StatusBadRequest)
+	if voice == "" || language == "" {
+		http.Error(w, "voice and language are required", http.StatusBadRequest)
 		return
 	}
 	if !voicePreviewKeyPart.MatchString(voice) || !voicePreviewKeyPart.MatchString(language) {
 		http.Error(w, "invalid voice or language", http.StatusBadRequest)
 		return
 	}
+	text := voicePreviewSampleText(language)
 	if utf8.RuneCountInString(text) > voicePreviewMaxTextChars {
 		http.Error(w, "text is too long", http.StatusBadRequest)
 		return
@@ -129,7 +143,7 @@ func (s *Server) handleVoicePreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if key, err := s.d.Discussions.GetVoicePreview(ctx, voice, language); err == nil && key != "" {
+	if key, err := s.d.Discussions.GetVoicePreview(ctx, voice, language); err == nil && voicePreviewKeyMatchesText(key, text) {
 		if url, err := s.d.Uploader.DownloadURL(ctx, key, time.Hour); err == nil {
 			writeJSON(w, voicePreviewResponse{URL: url})
 			return
@@ -160,7 +174,7 @@ func (s *Server) handleVoicePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := s.d.Uploader.Key("voice-previews/" + voice + "-" + language + ".mp3")
+	key := s.d.Uploader.Key(voicePreviewObjectName(voice, language, text))
 	if err := s.d.Uploader.UploadBytes(ctx, key, "audio/mpeg", data); err != nil {
 		http.Error(w, "store preview: "+err.Error(), http.StatusBadGateway)
 		return
@@ -174,6 +188,66 @@ func (s *Server) handleVoicePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, voicePreviewResponse{URL: url})
+}
+
+func voicePreviewSampleText(language string) string {
+	switch normalizedVoicePreviewLanguage(language) {
+	case "zh-Hant":
+		return "你好！這是這段聲音的快速試聽。"
+	case "zh-Hans":
+		return "你好！这是这段声音的快速试听。"
+	case "ja":
+		return "こんにちは。この音声がどのように聞こえるかの簡単なプレビューです。"
+	case "ko":
+		return "안녕하세요! 이 목소리가 어떻게 들리는지 짧게 미리 들어보세요."
+	case "es":
+		return "¡Hola! Esta es una breve muestra de cómo suena esta voz."
+	case "fr":
+		return "Bonjour ! Voici un bref aperçu de cette voix."
+	case "de":
+		return "Hallo! Hier ist eine kurze Vorschau darauf, wie diese Stimme klingt."
+	default:
+		return "Hello! Here's a quick preview of how this voice sounds."
+	}
+}
+
+func normalizedVoicePreviewLanguage(language string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(language), "_", "-"))
+	if normalized == "zh" || strings.HasPrefix(normalized, "zh-hans") ||
+		strings.HasPrefix(normalized, "zh-cn") || strings.HasPrefix(normalized, "zh-sg") {
+		return "zh-Hans"
+	}
+	if strings.HasPrefix(normalized, "zh-hant") || strings.HasPrefix(normalized, "zh-tw") ||
+		strings.HasPrefix(normalized, "zh-hk") || strings.HasPrefix(normalized, "zh-mo") {
+		return "zh-Hant"
+	}
+	switch {
+	case strings.HasPrefix(normalized, "ja"):
+		return "ja"
+	case strings.HasPrefix(normalized, "ko"):
+		return "ko"
+	case strings.HasPrefix(normalized, "es"):
+		return "es"
+	case strings.HasPrefix(normalized, "fr"):
+		return "fr"
+	case strings.HasPrefix(normalized, "de"):
+		return "de"
+	default:
+		return "en"
+	}
+}
+
+func voicePreviewObjectName(voice, language, text string) string {
+	return "voice-previews/" + voice + "-" + language + "-" + voicePreviewTextHash(text) + ".mp3"
+}
+
+func voicePreviewKeyMatchesText(key, text string) bool {
+	return strings.HasSuffix(strings.TrimSpace(key), "-"+voicePreviewTextHash(text)+".mp3")
+}
+
+func voicePreviewTextHash(text string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(text)))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // voiceCatalog returns the Azure voice roster, preferring the Redis cache and

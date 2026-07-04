@@ -40,7 +40,7 @@ fi
 
 log "starting backend on ${BASE_URL} …"
 log "auth is bypassed (fixed user 'test'); fake LLM + fake TTS; local SQLite"
-log "seeded fixtures: test-ready, test-ongoing, test-plan, test2-private, test2-public"
+log "seeded fixtures: test-ready, test-ongoing, test-plan, test-plan-voice, test2-private, test2-public"
 log "health:    curl ${BASE_URL}/api/config"
 log "press Ctrl-C to stop"
 

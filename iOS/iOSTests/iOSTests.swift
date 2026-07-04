@@ -1073,8 +1073,8 @@ private extension URL {
 // MARK: - Timed illustration timeline
 
 extension iOSTests {
-    private func imageLine(_ url: String, offset: Double? = nil) -> LiveLine {
-        LiveLine(speaker: "Narrator", role: "series_host", text: "", isUser: false, done: true,
+    private func imageLine(_ url: String, offset: Double? = nil, caption: String = "") -> LiveLine {
+        LiveLine(speaker: "Narrator", role: "series_host", text: caption, isUser: false, done: true,
                  imageURL: url, audioOffsetSeconds: offset)
     }
 
@@ -1082,12 +1082,13 @@ extension iOSTests {
         let lines = [
             LiveLine(speaker: "Narrator", role: "series_host", text: "hello", isUser: false, done: true),
             imageLine("https://img/2.png", offset: 45),
-            imageLine("https://img/1.png", offset: 10),
+            imageLine("https://img/1.png", offset: 10, caption: "Chapter one"),
         ]
         let timeline = PlayerModel.buildIllustrationTimeline(lines: lines, duration: 120)
         XCTAssertEqual(timeline.count, 2)
         XCTAssertEqual(timeline[0].start, 10)
         XCTAssertEqual(timeline[0].url.absoluteString, "https://img/1.png")
+        XCTAssertEqual(timeline[0].caption, "Chapter one")
         XCTAssertEqual(timeline[1].start, 45)
     }
 

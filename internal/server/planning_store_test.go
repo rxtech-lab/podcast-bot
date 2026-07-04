@@ -43,6 +43,57 @@ func TestPlanningEnsureConversationIdempotent(t *testing.T) {
 	}
 }
 
+func TestPlanningConversationWithTurnsByDiscussionJoinedLoad(t *testing.T) {
+	_, ps, discID := newTestPlanningStore(t)
+	ctx := context.Background()
+
+	exists, conv, turns, err := ps.ConversationWithTurnsByDiscussion(ctx, "u1", "missing")
+	if err != nil {
+		t.Fatalf("ConversationWithTurnsByDiscussion missing: %v", err)
+	}
+	if exists || conv != nil || len(turns) != 0 {
+		t.Fatalf("missing discussion = exists %v conv %#v turns %d, want empty", exists, conv, len(turns))
+	}
+
+	exists, conv, turns, err = ps.ConversationWithTurnsByDiscussion(ctx, "u2", discID)
+	if err != nil {
+		t.Fatalf("ConversationWithTurnsByDiscussion wrong owner: %v", err)
+	}
+	if exists || conv != nil || len(turns) != 0 {
+		t.Fatalf("wrong owner = exists %v conv %#v turns %d, want empty", exists, conv, len(turns))
+	}
+
+	exists, conv, turns, err = ps.ConversationWithTurnsByDiscussion(ctx, "u1", discID)
+	if err != nil {
+		t.Fatalf("ConversationWithTurnsByDiscussion no conversation: %v", err)
+	}
+	if !exists || conv != nil || len(turns) != 0 {
+		t.Fatalf("no conversation = exists %v conv %#v turns %d, want discussion only", exists, conv, len(turns))
+	}
+
+	created, err := ps.EnsureConversation(ctx, "u1", discID)
+	if err != nil {
+		t.Fatalf("EnsureConversation: %v", err)
+	}
+	if err := ps.AppendTurn(ctx, created.ID, planningTurnInput{Role: "user", Text: "first"}); err != nil {
+		t.Fatalf("AppendTurn first: %v", err)
+	}
+	if err := ps.AppendTurn(ctx, created.ID, planningTurnInput{Role: "assistant", Text: "second"}); err != nil {
+		t.Fatalf("AppendTurn second: %v", err)
+	}
+
+	exists, conv, turns, err = ps.ConversationWithTurnsByDiscussion(ctx, "u1", discID)
+	if err != nil {
+		t.Fatalf("ConversationWithTurnsByDiscussion with turns: %v", err)
+	}
+	if !exists || conv == nil || conv.ID != created.ID {
+		t.Fatalf("joined conversation = exists %v conv %#v, want %q", exists, conv, created.ID)
+	}
+	if len(turns) != 2 || turns[0].Role != "user" || turns[0].Text != "first" || turns[1].Role != "assistant" {
+		t.Fatalf("joined turns = %#v, want ordered user/assistant", turns)
+	}
+}
+
 func TestPlanningTurnsRebuildAndQuestionRoundTrip(t *testing.T) {
 	_, ps, discID := newTestPlanningStore(t)
 	ctx := context.Background()

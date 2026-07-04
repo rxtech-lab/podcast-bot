@@ -448,6 +448,7 @@ func (s *Server) handleJobTranscript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "video mode not configured", http.StatusInternalServerError)
 		return
 	}
+	timer := newStationTimer()
 	id := r.PathValue("id")
 	if id == "" {
 		http.NotFound(w, r)
@@ -455,35 +456,74 @@ func (s *Server) handleJobTranscript(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if orch := s.d.Jobs.Orch(id); orch != nil {
-		writeTranscript(w, s.mergedJobTranscript(r, id, orch.Transcript.Snapshot()))
+		t0 := time.Now()
+		live := orch.Transcript.Snapshot()
+		timer.mark("live_snapshot", t0)
+		s.writeJobTranscriptTimed(w, s.mergedJobTranscriptTimed(r, id, live, timer), timer)
 		return
 	}
-	if s.d.Jobs.Get(id) == nil {
-		if recovered := s.recoverJob(id); recovered == nil {
-			if lines := s.mergedJobTranscript(r, id, nil); len(lines) > 0 {
-				writeTranscript(w, lines)
-				return
-			}
+	if lines := s.mergedJobTranscriptTimed(r, id, nil, timer); len(lines) > 0 {
+		s.writeJobTranscriptTimed(w, lines, timer)
+		return
+	}
+	t0 := time.Now()
+	job := s.d.Jobs.GetWithoutLogs(id)
+	timer.mark("job_lookup", t0)
+	if job == nil {
+		t0 = time.Now()
+		recovered := s.recoverJob(id)
+		timer.mark("recover_job", t0)
+		if recovered == nil {
 			http.NotFound(w, r)
 			return
 		}
 	}
-	if lines := s.mergedJobTranscript(r, id, nil); len(lines) > 0 {
-		writeTranscript(w, lines)
-		return
+	s.writeJobTranscriptTimed(w, nil, timer)
+}
+
+func (s *Server) writeJobTranscriptTimed(w http.ResponseWriter, lines []agent.TranscriptLine, timer *stationTimer) {
+	t0 := time.Now()
+	writeTranscript(w, lines)
+	if timer != nil {
+		timer.mark("write_json", t0)
+		s.logStationTiming("jobs.transcript", len(lines), timer)
 	}
-	writeTranscript(w, nil)
 }
 
 func (s *Server) mergedJobTranscript(r *http.Request, jobID string, live []agent.TranscriptLine) []agent.TranscriptLine {
+	return s.mergedJobTranscriptTimed(r, jobID, live, nil)
+}
+
+func (s *Server) mergedJobTranscriptTimed(r *http.Request, jobID string, live []agent.TranscriptLine, timer *stationTimer) []agent.TranscriptLine {
+	t0 := time.Now()
 	live = normalizedTranscriptLines(live)
+	if timer != nil {
+		timer.mark("normalize_live", t0)
+	}
+	t0 = time.Now()
 	if disk := s.jobDiskTranscript(jobID); len(disk) > 0 {
-		return appendTranscriptSuffix(disk, live)
+		if timer != nil {
+			timer.mark("disk_transcript", t0)
+		}
+		t0 = time.Now()
+		out := appendTranscriptSuffix(disk, live)
+		if timer != nil {
+			timer.mark("append_suffix", t0)
+		}
+		return out
+	}
+	if timer != nil {
+		timer.mark("disk_transcript", t0)
 	}
 	if len(live) > 0 {
 		return live
 	}
-	return s.nativeDiscussionTranscript(r, jobID)
+	t0 = time.Now()
+	out := s.nativeDiscussionTranscript(r, jobID)
+	if timer != nil {
+		timer.mark("native_transcript", t0)
+	}
+	return out
 }
 
 func (s *Server) jobDiskTranscript(jobID string) []agent.TranscriptLine {

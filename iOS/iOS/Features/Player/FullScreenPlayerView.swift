@@ -3,9 +3,10 @@ import TipKit
 import UIKit
 
 /// Full-screen "now playing" experience presented over `PodcastPlayerView`.
-/// Top: minimize. Center: the podcast cover art when one exists, with a button
-/// that flips to an Apple-Music-style synced caption list (or the single live
-/// caption while streaming). Bottom: scrubber + skip ±15s + play/pause.
+/// The cover art (or timed illustration) bleeds edge-to-edge from the top of
+/// the screen with the synced caption overlaid on it, and a button flips it to
+/// an Apple-Music-style synced caption list (or the single live caption while
+/// streaming). Bottom: scrubber + skip ±15s + play/pause.
 struct FullScreenPlayerView: View {
     @Bindable var model: PlayerModel
     @Environment(\.dismiss) private var dismiss
@@ -33,9 +34,20 @@ struct FullScreenPlayerView: View {
     /// apply: the latest arrived image during a live stream, or the image at
     /// the playback position for a finished audiobook. Nil falls back to the
     /// cover.
+    private var currentIllustrationCue: PlayerModel.IllustrationCue? {
+        if model.isLivePlayback { return model.latestIllustrationCue }
+        return model.illustrationCue(at: model.currentTime)
+    }
+
     private var currentIllustrationURL: URL? {
-        if model.isLivePlayback { return model.latestIllustrationURL }
-        return model.illustrationURL(at: model.currentTime)
+        currentIllustrationCue?.url
+    }
+
+    /// The synced VTT audio caption shown under the artwork, matching the mini
+    /// player. Illustration cues carry their own image caption, but listeners
+    /// follow the narration, so the audio line is surfaced instead.
+    private var artworkCaption: String {
+        model.caption.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The next timeline entry, prefetched so the hard cut lands instantly.
@@ -68,19 +80,28 @@ struct FullScreenPlayerView: View {
         ZStack {
             background
             VStack(spacing: 0) {
-                header
-                ZStack {
-                    if transcriptVisible {
-                        transcript
-                            .transition(.opacity)
-                    } else {
-                        coverArt
+                // The hero fills everything above the controls, so its blurred
+                // bottom edge always lands just above the seek bar.
+                ZStack(alignment: .top) {
+                    if showsCenterCover {
+                        coverHero
                     }
+                    VStack(spacing: 0) {
+                        header
+                        ZStack {
+                            if transcriptVisible {
+                                transcript
+                                    .transition(.opacity)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 controls
+                    .padding(.horizontal, 20)
             }
-            .padding(.horizontal, 20)
             .padding(.bottom, 24)
         }
         .sheet(isPresented: Binding(
@@ -104,16 +125,18 @@ struct FullScreenPlayerView: View {
         .sheet(isPresented: $showingShareSheet) {
             ShareSheet(discussionID: model.discussion.id, api: model.api)
         }
-        .task(id: coverColorKey) {
-            await model.loadCoverColors()
+        .task(id: artworkColorKey) {
+            await model.adoptArtworkColors(from: currentIllustrationURL)
         }
         .preventsIdleSleep()
     }
 
-    /// Changes whenever the cover's source changes, so the background palette is
-    /// recomputed after an edit or a background-generated cover lands.
-    private var coverColorKey: String {
-        "\(cover?.imageURL ?? "")|\(cover?.gradientStart ?? "")|\(cover?.gradientEnd ?? "")"
+    /// Changes whenever the artwork on screen changes — a new timed
+    /// illustration, or the cover's source after an edit — so the background
+    /// palette always follows the image currently displayed.
+    private var artworkColorKey: String {
+        if let url = currentIllustrationURL { return url.absoluteString }
+        return "\(cover?.imageURL ?? "")|\(cover?.gradientStart ?? "")|\(cover?.gradientEnd ?? "")"
     }
 
     @ViewBuilder
@@ -125,26 +148,75 @@ struct FullScreenPlayerView: View {
         }
     }
 
-    /// Large rounded artwork that gently shrinks when paused, mirroring the
-    /// system Now Playing screen. Falls back to the cover's gradient. The
-    /// matched-geometry id lets it "magic move" to the header thumbnail when the
-    /// listener flips to the transcript.
-    private var coverArt: some View {
+    /// Full-bleed hero artwork running from the very top of the screen (under
+    /// the status bar, behind the header) down to just above the seek bar. The
+    /// bottom progressively blurs and melts into the tinted background, and the
+    /// synced VTT caption rides on top of the blurred band. The
+    /// matched-geometry id lets it "magic move" to the header thumbnail when
+    /// the listener flips to the transcript.
+    private var coverHero: some View {
         GeometryReader { geo in
-            let side = min(geo.size.width, geo.size.height) - 8
-            // matchedGeometryEffect must wrap the *flexible* image and the frame
-            // must come after it, otherwise the inner frame pins the size and
-            // only the position animates (no grow/shrink) — see swiftui-lab /
-            // Chris Eidhof on the modifier-order pitfall.
-            coverImage
-                .matchedGeometryEffect(id: coverID, in: coverNamespace)
-                .frame(width: side, height: side)
-                .clipShape(.rect(cornerRadius: 20))
-                .shadow(color: .black.opacity(0.35), radius: 24, y: 14)
-                .scaleEffect(model.isPlaying ? 1.0 : 0.86)
-                .animation(.spring(duration: 0.5), value: model.isPlaying)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZStack(alignment: .bottom) {
+                coverImage
+                    .matchedGeometryEffect(id: coverID, in: coverNamespace)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                    .overlay {
+                        // Gradient-masked material approximates a progressive
+                        // blur: sharp on top, fully frosted at the bottom edge.
+                        Rectangle()
+                            .fill(.ultraThinMaterial)
+                            .mask {
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .clear, location: 0.55),
+                                        .init(color: .black, location: 0.9),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            }
+                    }
+                    .mask {
+                        // Short alpha fade at the very bottom so the blurred
+                        // band dissolves into the background instead of ending
+                        // on a hard edge above the controls.
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: 0.92),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+
+                if !artworkCaption.isEmpty {
+                    heroCaption
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 20)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: artworkCaption)
         }
+        .ignoresSafeArea(edges: [.top, .horizontal])
+    }
+
+    /// Subtitle-style caption bubble: white text on a translucent dark backing,
+    /// so it stays legible no matter what the artwork behind it looks like.
+    private var heroCaption: some View {
+        Text(artworkCaption)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.45), in: .rect(cornerRadius: 12))
+            .id(artworkCaption)
+            .transition(.opacity)
     }
 
     /// Small header artwork shown in transcription mode; shares the cover's
@@ -452,10 +524,10 @@ private struct SeekBar: View {
                         isScrubbing = false
                     }
                 })
-                .tint(Theme.accent)
+                .tint(foregroundPalette.accent)
             } else {
                 ProgressView(value: progress)
-                    .tint(Theme.accent)
+                    .tint(foregroundPalette.accent)
             }
             HStack {
                 Text(timeString(displayTime)).font(.caption2).foregroundStyle(foregroundPalette.secondary)
@@ -566,11 +638,12 @@ private struct FullScreenForegroundPalette {
         if luminance < 0.45 {
             primary = .white
             secondary = .white.opacity(0.68)
+            accent = .white
         } else {
             primary = .black
             secondary = .black.opacity(0.58)
+            accent = .black
         }
-        accent = Theme.accent
     }
 
     private static func averageScrimmedLuminance(for colors: [Color]) -> Double {
@@ -678,3 +751,70 @@ actor IllustrationImageLoader {
         _ = await load(url)
     }
 }
+
+#if DEBUG
+// MARK: - Previews
+
+/// Never returns a token, so the preview's APIClient can't make authenticated
+/// calls — everything on screen comes from the seeded model state below.
+private struct PreviewTokenProvider: TokenProviding {
+    func token() async -> String? { nil }
+    func refreshedToken() async -> String? { nil }
+}
+
+/// Builds an offline `PlayerModel` frozen mid-playback. `start()` is never
+/// called, so nothing plays and no sockets open; the seeded `caption` /
+/// `lines` / `duration` drive the artwork, VTT caption, and scrubber layout.
+@MainActor
+private func fullScreenPreviewModel(withArtwork: Bool) -> PlayerModel {
+    let coverJSON = withArtwork
+        ? ", \"cover\": {\"type\": \"gradient\", \"gradient_start\": \"#6D5BD0\", \"gradient_end\": \"#2B2350\"}"
+        : ""
+    let discussion = try! JSONDecoder().decode(Discussion.self, from: Data("""
+    {
+      "id": "preview-full-screen-player",
+      "topic": "第三空间的卑微愿望",
+      "title": "第三空间的卑微愿望 · 林悦",
+      "status": "ready",
+      "language": "zh"\(coverJSON)
+    }
+    """.utf8))
+
+    let model = PlayerModel(
+        discussion: discussion,
+        api: APIClient(tokens: PreviewTokenProvider()),
+        username: "preview"
+    )
+    model.duration = 1439
+    model.currentTime = 573
+    model.caption = "他在狭窄的地下室里看着糖糖的照片，那是他心中唯一的牵挂。"
+    model.captionSpeaker = "林悦"
+    model.lines = [
+        LiveLine(speaker: "林悦", role: "host",
+                 text: "远处传来机械的轰鸣声，那是第三空间永不停歇的脉搏。",
+                 isUser: false, done: true),
+    ]
+    if withArtwork {
+        // A timed illustration line so the artwork slot exercises the
+        // illustration path (image caption stays off-screen; the VTT caption
+        // above is what renders under the art). The gradient cover shows
+        // until the image loads.
+        model.lines.append(
+            LiveLine(speaker: "", role: "image",
+                     text: "狭窄地下室里的一盏孤灯。",
+                     isUser: false, done: true,
+                     imageURL: "https://picsum.photos/seed/debate-bot/900",
+                     audioOffsetSeconds: 60)
+        )
+    }
+    return model
+}
+
+#Preview("Artwork · VTT caption") {
+    FullScreenPlayerView(model: fullScreenPreviewModel(withArtwork: true))
+}
+
+#Preview("No artwork · live caption") {
+    FullScreenPlayerView(model: fullScreenPreviewModel(withArtwork: false))
+}
+#endif

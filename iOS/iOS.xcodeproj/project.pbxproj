@@ -133,6 +133,7 @@
 				Features/Library/MarketplaceView.swift,
 				Features/Library/PublishStationSheet.swift,
 				Features/Plan/AttachmentSupport.swift,
+				Features/Plan/ModelPickerView.swift,
 				Features/Plan/NewDiscussionFormCoordinator.swift,
 				Features/Plan/NewDiscussionView.swift,
 				Features/Plan/NewDiscussionWidgets.swift,

@@ -298,6 +298,58 @@ func TestDiscussionStoreListJoinsVideoJobsForStatus(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreGetJoinsVideoJobSnapshot(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "shared.db")
+	jobs, err := NewJobRegistry(dbPath, "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	store, err := NewDiscussionStore(dbPath, "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script: &config.DebateTopic{Title: "AI Safety", Type: config.ContentTypeDiscussion, Language: "en-US"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, owner, created.ID, "job-ready"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	jobs.Add("job-ready")
+	jobs.Update("job-ready", func(j *Job) {
+		j.Status = JobDone
+		j.AudioOnly = true
+		j.AudioS3Key = "audio/job-ready.mp3"
+		j.PromptTokens = 12
+		j.CompletionTokens = 34
+		j.TotalTokens = 46
+		j.LLMCostUSD = 0.25
+		j.LLMCostKnown = true
+		j.TTSCostUSD = 0.5
+		j.MusicCostUSD = 0.75
+	})
+
+	got, err := store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil || got.joinedJob == nil {
+		t.Fatalf("joined job missing: %+v", got)
+	}
+	if got.joinedJob.Status != JobDone || got.joinedJob.AudioS3Key != "audio/job-ready.mp3" {
+		t.Fatalf("joined job = %+v", got.joinedJob)
+	}
+	if got.joinedJob.TotalTokens != 46 || !got.joinedJob.LLMCostKnown {
+		t.Fatalf("joined usage = %+v", got.joinedJob)
+	}
+}
+
 func TestDiscussionStoreSearch(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
@@ -1447,6 +1499,58 @@ func TestDiscussionSpeakerVoiceOverrides(t *testing.T) {
 	}
 }
 
+func TestAudioBookSpeakerModelAndVoiceOverrides(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "audiobook", planResponse{
+		Script: &config.DebateTopic{
+			Title:         "Audio Book",
+			Type:          config.ContentTypeAudioBook,
+			Language:      "zh-CN",
+			AudioBookHost: config.AgentSpec{Name: "Narrator", Model: "model-a"},
+			AudioBookSpeakers: []config.AudioBookSpeaker{
+				{Name: "Guest", Model: "model-a", Description: "supporting voice"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated, err := store.SetSpeakerModel(ctx, owner, created.ID, "Guest", "model-x")
+	if err != nil {
+		t.Fatalf("SetSpeakerModel audiobook speaker: %v", err)
+	}
+	if got := audioBookSpeakerModel(t, updated.Script, "Guest"); got != "model-x" {
+		t.Fatalf("Guest model after set = %q, want model-x", got)
+	}
+
+	updated, err = store.SetSpeakerVoice(ctx, owner, created.ID, "Guest", "zh-CN-XiaochenNeural")
+	if err != nil {
+		t.Fatalf("SetSpeakerVoice audiobook speaker: %v", err)
+	}
+	if got := audioBookSpeakerVoice(t, updated.Script, "Guest"); got != "zh-CN-XiaochenNeural" {
+		t.Fatalf("Guest voice after set = %q, want zh-CN-XiaochenNeural", got)
+	}
+
+	got, err := store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if model := audioBookSpeakerModel(t, got.Script, "Guest"); model != "model-x" {
+		t.Fatalf("Guest model on Get = %q, want model-x", model)
+	}
+	if voice := audioBookSpeakerVoice(t, got.Script, "Guest"); voice != "zh-CN-XiaochenNeural" {
+		t.Fatalf("Guest voice on Get = %q, want zh-CN-XiaochenNeural", voice)
+	}
+}
+
 func TestVoicePreviewStore(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
@@ -1503,6 +1607,34 @@ func discussantModel(t *testing.T, script *config.DebateTopic, name string) stri
 		}
 	}
 	t.Fatalf("discussant %q not found in %+v", name, script.Discussants)
+	return ""
+}
+
+func audioBookSpeakerModel(t *testing.T, script *config.DebateTopic, name string) string {
+	t.Helper()
+	if script == nil {
+		t.Fatal("script is nil")
+	}
+	for _, speaker := range script.AudioBookSpeakers {
+		if speaker.Name == name {
+			return speaker.Model
+		}
+	}
+	t.Fatalf("audiobook speaker %q not found in %+v", name, script.AudioBookSpeakers)
+	return ""
+}
+
+func audioBookSpeakerVoice(t *testing.T, script *config.DebateTopic, name string) string {
+	t.Helper()
+	if script == nil {
+		t.Fatal("script is nil")
+	}
+	for _, speaker := range script.AudioBookSpeakers {
+		if speaker.Name == name {
+			return speaker.Voice
+		}
+	}
+	t.Fatalf("audiobook speaker %q not found in %+v", name, script.AudioBookSpeakers)
 	return ""
 }
 

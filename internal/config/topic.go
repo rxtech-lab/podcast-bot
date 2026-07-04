@@ -93,6 +93,8 @@ type AudioBookSpeaker struct {
 	Name        string `yaml:"name" json:"name"`
 	Gender      string `yaml:"gender,omitempty" json:"gender,omitempty"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Model       string `yaml:"model,omitempty" json:"model,omitempty"`
+	Voice       string `yaml:"voice,omitempty" json:"voice,omitempty"`
 }
 
 // AudioBookChapter is one proposed chapter in an audiobook plan.

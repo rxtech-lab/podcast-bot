@@ -43,10 +43,10 @@ const illustrationSize = "1920x1080"
 const illustrationURLTTL = 7 * 24 * time.Hour
 
 // illustrationConcurrency bounds how many illustration generations run at
-// once. The dense scene plan can call for up to 40 images; each is a Gemini
+// once. The dense scene plan can call for up to 25 images; each is a Gemini
 // generation + an S3 upload, so an unbounded goroutine-per-image fan-out
 // would trip rate limits.
-const illustrationConcurrency = 5
+const illustrationConcurrency = 10
 
 const avatarSize = "1024x1024"
 

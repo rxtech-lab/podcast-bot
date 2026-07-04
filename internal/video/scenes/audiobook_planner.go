@@ -16,7 +16,7 @@ import (
 // generation + an S3 upload.
 const (
 	minAudioBookFrames = 6
-	maxAudioBookFrames = 40
+	maxAudioBookFrames = 25
 )
 
 func audioBookFrameFloor(totalMinutes int) int {

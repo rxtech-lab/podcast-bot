@@ -90,6 +90,11 @@ type Deps struct {
 	// transcript shows the picture at that point in the narration. Nil/empty
 	// for non-audiobook runs; an empty entry means "no image for this beat".
 	AudioBookImageURLs []string
+	// AudioBookImageCaptions maps scene-beat index → the planner's short
+	// description for that illustration. It is carried as the transcript text
+	// for image rows so clients can caption the active artwork without another
+	// fetch.
+	AudioBookImageCaptions []string
 
 	// RecordAudioBookImageOffset, when non-nil, is called each time an
 	// audiobook scene image is emitted, with the beat index and its position
@@ -783,10 +788,15 @@ func (p *Pipeline) emitSceneImage(t *Turn, idx int, offset time.Duration) {
 	if p.d.RecordAudioBookImageOffset != nil {
 		p.d.RecordAudioBookImageOffset(idx, offset.Seconds())
 	}
+	caption := ""
+	if idx < len(p.d.AudioBookImageCaptions) {
+		caption = strings.TrimSpace(p.d.AudioBookImageCaptions[idx])
+	}
 	p.d.Transcript.AppendLine(agent.TranscriptLine{
 		Speaker:       t.Speaker.Name(),
 		Role:          t.Speaker.Role(),
 		Side:          t.Speaker.Side(),
+		Text:          caption,
 		ImageURL:      url,
 		At:            time.Now(),
 		AudioOffsetMS: offsetMS,
@@ -794,6 +804,7 @@ func (p *Pipeline) emitSceneImage(t *Turn, idx int, offset time.Duration) {
 	p.d.Send(TranscriptMsg{
 		Speaker:       t.Speaker.Name(),
 		Role:          t.Speaker.Role(),
+		Text:          caption,
 		ImageURL:      url,
 		Done:          true,
 		AudioOffsetMS: offsetMS,

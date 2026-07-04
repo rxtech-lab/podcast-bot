@@ -68,6 +68,14 @@ func TestPrepareSQLForPostgres(t *testing.T) {
 	}
 }
 
+func TestPrepareSQLForPostgresUsesBigIntForSQLiteIntegers(t *testing.T) {
+	got := prepareSQL(databasePostgres, `created_at INTEGER NOT NULL, prompt_tokens INTEGER NOT NULL DEFAULT 0, note TEXT DEFAULT 'INTEGER'`)
+	want := `created_at BIGINT NOT NULL, prompt_tokens BIGINT NOT NULL DEFAULT 0, note TEXT DEFAULT 'INTEGER'`
+	if got != want {
+		t.Fatalf("prepareSQL = %q, want %q", got, want)
+	}
+}
+
 func TestSQLBoolIntScansBoolAndInt(t *testing.T) {
 	var fromBool sqlBoolInt
 	if err := fromBool.Scan(true); err != nil {

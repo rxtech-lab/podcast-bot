@@ -115,12 +115,13 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 
 	type fixture struct {
 		id, owner, title, status, visibility string
-		ready, public, transcript           bool
+		ready, public, transcript            bool
 	}
 	fixtures := []fixture{
 		{"test-ready", "test", "E2E Ready Podcast", string(DiscussionReady), "private", true, false, true},
 		{"test-ongoing", "test", "E2E Ongoing Podcast", string(DiscussionGenerating), "private", false, false, false},
 		{"test-plan", "test", "E2E Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
+		{"test-plan-voice", "test", "E2E Voice Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
 		{"test2-private", "test2", "E2E Other Private", string(DiscussionReady), "private", true, false, true},
 		{"test2-public", "test2", "E2E Other Public", string(DiscussionReady), "public", true, true, true},
 	}

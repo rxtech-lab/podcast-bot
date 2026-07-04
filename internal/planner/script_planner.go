@@ -654,6 +654,7 @@ func (p *Planner) assembleAudioBookWithModel(d *audioBookDraft, lang, channel st
 			Name:        name,
 			Gender:      strings.TrimSpace(s.Gender),
 			Description: strings.TrimSpace(s.Description),
+			Model:       model,
 		})
 		speakerNames[key] = name
 	}

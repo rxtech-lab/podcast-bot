@@ -27,7 +27,7 @@ func TestAudioBookFrameFloor(t *testing.T) {
 		{1, minAudioBookFrames},  // 2 < min → clamp up
 		{3, minAudioBookFrames},  // 6 == min
 		{10, 20},                 // 2/min
-		{15, 30},                 // 2/min
+		{15, maxAudioBookFrames}, // 30 > max -> clamp down
 		{30, maxAudioBookFrames}, // 60 > max → clamp down
 		{500, maxAudioBookFrames},
 	}

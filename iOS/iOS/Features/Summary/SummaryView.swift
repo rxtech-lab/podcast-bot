@@ -1,9 +1,13 @@
 import AuthenticationServices
 import BeautifulMermaid
+import Kingfisher
 import MarkdownUI
 import QuickLook
 import SwiftUI
 import TipKit
+import os
+
+private let summaryViewLog = Logger(subsystem: "com.debatebot.ios", category: "SummaryView")
 
 /// Displays a finished podcast's generated summary document. The Markdown body
 /// is fetched only when this view mounts (the podcast detail never carries it),
@@ -141,6 +145,7 @@ struct SummaryView: View {
     private func markdownContent(markdown: String) -> some View {
         ScrollView {
             Markdown(markdown)
+                .markdownImageProvider(KingfisherMarkdownImageProvider())
                 .markdownBlockStyle(\.codeBlock) { configuration in
                     if configuration.language?.lowercased() == "mermaid" {
                         MermaidBlock(code: configuration.content)
@@ -339,6 +344,7 @@ struct SummaryView: View {
         pptPreviewFile = nil
         do {
             let loaded = try await api.summary(id: discussionID, docType: docType)
+            logRawMarkdownForDebug(loaded.markdown, docType: docType, source: "SummaryView.load")
             document = loaded
             isLoading = false
             if isSummaryDocumentSelected, !loaded.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -385,6 +391,54 @@ struct SummaryView: View {
             isPPTDeckAvailable = false
         } catch {
             isPPTDeckAvailable = false
+        }
+    }
+
+    private func logRawMarkdownForDebug(_ markdown: String, docType: String, source: String) {
+        let chunkSize = 2_000
+        let totalParts = max(1, (markdown.count + chunkSize - 1) / chunkSize)
+        summaryViewLog.info("Raw markdown begin source=\(source, privacy: .public) discussion=\(discussionID, privacy: .public) doc_type=\(docType, privacy: .public) chars=\(markdown.count, privacy: .public) parts=\(totalParts, privacy: .public)")
+
+        guard !markdown.isEmpty else {
+            summaryViewLog.info("Raw markdown chunk source=\(source, privacy: .public) discussion=\(discussionID, privacy: .public) doc_type=\(docType, privacy: .public) part=1/1 markdown=''")
+            summaryViewLog.info("Raw markdown end source=\(source, privacy: .public) discussion=\(discussionID, privacy: .public) doc_type=\(docType, privacy: .public)")
+            return
+        }
+
+        var part = 1
+        var index = markdown.startIndex
+        while index < markdown.endIndex {
+            let next = markdown.index(index, offsetBy: chunkSize, limitedBy: markdown.endIndex) ?? markdown.endIndex
+            let chunk = String(markdown[index..<next])
+            summaryViewLog.info("Raw markdown chunk source=\(source, privacy: .public) discussion=\(discussionID, privacy: .public) doc_type=\(docType, privacy: .public) part=\(part, privacy: .public)/\(totalParts, privacy: .public) markdown=\(chunk, privacy: .public)")
+            index = next
+            part += 1
+        }
+
+        summaryViewLog.info("Raw markdown end source=\(source, privacy: .public) discussion=\(discussionID, privacy: .public) doc_type=\(docType, privacy: .public)")
+    }
+}
+
+private struct KingfisherMarkdownImageProvider: ImageProvider {
+    func makeImage(url: URL?) -> some View {
+        Group {
+            if let url {
+                KFImage.url(url)
+                    .placeholder {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 160)
+                    }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .fade(duration: 0.15)
+                    .resizable()
+                    .scaledToFit()
+                    .id(url.absoluteString)
+            } else {
+                Color.clear
+                    .frame(width: 0, height: 0)
+            }
         }
     }
 }

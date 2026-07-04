@@ -376,6 +376,16 @@ func (r *JobRegistry) Add(id string) *Job {
 
 // Get returns a snapshot of the named job, or nil when unknown.
 func (r *JobRegistry) Get(id string) *Job {
+	return r.get(id, true)
+}
+
+// GetWithoutLogs returns a job snapshot without loading its progress log rows.
+// Use this on read paths that only need status, artifacts, and usage metadata.
+func (r *JobRegistry) GetWithoutLogs(id string) *Job {
+	return r.get(id, false)
+}
+
+func (r *JobRegistry) get(id string, includeLogs bool) *Job {
 	var rec videoJobRecord
 	query := func() error {
 		return r.db.First(&rec, "id = ?", id).Error
@@ -387,7 +397,9 @@ func (r *JobRegistry) Get(id string) *Job {
 		}
 	}
 	j := jobFromRecord(rec)
-	j.Logs = r.logs(id)
+	if includeLogs {
+		j.Logs = r.logs(id)
+	}
 	return &j
 }
 
