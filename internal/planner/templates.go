@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -180,7 +181,7 @@ func defaultAudioBookPlanSchema() map[string]any {
 			},
 			"chapters": map[string]any{
 				"type":        "array",
-				"description": "Dedicated chapter sections for the audiobook. Prefer 3 chapters for most sources and never provide more than 5. Keep chapter summaries brief and do not duplicate chapters in overall_summary.",
+				"description": fmt.Sprintf("Dedicated chapter sections for the audiobook, one per natural chapter or major section of the source. Prefer 3-5 for short sources; long books may have as many chapters as the source genuinely has, up to %d. Keep chapter summaries brief and do not duplicate chapters in overall_summary.", audioBookMaxChapters),
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -36,6 +37,81 @@ func e2eScript(title string) string {
 	}
 	b, _ := json.Marshal(topic)
 	return string(b)
+}
+
+// e2eAudioBookScript builds a valid audiobook DebateTopic JSON with
+// chapterCount planned chapters. indices (1-based) marks the chapters THIS
+// discussion narrated — the chapter-batch fixtures use it so the checklist UI
+// sees done vs pending chapters without running a generation.
+func e2eAudioBookScript(title string, chapterCount int, indices []int) string {
+	chapters := make([]config.AudioBookChapter, 0, chapterCount)
+	outline := make([]string, 0, chapterCount)
+	for i := 1; i <= chapterCount; i++ {
+		chapters = append(chapters, config.AudioBookChapter{
+			Title:   fmt.Sprintf("Synthetic Chapter %d", i),
+			Summary: fmt.Sprintf("What happens in synthetic chapter %d.", i),
+		})
+		outline = append(outline, fmt.Sprintf("%d. Synthetic Chapter %d — what happens in synthetic chapter %d.", i, i, i))
+	}
+	topic := &config.DebateTopic{
+		Title:                   title,
+		Type:                    config.ContentTypeAudioBook,
+		Language:                "en-US",
+		TotalMinutes:            1,
+		SegmentMaxSeconds:       60,
+		TTSProvider:             config.TTSProviderAzure,
+		Resolution:              config.Resolution1080p,
+		Channel:                 "default",
+		AudioBookHost:           config.AgentSpec{Name: "Test Narrator", Model: "gpt-4o-mini"},
+		AudioBookStyle:          config.AudioBookStyleAudioBook,
+		AudioBookChapters:       chapters,
+		AudioBookChapterIndices: indices,
+		Background:              "Synthetic background for the end-to-end audiobook.",
+		// Chapter batches re-render script.md at generation time, and
+		// type=audio-book validation requires the `## Surface` chapter
+		// outline — without it the generate-chapters request 400s.
+		Surface: strings.Join(outline, "\n"),
+	}
+	b, _ := json.Marshal(topic)
+	return string(b)
+}
+
+// seedAudioBookRow inserts one audiobook fixture, optionally linked to a
+// parent (referenceID) and placed into an album at the given position.
+func (s *DiscussionStore) seedAudioBookRow(ctx context.Context, id, owner, title, status, scriptJSON, referenceID, albumID string, albumPosition int64) error {
+	now := time.Now().UnixMilli()
+	downloadURL := ""
+	var duration float64
+	jobID := ""
+	if status == string(DiscussionReady) {
+		downloadURL = fmt.Sprintf("https://e2e.local/audio/%s.mp3", id)
+		duration = 48
+		jobID = "e2e-job-" + id
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO native_discussions
+		(id, owner_user_id, topic, title, status, language, job_id, download_url, duration_seconds,
+		 points_charged, visibility, published_at, cover_type, cover_gradient_start, cover_gradient_end,
+		 script_json, markdown, sources_json, researched, plan_template,
+		 reference_discussion_id, album_id, album_position, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'en-US', ?, ?, ?, 10, 'private', 0, 'gradient', '#6E8BFF', '#9B6EFF',
+		 ?, ?, '[]', 0, 'default', ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		id, owner, title, title, status, jobID, downloadURL, duration,
+		scriptJSON, "# "+title+"\n\nSynthetic audiobook plan markdown.",
+		referenceID, albumID, albumPosition,
+		now, now)
+	return err
+}
+
+// seedAlbumRow inserts one native_albums fixture.
+func (s *DiscussionStore) seedAlbumRow(ctx context.Context, id, owner, title, kind, rootDiscussionID string) error {
+	now := time.Now().UnixMilli()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO native_albums
+		(id, owner_user_id, title, kind, root_discussion_id, cover_type, cover_gradient_start, cover_gradient_end, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'gradient', '#6E8BFF', '#9B6EFF', ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		id, owner, title, kind, rootDiscussionID, now, now)
+	return err
 }
 
 // seedDiscussionRow inserts one native_discussions fixture, relying on the
@@ -133,6 +209,79 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 			if err := s.seedTranscript(ctx, f.id); err != nil {
 				return fmt.Errorf("seed transcript %s: %w", f.id, err)
 			}
+		}
+	}
+
+	// Audiobook chapter-batch + album fixtures: a 12-chapter plan whose root
+	// generated chapters 1-3 and whose follow-up batch generated 4-5, both
+	// grouped into one auto album. Chapters 6-12 stay pending so the checklist
+	// UI has both locked and selectable rows (and more pending than the
+	// 5-per-batch cap, to exercise the client-side selection limit).
+	const audioBookChapterCount = 12
+	if err := s.seedAlbumRow(ctx, "test-album", "test", "E2E Audiobook Album", albumKindAuto, "test-audiobook"); err != nil {
+		return fmt.Errorf("seed album: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-audiobook", "test", "E2E Audiobook",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Audiobook", audioBookChapterCount, []int{1, 2, 3}),
+		"", "test-album", albumBatchPositionBase+1); err != nil {
+		return fmt.Errorf("seed audiobook root: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-audiobook-part2", "test", "E2E Audiobook — Chapters 4-5",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Audiobook — Chapters 4-5", audioBookChapterCount, []int{4, 5}),
+		"test-audiobook", "test-album", albumBatchPositionBase+4); err != nil {
+		return fmt.Errorf("seed audiobook batch: %w", err)
+	}
+	for _, id := range []string{"test-audiobook", "test-audiobook-part2"} {
+		if err := s.seedTranscript(ctx, id); err != nil {
+			return fmt.Errorf("seed transcript %s: %w", id, err)
+		}
+	}
+
+	// Album marketplace fixtures. test-publish-album starts private so the UI
+	// test can publish a selected member. test-market-album has one public and
+	// one private member so a second user can verify public album filtering.
+	if err := s.seedAlbumRow(ctx, "test-publish-album", "test", "E2E Publish Album", albumKindManual, ""); err != nil {
+		return fmt.Errorf("seed publish album: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-publish-album-one", "test", "E2E Publish Album One",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Publish Album One", 2, []int{1}),
+		"", "test-publish-album", albumBatchPositionBase+1); err != nil {
+		return fmt.Errorf("seed publish album one: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-publish-album-two", "test", "E2E Publish Album Two",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Publish Album Two", 2, []int{2}),
+		"", "test-publish-album", albumBatchPositionBase+2); err != nil {
+		return fmt.Errorf("seed publish album two: %w", err)
+	}
+	if err := s.seedAlbumRow(ctx, "test-market-album", "test", "E2E Market Album", albumKindManual, ""); err != nil {
+		return fmt.Errorf("seed market album: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-market-public", "test", "E2E Market Public Episode",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Market Public Episode", 2, []int{1}),
+		"", "test-market-album", albumBatchPositionBase+1); err != nil {
+		return fmt.Errorf("seed market public episode: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-market-private", "test", "E2E Market Private Episode",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Market Private Episode", 2, []int{2}),
+		"", "test-market-album", albumBatchPositionBase+2); err != nil {
+		return fmt.Errorf("seed market private episode: %w", err)
+	}
+	marketCover := DiscussionCover{Type: "gradient", GradientStart: "#6E8BFF", GradientEnd: "#9B6EFF"}
+	if _, err := s.SetAlbumCover(ctx, "test", "test-market-album", marketCover); err != nil {
+		return fmt.Errorf("publish market album cover: %w", err)
+	}
+	if _, err := s.SetVisibility(ctx, "test", "test-market-public", DiscussionPublic, marketCover); err != nil {
+		return fmt.Errorf("publish market public episode: %w", err)
+	}
+	for _, id := range []string{"test-publish-album-one", "test-publish-album-two", "test-market-public", "test-market-private"} {
+		if err := s.seedTranscript(ctx, id); err != nil {
+			return fmt.Errorf("seed transcript %s: %w", id, err)
 		}
 	}
 	return nil

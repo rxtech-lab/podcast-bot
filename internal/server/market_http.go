@@ -347,6 +347,9 @@ func (s *Server) handleDiscussionCoverGenerate(w http.ResponseWriter, r *http.Re
 func (s *Server) prepareMarketDiscussions(r *http.Request, items []Discussion, timer *stationTimer) {
 	viewer := s.requestUser(r).ID
 	s.prepareDiscussionListRows(r, items, timer)
+	t0 := time.Now()
+	s.attachVisibleAlbumSummaries(r.Context(), viewer, items)
+	timer.mark("visibleAlbums", t0)
 	if !needsCreatorProfileAttach(items) {
 		return
 	}

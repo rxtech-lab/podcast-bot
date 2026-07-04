@@ -10,9 +10,14 @@ import (
 
 type precheckResponse struct {
 	NewDiscussion precheckNewDiscussion `json:"new_discussion"`
+	NewAlbum      precheckNewAlbum      `json:"new_album"`
 }
 
 type precheckNewDiscussion struct {
+	Form precheckForm `json:"form"`
+}
+
+type precheckNewAlbum struct {
 	Form precheckForm `json:"form"`
 }
 
@@ -48,7 +53,51 @@ func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 		NewDiscussion: precheckNewDiscussion{
 			Form: newDiscussionPrecheckForm(lang),
 		},
+		NewAlbum: precheckNewAlbum{
+			Form: newAlbumPrecheckForm(lang),
+		},
 	})
+}
+
+// newAlbumPrecheckForm is the server-owned "New Album" form. The client posts
+// the form values verbatim to POST /api/albums; with no discussion_ids the
+// server creates an empty album episodes are added to later.
+func newAlbumPrecheckForm(lang contentcreator.Lang) precheckForm {
+	return precheckForm{
+		Title:        phrase(lang, "New Album", "新建专辑", "新增專輯"),
+		Description:  phrase(lang, "Group stations into one collection.", "把频道整理成一个合集。", "把頻道整理成一個合集。"),
+		SubmitTitle:  phrase(lang, "Create", "创建", "建立"),
+		CancelTitle:  phrase(lang, "Cancel", "取消", "取消"),
+		LoadingTitle: phrase(lang, "Creating album...", "正在创建专辑…", "正在建立專輯…"),
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"title": map[string]any{
+					"type":        "string",
+					"title":       phrase(lang, "Name", "名称", "名稱"),
+					"description": phrase(lang, "You can add episodes from the album page after it is created.", "创建后可在专辑页面添加剧集。", "建立後可在專輯頁面新增劇集。"),
+					"minLength":   1,
+					"default":     "",
+				},
+			},
+			"required": []any{"title"},
+		},
+		UISchema: map[string]any{
+			"ui:order": []any{"title"},
+			"title": map[string]any{
+				"ui:widget": "glassText",
+				"ui:options": map[string]any{
+					"placeholder":      phrase(lang, "e.g. World History Series", "例如：世界历史系列", "例如：世界歷史系列"),
+					"multiline":        false,
+					"accessibility_id": "newAlbum.title",
+				},
+			},
+		},
+		InitialData: map[string]any{
+			"title": "",
+		},
+	}
 }
 
 func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {

@@ -24,6 +24,14 @@ enum AppConfig {
     /// value in E2E mode (every request resolves to the fixed "test" user).
     static let e2eAuthToken = "e2e-test-token"
 
+    /// Optional acting user override for multi-user XCUITests. Defaults to the
+    /// seeded owner "test".
+    static let e2eUserID: String = {
+        let raw = ProcessInfo.processInfo.environment["E2E_USER_ID"] ?? "test"
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "test" : trimmed
+    }()
+
     /// A deep link the harness wants routed through DeepLinkRouter on launch
     /// (e.g. "debatepod://d/test-ready"). Nil when not testing deep links.
     static let e2eDeepLink: URL? = {

@@ -145,6 +145,16 @@
         }
       }
     },
+    "%lld episode%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld episode%2$@"
+          }
+        }
+      }
+    },
     "%lld followers" : {
       "comment" : "Plural creator follower count",
       "localizations" : {
@@ -255,6 +265,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 個來源"
+          }
+        }
+      }
+    },
+    "%lld. %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld. %2$@"
           }
         }
       }
@@ -670,6 +690,9 @@
         }
       }
     },
+    "Add Podcasts" : {
+
+    },
     "Add Sources" : {
       "localizations" : {
         "zh-Hans" : {
@@ -691,6 +714,9 @@
           }
         }
       }
+    },
+    "Add to Album" : {
+
     },
     "Added %lld source:" : {
       "comment" : "User bubble header when one source is added; followed by the URL list",
@@ -782,6 +808,12 @@
           }
         }
       }
+    },
+    "Album creation is not available on this server." : {
+
+    },
+    "Album name" : {
+
     },
     "All" : {
       "comment" : "Library visibility filter: all stations",
@@ -985,6 +1017,9 @@
           }
         }
       }
+    },
+    "Audiobooks" : {
+
     },
     "Auto" : {
       "comment" : "Voice message language option that uses backend transcription",
@@ -1200,6 +1235,9 @@
         }
       }
     },
+    "Chapter %lld" : {
+
+    },
     "Chapters" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1218,6 +1256,19 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "章節"
+          }
+        }
+      }
+    },
+    "Chapters %@" : {
+
+    },
+    "Chapters %lld-%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Chapters %1$lld-%2$lld"
           }
         }
       }
@@ -1762,6 +1813,12 @@
         }
       }
     },
+    "Couldn't add podcasts" : {
+
+    },
+    "Couldn't add to album" : {
+
+    },
     "Couldn’t export" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1827,6 +1884,12 @@
           }
         }
       }
+    },
+    "Couldn't load album" : {
+
+    },
+    "Couldn't load chapters" : {
+
     },
     "Couldn't open link" : {
       "localizations" : {
@@ -1941,6 +2004,12 @@
         }
       }
     },
+    "Couldn't start generation" : {
+
+    },
+    "Couldn't update the album" : {
+
+    },
     "Cover" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1962,6 +2031,9 @@
           }
         }
       }
+    },
+    "Create" : {
+
     },
     "Create AI cover art in the background" : {
       "extractionState" : "stale",
@@ -1985,6 +2057,9 @@
           }
         }
       }
+    },
+    "Create albums from the + menu in your library and group %@s into one collection with its own cover." : {
+
     },
     "Create Audio Books" : {
       "localizations" : {
@@ -2343,6 +2418,9 @@
           }
         }
       }
+    },
+    "Delete" : {
+
     },
     "Deselect source" : {
       "localizations" : {
@@ -2844,6 +2922,12 @@
     "Enter fullscreen" : {
 
     },
+    "Episode" : {
+
+    },
+    "Every podcast already belongs to an album." : {
+
+    },
     "Exit fullscreen" : {
 
     },
@@ -3336,6 +3420,16 @@
         }
       }
     },
+    "Generate %lld chapter%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Generate %1$lld chapter%2$@"
+          }
+        }
+      }
+    },
     "Generate a cover" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3402,6 +3496,9 @@
           }
         }
       }
+    },
+    "Generate more chapters (%lld left)" : {
+
     },
     "Generate podcast" : {
       "extractionState" : "stale",
@@ -3559,6 +3656,9 @@
         }
       }
     },
+    "Generate up to %lld chapters at a time. Remaining chapters can be generated later as follow-up episodes in the same album." : {
+
+    },
     "Generating" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3626,6 +3726,9 @@
           }
         }
       }
+    },
+    "Generating…" : {
+
     },
     "Generation failed" : {
       "comment" : "Fallback status when podcast generation failed without a server message",
@@ -4228,6 +4331,9 @@
         }
       }
     },
+    "Long audiobooks generate in batches of up to 5 chapters. Remaining chapters can be generated later from the podcast." : {
+
+    },
     "Make it public" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4315,6 +4421,9 @@
           }
         }
       }
+    },
+    "Max chapters per generation: %lld" : {
+
     },
     "Message the planner" : {
       "localizations" : {
@@ -4448,6 +4557,9 @@
           }
         }
       }
+    },
+    "New Album" : {
+
     },
     "New link" : {
       "localizations" : {
@@ -4924,6 +5036,9 @@
         }
       }
     },
+    "Nothing to add" : {
+
+    },
     "Notion Pages" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5103,6 +5218,9 @@
           }
         }
       }
+    },
+    "Organize with albums" : {
+
     },
     "Others" : {
       "comment" : "Model picker section for models without a company prefix"
@@ -5553,6 +5671,9 @@
         }
       }
     },
+    "Planning" : {
+
+    },
     "Planning and generating %@ will show up here." : {
       "localizations" : {
         "zh-Hans" : {
@@ -5620,6 +5741,9 @@
           }
         }
       }
+    },
+    "Play" : {
+
     },
     "Please use the attached files." : {
       "comment" : "Fallback chat message when sending attachments without text",
@@ -5762,7 +5886,6 @@
       }
     },
     "Podcasts" : {
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -6356,6 +6479,9 @@
         }
       }
     },
+    "Publish Album" : {
+
+    },
     "Publish Station" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6646,6 +6772,21 @@
           }
         }
       }
+    },
+    "Remove Album" : {
+
+    },
+    "Remove from Album" : {
+
+    },
+    "Remove this album?" : {
+
+    },
+    "Rename" : {
+
+    },
+    "Rename Album" : {
+
     },
     "Request failed (%lld): %@" : {
       "comment" : "Generic HTTP error; code is the status code, msg is the server message",
@@ -7218,6 +7359,9 @@
           }
         }
       }
+    },
+    "Select chapters to generate" : {
+
     },
     "Select source" : {
       "localizations" : {
@@ -8202,6 +8346,9 @@
         }
       }
     },
+    "The grouping is removed; the podcasts stay in your library." : {
+
+    },
     "The plan update failed. Please try again." : {
       "comment" : "Fallback error when an SSE error event carries no message",
       "localizations" : {
@@ -8499,6 +8646,9 @@
           }
         }
       }
+    },
+    "This podcast doesn't belong to an album yet." : {
+
     },
     "This share link has expired or was revoked." : {
       "comment" : "Shown when opening an expired/revoked share link",
@@ -9360,6 +9510,9 @@
           }
         }
       }
+    },
+    "Your Albums" : {
+
     },
     "中文支持" : {
       "localizations" : {

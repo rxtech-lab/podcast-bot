@@ -176,7 +176,9 @@ final class APIClient: Sendable {
                              supportsPoints: Bool = false,
                              supportsFollowUp: Bool = false,
                              supportsCreateFromPlan: Bool = false,
-                             supportsSignOut: Bool = false) async throws -> DiscussionUIActionsResponse {
+                             supportsSignOut: Bool = false,
+                             supportsChapterBatches: Bool = false,
+                             supportsAlbums: Bool = false) async throws -> DiscussionUIActionsResponse {
         var query = [URLQueryItem(name: "surface", value: surface)]
         if let docType, !docType.isEmpty {
             query.append(URLQueryItem(name: "doc_type", value: docType))
@@ -192,6 +194,12 @@ final class APIClient: Sendable {
         }
         if supportsSignOut {
             query.append(URLQueryItem(name: "supports_sign_out", value: "true"))
+        }
+        if supportsChapterBatches {
+            query.append(URLQueryItem(name: "supports_chapter_batches", value: "true"))
+        }
+        if supportsAlbums {
+            query.append(URLQueryItem(name: "supports_albums", value: "true"))
         }
         return try await get("/api/discussions/\(id)/ui-actions", query: query)
     }
@@ -652,9 +660,94 @@ final class APIClient: Sendable {
         return resp.text
     }
 
-    func generateDiscussion(id: String, language: String) async throws -> Discussion {
+    func generateDiscussion(id: String, language: String, chapters: [Int]? = nil) async throws -> Discussion {
         try await send("POST", "/api/discussions/\(id)/generate",
-                       body: DiscussionGenerateRequest(language: language))
+                       body: DiscussionGenerateRequest(language: language, chapters: chapters))
+    }
+
+    /// Fetches the root plan's full chapter list annotated with per-chapter
+    /// generation progress, for the chapter-checklist sheet.
+    func discussionChapters(id: String) async throws -> ChaptersResponse {
+        try await get("/api/discussions/\(id)/chapters")
+    }
+
+    /// Creates and starts a follow-up chapter batch: a new podcast linked to
+    /// the audiobook root that narrates the selected pending chapters (max 5).
+    /// The server returns 400 when the selection exceeds the limit or overlaps
+    /// generated chapters.
+    func generateChapters(id: String, chapters: [Int], language: String? = nil) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/chapters/generate",
+                       body: ChaptersGenerateRequest(chapters: chapters, language: language))
+    }
+
+    // MARK: - Albums
+
+    func albums() async throws -> [AlbumDTO] {
+        try await get("/api/albums")
+    }
+
+    func album(id: String) async throws -> AlbumDetailResponse {
+        try await get("/api/albums/\(id)")
+    }
+
+    func publicAlbum(id: String) async throws -> AlbumDetailResponse {
+        try await get("/api/market/albums/\(id)")
+    }
+
+    func createAlbum(title: String, discussionIDs: [String]) async throws -> AlbumDTO {
+        try await send("POST", "/api/albums",
+                       body: AlbumCreateRequest(title: title, discussionIDs: discussionIDs))
+    }
+
+    /// Creates an album from the raw new-album form values (the JSONSchemaForm
+    /// output for GET /api/precheck's `new_album` form). The server owns every
+    /// form key, so the values are posted verbatim.
+    func createAlbum(form: FormData) async throws -> AlbumDTO {
+        try await send("POST", "/api/albums", body: form)
+    }
+
+    func addToAlbum(id: String, discussionIDs: [String]) async throws -> AlbumDTO {
+        try await send("POST", "/api/albums/\(id)/discussions",
+                       body: AlbumAddMembersRequest(discussionIDs: discussionIDs))
+    }
+
+    func publishAlbum(id: String, mode: String, discussionIDs: [String], cover: DiscussionCover) async throws -> AlbumDetailResponse {
+        try await send("POST", "/api/albums/\(id)/publish",
+                       body: AlbumPublishRequest(mode: mode, discussionIDs: discussionIDs, cover: cover))
+    }
+
+    func removeFromAlbum(id: String, discussionID: String) async throws {
+        _ = try await perform(request(method: "DELETE", path: "/api/albums/\(id)/discussions/\(discussionID)"))
+    }
+
+    /// Server-rendered album toolbar menu (same shape as the podcast toolbars).
+    func albumUIActions(id: String) async throws -> DiscussionUIActionsResponse {
+        try await get("/api/albums/\(id)/ui-actions")
+    }
+
+    func renameAlbum(id: String, title: String) async throws -> AlbumDTO {
+        try await send("PATCH", "/api/albums/\(id)", body: AlbumRenameRequest(title: title))
+    }
+
+    /// Generates AI cover art for an album; the result is persisted separately
+    /// via `updateAlbumCover`, mirroring the discussion cover flow.
+    func generateAlbumCover(id: String, prompt: String) async throws -> DiscussionCover {
+        let response: CoverGenerateResponse = try await send(
+            "POST",
+            "/api/albums/\(id)/cover/generate",
+            body: CoverGenerateRequest(prompt: prompt)
+        )
+        return response.cover
+    }
+
+    /// Persists a cover on an album (gradient, uploaded image, or generated AI art).
+    func updateAlbumCover(id: String, cover: DiscussionCover) async throws -> AlbumDTO {
+        try await send("PATCH", "/api/albums/\(id)/cover", body: CoverUpdateRequest(cover: cover))
+    }
+
+    /// Removes the album grouping; the member podcasts are kept.
+    func deleteAlbum(id: String) async throws {
+        _ = try await perform(request(method: "DELETE", path: "/api/albums/\(id)"))
     }
 
     func deleteDiscussion(id: String) async throws {
@@ -1312,6 +1405,9 @@ final class APIClient: Sendable {
         req.setValue("ios", forHTTPHeaderField: "X-Client-Platform")
         req.setValue(Self.clientVersion, forHTTPHeaderField: "X-Client-Version")
         req.setValue(Self.clientBuild, forHTTPHeaderField: "X-Client-Build")
+        if AppConfig.isE2E {
+            req.setValue(AppConfig.e2eUserID, forHTTPHeaderField: "X-E2E-User-ID")
+        }
         if let body {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

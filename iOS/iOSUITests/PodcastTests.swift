@@ -13,6 +13,10 @@ final class PodcastTests: E2ETestCase {
     func testCreatePlanAcceptReady() throws {
         let app = launch()
         app.buttons["library.new"].tap()
+        // The + button is now a menu: pick "New Station" from the dropdown.
+        let newStation = app.buttons["library.new.station"]
+        XCTAssertTrue(newStation.waitForExistence(timeout: 5), "new-station menu item not found")
+        newStation.tap()
 
         // The new-discussion form is server-rendered; the topic field carries a
         // stable identifier. A vertical-axis TextField can surface as either a

@@ -153,8 +153,22 @@ func (s *Server) podcastMenuActions(r *http.Request, d *Discussion, lang content
 	if queryBool(r, "supports_points") {
 		items = append(items, actionItem("points", phrase(lang, "Points", "点数", "點數"), "", "sparkles", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "points")))
 	}
-	if queryBool(r, "supports_follow_up") {
+	pendingChapters := queryBool(r, "supports_chapter_batches") && d.IsOwner && discussionIsAudioBook(d) && d.Status == DiscussionReady && s.hasPendingChapters(r, d)
+	if pendingChapters {
+		items = append(items, actionItem("generate-more-chapters", phrase(lang, "Generate More Chapters", "继续生成章节", "繼續產生章節"), "", "text.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "generate-chapters")))
+	}
+	// While an audiobook still has ungenerated chapters, continuing the book
+	// is the "Generate More Chapters" flow — offering a follow-up alongside it
+	// would fork the story before it's finished.
+	if queryBool(r, "supports_follow_up") && !pendingChapters {
 		items = append(items, actionItem("create-follow-up", phrase(lang, "Create Follow-up", "创建后续节目", "建立後續節目"), "", "arrow.triangle.branch", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "follow-up")))
+	}
+	if queryBool(r, "supports_albums") {
+		if strings.TrimSpace(d.AlbumID) != "" {
+			items = append(items, actionItem("view-album", phrase(lang, "View Album", "查看专辑", "查看專輯"), "", "rectangle.stack", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "album")))
+		} else if d.IsOwner {
+			items = append(items, actionItem("add-to-album", phrase(lang, "Add to Album", "加入专辑", "加入專輯"), "", "plus.rectangle.on.folder", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "add-to-album")))
+		}
 	}
 	if queryBool(r, "supports_create_from_plan") {
 		items = append(items, actionItem("create-from-plan", phrase(lang, "Create from Plan", "从计划创建", "從計劃建立"), phrase(lang, "Creating", "正在创建", "正在建立"), "plus.circle", "", true, "request", discussionActionLink(d.ID, "action", "create-from-plan")))

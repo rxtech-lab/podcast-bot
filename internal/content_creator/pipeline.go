@@ -182,6 +182,10 @@ type Pipeline struct {
 	// already surfaced at the start of the first narration turn. Only touched
 	// from produce(), which runs turns serially.
 	openingImageEmitted bool
+	// audioBookMaxSceneIndex is the largest explicit `<scene N/>` accepted
+	// across audiobook turns. Completion is honored only after this reaches
+	// the final planned illustration beat.
+	audioBookMaxSceneIndex int
 
 	// nextPlayAt is the wall-clock moment the next-to-be-synthesized
 	// sentence's first audio byte is expected to reach the listener.
@@ -225,6 +229,51 @@ func (p *Pipeline) plannerDone() bool {
 	}
 	done, ok := p.d.Planner.(interface{ Done() bool })
 	return ok && done.Done()
+}
+
+func (p *Pipeline) validateAudioBookCompletionRequest(t *Turn) {
+	if p == nil || t == nil || p.d.ContentType != config.ContentTypeAudioBook {
+		return
+	}
+	if t.maxSceneIndex > p.audioBookMaxSceneIndex {
+		p.audioBookMaxSceneIndex = t.maxSceneIndex
+	}
+	validator, ok := p.d.Planner.(interface {
+		ValidateEndAfterTurn(maxSceneIndex, requiredFinalSceneIndex int) (requested, accepted bool)
+	})
+	if !ok {
+		return
+	}
+	required := p.audioBookRequiredFinalSceneIndex()
+	requested, accepted := validator.ValidateEndAfterTurn(p.audioBookMaxSceneIndex, required)
+	if !requested || p.d.Log == nil {
+		return
+	}
+	if accepted {
+		p.d.Log.Info("audiobook end accepted",
+			"turn", t.ID,
+			"max_scene", p.audioBookMaxSceneIndex,
+			"required_scene", required)
+		return
+	}
+	p.d.Log.Warn("audiobook end rejected before final scene",
+		"turn", t.ID,
+		"max_scene", p.audioBookMaxSceneIndex,
+		"required_scene", required)
+}
+
+func (p *Pipeline) audioBookRequiredFinalSceneIndex() int {
+	if p == nil {
+		return 0
+	}
+	frames := len(p.d.AudioBookImageURLs)
+	if frames == 0 {
+		frames = p.d.NarrationFrames
+	}
+	if frames <= 1 {
+		return 0
+	}
+	return frames - 1
 }
 
 // SubtitleCues returns the timed WebVTT cues accumulated so far.
@@ -375,6 +424,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 					time.Since(start).Round(time.Second))})
 			}
 			p.d.Tracker.AddSpeaking(t.Speaker.Name(), time.Since(start))
+			p.validateAudioBookCompletionRequest(t)
 			t.MarkPlayed()
 			if t.AudioPath != "" {
 				filesMu.Lock()
@@ -973,6 +1023,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		// final paragraph break). Both buckets fire immediately; there's
 		// no audio gap to defer trailing advances against. The audio offset
 		// is the running playhead — no per-sentence cueStart exists here.
+		t.RecordSceneMarkers(leadAdvances, trailAdvances)
 		markerOffset := p.audioOffsetNow()
 		for _, idx := range leadAdvances {
 			p.d.Send(SceneAdvanceMsg{Index: idx})
@@ -1038,6 +1089,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if err != nil {
 		return n, err
 	}
+	t.RecordSceneMarkers(leadAdvances, trailAdvances)
 
 	audioDuration := time.Duration(float64(n) /
 		float64(audio.AudioBytesPerSec) * float64(time.Second))

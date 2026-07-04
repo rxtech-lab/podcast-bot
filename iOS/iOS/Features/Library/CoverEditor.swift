@@ -15,7 +15,7 @@ struct CoverEditor: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
 
-    let discussionID: String
+    let target: CoverGenerationTarget
     let title: String
     @Binding var cover: DiscussionCover
     @Binding var isWorking: Bool
@@ -34,8 +34,8 @@ struct CoverEditor: View {
         ("#202124", "#6A6EF6"),
     ]
 
-    init(discussionID: String, title: String, cover: Binding<DiscussionCover>, isWorking: Binding<Bool>) {
-        self.discussionID = discussionID
+    init(target: CoverGenerationTarget, title: String, cover: Binding<DiscussionCover>, isWorking: Binding<Bool>) {
+        self.target = target
         self.title = title
         _cover = cover
         _isWorking = isWorking
@@ -131,7 +131,12 @@ struct CoverEditor: View {
         Task { @MainActor in
             defer { isWorking = false }
             do {
-                cover = try await APIClient(tokens: auth).generateDiscussionCover(id: discussionID, prompt: prompt)
+                switch target {
+                case .discussion(let id):
+                    cover = try await APIClient(tokens: auth).generateDiscussionCover(id: id, prompt: prompt)
+                case .album(let id):
+                    cover = try await APIClient(tokens: auth).generateAlbumCover(id: id, prompt: prompt)
+                }
                 await purchases.refreshBalance()
             } catch let APIError.insufficientPoints(required, balance) {
                 errorMessage = "You need \(UsageSummary.formatInt(required)) points but have \(UsageSummary.formatInt(balance))."
@@ -250,6 +255,13 @@ struct CoverEditor: View {
         guard !APIClient.isCancellation(error) else { return }
         errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
     }
+}
+
+/// What the AI "Generate Cover" button generates art for — the server call
+/// differs (and bills against) the discussion or the album.
+enum CoverGenerationTarget {
+    case discussion(id: String)
+    case album(id: String)
 }
 
 /// The starting cover picker tab, derived from an existing cover's type.

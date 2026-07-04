@@ -174,6 +174,12 @@ type DebateTopic struct {
 	AudioBookStyle    string             `yaml:"audio_book_style,omitempty" json:"audio_book_style,omitempty"`
 	AudioBookSpeakers []AudioBookSpeaker `yaml:"audio_book_speakers,omitempty" json:"audio_book_speakers,omitempty"`
 	AudioBookChapters []AudioBookChapter `yaml:"audio_book_chapters,omitempty" json:"audio_book_chapters,omitempty"`
+	// AudioBookChapterIndices are the 1-based positions, in the root plan's
+	// full chapter list, that THIS script narrates. Set on derived batch
+	// scripts so a batch covering chapters 6-8 keeps global numbering and the
+	// chapter-progress UI knows what each generation covered. Empty means the
+	// script narrates all of AudioBookChapters (legacy single-shot audiobooks).
+	AudioBookChapterIndices []int `yaml:"audio_book_chapter_indices,omitempty" json:"audio_book_chapter_indices,omitempty"`
 
 	// Discussion-only roster. Discussants each carry an Aspect (the angle
 	// they speak from) and respond to one another; Host moderates; Commander

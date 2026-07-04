@@ -135,8 +135,9 @@ func TestRenderMarkdownRoundTripAudioBook(t *testing.T) {
 			{Title: "Origins", Summary: "How the story begins."},
 			{Title: "Consequences", Summary: "What follows from the opening ideas."},
 		},
-		Background: "A concise overall summary.",
-		Surface:    "### Chapter 1: Origins\n\nHow the story begins.\n\n### Chapter 2: Consequences\n\nWhat follows.",
+		AudioBookChapterIndices: []int{6, 7},
+		Background:              "A concise overall summary.",
+		Surface:                 "### Chapter 1: Origins\n\nHow the story begins.\n\n### Chapter 2: Consequences\n\nWhat follows.",
 	}
 	got := writeAndLoad(t, in)
 	if !reflect.DeepEqual(in, got) {

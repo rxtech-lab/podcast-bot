@@ -76,13 +76,13 @@ const discussionSelectColumns = `id, owner_user_id, topic, title, status, langua
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 	tts_cost_usd, music_cost_usd, points_charged, points_reserved, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, script_json, markdown, sources_json, researched,
-	reference_discussion_id, plan_template, created_at, updated_at`
+	reference_discussion_id, plan_template, created_at, updated_at, album_id`
 
 const discussionListSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
 	tts_cost_usd, music_cost_usd, points_charged, points_reserved, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, '' AS script_json, '' AS markdown, '[]' AS sources_json, researched,
-	reference_discussion_id, plan_template, created_at, updated_at`
+	reference_discussion_id, plan_template, created_at, updated_at, album_id`
 
 const joinedJobSelectColumns = `j.id, j.status, j.s3_key, j.audio_s3_key, j.audio_only,
 	j.prompt_tokens, j.completion_tokens, j.total_tokens, j.llm_cost_usd, j.llm_cost_known,
@@ -168,24 +168,29 @@ type Discussion struct {
 	// server builds it (clients never construct share links themselves) so the
 	// shared link and the markdown link always stay in lockstep. Populated by
 	// applyDiscussionShareURL on the read paths.
-	ShareURL              string               `json:"share_url,omitempty"`
-	Cover                 DiscussionCover      `json:"cover,omitempty"`
-	Creator               *CreatorProfile      `json:"creator,omitempty"`
-	LikeCount             int64                `json:"like_count"`
-	IsLiked               bool                 `json:"is_liked"`
-	IsOwner               bool                 `json:"is_owner"`
-	PublishedAt           *time.Time           `json:"published_at,omitempty"`
-	Script                *config.DebateTopic  `json:"script,omitempty"`
-	Markdown              string               `json:"markdown,omitempty"`
-	Sources               []config.Source      `json:"sources,omitempty"`
-	Researched            bool                 `json:"researched"`
-	ReferenceDiscussionID string               `json:"reference_discussion_id,omitempty"`
-	Template              string               `json:"template,omitempty"`
-	Lines                 []DiscussionLine     `json:"lines,omitempty"`
-	EditTurns             []DiscussionEditTurn `json:"edit_turns,omitempty"`
-	EditTurnsHasMore      bool                 `json:"edit_turns_has_more,omitempty"`
-	EditTurnsBefore       int64                `json:"edit_turns_before,omitempty"`
-	Progress              *DiscussionProgress  `json:"progress,omitempty"`
+	ShareURL              string              `json:"share_url,omitempty"`
+	Cover                 DiscussionCover     `json:"cover,omitempty"`
+	Creator               *CreatorProfile     `json:"creator,omitempty"`
+	LikeCount             int64               `json:"like_count"`
+	IsLiked               bool                `json:"is_liked"`
+	IsOwner               bool                `json:"is_owner"`
+	PublishedAt           *time.Time          `json:"published_at,omitempty"`
+	Script                *config.DebateTopic `json:"script,omitempty"`
+	Markdown              string              `json:"markdown,omitempty"`
+	Sources               []config.Source     `json:"sources,omitempty"`
+	Researched            bool                `json:"researched"`
+	ReferenceDiscussionID string              `json:"reference_discussion_id,omitempty"`
+	// AlbumID links this discussion into a native_albums group; empty when
+	// ungrouped. Album is the attached summary (title/cover/episode count),
+	// populated on list rows so the home screen can render album groups.
+	AlbumID          string               `json:"album_id,omitempty"`
+	Album            *AlbumSummary        `json:"album,omitempty"`
+	Template         string               `json:"template,omitempty"`
+	Lines            []DiscussionLine     `json:"lines,omitempty"`
+	EditTurns        []DiscussionEditTurn `json:"edit_turns,omitempty"`
+	EditTurnsHasMore bool                 `json:"edit_turns_has_more,omitempty"`
+	EditTurnsBefore  int64                `json:"edit_turns_before,omitempty"`
+	Progress         *DiscussionProgress  `json:"progress,omitempty"`
 	// Summary is the content-free descriptor of the podcast's generated summary
 	// document. nil when no summary exists yet (e.g. the podcast hasn't finished).
 	// The Markdown body is never included here — it is fetched separately from the
@@ -432,6 +437,26 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS user_push_tokens_user_env_idx
 			ON user_push_tokens(user_id, environment, updated_at DESC)`,
+		// Albums group linked podcasts (audiobook chapter batches and follow-up
+		// podcasts) into one home-list entry. kind 'auto' albums are created
+		// implicitly around a root discussion when its first follow-up appears;
+		// kind 'manual' albums are user-created groupings.
+		`CREATE TABLE IF NOT EXISTS native_albums (
+			id TEXT PRIMARY KEY,
+			owner_user_id TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'manual',
+			root_discussion_id TEXT NOT NULL DEFAULT '',
+			cover_type TEXT NOT NULL DEFAULT '',
+			cover_image_url TEXT NOT NULL DEFAULT '',
+			cover_image_key TEXT NOT NULL DEFAULT '',
+			cover_gradient_start TEXT NOT NULL DEFAULT '',
+			cover_gradient_end TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS native_albums_owner_idx
+			ON native_albums(owner_user_id, updated_at DESC)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.exec(ctx, stmt); err != nil {
@@ -465,6 +490,11 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		// video; the playback URL is presigned on demand. Empty until the
 		// post-audio render finishes (or when video isn't produced).
 		{"video_key", "video_key TEXT NOT NULL DEFAULT ''"},
+		// album_id groups this discussion into a native_albums row; empty means
+		// ungrouped. album_position orders episodes within the album (audiobook
+		// batches use 1000 + first chapter index; 0 falls back to created_at).
+		{"album_id", "album_id TEXT NOT NULL DEFAULT ''"},
+		{"album_position", "album_position INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussions", col.name, col.def); err != nil {
 			return err
@@ -472,6 +502,14 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 	}
 	if _, err := s.exec(ctx, `CREATE INDEX IF NOT EXISTS native_discussions_market_idx
 		ON native_discussions(visibility, published_at DESC, created_at DESC, id DESC)`); err != nil {
+		return err
+	}
+	if _, err := s.exec(ctx, `CREATE INDEX IF NOT EXISTS native_discussions_album_idx
+		ON native_discussions(album_id, album_position, created_at)`); err != nil {
+		return err
+	}
+	if _, err := s.exec(ctx, `CREATE INDEX IF NOT EXISTS native_discussions_reference_idx
+		ON native_discussions(reference_discussion_id)`); err != nil {
 		return err
 	}
 	// Plan-snapshot columns on edit turns are newer than the table; backfill
@@ -699,6 +737,35 @@ func (s *DiscussionStore) SetReference(ctx context.Context, owner, id, reference
 		return nil, nil
 	}
 	return s.Get(ctx, owner, id)
+}
+
+// ListByReference returns the owner's discussions that reference referenceID
+// (follow-up podcasts and audiobook chapter batches), oldest first. The full
+// column set (including script_json) is selected because callers need each
+// child's plan — e.g. AudioBookChapterIndices for chapter-progress tracking.
+func (s *DiscussionStore) ListByReference(ctx context.Context, owner, referenceID string) ([]Discussion, error) {
+	referenceID = strings.TrimSpace(referenceID)
+	if referenceID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
+			FROM native_discussions
+			WHERE owner_user_id = ? AND reference_discussion_id = ?
+			ORDER BY created_at ASC, id ASC`, owner, referenceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussion(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, owner)
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // List returns discussions for an owner sorted by creation time, newest first.
@@ -2553,7 +2620,7 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &d.Template, &created, &updated)
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.AlbumID)
 	if err != nil {
 		return d, err
 	}
@@ -2576,7 +2643,7 @@ func scanDiscussionWithJoinedJob(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &d.Template, &created, &updated,
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.AlbumID,
 		&jobID, &jobStatus, &jobS3Key, &jobAudioS3Key, &jobAudioOnly,
 		&jobPromptTokens, &jobCompletionTokens, &jobTotalTokens, &jobLLMCostUSD, &jobCostKnown,
 		&jobTTSCostUSD, &jobMusicCostUSD)
@@ -2616,7 +2683,7 @@ func scanDiscussionWithSummary(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &summaryStatus, &summaryGeneratedAt)
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.AlbumID, &summaryStatus, &summaryGeneratedAt)
 	if err != nil {
 		return d, err
 	}
@@ -2637,7 +2704,7 @@ func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.LikeCount, &liked, &owner)
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.AlbumID, &d.LikeCount, &liked, &owner)
 	if err != nil {
 		return d, err
 	}
@@ -2662,7 +2729,7 @@ func scanDiscussionWithMarketSummary(row discussionScanner) (Discussion, error) 
 		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
-		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.LikeCount, &liked, &owner, &summaryStatus, &summaryGeneratedAt)
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.AlbumID, &d.LikeCount, &liked, &owner, &summaryStatus, &summaryGeneratedAt)
 	if err != nil {
 		return d, err
 	}

@@ -57,5 +57,11 @@ struct WhatsNewFeature: Identifiable, Equatable {
             subtitle: "Turn sources into narrated audio books with chapters, voices, illustrations, and a rendered video.",
             icon: "book.closed.fill"
         ),
+        WhatsNewFeature(
+            id: "album-grouping",
+            title: "Organize with albums",
+            subtitle: "Create albums from the + menu in your library and group \(AppStringLiteral.stationNameRaw)s into one collection with its own cover.",
+            icon: "rectangle.stack.fill"
+        ),
     ]
 }
