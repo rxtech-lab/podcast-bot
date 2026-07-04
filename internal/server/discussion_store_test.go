@@ -1359,6 +1359,139 @@ func TestDiscussionSpeakerModelOverridesSurvivePlanRegeneration(t *testing.T) {
 	}
 }
 
+func TestDiscussionSpeakerVoiceOverrides(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	created, err := store.Create(ctx, owner, "AI safety", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "AI Safety Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host", Model: "model-a"},
+			Discussants: []config.AgentSpec{
+				{Name: "Alice", Model: "model-a", Aspect: "technical"},
+				{Name: "Bob", Model: "model-a", Aspect: "policy"},
+			},
+			Commander: config.AgentSpec{Model: "model-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Unknown speaker → nil (404), no error.
+	if d, err := store.SetSpeakerVoice(ctx, owner, created.ID, "Nobody", "en-US-AvaNeural"); err != nil || d != nil {
+		t.Fatalf("SetSpeakerVoice unknown speaker = (%v, %v), want (nil, nil)", d, err)
+	}
+
+	updated, err := store.SetSpeakerVoice(ctx, owner, created.ID, "Alice", "en-US-AvaNeural")
+	if err != nil {
+		t.Fatalf("SetSpeakerVoice: %v", err)
+	}
+	if got := discussantVoice(t, updated.Script, "Alice"); got != "en-US-AvaNeural" {
+		t.Fatalf("Alice voice after set = %q, want en-US-AvaNeural", got)
+	}
+	if got := discussantVoice(t, updated.Script, "Bob"); got != "" {
+		t.Fatalf("Bob voice after Alice set = %q, want empty (auto)", got)
+	}
+
+	// Narrator (audiobook host) matches too.
+	if _, err := store.SetSpeakerVoice(ctx, owner, created.ID, "Host", "en-US-GuyNeural"); err != nil {
+		t.Fatalf("SetSpeakerVoice host: %v", err)
+	}
+	got, err := store.Get(ctx, owner, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Script.Host.Voice != "en-US-GuyNeural" {
+		t.Fatalf("Host voice on Get = %q, want en-US-GuyNeural", got.Script.Host.Voice)
+	}
+
+	// Plan regeneration keeps the override by speaker name.
+	updated, err = store.UpdatePlan(ctx, owner, created.ID, planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Expanded AI Safety Panel",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+			Host:     config.AgentSpec{Name: "Host", Model: "model-b"},
+			Discussants: []config.AgentSpec{
+				{Name: "Alice", Model: "model-b", Aspect: "technical"},
+				{Name: "Charlie", Model: "model-b", Aspect: "economic"},
+			},
+			Commander: config.AgentSpec{Model: "model-b"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePlan: %v", err)
+	}
+	if got := discussantVoice(t, updated.Script, "Alice"); got != "en-US-AvaNeural" {
+		t.Fatalf("Alice voice after regenerated plan = %q, want en-US-AvaNeural", got)
+	}
+	if got := discussantVoice(t, updated.Script, "Charlie"); got != "" {
+		t.Fatalf("Charlie voice after regenerated plan = %q, want empty (auto)", got)
+	}
+
+	// Empty voice clears the override back to auto.
+	updated, err = store.SetSpeakerVoice(ctx, owner, created.ID, "Alice", "")
+	if err != nil {
+		t.Fatalf("SetSpeakerVoice clear: %v", err)
+	}
+	if got := discussantVoice(t, updated.Script, "Alice"); got != "" {
+		t.Fatalf("Alice voice after clear = %q, want empty (auto)", got)
+	}
+}
+
+func TestVoicePreviewStore(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	if key, err := store.GetVoicePreview(ctx, "en-US-AvaNeural", "en-US"); err != nil || key != "" {
+		t.Fatalf("GetVoicePreview before put = (%q, %v), want empty, nil", key, err)
+	}
+	if err := store.PutVoicePreview(ctx, "en-US-AvaNeural", "en-US", "voice-previews/en-US-AvaNeural-en-US.mp3"); err != nil {
+		t.Fatalf("PutVoicePreview: %v", err)
+	}
+	key, err := store.GetVoicePreview(ctx, "en-US-AvaNeural", "en-US")
+	if err != nil || key != "voice-previews/en-US-AvaNeural-en-US.mp3" {
+		t.Fatalf("GetVoicePreview after put = (%q, %v)", key, err)
+	}
+	// Re-put with a new key overwrites (same-key upsert semantics).
+	if err := store.PutVoicePreview(ctx, "en-US-AvaNeural", "en-US", "voice-previews/new.mp3"); err != nil {
+		t.Fatalf("PutVoicePreview overwrite: %v", err)
+	}
+	if key, _ := store.GetVoicePreview(ctx, "en-US-AvaNeural", "en-US"); key != "voice-previews/new.mp3" {
+		t.Fatalf("GetVoicePreview after overwrite = %q, want voice-previews/new.mp3", key)
+	}
+	// Different language is a separate cache entry.
+	if key, _ := store.GetVoicePreview(ctx, "en-US-AvaNeural", "zh-CN"); key != "" {
+		t.Fatalf("GetVoicePreview other language = %q, want empty", key)
+	}
+}
+
+func discussantVoice(t *testing.T, script *config.DebateTopic, name string) string {
+	t.Helper()
+	if script == nil {
+		t.Fatal("script is nil")
+	}
+	for _, d := range script.Discussants {
+		if d.Name == name {
+			return d.Voice
+		}
+	}
+	t.Fatalf("discussant %q not found in %+v", name, script.Discussants)
+	return ""
+}
+
 func discussantModel(t *testing.T, script *config.DebateTopic, name string) string {
 	t.Helper()
 	if script == nil {

@@ -303,7 +303,7 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	if err := o.buildAgents(); err != nil {
 		return err
 	}
-	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log)
+	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log, o.speakerVoiceOverrides())
 	for _, a := range o.Registry.All() {
 		o.Log.Info("agent ready",
 			"name", a.Name(),
@@ -317,6 +317,26 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	o.Send(StatusMsg{Text: ""})
 	o.Send(PhaseMsg{Phase: agent.PhaseOpening})
 	return nil
+}
+
+// speakerVoiceOverrides collects the user's per-speaker TTS voice choices from
+// the plan (agent name → Azure voice ShortName) for AssignVoices. Speakers
+// without a stored choice are absent and keep the automatic pick.
+func (o *Orchestrator) speakerVoiceOverrides() map[string]string {
+	out := map[string]string{}
+	add := func(spec config.AgentSpec) {
+		name := strings.TrimSpace(spec.Name)
+		voice := strings.TrimSpace(spec.Voice)
+		if name != "" && voice != "" {
+			out[name] = voice
+		}
+	}
+	add(o.Topic.Host)
+	add(o.Topic.AudioBookHost)
+	for _, d := range o.Topic.Discussants {
+		add(d)
+	}
+	return out
 }
 
 // makeAgent constructs one role-typed agent from a config.AgentSpec, falling

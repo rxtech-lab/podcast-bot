@@ -21,6 +21,10 @@ type AgentSpec struct {
 	// ignored by every other format. Optional — a blank aspect just means
 	// the discussant speaks from no pre-assigned angle.
 	Aspect string `yaml:"aspect,omitempty" json:"aspect,omitempty"`
+	// Voice is an optional TTS voice override (Azure neural voice ShortName,
+	// e.g. "en-US-AvaMultilingualNeural"). Blank means the voice picker
+	// auto-assigns one at generation time.
+	Voice string `yaml:"voice,omitempty" json:"voice,omitempty"`
 }
 
 // TTS provider identifiers used in topic.md `tts_provider:` field.

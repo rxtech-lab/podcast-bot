@@ -94,6 +94,14 @@ type discussionSpeakerModelRequest struct {
 	Model   string `json:"model"`
 }
 
+// discussionSpeakerVoiceRequest changes the TTS voice assigned to one speaker
+// (host, discussant, or audiobook narrator, matched by name) in a discussion's
+// plan. An empty voice clears the override back to automatic assignment.
+type discussionSpeakerVoiceRequest struct {
+	Speaker string `json:"speaker"`
+	Voice   string `json:"voice"`
+}
+
 type discussionSourceSearchResponse struct {
 	Sources []config.Source `json:"sources"`
 }
@@ -459,6 +467,36 @@ func (s *Server) handleUpdateSpeakerModel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	updated, err := s.d.Discussions.SetSpeakerModel(r.Context(), s.requestUser(r).ID, r.PathValue("id"), speaker, model)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.applyDiscussionJobStatus(r, updated, true)
+	s.applyDiscussionProgress(r.Context(), updated)
+	s.refreshDiscussionCoverURL(r.Context(), updated)
+	s.sanitizeDiscussionUsage(updated)
+	writeJSON(w, updated)
+}
+
+// handleUpdateSpeakerVoice changes the TTS voice override for one speaker
+// (host, discussant, or audiobook narrator, matched by name) in an owned
+// discussion's plan. An empty voice clears the override. The voice is picked
+// up at generation time.
+func (s *Server) handleUpdateSpeakerVoice(w http.ResponseWriter, r *http.Request) {
+	var req discussionSpeakerVoiceRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	speaker := strings.TrimSpace(req.Speaker)
+	if speaker == "" {
+		http.Error(w, "speaker is required", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.d.Discussions.SetSpeakerVoice(r.Context(), s.requestUser(r).ID, r.PathValue("id"), speaker, req.Voice)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

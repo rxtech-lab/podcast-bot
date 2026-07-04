@@ -90,6 +90,9 @@ type Deps struct {
 	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
 	// in Redis for 24h. nil disables caching — the handler fetches live each time.
 	ModelCatalog *ModelCatalogStore
+	// VoiceCatalog caches the Azure TTS voice roster (GET /api/voices) in Redis
+	// for 24h. nil disables caching — the handler fetches live each time.
+	VoiceCatalog *VoiceCatalogStore
 	Log          *slog.Logger
 	UploadRoot   string
 	SubmitJob    func(jobID string, sub JobSubmission) error
@@ -233,6 +236,8 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/discussion-types", s.handleDiscussionTypes)
 	s.mux.HandleFunc("GET /api/templates", s.handleTemplates)
 	s.mux.HandleFunc("GET /api/models", s.handleModels)
+	s.mux.HandleFunc("GET /api/voices", s.handleVoices)
+	s.mux.HandleFunc("POST /api/voices/preview", s.handleVoicePreview)
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
 	s.mux.HandleFunc("POST /api/plan/improve", s.handlePlanImprove)
@@ -306,6 +311,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/visibility", s.handleDiscussionVisibility)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/speaker-model", s.handleUpdateSpeakerModel)
+		s.mux.HandleFunc("PATCH /api/discussions/{id}/speaker-voice", s.handleUpdateSpeakerVoice)
 		s.mux.HandleFunc("POST /api/discussions/{id}/cover/generate", s.handleDiscussionCoverGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/cover", s.handleDiscussionCoverSet)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)

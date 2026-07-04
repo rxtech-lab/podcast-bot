@@ -686,6 +686,28 @@ final class APIClient: Sendable {
         return response.models ?? []
     }
 
+    /// The Azure TTS voices available for per-speaker assignment, fetched from
+    /// Azure's voices/list endpoint and cached server-side (24h).
+    func availableVoices() async throws -> [VoiceInfoDTO] {
+        let response: VoicesResponseDTO = try await get("/api/voices")
+        return response.voices ?? []
+    }
+
+    /// A playable URL for a short sample of one Azure voice speaking `text`.
+    /// The server synthesizes at most once per (voice, language) and serves a
+    /// cached MP3 afterwards.
+    func previewVoice(voice: String, language: String, text: String) async throws -> URL {
+        let response: VoicePreviewResponseDTO = try await send(
+            "POST",
+            "/api/voices/preview",
+            body: VoicePreviewRequest(voice: voice, language: language, text: text)
+        )
+        guard let url = URL(string: response.url) else {
+            throw APIError.decoding("invalid preview url")
+        }
+        return url
+    }
+
     /// The content types currently supported by the planner. Today this is a
     /// single `discussion` entry, but the backend owns the list so clients do
     /// not hard-code future options.
@@ -739,6 +761,17 @@ final class APIClient: Sendable {
             "PATCH",
             "/api/discussions/\(id)/speaker-model",
             body: SpeakerModelRequest(speaker: speaker, model: model)
+        )
+    }
+
+    /// Changes the TTS voice for one speaker (host, discussant, or audiobook
+    /// narrator, by name) in a discussion's plan and returns the updated
+    /// discussion. An empty voice clears the override (back to automatic).
+    func updateSpeakerVoice(id: String, speaker: String, voice: String) async throws -> Discussion {
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/speaker-voice",
+            body: SpeakerVoiceRequest(speaker: speaker, voice: voice)
         )
     }
 

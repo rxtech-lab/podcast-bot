@@ -346,6 +346,24 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS native_discussion_speaker_models_discussion_idx
 			ON native_discussion_speaker_models(discussion_id)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_speaker_voices (
+			discussion_id TEXT NOT NULL,
+			speaker_name TEXT NOT NULL,
+			voice TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, speaker_name),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_speaker_voices_discussion_idx
+			ON native_discussion_speaker_voices(discussion_id)`,
+		`CREATE TABLE IF NOT EXISTS voice_previews (
+			voice TEXT NOT NULL,
+			language TEXT NOT NULL,
+			s3_key TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY(voice, language)
+		)`,
 		`CREATE TABLE IF NOT EXISTS native_discussion_likes (
 			user_id TEXT NOT NULL,
 			discussion_id TEXT NOT NULL,
@@ -961,7 +979,7 @@ func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*D
 		return nil, err
 	}
 	markDiscussionViewer(&d, viewer)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	lines, err := s.lines(ctx, id)
@@ -1424,7 +1442,7 @@ func (s *DiscussionStore) GetByJobID(ctx context.Context, jobID string) (*Discus
 		return nil, err
 	}
 	markDiscussionViewer(&d, d.OwnerUserID)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -1445,7 +1463,7 @@ func (s *DiscussionStore) GetForNotification(ctx context.Context, id string) (*D
 		return nil, err
 	}
 	markDiscussionViewer(&d, d.OwnerUserID)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -1462,7 +1480,7 @@ func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (
 		return nil, err
 	}
 	markDiscussionViewer(&d, owner)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -1506,6 +1524,10 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 		if err := s.applySpeakerModelOverridesToScript(ctx, id, resp.Script); err != nil {
 			return nil, err
 		}
+		// Voice overrides are deliberately NOT applied here: baking a voice
+		// into the persisted script_json would survive a later "clear back to
+		// auto" (the override row is deleted but the stored script keeps the
+		// stale voice). Voices are layered on at read time only.
 		title = resp.Script.Title
 		language = resp.Script.Language
 	}
@@ -1535,11 +1557,16 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	return s.Get(ctx, owner, id)
 }
 
-func (s *DiscussionStore) applySpeakerModelOverrides(ctx context.Context, d *Discussion) error {
+// applySpeakerOverrides layers the user's per-speaker model and voice
+// overrides onto a freshly loaded discussion's script.
+func (s *DiscussionStore) applySpeakerOverrides(ctx context.Context, d *Discussion) error {
 	if d == nil || d.Script == nil {
 		return nil
 	}
-	return s.applySpeakerModelOverridesToScript(ctx, d.ID, d.Script)
+	if err := s.applySpeakerModelOverridesToScript(ctx, d.ID, d.Script); err != nil {
+		return err
+	}
+	return s.applySpeakerVoiceOverridesToScript(ctx, d.ID, d.Script)
 }
 
 func (s *DiscussionStore) applySpeakerModelOverridesToScript(ctx context.Context, discussionID string, script *config.DebateTopic) error {
@@ -1716,6 +1743,163 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 		return nil, nil
 	}
 	return s.Get(ctx, owner, id)
+}
+
+func (s *DiscussionStore) speakerVoiceOverrides(ctx context.Context, discussionID string) (map[string]string, error) {
+	discussionID = strings.TrimSpace(discussionID)
+	if discussionID == "" {
+		return nil, nil
+	}
+	overrides := map[string]string{}
+	err := retryTransientDBConnection(ctx, func() error {
+		rows, err := s.db.QueryContext(ctx, `SELECT speaker_name, voice
+			FROM native_discussion_speaker_voices WHERE discussion_id = ?`, discussionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		next := map[string]string{}
+		for rows.Next() {
+			var speaker, voice string
+			if err := rows.Scan(&speaker, &voice); err != nil {
+				return err
+			}
+			speaker = strings.TrimSpace(speaker)
+			voice = strings.TrimSpace(voice)
+			if speaker == "" || voice == "" {
+				continue
+			}
+			next[speaker] = voice
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		overrides = next
+		return nil
+	})
+	return overrides, err
+}
+
+func (s *DiscussionStore) applySpeakerVoiceOverridesToScript(ctx context.Context, discussionID string, script *config.DebateTopic) error {
+	if script == nil {
+		return nil
+	}
+	overrides, err := s.speakerVoiceOverrides(ctx, discussionID)
+	if err != nil || len(overrides) == 0 {
+		return err
+	}
+	applySpeakerVoiceOverridesToTopic(script, overrides)
+	return nil
+}
+
+func applySpeakerVoiceOverridesToTopic(topic *config.DebateTopic, overrides map[string]string) {
+	if topic == nil || len(overrides) == 0 {
+		return
+	}
+	if voice := overrides[strings.TrimSpace(topic.Host.Name)]; voice != "" {
+		topic.Host.Voice = voice
+	}
+	if voice := overrides[strings.TrimSpace(topic.AudioBookHost.Name)]; voice != "" {
+		topic.AudioBookHost.Voice = voice
+	}
+	for i := range topic.Discussants {
+		if voice := overrides[strings.TrimSpace(topic.Discussants[i].Name)]; voice != "" {
+			topic.Discussants[i].Voice = voice
+		}
+	}
+}
+
+// SetSpeakerVoice changes the TTS voice override for a single speaker (the
+// discussion host/discussant, or the audiobook narrator, matched by name) in
+// the plan. Like model overrides, the value lives outside script_json so plan
+// regenerations keep the user's per-speaker voice by speaker name. An empty
+// voice clears the override (back to automatic assignment). Unlike models
+// there is nothing to seed: plans declare no per-speaker voice, so absent rows
+// simply mean "auto". Returns nil (→ 404) when the discussion has no plan or
+// no speaker matches the given name.
+func (s *DiscussionStore) SetSpeakerVoice(ctx context.Context, owner, id, speaker, voice string) (*Discussion, error) {
+	speaker = strings.TrimSpace(speaker)
+	voice = strings.TrimSpace(voice)
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	if d.Script == nil {
+		return nil, nil
+	}
+	matched := d.Script.Host.Name == speaker || d.Script.AudioBookHost.Name == speaker
+	for i := range d.Script.Discussants {
+		if d.Script.Discussants[i].Name == speaker {
+			matched = true
+		}
+	}
+	if !matched {
+		return nil, nil
+	}
+	now := time.Now().UnixMilli()
+	if voice == "" {
+		_, err = s.exec(ctx, `DELETE FROM native_discussion_speaker_voices
+			WHERE discussion_id = ? AND speaker_name = ?`, id, speaker)
+	} else {
+		_, err = s.exec(ctx, `INSERT INTO native_discussion_speaker_voices
+			(discussion_id, speaker_name, voice, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(discussion_id, speaker_name) DO UPDATE SET
+				voice = excluded.voice,
+				updated_at = excluded.updated_at`,
+			id, speaker, voice, now, now)
+	}
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.exec(ctx, `UPDATE native_discussions SET updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`, now, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
+// GetVoicePreview returns the stored S3 key for a cached (voice, language)
+// preview MP3, or "" when none has been rendered yet.
+func (s *DiscussionStore) GetVoicePreview(ctx context.Context, voice, language string) (string, error) {
+	voice = strings.TrimSpace(voice)
+	language = strings.TrimSpace(language)
+	if voice == "" || language == "" {
+		return "", nil
+	}
+	var key string
+	err := retryTransientDBConnection(ctx, func() error {
+		row := s.db.QueryRowContext(ctx, `SELECT s3_key FROM voice_previews
+			WHERE voice = ? AND language = ?`, voice, language)
+		switch err := row.Scan(&key); {
+		case errors.Is(err, sql.ErrNoRows):
+			key = ""
+			return nil
+		default:
+			return err
+		}
+	})
+	return key, err
+}
+
+// PutVoicePreview records the S3 key of a rendered (voice, language) preview
+// MP3 so later requests skip synthesis.
+func (s *DiscussionStore) PutVoicePreview(ctx context.Context, voice, language, s3Key string) error {
+	voice = strings.TrimSpace(voice)
+	language = strings.TrimSpace(language)
+	s3Key = strings.TrimSpace(s3Key)
+	if voice == "" || language == "" || s3Key == "" {
+		return errors.New("voice preview: empty voice, language, or key")
+	}
+	_, err := s.exec(ctx, `INSERT INTO voice_previews (voice, language, s3_key, created_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(voice, language) DO UPDATE SET s3_key = excluded.s3_key`,
+		voice, language, s3Key, time.Now().UnixMilli())
+	return err
 }
 
 func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (*Discussion, error) {

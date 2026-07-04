@@ -18,6 +18,9 @@ struct AgentDTO: Codable, Hashable, Sendable {
     var name: String
     var model: String?
     var aspect: String?
+    /// Azure TTS voice ShortName override; nil/empty means the engine
+    /// auto-assigns a voice at generation time.
+    var voice: String?
 }
 
 struct AudioBookSpeakerDTO: Codable, Hashable, Sendable {
@@ -145,6 +148,73 @@ struct PrecheckFormActionDTO: Codable, Hashable, Sendable, Identifiable {
 struct SpeakerModelRequest: Codable, Sendable {
     var speaker: String
     var model: String
+}
+
+/// Body of PATCH /api/discussions/{id}/speaker-voice. An empty voice clears
+/// the override back to automatic assignment.
+struct SpeakerVoiceRequest: Codable, Sendable {
+    var speaker: String
+    var voice: String
+}
+
+/// One selectable Azure TTS voice from GET /api/voices.
+struct VoiceInfoDTO: Codable, Hashable, Sendable, Identifiable {
+    var name: String
+    var locale: String
+    var localeName: String?
+    var gender: String?
+    var voiceType: String?
+    var styles: [String]?
+
+    var id: String { name }
+
+    /// "en-US-AvaMultilingualNeural" → "Ava Multilingual". Falls back to the
+    /// raw name when it doesn't follow Azure's {locale}-{Name}Neural shape.
+    var displayName: String {
+        var trimmed = name
+        if trimmed.hasPrefix(locale + "-") { trimmed.removeFirst(locale.count + 1) }
+        if trimmed.hasSuffix("Neural") { trimmed.removeLast("Neural".count) }
+        guard !trimmed.isEmpty else { return name }
+        var out = ""
+        let chars = Array(trimmed)
+        for i in chars.indices {
+            let ch = chars[i]
+            if i > 0, ch.isUppercase {
+                let prev = chars[i - 1]
+                let nextIsLower = i + 1 < chars.count && chars[i + 1].isLowercase
+                // "AvaMultilingual" → "Ava Multilingual", "HDLatest" → "HD Latest"
+                if prev.isLowercase || (prev.isUppercase && nextIsLower) {
+                    out.append(" ")
+                }
+            }
+            out.append(ch)
+        }
+        return out
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, locale, gender, styles
+        case localeName = "locale_name"
+        case voiceType = "voice_type"
+    }
+}
+
+/// Body of GET /api/voices.
+struct VoicesResponseDTO: Codable, Sendable {
+    var voices: [VoiceInfoDTO]?
+}
+
+/// Body of POST /api/voices/preview.
+struct VoicePreviewRequest: Codable, Sendable {
+    var voice: String
+    var language: String
+    var text: String
+}
+
+/// Response of POST /api/voices/preview: a short-lived playback URL for the
+/// cached sample MP3.
+struct VoicePreviewResponseDTO: Codable, Sendable {
+    var url: String
 }
 
 /// The discussion script (config.DebateTopic). Only the discussion-relevant
