@@ -2,6 +2,7 @@ package contentcreator
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/agent"
@@ -20,6 +21,56 @@ type AudioBookImage struct {
 	URL       string
 	Caption   string
 	Animation string
+	// Key is the durable object-storage key behind URL, kept so serving
+	// layers can re-mint a fresh URL when the stored one is a time-limited
+	// presign. Empty when uploads are disabled.
+	Key string
+}
+
+// IllustrationCue is one entry of an audiobook's canonical illustration
+// timeline: the image on screen from StartMS until the next cue. Built at
+// finalisation from the offsets recorded while the run streamed, persisted as
+// the illustrations.json sidecar, and served to clients verbatim — players
+// consume this timeline instead of reconstructing timing from transcript
+// lines.
+type IllustrationCue struct {
+	StartMS  int64  `json:"start_ms"`
+	ImageURL string `json:"image_url"`
+	// ImageKey is the durable object-storage key behind ImageURL (see
+	// AudioBookImage.Key). Persisted in the sidecar; stripped from client
+	// responses.
+	ImageKey string `json:"image_key,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+}
+
+// AudioBookIllustrationTimeline builds the canonical timeline from the beat
+// offsets recorded during the run. Beats whose scene marker never fired are
+// omitted (their image never appeared). The earliest cue is clamped to 0 so
+// the opening illustration covers playback from the first second.
+func (o *Orchestrator) AudioBookIllustrationTimeline() []IllustrationCue {
+	offsets := o.AudioBookImageOffsets()
+	if len(offsets) == 0 {
+		return nil
+	}
+	cues := make([]IllustrationCue, 0, len(o.audioBookImages))
+	for _, img := range o.audioBookImages {
+		sec, ok := offsets[img.Beat]
+		if !ok || strings.TrimSpace(img.URL) == "" {
+			continue
+		}
+		cues = append(cues, IllustrationCue{
+			StartMS:  int64(sec * 1000),
+			ImageURL: img.URL,
+			ImageKey: img.Key,
+			Caption:  strings.TrimSpace(img.Caption),
+		})
+	}
+	if len(cues) == 0 {
+		return nil
+	}
+	sort.Slice(cues, func(i, j int) bool { return cues[i].StartMS < cues[j].StartMS })
+	cues[0].StartMS = 0
+	return cues
 }
 
 // AudioBookAvatar is one generated speaker portrait for the conversational

@@ -2841,6 +2841,12 @@
         }
       }
     },
+    "Enter fullscreen" : {
+
+    },
+    "Exit fullscreen" : {
+
+    },
     "Expires %@" : {
       "localizations" : {
         "zh-Hans" : {

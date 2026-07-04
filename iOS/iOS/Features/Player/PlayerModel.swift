@@ -334,26 +334,13 @@ final class PlayerModel {
         let caption: String
     }
 
-    // Memoized like `lyricGroupsCache`: rebuilt only when the line count or
-    // the known duration moves (duration matters for the legacy even-split
-    // synthesis below).
-    @ObservationIgnored private var illustrationTimelineCache: [IllustrationCue] = []
-    @ObservationIgnored private var illustrationTimelineCacheKey = (-1, -1)
-
-    /// Illustration cues ordered by audio offset. When the discussion has
-    /// image lines but none carry server timing (audiobooks generated before
-    /// offsets existed), synthesize an even split across the known duration —
-    /// the same spacing the legacy slideshow video used. Empty when there are
-    /// no images (or no way to time them), in which case the artwork stays on
-    /// the cover.
-    var illustrationTimeline: [IllustrationCue] {
-        let key = (lines.count, Int(duration))
-        if key != illustrationTimelineCacheKey {
-            illustrationTimelineCache = Self.buildIllustrationTimeline(lines: lines, duration: duration)
-            illustrationTimelineCacheKey = key
-        }
-        return illustrationTimelineCache
-    }
+    /// Illustration cues ordered by audio offset, exactly as served by
+    /// GET /api/jobs/{id}/illustrations. The backend owns all timing —
+    /// including the legacy synthesis for audiobooks generated before
+    /// per-image offsets existed — so the player never reconstructs a
+    /// timeline from transcript lines. Empty when the discussion has no timed
+    /// artwork (the artwork slot stays on the cover).
+    private(set) var illustrationTimeline: [IllustrationCue] = []
 
     /// The most recently arrived illustration — what live streaming shows.
     var latestIllustrationCue: IllustrationCue? {
@@ -382,37 +369,37 @@ final class PlayerModel {
         illustrationCue(at: time)?.url
     }
 
-    nonisolated static func buildIllustrationTimeline(lines: [LiveLine], duration: Double) -> [IllustrationCue] {
-        struct ImageEntry {
-            let url: URL
-            let offset: Double?
-            let caption: String
+    /// Maps the server's illustration DTOs into player cues, dropping entries
+    /// whose URL doesn't parse and keeping the array ordered by start time.
+    nonisolated static func illustrationCues(from dtos: [IllustrationCueDTO]) -> [IllustrationCue] {
+        dtos.compactMap { dto -> IllustrationCue? in
+            let raw = dto.imageURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty, let url = URL(string: raw) else { return nil }
+            return IllustrationCue(start: max(0, Double(dto.startMS) / 1000.0),
+                                   url: url,
+                                   caption: dto.caption?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         }
-        var entries: [ImageEntry] = []
-        var seen = Set<String>()
-        for line in lines where line.hasImage {
-            guard let raw = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  let url = URL(string: raw),
-                  !seen.contains(raw) else { continue }
-            seen.insert(raw)
-            entries.append(ImageEntry(url: url,
-                                      offset: line.audioOffsetSeconds,
-                                      caption: line.displayText))
+        .sorted { $0.start < $1.start }
+    }
+
+    /// Fetches the backend-owned illustration timeline. Waits briefly for the
+    /// player to report a duration first — the server only needs it to
+    /// synthesize an even split for legacy audiobooks with no recorded
+    /// offsets — then retries a few times so a transient network error
+    /// doesn't leave a finished audiobook stuck on its cover.
+    private func loadIllustrationTimeline(jobID: String) async {
+        for _ in 0..<10 where duration <= 0 {
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .milliseconds(500))
         }
-        guard !entries.isEmpty else { return [] }
-        let timed = entries.compactMap { entry -> IllustrationCue? in
-            guard let offset = entry.offset else { return nil }
-            return IllustrationCue(start: offset, url: entry.url, caption: entry.caption)
-        }
-        if !timed.isEmpty {
-            return timed.sorted { $0.start < $1.start }
-        }
-        // Legacy fallback: no offsets recorded — approximate with an even
-        // split in transcript order, mirroring the legacy slideshow video.
-        guard duration > 0 else { return [] }
-        let per = duration / Double(entries.count)
-        return entries.enumerated().map { i, entry in
-            IllustrationCue(start: Double(i) * per, url: entry.url, caption: entry.caption)
+        for attempt in 0..<3 {
+            guard !Task.isCancelled else { return }
+            let durationMS = duration > 0 ? Int(duration * 1000) : nil
+            if let dtos = try? await api.jobIllustrations(id: jobID, durationMS: durationMS) {
+                illustrationTimeline = Self.illustrationCues(from: dtos)
+                return
+            }
+            try? await Task.sleep(for: .seconds(Double(attempt + 1) * 2))
         }
     }
 
@@ -520,6 +507,7 @@ final class PlayerModel {
             tasks.append(Task { await pollStatus(jobID: jobID) })
         } else {
             tasks.append(Task { await loadFinalCaptions(jobID: jobID) })
+            tasks.append(Task { await loadIllustrationTimeline(jobID: jobID) })
         }
     }
 
@@ -1597,6 +1585,7 @@ final class PlayerModel {
                                       isUser: dto.isUser, done: true,
                                       senderUserID: dto.senderUserID, audioURL: dto.audioURL,
                                       imageURL: dto.imageURL,
+                                      audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: dto.startMS),
                                       sources: dto.sources, judgementComment: dto.judgementComment))
             }
         }
@@ -2098,6 +2087,7 @@ final class PlayerModel {
         let shouldResume = isPlaying || autoplayRequested
         playerLog.debug("switchToFinalAudio: swapping live HLS -> final audio (resume=\(resumeTime, privacy: .public), shouldResume=\(shouldResume, privacy: .public))")
         await loadFinalCaptions(jobID: jobID)
+        tasks.append(Task { await loadIllustrationTimeline(jobID: jobID) })
 
         var options: [String: Any] = [:]
         var headers = ["Accept-Language": AcceptLanguage.headerValue]

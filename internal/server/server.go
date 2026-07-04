@@ -271,6 +271,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/jobs/{id}/transcript", s.handleJobTranscript)
 		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles", s.handleJobSubtitles)
 		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles/live", s.handleJobSubtitlesLive)
+		s.mux.HandleFunc("GET /api/jobs/{id}/illustrations", s.handleJobIllustrations)
 		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
 		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
 		s.mux.HandleFunc("GET /api/jobs/{id}/ws", s.handleJobWS)
