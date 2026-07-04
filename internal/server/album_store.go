@@ -27,6 +27,7 @@ type Album struct {
 	RootDiscussionID string          `json:"root_discussion_id,omitempty"`
 	Cover            DiscussionCover `json:"cover,omitempty"`
 	EpisodeCount     int64           `json:"episode_count"`
+	IsOwner          bool            `json:"is_owner"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
 }
@@ -60,6 +61,13 @@ func scanAlbum(row discussionScanner) (Album, error) {
 	a.CreatedAt = time.UnixMilli(created)
 	a.UpdatedAt = time.UnixMilli(updated)
 	return a, nil
+}
+
+func markAlbumViewer(a *Album, viewer string) {
+	if a == nil {
+		return
+	}
+	a.IsOwner = a.OwnerUserID == viewer
 }
 
 // CreateAlbum inserts a new album owned by owner and returns it.
@@ -98,6 +106,33 @@ func (s *DiscussionStore) GetAlbum(ctx context.Context, owner, id string) (*Albu
 		}
 		return nil, err
 	}
+	markAlbumViewer(&a, owner)
+	return &a, nil
+}
+
+// GetVisibleAlbum returns an album the viewer may inspect. Owners can see the
+// whole album; non-owners can see it once at least one ready/generating member
+// is public.
+func (s *DiscussionStore) GetVisibleAlbum(ctx context.Context, viewer, id string) (*Album, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+albumSelectColumns+`
+		FROM native_albums a
+		WHERE a.id = ? AND (
+			a.owner_user_id = ? OR EXISTS (
+				SELECT 1 FROM native_discussions d
+				WHERE d.album_id = a.id AND d.visibility = ? AND d.status IN (?, ?)
+			)
+		)`, strings.TrimSpace(id), viewer, string(DiscussionPublic), string(DiscussionGenerating), string(DiscussionReady))
+	a, err := scanAlbum(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	markAlbumViewer(&a, viewer)
 	return &a, nil
 }
 
@@ -118,6 +153,7 @@ func (s *DiscussionStore) ListAlbums(ctx context.Context, owner string) ([]Album
 		if err != nil {
 			return nil, err
 		}
+		markAlbumViewer(&a, owner)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -145,6 +181,40 @@ func (s *DiscussionStore) AlbumEpisodes(ctx context.Context, owner, albumID stri
 			return nil, err
 		}
 		markDiscussionViewer(&d, owner)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// VisibleAlbumEpisodes returns album episodes visible to viewer. Owners receive
+// the full album; non-owners receive only public ready/generating episodes.
+func (s *DiscussionStore) VisibleAlbumEpisodes(ctx context.Context, viewer, albumID string) ([]Discussion, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	album, err := s.GetVisibleAlbum(ctx, viewer, albumID)
+	if err != nil || album == nil {
+		return nil, err
+	}
+	if album.IsOwner {
+		return s.AlbumEpisodes(ctx, viewer, album.ID)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+discussionSelectColumns+`
+		FROM native_discussions
+		WHERE album_id = ? AND visibility = ? AND status IN (?, ?)
+		ORDER BY album_position ASC, created_at ASC, id ASC`,
+		strings.TrimSpace(album.ID), string(DiscussionPublic), string(DiscussionGenerating), string(DiscussionReady))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussion(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, viewer)
 		out = append(out, d)
 	}
 	return out, rows.Err()
@@ -283,6 +353,60 @@ func (s *DiscussionStore) AlbumSummariesFor(ctx context.Context, owner string, i
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+albumSelectColumns+`
 		FROM native_albums a WHERE a.owner_user_id = ? AND a.id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*AlbumSummary, len(distinct))
+	for rows.Next() {
+		a, err := scanAlbum(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[a.ID] = &AlbumSummary{ID: a.ID, Title: a.Title, Kind: a.Kind, Cover: a.Cover, EpisodeCount: a.EpisodeCount}
+	}
+	return out, rows.Err()
+}
+
+// AlbumSummariesForVisible returns compact album descriptors for albums that
+// viewer can see. For non-owned albums, episode_count is the public visible
+// count, not the owner's private total.
+func (s *DiscussionStore) AlbumSummariesForVisible(ctx context.Context, viewer string, ids []string) (map[string]*AlbumSummary, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	distinct := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		distinct = append(distinct, id)
+	}
+	if len(distinct) == 0 {
+		return map[string]*AlbumSummary{}, nil
+	}
+	placeholders := strings.Repeat("?,", len(distinct))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := []any{viewer, string(DiscussionPublic), string(DiscussionGenerating), string(DiscussionReady)}
+	for _, id := range distinct {
+		args = append(args, id)
+	}
+	args = append(args, viewer, string(DiscussionPublic), string(DiscussionGenerating), string(DiscussionReady))
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id, a.owner_user_id, a.title, a.kind, a.root_discussion_id,
+			a.cover_type, a.cover_image_url, a.cover_image_key, a.cover_gradient_start, a.cover_gradient_end,
+			a.created_at, a.updated_at,
+			(SELECT COUNT(*) FROM native_discussions d
+			 WHERE d.album_id = a.id AND (a.owner_user_id = ? OR (d.visibility = ? AND d.status IN (?, ?)))) AS episode_count
+		FROM native_albums a
+		WHERE a.id IN (`+placeholders+`) AND (
+			a.owner_user_id = ? OR EXISTS (
+				SELECT 1 FROM native_discussions d
+				WHERE d.album_id = a.id AND d.visibility = ? AND d.status IN (?, ?)
+			)
+		)`, args...)
 	if err != nil {
 		return nil, err
 	}

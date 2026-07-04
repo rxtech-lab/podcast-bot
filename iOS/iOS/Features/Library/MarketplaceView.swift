@@ -523,6 +523,7 @@ private struct MarketFeaturedStation: View {
             .glassCard()
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("market.station.\(discussion.id)")
     }
 }
 
@@ -538,6 +539,7 @@ private struct MarketStationCard: View {
                     .aspectRatio(1, contentMode: .fit)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("market.station.\(discussion.id)")
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(discussion.displayTitle)
@@ -567,6 +569,7 @@ private struct MarketStationShelfItem: View {
                     .frame(width: 136, height: 136)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("market.station.\(discussion.id)")
             HStack {
                 Text(discussion.displayTitle)
                     .font(.caption.weight(.semibold))

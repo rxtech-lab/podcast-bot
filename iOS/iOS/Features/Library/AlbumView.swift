@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum AlbumViewMode {
+    case owner
+    case publicMarket
+}
+
 /// Apple Music-style album page: large cover, title, episode count, play
 /// button, and the episode list in album order (audiobook batches by chapter,
 /// then creation time). The toolbar menu carries the album actions: generate
@@ -15,6 +20,7 @@ struct AlbumView: View {
     @Environment(\.dismiss) private var dismiss
     let albumID: String
     var ownsNavigation: Bool = false
+    var mode: AlbumViewMode = .owner
 
     @State private var detail: AlbumDetailResponse?
     @State private var actionItems: [DiscussionUIActionItem] = []
@@ -23,6 +29,7 @@ struct AlbumView: View {
     @State private var actionError: String?
     @State private var showingChapterChecklist = false
     @State private var showingAddPodcasts = false
+    @State private var showingPublish = false
     @State private var showingCoverEditor = false
     @State private var showingRename = false
     @State private var showingRemoveConfirm = false
@@ -64,6 +71,9 @@ struct AlbumView: View {
         .sheet(isPresented: $showingAddPodcasts) {
             addPodcastsSheet
         }
+        .sheet(isPresented: $showingPublish) {
+            publishAlbumSheet
+        }
         .sheet(isPresented: $showingCoverEditor) {
             coverEditorSheet
         }
@@ -104,16 +114,42 @@ struct AlbumView: View {
                     .accessibilityIdentifier("album.close")
             }
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        if canManageAlbum, let publish = publishAction {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    performAlbumAction(publish)
+                } label: {
+                    Image(systemName: publish.systemImage ?? "globe")
+                }
+                .accessibilityLabel(publish.title)
+                .accessibilityIdentifier("album.publish")
+                .disabled(!publish.enabled)
+            }
+        }
+        if canManageAlbum, !menuActionItems.isEmpty {
+            ToolbarItem(placement: .topBarTrailing) {
             DiscussionActionsMenu(
-                items: actionItems,
+                items: menuActionItems,
                 labelSystemImage: "ellipsis",
                 accessibilityLabel: "Album actions",
                 isBusy: { _ in false },
                 perform: performAlbumAction
             )
             .accessibilityIdentifier("album.more")
+            }
         }
+    }
+
+    private var canManageAlbum: Bool {
+        mode == .owner && (detail?.album.isOwner ?? true)
+    }
+
+    private var publishAction: DiscussionUIActionItem? {
+        actionItems.first { $0.id == "publish-album" }
+    }
+
+    private var menuActionItems: [DiscussionUIActionItem] {
+        actionItems.filter { $0.id != "publish-album" }
     }
 
     /// Routes a server-provided album action by its validated deep link
@@ -125,6 +161,8 @@ struct AlbumView: View {
             showingChapterChecklist = true
         case ["sheet", "add-podcasts"]:
             showingAddPodcasts = true
+        case ["sheet", "publish"]:
+            showingPublish = true
         case ["sheet", "cover"]:
             showingCoverEditor = true
         case ["sheet", "rename"]:
@@ -180,6 +218,16 @@ struct AlbumView: View {
         }
     }
 
+    @ViewBuilder
+    private var publishAlbumSheet: some View {
+        if let detail {
+            AlbumPublishSheet(detail: detail) { updated in
+                self.detail = updated
+                showingPublish = false
+            }
+        }
+    }
+
     private var actionErrorBinding: Binding<Bool> {
         Binding(
             get: { actionError != nil },
@@ -231,23 +279,36 @@ struct AlbumView: View {
             }
             Section {
                 ForEach(Array(detail.episodes.enumerated()), id: \.element.id) { index, episode in
-                    NavigationLink(value: LibraryDestination.discussion(episode)) {
-                        AlbumEpisodeRow(episode: episode, number: index + 1)
-                    }
-                    .accessibilityIdentifier("album.episode.\(episode.id)")
-                    .listRowBackground(Color.clear)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            removeEpisode(episode)
-                        } label: {
-                            Label("Remove from Album", systemImage: "rectangle.stack.badge.minus")
-                        }
-                    }
+                    episodeRow(episode, number: index + 1)
                 }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+
+    @ViewBuilder
+    private func episodeRow(_ episode: Discussion, number: Int) -> some View {
+        if canManageAlbum {
+            NavigationLink(value: LibraryDestination.discussion(episode)) {
+                AlbumEpisodeRow(episode: episode, number: number)
+            }
+            .accessibilityIdentifier("album.episode.\(episode.id)")
+            .listRowBackground(Color.clear)
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) {
+                    removeEpisode(episode)
+                } label: {
+                    Label("Remove from Album", systemImage: "rectangle.stack.badge.minus")
+                }
+            }
+        } else {
+            NavigationLink(value: LibraryDestination.discussion(episode)) {
+                AlbumEpisodeRow(episode: episode, number: number)
+            }
+            .accessibilityIdentifier("album.episode.\(episode.id)")
+            .listRowBackground(Color.clear)
+        }
     }
 
     private func header(_ detail: AlbumDetailResponse) -> some View {
@@ -288,7 +349,7 @@ struct AlbumView: View {
         case .discussion(let episode):
             episodeDestination(episode)
         case .album(let id):
-            AlbumView(albumID: id)
+            AlbumView(albumID: id, mode: mode)
         }
     }
 
@@ -315,7 +376,11 @@ struct AlbumView: View {
             return
         }
         do {
-            detail = try await APIClient(tokens: auth).album(id: albumID)
+            if mode == .owner {
+                detail = try await APIClient(tokens: auth).album(id: albumID)
+            } else {
+                detail = try await APIClient(tokens: auth).publicAlbum(id: albumID)
+            }
             errorMessage = nil
         } catch {
             guard !APIClient.isCancellation(error) else { return }
@@ -324,8 +389,164 @@ struct AlbumView: View {
         isLoading = false
         // The toolbar menu is server-rendered; a fetch failure just leaves the
         // menu in its loading state until the next refresh.
-        if let actions = try? await APIClient(tokens: auth).albumUIActions(id: albumID) {
+        if mode == .owner, let actions = try? await APIClient(tokens: auth).albumUIActions(id: albumID) {
             actionItems = actions.items
+        } else {
+            actionItems = []
+        }
+    }
+}
+
+private enum AlbumPublishMode: String, CaseIterable, Identifiable {
+    case all
+    case selected
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All Podcasts"
+        case .selected:
+            return "Selected"
+        }
+    }
+}
+
+private struct AlbumPublishSheet: View {
+    @Environment(AuthManager.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+
+    let detail: AlbumDetailResponse
+    var onPublished: (AlbumDetailResponse) -> Void
+
+    @State private var mode: AlbumPublishMode = .all
+    @State private var selected: Set<String>
+    @State private var cover: DiscussionCover
+    @State private var isWorking = false
+    @State private var errorMessage: String?
+
+    init(detail: AlbumDetailResponse, onPublished: @escaping (AlbumDetailResponse) -> Void) {
+        self.detail = detail
+        self.onPublished = onPublished
+        _selected = State(initialValue: Set(detail.episodes.map(\.id)))
+        let initialCover = detail.album.cover?.isPublishable == true ? detail.album.cover! : .defaultGradient
+        _cover = State(initialValue: initialCover)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                CoverEditor(target: .album(id: detail.album.id),
+                            title: detail.album.title,
+                            cover: $cover,
+                            isWorking: $isWorking)
+
+                Section {
+                    Picker("Publish", selection: $mode) {
+                        ForEach(AlbumPublishMode.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("albumPublish.mode")
+                }
+
+                if mode == .selected {
+                    Section("Podcasts") {
+                        ForEach(detail.episodes) { episode in
+                            Button {
+                                toggleSelection(episode.id)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(episode.displayTitle)
+                                            .foregroundStyle(.primary)
+                                        Text(episode.status.rawValue.capitalized)
+                                            .font(.caption)
+                                            .foregroundStyle(Theme.secondaryText)
+                                    }
+                                    Spacer()
+                                    Image(systemName: selected.contains(episode.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(selected.contains(episode.id) ? Theme.accent : Theme.secondaryText)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("albumPublish.row.\(episode.id)")
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Publish Album")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        publish()
+                    } label: {
+                        if isWorking {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("Publish")
+                        }
+                    }
+                    .disabled(isWorking || !cover.isPublishable || publishIDs.isEmpty)
+                    .accessibilityIdentifier("albumPublish.submit")
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .interactiveDismissDisabled(isWorking)
+        .accessibilityIdentifier("albumPublish.sheet")
+    }
+
+    private var publishIDs: [String] {
+        switch mode {
+        case .all:
+            detail.episodes.map(\.id)
+        case .selected:
+            detail.episodes.map(\.id).filter { selected.contains($0) }
+        }
+    }
+
+    private func toggleSelection(_ id: String) {
+        if selected.contains(id) {
+            selected.remove(id)
+        } else {
+            selected.insert(id)
+        }
+    }
+
+    private func publish() {
+        isWorking = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer { isWorking = false }
+            do {
+                let updated = try await APIClient(tokens: auth).publishAlbum(
+                    id: detail.album.id,
+                    mode: mode.rawValue,
+                    discussionIDs: publishIDs,
+                    cover: cover
+                )
+                onPublished(updated)
+                dismiss()
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 }

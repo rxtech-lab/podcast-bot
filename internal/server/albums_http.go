@@ -150,6 +150,34 @@ func (s *Server) attachAlbumSummaries(ctx context.Context, owner string, items [
 	}
 }
 
+// attachVisibleAlbumSummaries annotates visible marketplace rows with album
+// summaries. Unlike attachAlbumSummaries, this can attach non-owned albums and
+// counts only the episodes the current viewer may see.
+func (s *Server) attachVisibleAlbumSummaries(ctx context.Context, viewer string, items []Discussion) {
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		if items[i].AlbumID != "" {
+			ids = append(ids, items[i].AlbumID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	summaries, err := s.d.Discussions.AlbumSummariesForVisible(ctx, viewer, ids)
+	if err != nil {
+		s.logger().Warn("visible album summaries load failed", "err", err)
+		return
+	}
+	for _, summary := range summaries {
+		s.refreshAlbumSummaryCoverURL(ctx, summary)
+	}
+	for i := range items {
+		if items[i].AlbumID != "" {
+			items[i].Album = summaries[items[i].AlbumID]
+		}
+	}
+}
+
 // albumCreateRequest is the body of POST /api/albums.
 type albumCreateRequest struct {
 	Title         string   `json:"title"`
@@ -159,6 +187,13 @@ type albumCreateRequest struct {
 // albumAddMembersRequest is the body of POST /api/albums/{id}/discussions.
 type albumAddMembersRequest struct {
 	DiscussionIDs []string `json:"discussion_ids"`
+}
+
+// albumPublishRequest is the body of POST /api/albums/{id}/publish.
+type albumPublishRequest struct {
+	Mode          string          `json:"mode"`
+	DiscussionIDs []string        `json:"discussion_ids"`
+	Cover         DiscussionCover `json:"cover"`
 }
 
 // albumDetailResponse is the payload of GET /api/albums/{id}.
@@ -283,6 +318,36 @@ func (s *Server) handleAlbumGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, albumDetailResponse{Album: album, Episodes: episodes})
 }
 
+// handleMarketAlbumGet serves GET /api/market/albums/{id}: the public album
+// projection. Owners see the full album; everyone else sees only public
+// ready/generating episodes.
+func (s *Server) handleMarketAlbumGet(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	s.rememberCreatorProfile(r.Context(), user)
+	album, err := s.d.Discussions.GetVisibleAlbum(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if album == nil {
+		http.NotFound(w, r)
+		return
+	}
+	episodes, err := s.d.Discussions.VisibleAlbumEpisodes(r.Context(), user.ID, album.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !album.IsOwner && len(episodes) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	timer := newStationTimer()
+	s.prepareMarketDiscussions(r, episodes, timer)
+	s.refreshAlbumCoverURL(r.Context(), album)
+	writeJSON(w, albumDetailResponse{Album: album, Episodes: episodes})
+}
+
 // handleAlbumAddMembers serves POST /api/albums/{id}/discussions: adds owned
 // podcasts to an owned album. 400 when a podcast already belongs to another
 // album.
@@ -354,6 +419,8 @@ func (s *Server) handleAlbumUIActions(w http.ResponseWriter, r *http.Request) {
 			"text.badge.plus", "", true, "open-sheet", albumActionLink(album.ID, "sheet", "generate-chapters")))
 	}
 	items = append(items,
+		actionItem("publish-album", phrase(lang, "Publish Album", "发布专辑", "發佈專輯"), "",
+			"globe", "", album.EpisodeCount > 0, "open-sheet", albumActionLink(album.ID, "sheet", "publish")),
 		actionItem("add-podcasts", phrase(lang, "Add Podcasts", "加入播客", "加入播客"), "",
 			"plus.rectangle.on.folder", "", true, "open-sheet", albumActionLink(album.ID, "sheet", "add-podcasts")),
 		actionItem("rename-album", phrase(lang, "Rename Album", "重命名专辑", "重新命名專輯"), "",
@@ -364,6 +431,108 @@ func (s *Server) handleAlbumUIActions(w http.ResponseWriter, r *http.Request) {
 			"rectangle.stack.badge.minus", "destructive", true, "request", albumActionLink(album.ID, "action", "remove")),
 	)
 	writeJSON(w, discussionUIActionsResponse{ID: "album-actions", Items: items})
+}
+
+// handleAlbumPublish serves POST /api/albums/{id}/publish: publishes all or a
+// selected subset of owned album members. The album itself is visible in market
+// whenever at least one member is public; private members stay hidden.
+func (s *Server) handleAlbumPublish(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	var req albumPublishRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if !req.Cover.Valid() {
+		http.Error(w, "cover is required to publish", http.StatusBadRequest)
+		return
+	}
+	album, err := s.d.Discussions.GetAlbum(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if album == nil {
+		http.NotFound(w, r)
+		return
+	}
+	episodes, err := s.d.Discussions.AlbumEpisodes(r.Context(), user.ID, album.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(episodes) == 0 {
+		http.Error(w, "album has no podcasts to publish", http.StatusBadRequest)
+		return
+	}
+
+	selected, err := selectedAlbumEpisodes(req, episodes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := s.d.Discussions.SetAlbumCover(r.Context(), user.ID, album.ID, req.Cover); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, episode := range selected {
+		cover := episode.Cover
+		if !cover.Valid() {
+			cover = req.Cover
+		}
+		if _, err := s.d.Discussions.SetVisibility(r.Context(), user.ID, episode.ID, DiscussionPublic, cover); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	album, err = s.d.Discussions.GetAlbum(r.Context(), user.ID, album.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	episodes, err = s.d.Discussions.AlbumEpisodes(r.Context(), user.ID, album.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	timer := newStationTimer()
+	s.prepareDiscussionListRows(r, episodes, timer)
+	s.refreshAlbumCoverURL(r.Context(), album)
+	writeJSON(w, albumDetailResponse{Album: album, Episodes: episodes})
+}
+
+func selectedAlbumEpisodes(req albumPublishRequest, episodes []Discussion) ([]Discussion, error) {
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" || mode == "all" {
+		return episodes, nil
+	}
+	if mode != "selected" {
+		return nil, errors.New("invalid publish mode")
+	}
+	if len(req.DiscussionIDs) == 0 {
+		return nil, errors.New("select at least one podcast")
+	}
+	byID := make(map[string]Discussion, len(episodes))
+	for _, episode := range episodes {
+		byID[episode.ID] = episode
+	}
+	out := make([]Discussion, 0, len(req.DiscussionIDs))
+	seen := map[string]bool{}
+	for _, raw := range req.DiscussionIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		episode, ok := byID[id]
+		if !ok {
+			return nil, errors.New("podcast is not in this album: " + id)
+		}
+		seen[id] = true
+		out = append(out, episode)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("select at least one podcast")
+	}
+	return out, nil
 }
 
 // albumPendingChapters resolves the album's audiobook root (the auto album's

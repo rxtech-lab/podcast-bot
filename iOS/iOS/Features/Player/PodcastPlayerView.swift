@@ -497,7 +497,8 @@ struct PodcastPlayerView: View {
     private var albumSheet: some View {
         NavigationStack {
             AlbumView(albumID: currentDiscussion.albumID ?? chapterProgress?.albumID ?? "",
-                      ownsNavigation: true)
+                      ownsNavigation: true,
+                      mode: currentDiscussion.isOwner == true ? .owner : .publicMarket)
         }
     }
 

@@ -39,6 +39,8 @@ func (s *Server) e2eMode() bool { return s.d.Env != nil && s.d.Env.E2EMode }
 // fixtures and the iOS test harness use this exact id.
 const e2eUserID = "test"
 
+const e2eUserHeader = "X-E2E-User-ID"
+
 // requestAuthed reports whether the request carries a valid auth cookie.
 // Always true when no password is configured.
 func (s *Server) requestAuthed(r *http.Request) bool {
@@ -212,7 +214,11 @@ type requestUser struct {
 
 func (s *Server) requestUser(r *http.Request) requestUser {
 	if s.e2eMode() {
-		return requestUser{ID: e2eUserID, Name: "Test"}
+		id := strings.TrimSpace(r.Header.Get(e2eUserHeader))
+		if id == "" {
+			id = e2eUserID
+		}
+		return requestUser{ID: id, Name: id}
 	}
 	if tok := bearerToken(r); tok != "" {
 		sum := sha256.Sum256([]byte(tok))

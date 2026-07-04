@@ -15,8 +15,8 @@ final class AudiobookAlbumTests: E2ETestCase {
 
     /// The home list collapses album members into one group row; opening it
     /// lands on the album page.
-    private func openAlbum(_ app: XCUIApplication) {
-        let albumRow = app.buttons["album.row.test-album"]
+    private func openAlbum(_ app: XCUIApplication, id: String = "test-album") {
+        let albumRow = app.buttons["album.row.\(id)"]
         XCTAssertTrue(albumRow.waitForExistence(timeout: 20), "album group row never appeared in the library")
         albumRow.tap()
         XCTAssertTrue(app.otherElements["album.view"].waitForExistence(timeout: 15)
@@ -65,15 +65,21 @@ final class AudiobookAlbumTests: E2ETestCase {
         let app = launch()
         openRootAudiobookPlayer(app)
 
-        // The transcript ends with the generate-more call-to-action (7 of the
-        // 12 chapters are still pending). It sits at the transcript bottom.
-        let generateMore = app.buttons["player.generateMoreChapters"]
-        if !generateMore.waitForExistence(timeout: 15) {
-            app.swipeUp()
+        // Open the server-owned player action. This exercises the same
+        // checklist/generation path as the transcript footer while avoiding a
+        // flaky accessibility tap on the nested transcript CTA.
+        var openedAction = false
+        for _ in 0..<4 {
+            app.buttons["player.more"].tap()
+            let generate = app.buttons["Generate More Chapters"].firstMatch
+            if generate.waitForExistence(timeout: 4) {
+                generate.tap()
+                openedAction = true
+                break
+            }
+            dismissMenu(app)
         }
-        XCTAssertTrue(generateMore.waitForExistence(timeout: 10),
-                      "generate-more footer button never appeared in the transcript")
-        generateMore.tap()
+        XCTAssertTrue(openedAction, "Generate More Chapters never appeared in the player menu")
 
         // The checklist sheet loads the chapter progress from the backend.
         let checklist = app.descendants(matching: .any)
@@ -204,7 +210,77 @@ final class AudiobookAlbumTests: E2ETestCase {
                       "created album title not shown")
     }
 
-    // MARK: - 6. Backend agreement: the chapters endpoint drives the checklist
+    // MARK: - 6. Album toolbar publishes selected podcasts
+
+    func testAlbumToolbarPublishesSelectedPodcasts() throws {
+        let app = launch()
+        openAlbum(app, id: "test-publish-album")
+
+        let publish = app.buttons["album.publish"]
+        XCTAssertTrue(publish.waitForExistence(timeout: 15), "album publish toolbar button not shown")
+        publish.tap()
+
+        let sheet = app.descendants(matching: .any)
+            .matching(identifier: "albumPublish.sheet").firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "publish album sheet did not open")
+        app.buttons["Selected"].firstMatch.tap()
+        app.swipeUp()
+
+        let second = app.descendants(matching: .any)
+            .matching(identifier: "albumPublish.row.test-publish-album-two").firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 10), "second publish candidate not shown")
+        second.tap()
+
+        let submit = app.buttons["albumPublish.submit"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 5), "publish submit button missing")
+        submit.tap()
+        XCTAssertFalse(sheet.waitForExistence(timeout: 15), "publish sheet did not dismiss")
+
+        let obj = try fetchMarketAlbum("test-publish-album", userID: "test2")
+        let episodes = obj["episodes"] as? [[String: Any]] ?? []
+        XCTAssertEqual(episodes.map { $0["id"] as? String }, ["test-publish-album-one"],
+                       "selected publish should expose only the first podcast")
+    }
+
+    // MARK: - 7. Marketplace album view filters private episodes for another user
+
+    func testOtherUserViewsPublishedAlbumFromPodcastToolbarWithoutPrivateEpisodes() throws {
+        let app = launch(userID: "test2")
+        app.buttons["Open market"].tap()
+
+        let publicCard = findMarketStation(app, id: "test-market-public")
+        XCTAssertTrue(publicCard.waitForExistence(timeout: 20), "published market podcast not visible")
+        XCTAssertFalse(app.descendants(matching: .any)
+            .matching(identifier: "market.station.test-market-private").firstMatch.exists,
+                       "private album podcast should not be visible in market")
+        publicCard.tap()
+        XCTAssertTrue(playerOpened(app), "public market podcast did not open")
+
+        var opened = false
+        for _ in 0..<4 {
+            app.buttons["player.more"].tap()
+            let viewAlbum = app.buttons["View Album"].firstMatch
+            if viewAlbum.waitForExistence(timeout: 4) {
+                viewAlbum.tap()
+                opened = true
+                break
+            }
+            dismissMenu(app)
+        }
+        XCTAssertTrue(opened, "View Album action never appeared for the public album podcast")
+
+        let albumView = app.descendants(matching: .any)
+            .matching(identifier: "album.view").firstMatch
+        XCTAssertTrue(albumView.waitForExistence(timeout: 10), "public album did not open")
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(identifier: "album.episode.test-market-public").firstMatch.waitForExistence(timeout: 8),
+                      "public album episode missing")
+        XCTAssertFalse(app.descendants(matching: .any)
+            .matching(identifier: "album.episode.test-market-private").firstMatch.waitForExistence(timeout: 3),
+                       "private album episode leaked into public album")
+    }
+
+    // MARK: - 8. Backend agreement: the chapters endpoint drives the checklist
 
     func testChapterProgressEndpointMatchesFixtures() throws {
         let url = URL(string: "\(baseURL)/api/discussions/test-audiobook/chapters")!
@@ -236,5 +312,22 @@ final class AudiobookAlbumTests: E2ETestCase {
         let predicate = NSPredicate(format: "label CONTAINS %@", text)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func fetchMarketAlbum(_ id: String, userID: String) throws -> [String: Any] {
+        let url = URL(string: "\(baseURL)/api/market/albums/\(id)")!
+        var req = URLRequest(url: url)
+        req.setValue("Bearer e2e-test-token", forHTTPHeaderField: "Authorization")
+        req.setValue(userID, forHTTPHeaderField: "X-E2E-User-ID")
+        return try syncJSON(req)
+    }
+
+    private func findMarketStation(_ app: XCUIApplication, id: String) -> XCUIElement {
+        let match = app.descendants(matching: .any)
+            .matching(identifier: "market.station.\(id)").firstMatch
+        if !match.waitForExistence(timeout: 5) {
+            app.swipeUp()
+        }
+        return match
     }
 }

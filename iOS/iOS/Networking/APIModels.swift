@@ -789,6 +789,7 @@ struct AlbumDTO: Codable, Hashable, Sendable, Identifiable {
     var rootDiscussionID: String?
     var cover: DiscussionCover?
     var episodeCount: Int?
+    var isOwner: Bool?
     var createdAt: String?
     var updatedAt: String?
 
@@ -796,6 +797,7 @@ struct AlbumDTO: Codable, Hashable, Sendable, Identifiable {
         case id, title, kind, cover
         case rootDiscussionID = "root_discussion_id"
         case episodeCount = "episode_count"
+        case isOwner = "is_owner"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
@@ -829,6 +831,19 @@ struct AlbumAddMembersRequest: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case discussionIDs = "discussion_ids"
+    }
+}
+
+/// POST /api/albums/{id}/publish request body.
+struct AlbumPublishRequest: Codable, Sendable {
+    var mode: String
+    var discussionIDs: [String]
+    var cover: DiscussionCover
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case discussionIDs = "discussion_ids"
+        case cover
     }
 }
 

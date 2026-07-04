@@ -690,6 +690,10 @@ final class APIClient: Sendable {
         try await get("/api/albums/\(id)")
     }
 
+    func publicAlbum(id: String) async throws -> AlbumDetailResponse {
+        try await get("/api/market/albums/\(id)")
+    }
+
     func createAlbum(title: String, discussionIDs: [String]) async throws -> AlbumDTO {
         try await send("POST", "/api/albums",
                        body: AlbumCreateRequest(title: title, discussionIDs: discussionIDs))
@@ -705,6 +709,11 @@ final class APIClient: Sendable {
     func addToAlbum(id: String, discussionIDs: [String]) async throws -> AlbumDTO {
         try await send("POST", "/api/albums/\(id)/discussions",
                        body: AlbumAddMembersRequest(discussionIDs: discussionIDs))
+    }
+
+    func publishAlbum(id: String, mode: String, discussionIDs: [String], cover: DiscussionCover) async throws -> AlbumDetailResponse {
+        try await send("POST", "/api/albums/\(id)/publish",
+                       body: AlbumPublishRequest(mode: mode, discussionIDs: discussionIDs, cover: cover))
     }
 
     func removeFromAlbum(id: String, discussionID: String) async throws {
@@ -1396,6 +1405,9 @@ final class APIClient: Sendable {
         req.setValue("ios", forHTTPHeaderField: "X-Client-Platform")
         req.setValue(Self.clientVersion, forHTTPHeaderField: "X-Client-Version")
         req.setValue(Self.clientBuild, forHTTPHeaderField: "X-Client-Build")
+        if AppConfig.isE2E {
+            req.setValue(AppConfig.e2eUserID, forHTTPHeaderField: "X-E2E-User-ID")
+        }
         if let body {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

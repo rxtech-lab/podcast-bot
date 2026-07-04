@@ -20,7 +20,9 @@ final class AuthManager {
 
     /// The fixed user surfaced in E2E mode. Its id matches the backend seed owner
     /// ("test") so ownership-dependent UI behaves consistently.
-    private static let e2eUser = User(id: "test", name: "Test", email: nil, image: nil)
+    private static var e2eUser: User {
+        User(id: AppConfig.e2eUserID, name: AppConfig.e2eUserID, email: nil, image: nil)
+    }
 
     init() {
         let keychainService = Self.keychainService

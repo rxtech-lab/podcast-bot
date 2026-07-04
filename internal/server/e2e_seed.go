@@ -238,5 +238,51 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 			return fmt.Errorf("seed transcript %s: %w", id, err)
 		}
 	}
+
+	// Album marketplace fixtures. test-publish-album starts private so the UI
+	// test can publish a selected member. test-market-album has one public and
+	// one private member so a second user can verify public album filtering.
+	if err := s.seedAlbumRow(ctx, "test-publish-album", "test", "E2E Publish Album", albumKindManual, ""); err != nil {
+		return fmt.Errorf("seed publish album: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-publish-album-one", "test", "E2E Publish Album One",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Publish Album One", 2, []int{1}),
+		"", "test-publish-album", albumBatchPositionBase+1); err != nil {
+		return fmt.Errorf("seed publish album one: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-publish-album-two", "test", "E2E Publish Album Two",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Publish Album Two", 2, []int{2}),
+		"", "test-publish-album", albumBatchPositionBase+2); err != nil {
+		return fmt.Errorf("seed publish album two: %w", err)
+	}
+	if err := s.seedAlbumRow(ctx, "test-market-album", "test", "E2E Market Album", albumKindManual, ""); err != nil {
+		return fmt.Errorf("seed market album: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-market-public", "test", "E2E Market Public Episode",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Market Public Episode", 2, []int{1}),
+		"", "test-market-album", albumBatchPositionBase+1); err != nil {
+		return fmt.Errorf("seed market public episode: %w", err)
+	}
+	if err := s.seedAudioBookRow(ctx, "test-market-private", "test", "E2E Market Private Episode",
+		string(DiscussionReady),
+		e2eAudioBookScript("E2E Market Private Episode", 2, []int{2}),
+		"", "test-market-album", albumBatchPositionBase+2); err != nil {
+		return fmt.Errorf("seed market private episode: %w", err)
+	}
+	marketCover := DiscussionCover{Type: "gradient", GradientStart: "#6E8BFF", GradientEnd: "#9B6EFF"}
+	if _, err := s.SetAlbumCover(ctx, "test", "test-market-album", marketCover); err != nil {
+		return fmt.Errorf("publish market album cover: %w", err)
+	}
+	if _, err := s.SetVisibility(ctx, "test", "test-market-public", DiscussionPublic, marketCover); err != nil {
+		return fmt.Errorf("publish market public episode: %w", err)
+	}
+	for _, id := range []string{"test-publish-album-one", "test-publish-album-two", "test-market-public", "test-market-private"} {
+		if err := s.seedTranscript(ctx, id); err != nil {
+			return fmt.Errorf("seed transcript %s: %w", id, err)
+		}
+	}
 	return nil
 }

@@ -53,6 +53,10 @@ func markGenerated(t *testing.T, store *DiscussionStore, d *Discussion, indices 
 }
 
 func apiJSON(t *testing.T, method, url string, body any, into any) (int, string) {
+	return apiJSONWithHeaders(t, method, url, body, nil, into)
+}
+
+func apiJSONWithHeaders(t *testing.T, method, url string, body any, headers map[string]string, into any) (int, string) {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -68,6 +72,9 @@ func apiJSON(t *testing.T, method, url string, body any, into any) (int, string)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -306,6 +313,74 @@ func TestAlbumEndpoints(t *testing.T) {
 	}
 }
 
+func TestAlbumPublishSelectedAndPublicMarketAlbumFiltersPrivateEpisodes(t *testing.T) {
+	env := newDiscussionAPITestEnv(t)
+	first := seedAudioBook(t, env.store, 3)
+	second := seedAudioBook(t, env.store, 2)
+	markGenerated(t, env.store, first, []int{1, 2, 3}, "job-first")
+	markGenerated(t, env.store, second, []int{1, 2}, "job-second")
+
+	var album Album
+	status, body := apiJSON(t, "POST", env.ts.URL+"/api/albums",
+		map[string]any{"title": "Market Album", "discussion_ids": []string{first.ID, second.ID}}, &album)
+	if status != http.StatusOK {
+		t.Fatalf("create album status=%d body=%s", status, body)
+	}
+
+	var detail albumDetailResponse
+	status, body = apiJSON(t, "POST", env.ts.URL+"/api/albums/"+album.ID+"/publish",
+		map[string]any{
+			"mode":           "selected",
+			"discussion_ids": []string{first.ID},
+			"cover": map[string]any{
+				"type":           "gradient",
+				"gradient_start": "#111111",
+				"gradient_end":   "#777777",
+			},
+		}, &detail)
+	if status != http.StatusOK || detail.Album == nil || len(detail.Episodes) != 2 {
+		t.Fatalf("publish selected status=%d body=%s detail=%+v", status, body, detail)
+	}
+	published, err := env.store.Get(context.Background(), anonUser, first.ID)
+	if err != nil || published == nil || published.Visibility != DiscussionPublic {
+		t.Fatalf("first visibility = %+v err=%v, want public", published, err)
+	}
+	private, err := env.store.Get(context.Background(), anonUser, second.ID)
+	if err != nil || private == nil || private.Visibility != DiscussionPrivate {
+		t.Fatalf("second visibility = %+v err=%v, want private", private, err)
+	}
+
+	var publicAlbum albumDetailResponse
+	status, body = apiJSONWithHeaders(t, "GET", env.ts.URL+"/api/market/albums/"+album.ID, nil,
+		map[string]string{"Authorization": "Bearer viewer-token"}, &publicAlbum)
+	if status != http.StatusOK || publicAlbum.Album == nil || publicAlbum.Album.IsOwner || len(publicAlbum.Episodes) != 1 {
+		t.Fatalf("public album status=%d body=%s detail=%+v", status, body, publicAlbum)
+	}
+	if publicAlbum.Episodes[0].ID != first.ID {
+		t.Fatalf("public album episode = %s, want only %s", publicAlbum.Episodes[0].ID, first.ID)
+	}
+
+	var marketRows []Discussion
+	status, body = apiJSONWithHeaders(t, "GET", env.ts.URL+"/api/market/stations", nil,
+		map[string]string{"Authorization": "Bearer viewer-token"}, &marketRows)
+	if status != http.StatusOK {
+		t.Fatalf("market list status=%d body=%s", status, body)
+	}
+	var found Discussion
+	for _, row := range marketRows {
+		if row.ID == first.ID {
+			found = row
+			break
+		}
+		if row.ID == second.ID {
+			t.Fatalf("private album member leaked into market list: %+v", row)
+		}
+	}
+	if found.ID == "" || found.Album == nil || found.Album.ID != album.ID || found.Album.EpisodeCount != 1 {
+		t.Fatalf("market row album summary = %+v on row %+v", found.Album, found)
+	}
+}
+
 func TestAlbumUIActions(t *testing.T) {
 	env := newDiscussionAPITestEnv(t)
 	root := seedAudioBook(t, env.store, 8)
@@ -327,7 +402,7 @@ func TestAlbumUIActions(t *testing.T) {
 	for _, item := range resp.Items {
 		ids = append(ids, item.ID)
 	}
-	want := []string{"generate-more-chapters", "add-podcasts", "rename-album", "edit-cover", "remove-album"}
+	want := []string{"generate-more-chapters", "publish-album", "add-podcasts", "rename-album", "edit-cover", "remove-album"}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("album actions = %v, want %v", ids, want)
 	}
