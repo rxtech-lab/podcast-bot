@@ -49,6 +49,15 @@ type AudioBookVideoOptions struct {
 	Speakers []string
 	Lines    []AudioBookVideoLine
 	Avatars  []AudioBookVideoAvatar
+
+	// Animations is the planner's per-image camera-move token list, parallel
+	// to the imagePaths argument (stall / panleft / panright / pantop /
+	// panbottom / zoomin / zoomout). Empty → a built-in fallback cycle.
+	Animations []string
+	// ImageOffsets is the audio-relative start time (seconds) of each image,
+	// parallel to imagePaths — captured from the live run's scene-marker
+	// timing. Empty or invalid → images split the duration evenly.
+	ImageOffsets []float64
 }
 
 // RenderAudioBookVideoWithOptions composes a finished audiobook into a
@@ -69,6 +78,15 @@ func RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath string, imagePa
 	}
 	if isConversationalAudioBookStyle(opts.Style) {
 		return renderConversationalAudioBookVideo(outPath, audioPath, vttPath, imagePaths, res, opts, dur)
+	}
+	// Narration style: Ken Burns pan/zoom over each illustration, timed to
+	// the live run's scene-marker offsets. The static concat slideshow below
+	// remains as a fallback if the frame-pipe render fails (e.g. an
+	// undecodable image).
+	if kbErr := renderKenBurnsAudioBookVideo(outPath, audioPath, vttPath, imagePaths, res, opts, dur); kbErr == nil {
+		return nil
+	} else {
+		fmt.Fprintf(os.Stderr, "audiobook kenburns render failed, falling back to static slideshow: %v\n", kbErr)
 	}
 	perImage := dur / float64(len(imagePaths))
 

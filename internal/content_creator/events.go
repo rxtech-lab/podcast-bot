@@ -46,9 +46,13 @@ type TranscriptMsg struct {
 	JudgementComment string
 	// ImageURL, when set, carries a generated illustration to show inline in
 	// the chat transcript (audiobook content). Such a message has no spoken
-	// Text — it's an image-only bubble the client renders at this point in the
-	// stream. Empty for ordinary sentence messages.
+	// spoken Text. Its Text field may still carry the planner's short caption
+	// so the client can label the active artwork.
 	ImageURL string
+	// AudioOffsetMS is the message's position on the produced audio timeline
+	// in milliseconds (the VTT offset space). Set only on image-only audiobook
+	// messages so live clients can time artwork switches. 0 means "unknown".
+	AudioOffsetMS int64
 }
 
 // TickMsg updates the elapsed/remaining clock display.

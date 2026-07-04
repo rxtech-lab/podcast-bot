@@ -1,6 +1,7 @@
 package contentcreator
 
 import (
+	"strings"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
@@ -181,13 +182,27 @@ func (o *Orchestrator) assignSeriesCharacterVoices(voices []tts.Voice) {
 	}
 	names := make([]string, 0, len(o.seriesCharacters))
 	genders := map[string]string{}
+	voiceCatalog := map[string]bool{}
+	for _, v := range voices {
+		if strings.TrimSpace(v.ShortName) != "" {
+			voiceCatalog[v.ShortName] = true
+		}
+	}
+	o.seriesCharacterVoices = map[string]string{}
 	for _, c := range o.seriesCharacters {
+		if hint := strings.TrimSpace(c.VoiceHint); hint != "" && voiceCatalog[hint] {
+			o.seriesCharacterVoices[c.Name] = hint
+			excluded[hint] = true
+			continue
+		}
 		names = append(names, c.Name)
 		genders[c.Name] = c.Gender
 	}
-	o.seriesCharacterVoices = agent.AssignCharacterVoices(
+	for name, voice := range agent.AssignCharacterVoices(
 		voices, names, genders, o.Topic.Language,
-		time.Now().UnixNano(), excluded, o.Log)
+		time.Now().UnixNano(), excluded, o.Log) {
+		o.seriesCharacterVoices[name] = voice
+	}
 	if h, ok := o.Registry.SeriesHost.(*agent.SeriesHost); ok {
 		h.SetCharacterVoices(o.seriesCharacterVoices)
 	}

@@ -30,6 +30,9 @@ type MessageRow struct {
 	At               time.Time
 	SourcesJSON      string `gorm:"type:text"`
 	JudgementComment string `gorm:"type:text"`
+	// AudioOffsetMS is the line's position on the produced audio timeline in
+	// milliseconds. Set only for audiobook image-only lines; 0 = unknown.
+	AudioOffsetMS int64
 }
 
 // TableName pins the table to "messages" so future rename of the Go type
@@ -105,6 +108,7 @@ func (s *Store) Append(line agent.TranscriptLine) uint {
 		At:               line.At,
 		SourcesJSON:      sourcesJSON,
 		JudgementComment: line.JudgementComment,
+		AudioOffsetMS:    line.AudioOffsetMS,
 	}
 	if err := s.db.Create(&row).Error; err != nil {
 		s.log.Warn("sqlite append failed", "speaker", line.Speaker, "err", err)
@@ -175,6 +179,7 @@ func (s *Store) Snapshot() ([]agent.TranscriptLine, error) {
 			At:               r.At,
 			Sources:          sources,
 			JudgementComment: r.JudgementComment,
+			AudioOffsetMS:    r.AudioOffsetMS,
 		}
 	}
 	return out, nil

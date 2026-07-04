@@ -107,13 +107,29 @@ final class PodcastTests: E2ETestCase {
         XCTAssertTrue(editModels.waitForExistence(timeout: 40), "plan card / edit-models never appeared")
         editModels.tap()
 
-        // Change the first speaker's model to gpt-4o.
-        let menu = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'speakerModel.menu.'")).firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 10), "speaker model menu not found")
-        menu.tap()
+        // Change the first speaker's model to gpt-4o. The model row pushes a
+        // searchable picker list grouped by company.
+        let modelLink = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'speakerModel.link.'")).firstMatch
+        XCTAssertTrue(modelLink.waitForExistence(timeout: 10), "speaker model link not found")
+        modelLink.tap()
+
+        // The E2E roster has no "company/" id prefixes, so every model lands in
+        // the "Others" group (headers may render uppercased).
+        let othersHeader = app.staticTexts
+            .matching(NSPredicate(format: "label ==[c] 'Others'")).firstMatch
+        XCTAssertTrue(othersHeader.waitForExistence(timeout: 6), "company group header not shown")
+
+        // Filter with the search field when it is reachable; a missed search
+        // bar must not block the pick itself (the roster is short).
+        let search = app.searchFields.firstMatch
+        if !search.waitForExistence(timeout: 3) { app.swipeDown() }
+        if search.waitForExistence(timeout: 3) {
+            search.tap()
+            search.typeText("gpt-4o")
+        }
         let option = app.buttons["model.gpt-4o"]
-        XCTAssertTrue(option.waitForExistence(timeout: 6), "gpt-4o option not found")
+        XCTAssertTrue(option.waitForExistence(timeout: 6), "gpt-4o option not found in picker")
         option.tap()
         app.buttons["Done"].firstMatch.tap()
 
@@ -128,6 +144,73 @@ final class PodcastTests: E2ETestCase {
         let raw = try fetchDiscussionRaw("test-plan")
         XCTAssertTrue(raw.contains("\"model\":\"gpt-4o\""),
                       "the changed speaker model did not persist across rounds")
+    }
+
+    // MARK: - 5b. Plan mode: model + voice picks survive leaving and re-entering
+
+    /// Regression test: pick a model and a voice for a speaker, leave the plan
+    /// screen, come back, and reopen the sheet — it must show the picked model
+    /// and voice, not the stale pre-edit values from the library list.
+    func testSpeakerModelVoicePersistAcrossReentry() throws {
+        let discussionID = "test-plan-voice"
+        let app = launch()
+        openLibraryRow(app, id: discussionID)
+
+        let input = app.textFields["plan.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 12), "planner input not found")
+        input.tap()
+        input.typeText("Plan a podcast about deep sea exploration")
+        app.buttons["plan.send"].tap()
+
+        app.swipeDown()
+
+        // Plan card appears; open speaker models.
+        let editModels = app.buttons["plan.editModels"]
+        XCTAssertTrue(editModels.waitForExistence(timeout: 40), "plan card / edit-models never appeared")
+        editModels.tap()
+
+        // Change the first speaker's model.
+        let modelLinkQuery = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'speakerModel.link.'"))
+        let modelLink = modelLinkQuery.firstMatch
+        XCTAssertTrue(modelLink.waitForExistence(timeout: 10), "speaker model link not found")
+        modelLink.tap()
+        let option = app.buttons["model.claude-sonnet-4-6"]
+        XCTAssertTrue(option.waitForExistence(timeout: 6), "claude-sonnet-4-6 option not found in picker")
+        option.tap()
+
+        // Pick a voice for the same speaker (the voice row is hidden while the
+        // model PATCH is in flight, so waiting for it also syncs on the save).
+        let voiceLink = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'speakerVoice.link.'")).firstMatch
+        XCTAssertTrue(voiceLink.waitForExistence(timeout: 10), "voice link not found after model change")
+        voiceLink.tap()
+        let voice = app.buttons["voice.en-US-E2EAvaNeural"]
+        XCTAssertTrue(voice.waitForExistence(timeout: 10), "E2E fake voice not offered in the picker")
+        voice.tap()
+
+        // Back in the sheet, the picked voice's display name shows once the
+        // PATCH round-trip completes.
+        XCTAssertTrue(app.staticTexts["E2E Ava"].waitForExistence(timeout: 10),
+                      "picked voice not shown in the sheet after selection")
+        app.buttons["Done"].firstMatch.tap()
+
+        // Leave the plan screen, then re-enter from the library.
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 8), "back button not available")
+        back.tap()
+        openLibraryRow(app, id: discussionID)
+
+        // Reopen the sheet: it must show the persisted model and voice.
+        XCTAssertTrue(editModels.waitForExistence(timeout: 40), "plan card did not reappear after re-entry")
+        editModels.tap()
+        XCTAssertTrue(app.staticTexts["E2E Ava"].waitForExistence(timeout: 10),
+                      "reopened sheet lost the picked voice (stale discussion)")
+        XCTAssertTrue(modelLink.waitForExistence(timeout: 10), "speaker model link not found after re-entry")
+        let labelUpdated = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS 'claude-sonnet-4-6'"), object: modelLink)
+        XCTAssertEqual(XCTWaiter().wait(for: [labelUpdated], timeout: 10), .completed,
+                       "reopened sheet lost the picked model (stale discussion), shows: \(modelLink.label)")
     }
 
     // MARK: - 6. Planning shortfall → back home → settings still opens

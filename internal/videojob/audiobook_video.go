@@ -2,7 +2,9 @@ package videojob
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,11 +37,22 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	}
 	imgs := orch.AudioBookImages()
 	sort.Slice(imgs, func(i, j int) bool { return imgs[i].Beat < imgs[j].Beat })
+	offsets := orch.AudioBookImageOffsets()
 	paths := make([]string, 0, len(imgs))
+	anims := make([]string, 0, len(imgs))
+	starts := make([]float64, 0, len(imgs))
+	haveAllOffsets := true
 	for _, im := range imgs {
-		if im.Path != "" {
-			paths = append(paths, im.Path)
+		if im.Path == "" {
+			continue
 		}
+		paths = append(paths, im.Path)
+		anims = append(anims, im.Animation)
+		off, ok := offsets[im.Beat]
+		if !ok {
+			haveAllOffsets = false
+		}
+		starts = append(starts, off)
 	}
 	if len(paths) == 0 {
 		// No illustrations → no slideshow to render. The audio + text doc still
@@ -47,7 +60,15 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 		logger.Info("audiobook video skipped", "reason", "no illustrations")
 		return
 	}
+	if !haveAllOffsets {
+		// Partial timing means some markers never fired; the renderer's
+		// even-split fallback beats a timeline with holes.
+		starts = nil
+	}
 	opts := audioBookVideoOptions(topic, orch.Transcript.Snapshot(), orch.AudioBookAvatars())
+	opts.Animations = anims
+	opts.ImageOffsets = starts
+	writeAudioBookVideoTimings(logger, jobOutDir, anims, starts)
 
 	res := video.Resolution(topic.Resolution)
 	if sub.Resolution != "" {
@@ -118,6 +139,30 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 		server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Video ready", "video")
 		notifyAudioBookVideoReady(runCtx, deps, logger)
 	})
+}
+
+// writeAudioBookVideoTimings persists the per-image animation + audio-offset
+// snapshot next to the generated scene PNGs so the manual re-render endpoint
+// can rebuild the same motion-timed video after the orchestrator is gone.
+// offsets may be nil (unknown timing → even split on re-render).
+func writeAudioBookVideoTimings(logger *slog.Logger, jobOutDir string, anims []string, offsets []float64) {
+	payload := struct {
+		Animations   []string  `json:"animations"`
+		ImageOffsets []float64 `json:"image_offsets,omitempty"`
+	}{Animations: anims, ImageOffsets: offsets}
+	body, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		logger.Warn("audiobook video timings marshal failed", "err", err)
+		return
+	}
+	path := filepath.Join(jobOutDir, "audiobook", "scenes", "timings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		logger.Warn("audiobook video timings dir failed", "err", err)
+		return
+	}
+	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
+		logger.Warn("audiobook video timings write failed", "err", err)
+	}
 }
 
 func persistAudioBookVideoKey(ctx context.Context, deps Deps, logger *slog.Logger, jobID, key string) {

@@ -104,13 +104,16 @@ final class APIClient: Sendable {
         return try await get("/api/discussions", query: queryItems)
     }
 
-    func discussion(id: String, editLimit: Int? = nil, editBefore: Int64? = nil) async throws -> Discussion {
+    func discussion(id: String, editLimit: Int? = nil, editBefore: Int64? = nil, includeEditTurns: Bool? = nil) async throws -> Discussion {
         var query: [URLQueryItem] = []
         if let editLimit {
             query.append(URLQueryItem(name: "edit_limit", value: String(editLimit)))
         }
         if let editBefore {
             query.append(URLQueryItem(name: "edit_before", value: String(editBefore)))
+        }
+        if let includeEditTurns {
+            query.append(URLQueryItem(name: "include_edit_turns", value: includeEditTurns ? "true" : "false"))
         }
         return try await get("/api/discussions/\(id)", query: query)
     }
@@ -686,6 +689,27 @@ final class APIClient: Sendable {
         return response.models ?? []
     }
 
+    /// The Azure TTS voices available for per-speaker assignment, fetched from
+    /// Azure's voices/list endpoint and cached server-side (24h).
+    func availableVoices() async throws -> [VoiceInfoDTO] {
+        let response: VoicesResponseDTO = try await get("/api/voices")
+        return response.voices ?? []
+    }
+
+    /// A playable URL for a short localized sample of one Azure voice. The
+    /// server owns the sample text for each supported plan language.
+    func previewVoice(voice: String, language: String) async throws -> URL {
+        let response: VoicePreviewResponseDTO = try await send(
+            "POST",
+            "/api/voices/preview",
+            body: VoicePreviewRequest(voice: voice, language: language)
+        )
+        guard let url = URL(string: response.url) else {
+            throw APIError.decoding("invalid preview url")
+        }
+        return url
+    }
+
     /// The content types currently supported by the planner. Today this is a
     /// single `discussion` entry, but the backend owns the list so clients do
     /// not hard-code future options.
@@ -739,6 +763,17 @@ final class APIClient: Sendable {
             "PATCH",
             "/api/discussions/\(id)/speaker-model",
             body: SpeakerModelRequest(speaker: speaker, model: model)
+        )
+    }
+
+    /// Changes the TTS voice for one speaker (host, discussant, or audiobook
+    /// narrator, by name) in a discussion's plan and returns the updated
+    /// discussion. An empty voice clears the override (back to automatic).
+    func updateSpeakerVoice(id: String, speaker: String, voice: String) async throws -> Discussion {
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/speaker-voice",
+            body: SpeakerVoiceRequest(speaker: speaker, voice: voice)
         )
     }
 

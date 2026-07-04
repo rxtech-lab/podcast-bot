@@ -1069,3 +1069,61 @@ private extension URL {
             .reduce(into: [:]) { result, item in result[item.name] = item.value ?? "" } ?? [:]
     }
 }
+
+// MARK: - Timed illustration timeline
+
+extension iOSTests {
+    private func imageLine(_ url: String, offset: Double? = nil, caption: String = "") -> LiveLine {
+        LiveLine(speaker: "Narrator", role: "series_host", text: caption, isUser: false, done: true,
+                 imageURL: url, audioOffsetSeconds: offset)
+    }
+
+    func testIllustrationTimelineUsesServerOffsets() {
+        let lines = [
+            LiveLine(speaker: "Narrator", role: "series_host", text: "hello", isUser: false, done: true),
+            imageLine("https://img/2.png", offset: 45),
+            imageLine("https://img/1.png", offset: 10, caption: "Chapter one"),
+        ]
+        let timeline = PlayerModel.buildIllustrationTimeline(lines: lines, duration: 120)
+        XCTAssertEqual(timeline.count, 2)
+        XCTAssertEqual(timeline[0].start, 10)
+        XCTAssertEqual(timeline[0].url.absoluteString, "https://img/1.png")
+        XCTAssertEqual(timeline[0].caption, "Chapter one")
+        XCTAssertEqual(timeline[1].start, 45)
+    }
+
+    func testIllustrationTimelineLegacyEvenSplit() {
+        // No offsets recorded (legacy audiobook) → even split over duration.
+        let lines = [
+            imageLine("https://img/a.png"),
+            imageLine("https://img/b.png"),
+            imageLine("https://img/c.png"),
+        ]
+        let timeline = PlayerModel.buildIllustrationTimeline(lines: lines, duration: 90)
+        XCTAssertEqual(timeline.count, 3)
+        XCTAssertEqual(timeline[0].start, 0)
+        XCTAssertEqual(timeline[1].start, 30)
+        XCTAssertEqual(timeline[2].start, 60)
+    }
+
+    func testIllustrationTimelineEmptyWithoutDurationOrImages() {
+        // Unknown duration + no offsets → no timeline (artwork stays on cover).
+        let legacy = [imageLine("https://img/a.png")]
+        XCTAssertTrue(PlayerModel.buildIllustrationTimeline(lines: legacy, duration: 0).isEmpty)
+        // No image lines at all.
+        let textOnly = [LiveLine(speaker: "N", role: "series_host", text: "hi", isUser: false, done: true)]
+        XCTAssertTrue(PlayerModel.buildIllustrationTimeline(lines: textOnly, duration: 100).isEmpty)
+    }
+
+    func testIllustrationTimelineDedupsRepeatedURLs() {
+        let lines = [
+            imageLine("https://img/a.png", offset: 5),
+            imageLine("https://img/a.png", offset: 40),
+            imageLine("https://img/b.png", offset: 60),
+        ]
+        let timeline = PlayerModel.buildIllustrationTimeline(lines: lines, duration: 100)
+        XCTAssertEqual(timeline.count, 2)
+        XCTAssertEqual(timeline[0].start, 5)
+        XCTAssertEqual(timeline[1].start, 60)
+    }
+}

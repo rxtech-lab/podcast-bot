@@ -11,12 +11,15 @@ import (
 // AudioBookImage is one generated illustration for an audiobook. Beat is the
 // 0-based scene index it's anchored to (aligned with seriesNarrationPlan);
 // Path is the on-disk PNG; URL is its stable/presigned object-storage URL;
-// Caption is the planner's short description of the beat.
+// Caption is the planner's short description of the beat. Animation is the
+// planner's camera-move token for the video post-pass (stall / pan* / zoom*;
+// empty means stall).
 type AudioBookImage struct {
-	Beat    int
-	Path    string
-	URL     string
-	Caption string
+	Beat      int
+	Path      string
+	URL       string
+	Caption   string
+	Animation string
 }
 
 // AudioBookAvatar is one generated speaker portrait for the conversational
@@ -49,6 +52,35 @@ func (o *Orchestrator) AudioBookAvatars() []AudioBookAvatar {
 	return append([]AudioBookAvatar(nil), o.audioBookAvatars...)
 }
 
+// recordAudioBookImageOffset stores the audio-timeline position at which the
+// pipeline emitted beat's illustration. Later emissions of the same beat win
+// (a re-fired marker means the image re-appeared at the newer moment — but in
+// practice each beat fires once).
+func (o *Orchestrator) recordAudioBookImageOffset(beat int, seconds float64) {
+	if beat < 0 || seconds < 0 {
+		return
+	}
+	o.audioBookImageOffsetsMu.Lock()
+	defer o.audioBookImageOffsetsMu.Unlock()
+	if o.audioBookImageOffsets == nil {
+		o.audioBookImageOffsets = make(map[int]float64)
+	}
+	o.audioBookImageOffsets[beat] = seconds
+}
+
+// AudioBookImageOffsets returns a copy of the per-beat audio offsets (seconds)
+// captured during the live run. Empty for non-audiobook runs or when no scene
+// markers fired.
+func (o *Orchestrator) AudioBookImageOffsets() map[int]float64 {
+	o.audioBookImageOffsetsMu.Lock()
+	defer o.audioBookImageOffsetsMu.Unlock()
+	out := make(map[int]float64, len(o.audioBookImageOffsets))
+	for k, v := range o.audioBookImageOffsets {
+		out[k] = v
+	}
+	return out
+}
+
 // audioBookImageURLs returns the per-beat URL slice (index = beat) the
 // pipeline emits into the chat transcript on each `<scene N/>` marker.
 func (o *Orchestrator) audioBookImageURLs() []string {
@@ -68,6 +100,28 @@ func (o *Orchestrator) audioBookImageURLs() []string {
 		}
 	}
 	return urls
+}
+
+// audioBookImageCaptions returns the per-beat caption slice that parallels
+// audioBookImageURLs. Empty captions are allowed; the client simply omits the
+// artwork caption for those beats.
+func (o *Orchestrator) audioBookImageCaptions() []string {
+	if len(o.audioBookImages) == 0 {
+		return nil
+	}
+	maxBeat := 0
+	for _, img := range o.audioBookImages {
+		if img.Beat > maxBeat {
+			maxBeat = img.Beat
+		}
+	}
+	captions := make([]string, maxBeat+1)
+	for _, img := range o.audioBookImages {
+		if img.Beat >= 0 && img.Beat < len(captions) {
+			captions[img.Beat] = strings.TrimSpace(img.Caption)
+		}
+	}
+	return captions
 }
 
 func (o *Orchestrator) buildAudioBookAgents() error {
@@ -95,6 +149,7 @@ func (o *Orchestrator) buildAudioBookAgents() error {
 				Name:        s.Name,
 				Gender:      s.Gender,
 				Description: s.Description,
+				VoiceHint:   s.Voice,
 			})
 		}
 		o.seriesCharacters = cast
@@ -139,6 +194,7 @@ func audioBookCharacters(t *config.DebateTopic) []agent.SeriesCharacter {
 			Name:        s.Name,
 			Gender:      s.Gender,
 			Description: s.Description,
+			AzureVoice:  s.Voice,
 		})
 	}
 	return out

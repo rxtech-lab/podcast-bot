@@ -825,7 +825,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 	}
 	jobs, err := server.NewJobRegistry(
 		filepath.Join(dataRoot, "jobs.db"),
-		env.TursoConnectionURL,
+		env.DatabaseURL,
 		env.TursoAuthToken,
 	)
 	if err != nil {
@@ -842,7 +842,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 	}
 	discussions, err := server.NewDiscussionStore(
 		filepath.Join(dataRoot, "native-discussions.db"),
-		env.TursoConnectionURL,
+		env.DatabaseURL,
 		env.TursoAuthToken,
 	)
 	if err != nil {
@@ -926,6 +926,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		Progress:        server.NewDiscussionProgressStore(env.RedisURL, log),
 		PlanningStreams: server.NewPlanningStreamStore(env.RedisURL, log),
 		ModelCatalog:    server.NewModelCatalogStore(env.RedisURL, log),
+		VoiceCatalog:    server.NewVoiceCatalogStore(env.RedisURL, log),
 		Log:             log,
 		UploadRoot:      uploadRoot,
 		Password:        password,

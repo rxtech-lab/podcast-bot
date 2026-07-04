@@ -102,6 +102,11 @@ type TranscriptLine struct {
 	Addressed        bool
 	Sources          []TranscriptSource
 	JudgementComment string
+	// AudioOffsetMS is the line's position on the produced audio timeline in
+	// milliseconds (the same offset space as the VTT captions). Currently set
+	// only for image-only audiobook lines so clients can switch artwork in
+	// sync with playback. 0 means "unknown".
+	AudioOffsetMS int64
 }
 
 // TranscriptSource is a compact public reference attached to one transcript

@@ -1031,6 +1031,12 @@
         }
       }
     },
+    "Automatic" : {
+
+    },
+    "Automatic voice" : {
+      "comment" : "Voice row label when no explicit TTS voice is picked"
+    },
     "Balance" : {
       "comment" : "User menu label when the points balance is unknown",
       "localizations" : {
@@ -3888,6 +3894,9 @@
         }
       }
     },
+    "Let the engine pick a fitting voice" : {
+
+    },
     "Liked" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4066,6 +4075,12 @@
         }
       }
     },
+    "Loading models" : {
+
+    },
+    "Loading models…" : {
+
+    },
     "Loading podcast" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4158,6 +4173,9 @@
         }
       }
     },
+    "Loading voices…" : {
+
+    },
     "Loading..." : {
       "comment" : "Resolving parent discussion title",
       "localizations" : {
@@ -4182,6 +4200,7 @@
       }
     },
     "Loading…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -4602,6 +4621,7 @@
       }
     },
     "No models available" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -4622,6 +4642,9 @@
           }
         }
       }
+    },
+    "No models available." : {
+
     },
     "No podcasts yet" : {
       "extractionState" : "stale",
@@ -4869,6 +4892,9 @@
         }
       }
     },
+    "No voices available." : {
+
+    },
     "None" : {
       "comment" : "No parent discussion selected",
       "localizations" : {
@@ -5071,6 +5097,9 @@
           }
         }
       }
+    },
+    "Others" : {
+      "comment" : "Model picker section for models without a company prefix"
     },
     "Panelists" : {
       "localizations" : {
@@ -6888,6 +6917,9 @@
         }
       }
     },
+    "Search models" : {
+
+    },
     "Search pages" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6953,6 +6985,9 @@
           }
         }
       }
+    },
+    "Search voices" : {
+
     },
     "Search your %@" : {
       "localizations" : {
@@ -8255,6 +8290,7 @@
       }
     },
     "The selected model is used for this speaker when the plan is generated." : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

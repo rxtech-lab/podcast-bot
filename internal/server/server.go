@@ -90,6 +90,9 @@ type Deps struct {
 	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
 	// in Redis for 24h. nil disables caching — the handler fetches live each time.
 	ModelCatalog *ModelCatalogStore
+	// VoiceCatalog caches the Azure TTS voice roster (GET /api/voices) in Redis
+	// for 24h. nil disables caching — the handler fetches live each time.
+	VoiceCatalog *VoiceCatalogStore
 	Log          *slog.Logger
 	UploadRoot   string
 	SubmitJob    func(jobID string, sub JobSubmission) error
@@ -233,6 +236,8 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/discussion-types", s.handleDiscussionTypes)
 	s.mux.HandleFunc("GET /api/templates", s.handleTemplates)
 	s.mux.HandleFunc("GET /api/models", s.handleModels)
+	s.mux.HandleFunc("GET /api/voices", s.handleVoices)
+	s.mux.HandleFunc("POST /api/voices/preview", s.handleVoicePreview)
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/plan", s.handlePlan)
 	s.mux.HandleFunc("POST /api/plan/improve", s.handlePlanImprove)
@@ -306,6 +311,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/visibility", s.handleDiscussionVisibility)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/speaker-model", s.handleUpdateSpeakerModel)
+		s.mux.HandleFunc("PATCH /api/discussions/{id}/speaker-voice", s.handleUpdateSpeakerVoice)
 		s.mux.HandleFunc("POST /api/discussions/{id}/cover/generate", s.handleDiscussionCoverGenerate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/cover", s.handleDiscussionCoverSet)
 		s.mux.HandleFunc("POST /api/discussions/{id}/lines", s.handleDiscussionAppendLine)
@@ -502,6 +508,9 @@ type transcriptDTO struct {
 	At               time.Time                `json:"at"`
 	Sources          []agent.TranscriptSource `json:"sources,omitempty"`
 	JudgementComment string                   `json:"judgement_comment,omitempty"`
+	// AudioOffsetMS is the line's position on the audio timeline in
+	// milliseconds (audiobook image lines only; 0/omitted = unknown).
+	AudioOffsetMS int64 `json:"audio_offset_ms,omitempty"`
 }
 
 func toDTO(l agent.TranscriptLine) transcriptDTO {
@@ -509,6 +518,7 @@ func toDTO(l agent.TranscriptLine) transcriptDTO {
 		Speaker: l.Speaker, Role: string(l.Role), Side: l.Side,
 		Text: l.Text, ImageURL: l.ImageURL, At: l.At, Sources: l.Sources,
 		JudgementComment: l.JudgementComment,
+		AudioOffsetMS:    l.AudioOffsetMS,
 	}
 }
 
@@ -681,6 +691,9 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 		}
 		if m.ImageURL != "" {
 			payload["image_url"] = m.ImageURL
+		}
+		if m.AudioOffsetMS > 0 {
+			payload["audio_offset_ms"] = m.AudioOffsetMS
 		}
 		return eventEnvelope{"transcript", payload}, true
 	case contentcreator.TickMsg:

@@ -20,11 +20,21 @@ class E2ETestCase: XCTestCase {
     // MARK: - Launch helpers
 
     @discardableResult
-    func launch(deepLink: String? = nil) -> XCUIApplication {
+    func launch(deepLink: String? = nil, resetNewDiscussionSettings: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
         var env = ["E2E_TEST_MODE": "1", "E2E_API_BASE_URL": baseURL]
         if let deepLink { env["E2E_DEEP_LINK"] = deepLink }
         app.launchEnvironment = env
+        if resetNewDiscussionSettings {
+            app.launchArguments += [
+                "-newDiscussion.settings.type", "discussion",
+                "-newDiscussion.settings.template", "default",
+                "-newDiscussion.settings.discussants", "3",
+                "-newDiscussion.settings.language", "en-US",
+                "-newDiscussion.settings.generateCover", "NO",
+                "-newDiscussion.settings.hasStoredValues", "NO",
+            ]
+        }
         app.launch()
         return app
     }

@@ -6,13 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
-	libsql "github.com/tursodatabase/libsql-client-go/libsql"
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
@@ -79,15 +74,21 @@ const (
 
 const discussionSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
+	tts_cost_usd, music_cost_usd, points_charged, points_reserved, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, script_json, markdown, sources_json, researched,
 	reference_discussion_id, plan_template, created_at, updated_at`
 
 const discussionListSelectColumns = `id, owner_user_id, topic, title, status, language, job_id,
 	download_url, duration_seconds, prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, llm_cost_known,
-	tts_cost_usd, music_cost_usd, points_charged, visibility, published_at, cover_type, cover_image_url,
+	tts_cost_usd, music_cost_usd, points_charged, points_reserved, visibility, published_at, cover_type, cover_image_url,
 	cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt, '' AS script_json, '' AS markdown, '[]' AS sources_json, researched,
 	reference_discussion_id, plan_template, created_at, updated_at`
+
+const joinedJobSelectColumns = `j.id, j.status, j.s3_key, j.audio_s3_key, j.audio_only,
+	j.prompt_tokens, j.completion_tokens, j.total_tokens, j.llm_cost_usd, j.llm_cost_known,
+	j.tts_cost_usd, j.music_cost_usd`
+
+const discussionSummaryListSelectColumns = `sm.status AS summary_status, sm.generated_at AS summary_generated_at`
 
 var (
 	errDiscussionNotVisible = errors.New("discussion is not visible")
@@ -159,6 +160,7 @@ type Discussion struct {
 	// usage figure shown to end users; the token/cost fields above are hidden
 	// from clients (zeroed) once the points economy is enabled.
 	PointsCharged    int64                `json:"points_charged"`
+	PointsReserved   int64                `json:"-"`
 	ShowUsageSummary bool                 `json:"showUsageSummary"`
 	Visibility       DiscussionVisibility `json:"visibility"`
 	// ShareURL is the canonical public web link for this podcast — the same
@@ -190,48 +192,23 @@ type Discussion struct {
 	// summary content endpoint when the summary view mounts. Populated lazily on
 	// the detail path only.
 	Summary             *SummaryMeta `json:"summary,omitempty"`
-	AllowSendingMessage bool         `json:"allowSendingMessage"`
-	CreatedAt           time.Time    `json:"created_at"`
-	UpdatedAt           time.Time    `json:"updated_at"`
+	summaryMetaLoaded   bool
+	joinedJob           *Job
+	AllowSendingMessage bool      `json:"allowSendingMessage"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type DiscussionStore struct {
-	db            *sql.DB
+	db            *sqlDB
 	joinVideoJobs bool
 }
 
 func NewDiscussionStore(dbPath, primaryURL, authToken string) (*DiscussionStore, error) {
-	var (
-		db  *sql.DB
-		err error
-	)
-	if primaryURL != "" {
-		var opts []libsql.Option
-		if authToken != "" {
-			opts = append(opts, libsql.WithAuthToken(authToken))
-		}
-		c, err := libsql.NewConnector(primaryURL, opts...)
-		if err != nil {
-			return nil, err
-		}
-		db = sql.OpenDB(c)
-	} else {
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-			return nil, err
-		}
-		db, err = sql.Open("sqlite3", sqliteDSN(dbPath))
-		if err != nil {
-			return nil, err
-		}
+	db, err := openSQLDatabase(dbPath, primaryURL, authToken)
+	if err != nil {
+		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	// The hosted libsql/Turso connector keeps a long-lived HTTP stream per
-	// connection. When that stream sits idle the server tears it down, and the
-	// next use fails with "stream is closed: driver: bad connection". Cap the
-	// connection lifetime/idle time so database/sql recycles the stream before
-	// it goes stale rather than handing back a dead one.
-	db.SetConnMaxIdleTime(30 * time.Second)
-	db.SetConnMaxLifetime(5 * time.Minute)
 	s := &DiscussionStore{db: db}
 	if err := s.ensureSchema(context.Background()); err != nil {
 		_ = s.Close()
@@ -263,9 +240,7 @@ func (s *DiscussionStore) tableExists(ctx context.Context, name string) bool {
 	if s == nil || s.db == nil || strings.TrimSpace(name) == "" {
 		return false
 	}
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
-	return err == nil && count > 0
+	return s.db.tableExists(ctx, name)
 }
 
 func (s *DiscussionStore) videoJobsJoin() string {
@@ -273,6 +248,10 @@ func (s *DiscussionStore) videoJobsJoin() string {
 		return ` LEFT JOIN video_jobs j ON j.id = d.job_id`
 	}
 	return ""
+}
+
+func summaryMetaJoin() string {
+	return " LEFT JOIN native_discussion_summaries sm ON sm.discussion_id = d.id AND sm.doc_type = '" + SummaryDocTypeSummary + "'"
 }
 
 func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
@@ -346,6 +325,24 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS native_discussion_speaker_models_discussion_idx
 			ON native_discussion_speaker_models(discussion_id)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_speaker_voices (
+			discussion_id TEXT NOT NULL,
+			speaker_name TEXT NOT NULL,
+			voice TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, speaker_name),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS native_discussion_speaker_voices_discussion_idx
+			ON native_discussion_speaker_voices(discussion_id)`,
+		`CREATE TABLE IF NOT EXISTS voice_previews (
+			voice TEXT NOT NULL,
+			language TEXT NOT NULL,
+			s3_key TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY(voice, language)
+		)`,
 		`CREATE TABLE IF NOT EXISTS native_discussion_likes (
 			user_id TEXT NOT NULL,
 			discussion_id TEXT NOT NULL,
@@ -496,7 +493,7 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		}
 	}
 	// Partial index: enforce op_id uniqueness only for real ids, so legacy rows
-	// (op_id = '') coexist and an INSERT OR IGNORE retry collapses to a no-op.
+	// (op_id = '') coexist and an ON CONFLICT retry collapses to a no-op.
 	if _, err := s.exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS native_discussion_edit_turns_op_idx
 		ON native_discussion_edit_turns(op_id) WHERE op_id != ''`); err != nil {
 		return err
@@ -532,6 +529,9 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 // intact (those rows have an empty key) while letting distinct voice notes (each
 // with a unique upload key) coexist. Idempotent: a no-op once migrated.
 func (s *DiscussionStore) migrateLineUniqueness(ctx context.Context) error {
+	if s.db.kind == databasePostgres {
+		return nil
+	}
 	var ddl string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name='native_discussion_lines'`).Scan(&ddl)
@@ -731,7 +731,8 @@ func (s *DiscussionStore) list(ctx context.Context, owner string, visibility Dis
 	}
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
-			FROM native_discussions d`+s.videoJobsJoin()+` WHERE `+where+`
+			, `+discussionSummaryListSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+` WHERE `+where+`
 			ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
@@ -739,7 +740,7 @@ func (s *DiscussionStore) list(ctx context.Context, owner string, visibility Dis
 	defer rows.Close()
 	out := make([]Discussion, 0)
 	for rows.Next() {
-		d, err := scanDiscussion(rows)
+		d, err := scanDiscussionWithSummary(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -784,7 +785,8 @@ func (s *DiscussionStore) ListParentPodcasts(ctx context.Context, owner, query s
 	}
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
-			FROM native_discussions d`+s.videoJobsJoin()+`
+			, `+discussionSummaryListSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+`
 			WHERE `+where+`
 			ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
@@ -793,7 +795,7 @@ func (s *DiscussionStore) ListParentPodcasts(ctx context.Context, owner, query s
 	defer rows.Close()
 	out := make([]Discussion, 0)
 	for rows.Next() {
-		d, err := scanDiscussion(rows)
+		d, err := scanDiscussionWithSummary(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -822,7 +824,8 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 	}
 	args = append(args, pattern, pattern, pattern, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
-			FROM native_discussions d`+s.videoJobsJoin()+`
+			, `+discussionSummaryListSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+`
 			WHERE `+where+` AND (
 			d.topic LIKE ? ESCAPE '\' OR
 			d.title LIKE ? ESCAPE '\' OR
@@ -834,7 +837,7 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 	defer rows.Close()
 	out := make([]Discussion, 0)
 	for rows.Next() {
-		d, err := scanDiscussion(rows)
+		d, err := scanDiscussionWithSummary(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -872,18 +875,19 @@ func (s *DiscussionStore) ListByCreator(ctx context.Context, viewer, creatorID, 
 	}
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`,
-		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
-		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
-		d.owner_user_id = ? AS is_owner
-		FROM native_discussions d`+s.videoJobsJoin()+where+`
-		ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
+			(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
+			EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
+			d.owner_user_id = ? AS is_owner,
+			`+discussionSummaryListSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+where+`
+			ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := make([]Discussion, 0)
 	for rows.Next() {
-		d, err := scanDiscussionWithMarket(rows)
+		d, err := scanDiscussionWithMarketSummary(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -922,17 +926,18 @@ func (s *DiscussionStore) listMarket(ctx context.Context, viewer, query string, 
 	}
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`,
-		(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
-		EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
-		d.owner_user_id = ? AS is_owner`+from+where+`
-		ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
+			(SELECT COUNT(1) FROM native_discussion_likes l WHERE l.discussion_id = d.id) AS like_count,
+			EXISTS(SELECT 1 FROM native_discussion_likes l WHERE l.discussion_id = d.id AND l.user_id = ?) AS is_liked,
+			d.owner_user_id = ? AS is_owner,
+			`+discussionSummaryListSelectColumns+from+summaryMetaJoin()+where+`
+			ORDER BY d.published_at DESC, d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := make([]Discussion, 0)
 	for rows.Next() {
-		d, err := scanDiscussionWithMarket(rows)
+		d, err := scanDiscussionWithMarketSummary(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -961,7 +966,7 @@ func (s *DiscussionStore) GetVisible(ctx context.Context, viewer, id string) (*D
 		return nil, err
 	}
 	markDiscussionViewer(&d, viewer)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	lines, err := s.lines(ctx, id)
@@ -993,8 +998,8 @@ func (s *DiscussionStore) LikeWithCreated(ctx context.Context, viewer, id string
 	if ok, err := s.isPublic(ctx, id); err != nil || !ok {
 		return nil, false, err
 	}
-	res, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_likes
-		(user_id, discussion_id, created_at) VALUES (?, ?, ?)`, viewer, id, time.Now().UnixMilli())
+	res, err := s.exec(ctx, `INSERT INTO native_discussion_likes
+		(user_id, discussion_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, viewer, id, time.Now().UnixMilli())
 	if err != nil {
 		return nil, false, err
 	}
@@ -1125,7 +1130,7 @@ func (s *DiscussionStore) NotionConnection(ctx context.Context, userID string) (
 // here re-runs the statement on a fresh connection.
 //
 // IMPORTANT: the retry re-executes the statement, so callers must only pass
-// idempotent writes — UPDATE/DELETE, upserts (ON CONFLICT / INSERT OR IGNORE),
+// idempotent writes — UPDATE/DELETE, upserts (ON CONFLICT),
 // or inserts keyed so a re-run collapses to a no-op. A blind INSERT with an
 // autoincrement id must not use this path (it would duplicate on retry); make it
 // idempotent first or run it via s.db.ExecContext without retry.
@@ -1172,8 +1177,8 @@ func (s *DiscussionStore) FollowCreator(ctx context.Context, follower, creatorID
 		return target, err
 	}
 	if follower != creatorID {
-		_, err := s.exec(ctx, `INSERT OR IGNORE INTO creator_follows
-			(follower_user_id, creator_user_id, created_at) VALUES (?, ?, ?)`,
+		_, err := s.exec(ctx, `INSERT INTO creator_follows
+			(follower_user_id, creator_user_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
 			follower, creatorID, time.Now().UnixMilli())
 		if err != nil {
 			return nil, err
@@ -1392,16 +1397,43 @@ func escapeLike(s string) string {
 }
 
 func (s *DiscussionStore) Get(ctx context.Context, owner, id string) (*Discussion, error) {
-	d, err := s.getDiscussion(ctx, owner, id)
+	return s.GetTimed(ctx, owner, id, nil)
+}
+
+func (s *DiscussionStore) GetTimed(ctx context.Context, owner, id string, timer *stationTimer) (*Discussion, error) {
+	return s.getTimed(ctx, owner, id, true, timer)
+}
+
+func (s *DiscussionStore) GetWithoutEditTurnsTimed(ctx context.Context, owner, id string, timer *stationTimer) (*Discussion, error) {
+	return s.getTimed(ctx, owner, id, false, timer)
+}
+
+func (s *DiscussionStore) getTimed(ctx context.Context, owner, id string, includeEditTurns bool, timer *stationTimer) (*Discussion, error) {
+	t0 := time.Now()
+	d, err := s.getDiscussionTimed(ctx, owner, id, timer)
+	if timer != nil {
+		timer.mark("store_discussion", t0)
+	}
 	if err != nil || d == nil {
 		return d, err
 	}
-	lines, err := s.Lines(ctx, owner, id)
+	t0 = time.Now()
+	lines, err := s.lines(ctx, id)
+	if timer != nil {
+		timer.mark("store_lines", t0)
+	}
 	if err != nil {
 		return nil, err
 	}
 	d.Lines = lines
-	turns, err := s.EditTurns(ctx, owner, id)
+	if !includeEditTurns {
+		return d, nil
+	}
+	t0 = time.Now()
+	turns, err := s.editTurns(ctx, id)
+	if timer != nil {
+		timer.mark("store_edit_turns", t0)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1424,7 +1456,7 @@ func (s *DiscussionStore) GetByJobID(ctx context.Context, jobID string) (*Discus
 		return nil, err
 	}
 	markDiscussionViewer(&d, d.OwnerUserID)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -1445,16 +1477,48 @@ func (s *DiscussionStore) GetForNotification(ctx context.Context, id string) (*D
 		return nil, err
 	}
 	markDiscussionViewer(&d, d.OwnerUserID)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	if err := s.applySpeakerOverrides(ctx, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
 }
 
 func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (*Discussion, error) {
+	return s.getDiscussionTimed(ctx, owner, id, nil)
+}
+
+func (s *DiscussionStore) getDiscussionTimed(ctx context.Context, owner, id string, timer *stationTimer) (*Discussion, error) {
+	if s.joinVideoJobs {
+		t0 := time.Now()
+		row := s.db.QueryRowContext(ctx, `SELECT `+prefixedDiscussionSelectColumns("d")+`, `+joinedJobSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+` WHERE d.owner_user_id = ? AND d.id = ?`, owner, id)
+		d, err := scanDiscussionWithJoinedJob(row)
+		if timer != nil {
+			timer.mark("store_discussion_row", t0)
+		}
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		markDiscussionViewer(&d, owner)
+		t0 = time.Now()
+		if err := s.applySpeakerOverridesTimed(ctx, &d, timer); err != nil {
+			return nil, err
+		}
+		if timer != nil {
+			timer.mark("store_speaker_overrides", t0)
+		}
+		return &d, nil
+	}
+	t0 := time.Now()
 	row := s.db.QueryRowContext(ctx, `SELECT `+discussionSelectColumns+`
 		FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
 	d, err := scanDiscussion(row)
+	if timer != nil {
+		timer.mark("store_discussion_row", t0)
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -1462,23 +1526,43 @@ func (s *DiscussionStore) getDiscussion(ctx context.Context, owner, id string) (
 		return nil, err
 	}
 	markDiscussionViewer(&d, owner)
-	if err := s.applySpeakerModelOverrides(ctx, &d); err != nil {
+	t0 = time.Now()
+	if err := s.applySpeakerOverridesTimed(ctx, &d, timer); err != nil {
 		return nil, err
+	}
+	if timer != nil {
+		timer.mark("store_speaker_overrides", t0)
 	}
 	return &d, nil
 }
 
 func (s *DiscussionStore) GetWithEditTurnPage(ctx context.Context, owner, id string, limit int, beforeID int64) (*Discussion, error) {
+	return s.GetWithEditTurnPageTimed(ctx, owner, id, limit, beforeID, nil)
+}
+
+func (s *DiscussionStore) GetWithEditTurnPageTimed(ctx context.Context, owner, id string, limit int, beforeID int64, timer *stationTimer) (*Discussion, error) {
+	t0 := time.Now()
 	d, err := s.getDiscussion(ctx, owner, id)
+	if timer != nil {
+		timer.mark("store_discussion", t0)
+	}
 	if err != nil || d == nil {
 		return d, err
 	}
-	lines, err := s.Lines(ctx, owner, id)
+	t0 = time.Now()
+	lines, err := s.lines(ctx, id)
+	if timer != nil {
+		timer.mark("store_lines", t0)
+	}
 	if err != nil {
 		return nil, err
 	}
 	d.Lines = lines
-	turns, hasMore, err := s.EditTurnsPage(ctx, owner, id, limit, beforeID)
+	t0 = time.Now()
+	turns, hasMore, err := s.editTurnsPage(ctx, id, limit, beforeID)
+	if timer != nil {
+		timer.mark("store_edit_turns", t0)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1506,6 +1590,10 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 		if err := s.applySpeakerModelOverridesToScript(ctx, id, resp.Script); err != nil {
 			return nil, err
 		}
+		// Voice overrides are deliberately NOT applied here: baking a voice
+		// into the persisted script_json would survive a later "clear back to
+		// auto" (the override row is deleted but the stored script keeps the
+		// stale voice). Voices are layered on at read time only.
 		title = resp.Script.Title
 		language = resp.Script.Language
 	}
@@ -1535,11 +1623,31 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	return s.Get(ctx, owner, id)
 }
 
-func (s *DiscussionStore) applySpeakerModelOverrides(ctx context.Context, d *Discussion) error {
+// applySpeakerOverrides layers the user's per-speaker model and voice
+// overrides onto a freshly loaded discussion's script.
+func (s *DiscussionStore) applySpeakerOverrides(ctx context.Context, d *Discussion) error {
+	return s.applySpeakerOverridesTimed(ctx, d, nil)
+}
+
+func (s *DiscussionStore) applySpeakerOverridesTimed(ctx context.Context, d *Discussion, timer *stationTimer) error {
 	if d == nil || d.Script == nil {
 		return nil
 	}
-	return s.applySpeakerModelOverridesToScript(ctx, d.ID, d.Script)
+	t0 := time.Now()
+	models, voices, err := s.speakerOverrides(ctx, d.ID)
+	if timer != nil {
+		timer.mark("store_speaker_overrides_query", t0)
+	}
+	if err != nil {
+		return err
+	}
+	t0 = time.Now()
+	applySpeakerModelOverridesToTopic(d.Script, models)
+	applySpeakerVoiceOverridesToTopic(d.Script, voices)
+	if timer != nil {
+		timer.mark("store_speaker_overrides_apply", t0)
+	}
+	return nil
 }
 
 func (s *DiscussionStore) applySpeakerModelOverridesToScript(ctx context.Context, discussionID string, script *config.DebateTopic) error {
@@ -1587,6 +1695,54 @@ func (s *DiscussionStore) speakerModelOverrides(ctx context.Context, discussionI
 		return nil
 	})
 	return overrides, err
+}
+
+func (s *DiscussionStore) speakerOverrides(ctx context.Context, discussionID string) (map[string]string, map[string]string, error) {
+	discussionID = strings.TrimSpace(discussionID)
+	if discussionID == "" {
+		return nil, nil, nil
+	}
+	models := map[string]string{}
+	voices := map[string]string{}
+	err := retryTransientDBConnection(ctx, func() error {
+		rows, err := s.db.QueryContext(ctx, `SELECT kind, speaker_name, value FROM (
+			SELECT 'model' AS kind, speaker_name, model AS value
+			FROM native_discussion_speaker_models WHERE discussion_id = ?
+			UNION ALL
+			SELECT 'voice' AS kind, speaker_name, voice AS value
+			FROM native_discussion_speaker_voices WHERE discussion_id = ?
+		)`, discussionID, discussionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		nextModels := map[string]string{}
+		nextVoices := map[string]string{}
+		for rows.Next() {
+			var kind, speaker, value string
+			if err := rows.Scan(&kind, &speaker, &value); err != nil {
+				return err
+			}
+			speaker = strings.TrimSpace(speaker)
+			value = strings.TrimSpace(value)
+			if speaker == "" || value == "" {
+				continue
+			}
+			switch kind {
+			case "model":
+				nextModels[speaker] = value
+			case "voice":
+				nextVoices[speaker] = value
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		models = nextModels
+		voices = nextVoices
+		return nil
+	})
+	return models, voices, err
 }
 
 func (s *DiscussionStore) seedSpeakerModelOverrides(ctx context.Context, discussionID string, script *config.DebateTopic) error {
@@ -1642,6 +1798,9 @@ func speakerModelsFromTopic(topic *config.DebateTopic) map[string]string {
 		add(d.Name, d.Model)
 	}
 	add(topic.AudioBookHost.Name, topic.AudioBookHost.Model)
+	for _, speaker := range topic.AudioBookSpeakers {
+		add(speaker.Name, speaker.Model)
+	}
 	return out
 }
 
@@ -1660,14 +1819,19 @@ func applySpeakerModelOverridesToTopic(topic *config.DebateTopic, overrides map[
 			topic.Discussants[i].Model = model
 		}
 	}
+	for i := range topic.AudioBookSpeakers {
+		if model := overrides[strings.TrimSpace(topic.AudioBookSpeakers[i].Name)]; model != "" {
+			topic.AudioBookSpeakers[i].Model = model
+		}
+	}
 }
 
 // SetSpeakerModel changes the LLM model override for a single speaker (the
-// discussion host/discussant, or the audiobook narrator, matched by name) in the
-// plan. The override lives outside script_json so later plan regenerations that
-// add/remove speakers keep the user's existing per-speaker assignments by
-// speaker name. Returns nil (→ 404) when the discussion has no plan or no
-// speaker matches the given name.
+// discussion host/discussant, audiobook narrator, or audiobook speaker, matched
+// by name) in the plan. The override lives outside script_json so later plan
+// regenerations that add/remove speakers keep the user's existing per-speaker
+// assignments by speaker name. Returns nil (→ 404) when the discussion has no
+// plan or no speaker matches the given name.
 func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speaker, model string) (*Discussion, error) {
 	speaker = strings.TrimSpace(speaker)
 	model = strings.TrimSpace(model)
@@ -1690,6 +1854,11 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 	}
 	for i := range d.Script.Discussants {
 		if d.Script.Discussants[i].Name == speaker {
+			matched = true
+		}
+	}
+	for i := range d.Script.AudioBookSpeakers {
+		if d.Script.AudioBookSpeakers[i].Name == speaker {
 			matched = true
 		}
 	}
@@ -1718,6 +1887,173 @@ func (s *DiscussionStore) SetSpeakerModel(ctx context.Context, owner, id, speake
 	return s.Get(ctx, owner, id)
 }
 
+func (s *DiscussionStore) speakerVoiceOverrides(ctx context.Context, discussionID string) (map[string]string, error) {
+	discussionID = strings.TrimSpace(discussionID)
+	if discussionID == "" {
+		return nil, nil
+	}
+	overrides := map[string]string{}
+	err := retryTransientDBConnection(ctx, func() error {
+		rows, err := s.db.QueryContext(ctx, `SELECT speaker_name, voice
+			FROM native_discussion_speaker_voices WHERE discussion_id = ?`, discussionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		next := map[string]string{}
+		for rows.Next() {
+			var speaker, voice string
+			if err := rows.Scan(&speaker, &voice); err != nil {
+				return err
+			}
+			speaker = strings.TrimSpace(speaker)
+			voice = strings.TrimSpace(voice)
+			if speaker == "" || voice == "" {
+				continue
+			}
+			next[speaker] = voice
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		overrides = next
+		return nil
+	})
+	return overrides, err
+}
+
+func (s *DiscussionStore) applySpeakerVoiceOverridesToScript(ctx context.Context, discussionID string, script *config.DebateTopic) error {
+	if script == nil {
+		return nil
+	}
+	overrides, err := s.speakerVoiceOverrides(ctx, discussionID)
+	if err != nil || len(overrides) == 0 {
+		return err
+	}
+	applySpeakerVoiceOverridesToTopic(script, overrides)
+	return nil
+}
+
+func applySpeakerVoiceOverridesToTopic(topic *config.DebateTopic, overrides map[string]string) {
+	if topic == nil || len(overrides) == 0 {
+		return
+	}
+	if voice := overrides[strings.TrimSpace(topic.Host.Name)]; voice != "" {
+		topic.Host.Voice = voice
+	}
+	if voice := overrides[strings.TrimSpace(topic.AudioBookHost.Name)]; voice != "" {
+		topic.AudioBookHost.Voice = voice
+	}
+	for i := range topic.Discussants {
+		if voice := overrides[strings.TrimSpace(topic.Discussants[i].Name)]; voice != "" {
+			topic.Discussants[i].Voice = voice
+		}
+	}
+	for i := range topic.AudioBookSpeakers {
+		if voice := overrides[strings.TrimSpace(topic.AudioBookSpeakers[i].Name)]; voice != "" {
+			topic.AudioBookSpeakers[i].Voice = voice
+		}
+	}
+}
+
+// SetSpeakerVoice changes the TTS voice override for a single speaker (the
+// discussion host/discussant, audiobook narrator, or audiobook speaker, matched
+// by name) in the plan. Like model overrides, the value lives outside
+// script_json so plan regenerations keep the user's per-speaker voice by
+// speaker name. An empty voice clears the override (back to automatic
+// assignment). Unlike models there is nothing to seed: plans declare no
+// per-speaker voice, so absent rows simply mean "auto". Returns nil (→ 404)
+// when the discussion has no plan or no speaker matches the given name.
+func (s *DiscussionStore) SetSpeakerVoice(ctx context.Context, owner, id, speaker, voice string) (*Discussion, error) {
+	speaker = strings.TrimSpace(speaker)
+	voice = strings.TrimSpace(voice)
+	d, err := s.getDiscussion(ctx, owner, id)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	if d.Script == nil {
+		return nil, nil
+	}
+	matched := d.Script.Host.Name == speaker || d.Script.AudioBookHost.Name == speaker
+	for i := range d.Script.Discussants {
+		if d.Script.Discussants[i].Name == speaker {
+			matched = true
+		}
+	}
+	for i := range d.Script.AudioBookSpeakers {
+		if d.Script.AudioBookSpeakers[i].Name == speaker {
+			matched = true
+		}
+	}
+	if !matched {
+		return nil, nil
+	}
+	now := time.Now().UnixMilli()
+	if voice == "" {
+		_, err = s.exec(ctx, `DELETE FROM native_discussion_speaker_voices
+			WHERE discussion_id = ? AND speaker_name = ?`, id, speaker)
+	} else {
+		_, err = s.exec(ctx, `INSERT INTO native_discussion_speaker_voices
+			(discussion_id, speaker_name, voice, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(discussion_id, speaker_name) DO UPDATE SET
+				voice = excluded.voice,
+				updated_at = excluded.updated_at`,
+			id, speaker, voice, now, now)
+	}
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.exec(ctx, `UPDATE native_discussions SET updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`, now, owner, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
+// GetVoicePreview returns the stored S3 key for a cached (voice, language)
+// preview MP3, or "" when none has been rendered yet.
+func (s *DiscussionStore) GetVoicePreview(ctx context.Context, voice, language string) (string, error) {
+	voice = strings.TrimSpace(voice)
+	language = strings.TrimSpace(language)
+	if voice == "" || language == "" {
+		return "", nil
+	}
+	var key string
+	err := retryTransientDBConnection(ctx, func() error {
+		row := s.db.QueryRowContext(ctx, `SELECT s3_key FROM voice_previews
+			WHERE voice = ? AND language = ?`, voice, language)
+		switch err := row.Scan(&key); {
+		case errors.Is(err, sql.ErrNoRows):
+			key = ""
+			return nil
+		default:
+			return err
+		}
+	})
+	return key, err
+}
+
+// PutVoicePreview records the S3 key of a rendered (voice, language) preview
+// MP3 so later requests skip synthesis.
+func (s *DiscussionStore) PutVoicePreview(ctx context.Context, voice, language, s3Key string) error {
+	voice = strings.TrimSpace(voice)
+	language = strings.TrimSpace(language)
+	s3Key = strings.TrimSpace(s3Key)
+	if voice == "" || language == "" || s3Key == "" {
+		return errors.New("voice preview: empty voice, language, or key")
+	}
+	_, err := s.exec(ctx, `INSERT INTO voice_previews (voice, language, s3_key, created_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(voice, language) DO UPDATE SET s3_key = excluded.s3_key`,
+		voice, language, s3Key, time.Now().UnixMilli())
+	return err
+}
+
 func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (*Discussion, error) {
 	res, err := s.exec(ctx, `UPDATE native_discussions SET
 		status = ?, job_id = ?, prompt_tokens = 0, completion_tokens = 0, total_tokens = 0,
@@ -1736,6 +2072,18 @@ func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (
 func (s *DiscussionStore) SetJobResult(ctx context.Context, id string, status DiscussionStatus, downloadURL string) error {
 	_, err := s.exec(ctx, `UPDATE native_discussions SET status = ?, download_url = ?, updated_at = ?
 		WHERE id = ?`, status, downloadURL, time.Now().UnixMilli(), id)
+	return err
+}
+
+func (s *DiscussionStore) SetJobResultAndUsage(ctx context.Context, id string, status DiscussionStatus, downloadURL string, usage PointsUsageDetail) error {
+	_, err := s.exec(ctx, `UPDATE native_discussions SET
+		status = ?, download_url = ?,
+		prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, llm_cost_usd = ?, llm_cost_known = ?,
+		tts_cost_usd = ?, music_cost_usd = ?, updated_at = ?
+		WHERE id = ?`,
+		status, downloadURL,
+		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, usage.LLMCostUSD, boolInt(usage.LLMCostKnown),
+		usage.TTSCostUSD, usage.MusicCostUSD, time.Now().UnixMilli(), id)
 	return err
 }
 
@@ -1826,12 +2174,12 @@ func (s *DiscussionStore) appendTurn(ctx context.Context, owner, id, role, text,
 		return err
 	}
 	// op_id is generated once per call, so the s.exec connection retry reuses it
-	// and INSERT OR IGNORE collapses a retried insert into a no-op — while two
+	// and ON CONFLICT collapses a retried insert into a no-op — while two
 	// genuinely separate appends (even with identical text) get distinct ids and
 	// both persist.
 	opID := newJobID()
-	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_edit_turns
-		(op_id, discussion_id, role, text, script_json, sources_json, markdown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.exec(ctx, `INSERT INTO native_discussion_edit_turns
+		(op_id, discussion_id, role, text, script_json, sources_json, markdown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		opID, id, role, text, scriptJSON, sourcesJSON, markdown, time.Now().UnixMilli())
 	return err
 }
@@ -1934,7 +2282,7 @@ func (s *DiscussionStore) authorizeParticipation(ctx context.Context, viewer, id
 
 // ReplaceTranscript rewrites the agent lines for a discussion. The whole
 // transaction is retried on a transient libsql connection error; the body is
-// idempotent (delete-all-agent-lines, then INSERT OR IGNORE, then bump
+// idempotent (delete-all-agent-lines, then ON CONFLICT, then bump
 // updated_at), so re-running it after a stale-stream failure yields the same
 // final state and never partially applies (a failed attempt rolls back).
 func (s *DiscussionStore) ReplaceTranscript(ctx context.Context, id string, lines []agent.TranscriptLine) error {
@@ -1974,10 +2322,10 @@ func (s *DiscussionStore) replaceTranscriptOnce(ctx context.Context, id string, 
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
+		_, err = tx.ExecContext(ctx, `INSERT INTO native_discussion_lines
 			(discussion_id, speaker, role, side, text, start_ms, is_user, image_url, sources_json, judgement_comment, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			id, l.Speaker, string(l.Role), string(l.Side), text, l.AudioOffsetMS, 0,
 			imageURL, sourcesJSON, strings.TrimSpace(l.JudgementComment), createdAt)
 		if err != nil {
 			return err
@@ -2058,6 +2406,10 @@ func (s *DiscussionStore) EditTurns(ctx context.Context, owner, id string) ([]Di
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return nil, err
 	}
+	return s.editTurns(ctx, id)
+}
+
+func (s *DiscussionStore) editTurns(ctx context.Context, id string) ([]DiscussionEditTurn, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, role, text, script_json, sources_json, markdown, created_at
 		FROM native_discussion_edit_turns WHERE discussion_id = ? ORDER BY id`, id)
 	if err != nil {
@@ -2071,6 +2423,10 @@ func (s *DiscussionStore) EditTurnsPage(ctx context.Context, owner, id string, l
 	if ok, err := s.owns(ctx, owner, id); err != nil || !ok {
 		return nil, false, err
 	}
+	return s.editTurnsPage(ctx, id, limit, beforeID)
+}
+
+func (s *DiscussionStore) editTurnsPage(ctx context.Context, id string, limit int, beforeID int64) ([]DiscussionEditTurn, bool, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -2145,9 +2501,9 @@ func (s *DiscussionStore) appendLine(ctx context.Context, id string, line Discus
 	if text == "" && imageURL == "" && audioURL == "" && audioKey == "" {
 		return nil
 	}
-	_, err := s.exec(ctx, `INSERT OR IGNORE INTO native_discussion_lines
+	_, err := s.exec(ctx, `INSERT INTO native_discussion_lines
 		(discussion_id, speaker, role, side, text, start_ms, is_user, sender_user_id, audio_url, audio_key, image_url, sources_json, judgement_comment, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		id, strings.TrimSpace(line.Speaker), strings.TrimSpace(line.Role), strings.TrimSpace(line.Side),
 		text, line.StartMS, boolInt(line.IsUser), strings.TrimSpace(line.SenderUserID),
 		audioURL, audioKey, imageURL, "", "",
@@ -2194,7 +2550,7 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 	var costKnown int
 	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
 		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
-		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
 		&d.ReferenceDiscussionID, &d.Template, &created, &updated)
@@ -2205,15 +2561,80 @@ func scanDiscussion(row discussionScanner) (Discussion, error) {
 	return d, nil
 }
 
+func scanDiscussionWithJoinedJob(row discussionScanner) (Discussion, error) {
+	var d Discussion
+	var scriptJSON, sourcesJSON string
+	var researched int
+	var created, updated, published int64
+	var costKnown int
+	var jobID, jobStatus, jobS3Key, jobAudioS3Key sql.NullString
+	var jobAudioOnly, jobCostKnown sqlBoolInt
+	var jobPromptTokens, jobCompletionTokens, jobTotalTokens sql.NullInt64
+	var jobLLMCostUSD, jobTTSCostUSD, jobMusicCostUSD sql.NullFloat64
+	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
+		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
+		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated,
+		&jobID, &jobStatus, &jobS3Key, &jobAudioS3Key, &jobAudioOnly,
+		&jobPromptTokens, &jobCompletionTokens, &jobTotalTokens, &jobLLMCostUSD, &jobCostKnown,
+		&jobTTSCostUSD, &jobMusicCostUSD)
+	if err != nil {
+		return d, err
+	}
+	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
+	if jobID.Valid && strings.TrimSpace(jobID.String) != "" {
+		d.joinedJob = &Job{
+			ID:               jobID.String,
+			Status:           JobStatus(jobStatus.String),
+			S3Key:            jobS3Key.String,
+			AudioS3Key:       jobAudioS3Key.String,
+			AudioOnly:        jobAudioOnly.Int() != 0,
+			PromptTokens:     jobPromptTokens.Int64,
+			CompletionTokens: jobCompletionTokens.Int64,
+			TotalTokens:      jobTotalTokens.Int64,
+			LLMCostUSD:       jobLLMCostUSD.Float64,
+			LLMCostKnown:     jobCostKnown.Int() != 0,
+			TTSCostUSD:       jobTTSCostUSD.Float64,
+			MusicCostUSD:     jobMusicCostUSD.Float64,
+		}
+	}
+	return d, nil
+}
+
+func scanDiscussionWithSummary(row discussionScanner) (Discussion, error) {
+	var d Discussion
+	var scriptJSON, sourcesJSON string
+	var researched int
+	var created, updated, published int64
+	var costKnown int
+	var summaryStatus sql.NullString
+	var summaryGeneratedAt sql.NullInt64
+	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
+		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
+		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &summaryStatus, &summaryGeneratedAt)
+	if err != nil {
+		return d, err
+	}
+	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
+	applyJoinedSummaryMeta(&d, summaryStatus, summaryGeneratedAt)
+	return d, nil
+}
+
 func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 	var d Discussion
 	var scriptJSON, sourcesJSON string
 	var researched int
 	var created, updated, published int64
-	var costKnown, liked, owner int
+	var costKnown int
+	var liked, owner sqlBoolInt
 	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
 		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
-		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
 		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
 		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
 		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.LikeCount, &liked, &owner)
@@ -2221,15 +2642,63 @@ func scanDiscussionWithMarket(row discussionScanner) (Discussion, error) {
 		return d, err
 	}
 	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
-	d.IsLiked = liked != 0
-	d.IsOwner = owner != 0
+	d.IsLiked = liked.Int() != 0
+	d.IsOwner = owner.Int() != 0
 	d.ShowUsageSummary = d.IsOwner
 	return d, nil
 }
 
+func scanDiscussionWithMarketSummary(row discussionScanner) (Discussion, error) {
+	var d Discussion
+	var scriptJSON, sourcesJSON string
+	var researched int
+	var created, updated, published int64
+	var costKnown int
+	var liked, owner sqlBoolInt
+	var summaryStatus sql.NullString
+	var summaryGeneratedAt sql.NullInt64
+	err := row.Scan(&d.ID, &d.OwnerUserID, &d.Topic, &d.Title, &d.Status, &d.Language, &d.JobID,
+		&d.DownloadURL, &d.DurationSeconds, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.LLMCostUSD, &costKnown,
+		&d.TTSCostUSD, &d.MusicCostUSD, &d.PointsCharged, &d.PointsReserved, &d.Visibility, &published, &d.Cover.Type, &d.Cover.ImageURL,
+		&d.Cover.ImageKey, &d.Cover.GradientStart, &d.Cover.GradientEnd, &d.Cover.Prompt,
+		&scriptJSON, &d.Markdown, &sourcesJSON, &researched,
+		&d.ReferenceDiscussionID, &d.Template, &created, &updated, &d.LikeCount, &liked, &owner, &summaryStatus, &summaryGeneratedAt)
+	if err != nil {
+		return d, err
+	}
+	finalizeScannedDiscussion(&d, scriptJSON, sourcesJSON, researched, costKnown, published, created, updated)
+	d.IsLiked = liked.Int() != 0
+	d.IsOwner = owner.Int() != 0
+	d.ShowUsageSummary = d.IsOwner
+	applyJoinedSummaryMeta(&d, summaryStatus, summaryGeneratedAt)
+	return d, nil
+}
+
+func applyJoinedSummaryMeta(d *Discussion, status sql.NullString, generatedAt sql.NullInt64) {
+	if d == nil {
+		return
+	}
+	d.summaryMetaLoaded = true
+	if !status.Valid {
+		return
+	}
+	st := SummaryStatus(status.String)
+	meta := &SummaryMeta{
+		DocType:   SummaryDocTypeSummary,
+		Status:    st,
+		Available: st == SummaryReadyState,
+		Pending:   st == SummaryGenerating,
+	}
+	if generatedAt.Valid && generatedAt.Int64 > 0 {
+		t := time.UnixMilli(generatedAt.Int64)
+		meta.GeneratedAt = &t
+	}
+	d.Summary = meta
+}
+
 func scanCreatorProfile(row discussionScanner) (CreatorProfile, bool, error) {
 	var p CreatorProfile
-	var followed, self, visible int
+	var followed, self, visible sqlBoolInt
 	err := row.Scan(&p.ID, &p.DisplayName, &p.Username, &p.AvatarURL, &p.FollowerCount, &followed, &self, &visible)
 	if err != nil {
 		return p, false, err
@@ -2237,12 +2706,12 @@ func scanCreatorProfile(row discussionScanner) (CreatorProfile, bool, error) {
 	if strings.TrimSpace(p.DisplayName) == "" {
 		p.DisplayName = "Creator"
 	}
-	p.IsFollowed = followed != 0
-	p.IsSelf = self != 0
+	p.IsFollowed = followed.Int() != 0
+	p.IsSelf = self.Int() != 0
 	if p.IsSelf {
 		p.IsFollowed = false
 	}
-	return p, visible != 0, nil
+	return p, visible.Int() != 0, nil
 }
 
 func finalizeScannedDiscussion(d *Discussion, scriptJSON, sourcesJSON string, researched, costKnown int, published, created, updated int64) {
@@ -2293,36 +2762,7 @@ func markDiscussionViewer(d *Discussion, viewer string) {
 }
 
 func (s *DiscussionStore) ensureColumn(ctx context.Context, table, column, definition string) error {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			typ        string
-			notNull    int
-			defaultVal any
-			pk         int
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// ALTER ADD COLUMN is not idempotent (a retry after a dropped result fails
-	// with "duplicate column name"), so it must not go through the retrying
-	// s.exec. The existence check above already guards re-runs; this is a
-	// startup-only path on a fresh connection.
-	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition))
-	return err
+	return s.db.ensureColumn(ctx, table, column, definition)
 }
 
 func marshalString(v any) (string, error) {

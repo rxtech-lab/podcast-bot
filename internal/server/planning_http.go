@@ -48,6 +48,8 @@ type planningStreamSink struct {
 	conversationID string
 }
 
+const planningLoadActiveCheckTimeout = 300 * time.Millisecond
+
 func e2ePlanningInsufficientBalancePrompt(prompt string) bool {
 	return strings.Contains(strings.ToLower(prompt), "e2e insufficient balance")
 }
@@ -60,38 +62,75 @@ func (s planningStreamSink) send(event string, payload any) error {
 // handlePlanningConversationGet returns the persisted conversation for history
 // rebuild on app launch. Returns an empty view when no conversation exists yet.
 func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	user := s.requestUser(r)
 	id := r.PathValue("id")
-	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	phase := time.Now()
+	exists, conv, turns, err := s.d.Planning.ConversationWithTurnsByDiscussion(r.Context(), user.ID, id)
+	dbJoin := time.Since(phase)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if d == nil {
+	if !exists {
 		http.NotFound(w, r)
 		return
 	}
-	conv, err := s.d.Planning.ConversationByDiscussion(r.Context(), user.ID, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	view := PlanningConversationView{Parts: []PlanningPart{}}
+	var (
+		partsBuild     time.Duration
+		activeCheck    time.Duration
+		turnCount      int
+		activeTimedOut bool
+	)
 	if conv != nil {
 		view.Conversation = conv
-		turns, err := s.d.Planning.Turns(r.Context(), conv.ID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		turnCount = len(turns)
+		phase = time.Now()
 		view.Parts = planningConversationParts(turns)
+		partsBuild = time.Since(phase)
 		view.NeedsRun = planningConversationShouldAutoRun(conv, turns)
-		if active, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok {
+		phase = time.Now()
+		var active *PlanningActiveStream
+		var ok bool
+		active, ok, activeTimedOut = s.planningActiveStreamForLoad(r.Context(), conv.ID)
+		if ok {
 			view.IsRunning = true
 			view.ActiveStream = active.RunID
 		}
+		activeCheck = time.Since(phase)
 	}
+	writeStart := time.Now()
 	writeJSON(w, view)
+	writeDuration := time.Since(writeStart)
+	conversationID := ""
+	status := ""
+	if conv != nil {
+		conversationID = conv.ID
+		status = string(conv.Status)
+	}
+	s.logger().Info("planning conversation load timing",
+		"discussion", id,
+		"conversation", conversationID,
+		"status", status,
+		"turns", turnCount,
+		"parts", len(view.Parts),
+		"needs_run", view.NeedsRun,
+		"is_running", view.IsRunning,
+		"db_join_ms", durMS(dbJoin),
+		"parts_build_ms", durMS(partsBuild),
+		"active_check_ms", durMS(activeCheck),
+		"active_check_timed_out", activeTimedOut,
+		"write_json_ms", durMS(writeDuration),
+		"total_ms", durMS(time.Since(started)),
+	)
+}
+
+func (s *Server) planningActiveStreamForLoad(ctx context.Context, conversationID string) (*PlanningActiveStream, bool, bool) {
+	activeCtx, cancel := context.WithTimeout(ctx, planningLoadActiveCheckTimeout)
+	defer cancel()
+	active, ok := s.d.PlanningStreams.Active(activeCtx, conversationID)
+	return active, ok, errors.Is(activeCtx.Err(), context.DeadlineExceeded)
 }
 
 func (s *Server) handlePlanningStreamResume(w http.ResponseWriter, r *http.Request) {

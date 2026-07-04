@@ -25,8 +25,15 @@ var cinematicVoicePriority = []string{
 // are avoided when supply allows; otherwise voices recycle and a warning
 // is logged.
 //
+// overrides maps an agent name to a user-chosen voice ShortName; matching
+// agents skip the automatic pick entirely. Overrides are resolved against the
+// full unfiltered voice list (case-insensitive) so a cross-locale choice
+// works; a name absent from the list logs a warning and falls back to the
+// automatic pick (covers the fake/ElevenLabs providers whose pools don't
+// carry Azure names).
+//
 // seed makes intra-tier ordering deterministic when desired.
-func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int64, log *slog.Logger) {
+func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int64, log *slog.Logger, overrides map[string]string) {
 	prefix := strings.ToLower(strings.SplitN(language, "-", 2)[0])
 	var pool []tts.Voice
 	for _, v := range voices {
@@ -52,6 +59,15 @@ func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int6
 
 	used := map[string]bool{}
 	for _, a := range agents {
+		if want := strings.TrimSpace(overrides[a.Name()]); want != "" {
+			if v, ok := voiceByShortName(voices, want); ok {
+				used[v.ShortName] = true
+				a.SetVoice(v)
+				continue
+			}
+			log.Warn("voice override not found; falling back to automatic pick",
+				"agent", a.Name(), "voice", want)
+		}
 		v, ok := pickVoiceFor(pool, a.Name(), used)
 		if !ok {
 			log.Warn("no voices available; agent will use default", "agent", a.Name())
@@ -63,6 +79,16 @@ func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int6
 		used[v.ShortName] = true
 		a.SetVoice(v)
 	}
+}
+
+// voiceByShortName finds a voice by its Azure ShortName, case-insensitively.
+func voiceByShortName(voices []tts.Voice, shortName string) (tts.Voice, bool) {
+	for _, v := range voices {
+		if strings.EqualFold(v.ShortName, shortName) {
+			return v, true
+		}
+	}
+	return tts.Voice{}, false
 }
 
 // AssignCharacterVoices assigns one Azure neural voice to each name in

@@ -1,5 +1,6 @@
 import AVKit
 import Kingfisher
+import MarkdownUI
 import Photos
 import PhotosUI
 import RxAuthSwift
@@ -10,6 +11,7 @@ import UniformTypeIdentifiers
 import os
 
 private let transcriptImageLog = Logger(subsystem: "com.debatebot.ios", category: "TranscriptImage")
+private let textContentLog = Logger(subsystem: "com.debatebot.ios", category: "TextContent")
 
 /// The live podcast screen: streaming per-agent transcript bubbles, a synced
 /// caption, a Liquid Glass music-player bar, and a message input — matching the
@@ -2097,8 +2099,8 @@ struct IdentifiableURL: Identifiable {
 
 /// Renders an audiobook's "text-based content" — the book version of the
 /// narration with the generated illustrations inline. The body is Markdown
-/// (images embedded as `![](url)`), so it renders through the shared
-/// `MarkdownText` view, which already displays remote images.
+/// (images embedded as `![](url)`), with remote images loaded through
+/// Kingfisher so each URL gets its own cache identity.
 struct TextContentView: View {
     let discussionID: String
     let title: String
@@ -2123,7 +2125,8 @@ struct TextContentView: View {
                     )
                 } else {
                     ScrollView {
-                        MarkdownText(markdown)
+                        Markdown(markdown)
+                            .markdownImageProvider(TextContentMarkdownImageProvider())
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -2145,11 +2148,60 @@ struct TextContentView: View {
         errorText = nil
         do {
             let doc = try await api.summary(id: discussionID, docType: "text")
+            logRawMarkdownForDebug(doc.markdown)
             markdown = doc.markdown
         } catch {
             errorText = error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func logRawMarkdownForDebug(_ markdown: String) {
+        let chunkSize = 2_000
+        let totalParts = max(1, (markdown.count + chunkSize - 1) / chunkSize)
+        textContentLog.info("Raw markdown begin source=TextContentView.loadText discussion=\(discussionID, privacy: .public) doc_type=text chars=\(markdown.count, privacy: .public) parts=\(totalParts, privacy: .public)")
+
+        guard !markdown.isEmpty else {
+            textContentLog.info("Raw markdown chunk source=TextContentView.loadText discussion=\(discussionID, privacy: .public) doc_type=text part=1/1 markdown=''")
+            textContentLog.info("Raw markdown end source=TextContentView.loadText discussion=\(discussionID, privacy: .public) doc_type=text")
+            return
+        }
+
+        var part = 1
+        var index = markdown.startIndex
+        while index < markdown.endIndex {
+            let next = markdown.index(index, offsetBy: chunkSize, limitedBy: markdown.endIndex) ?? markdown.endIndex
+            let chunk = String(markdown[index..<next])
+            textContentLog.info("Raw markdown chunk source=TextContentView.loadText discussion=\(discussionID, privacy: .public) doc_type=text part=\(part, privacy: .public)/\(totalParts, privacy: .public) markdown=\(chunk, privacy: .public)")
+            index = next
+            part += 1
+        }
+
+        textContentLog.info("Raw markdown end source=TextContentView.loadText discussion=\(discussionID, privacy: .public) doc_type=text")
+    }
+}
+
+private struct TextContentMarkdownImageProvider: ImageProvider {
+    func makeImage(url: URL?) -> some View {
+        Group {
+            if let url {
+                KFImage.url(url)
+                    .placeholder {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 160)
+                    }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .fade(duration: 0.15)
+                    .resizable()
+                    .scaledToFit()
+                    .id(url.absoluteString)
+            } else {
+                Color.clear
+                    .frame(width: 0, height: 0)
+            }
+        }
     }
 }
 

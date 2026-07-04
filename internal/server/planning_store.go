@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -133,7 +132,7 @@ type PlanningConversationView struct {
 // discussion store's *sql.DB (single connection) so a turn write and a points
 // debit serialize against the same handle — constructed like NewPointsStore.
 type PlanningStore struct {
-	db *sql.DB
+	db *sqlDB
 }
 
 // NewPlanningStore builds a PlanningStore over the discussion store's database.
@@ -190,7 +189,7 @@ func (s *PlanningStore) ensureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS planning_turns_conversation_idx
 			ON planning_turns(conversation_id, seq)`,
 		// Partial unique index: enforce op_id uniqueness only for real ids so an
-		// INSERT OR IGNORE retry collapses to a no-op.
+		// ON CONFLICT retry collapses to a no-op.
 		`CREATE UNIQUE INDEX IF NOT EXISTS planning_turns_op_idx
 			ON planning_turns(op_id) WHERE op_id != ''`,
 	}
@@ -209,32 +208,7 @@ func (s *PlanningStore) ensureSchema(ctx context.Context) error {
 }
 
 func (s *PlanningStore) ensureColumn(ctx context.Context, table, column, definition string) error {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			typ        string
-			notNull    int
-			defaultVal any
-			pk         int
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition))
-	return err
+	return s.db.ensureColumn(ctx, table, column, definition)
 }
 
 func (s *PlanningStore) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -275,6 +249,81 @@ func (s *PlanningStore) ConversationByDiscussion(ctx context.Context, owner, dis
 	row := s.db.QueryRowContext(ctx, `SELECT id, discussion_id, owner_user_id, status, points_charged, flat_charged, created_at, updated_at
 		FROM planning_conversations WHERE discussion_id = ? AND owner_user_id = ?`, discussionID, owner)
 	return scanPlanningConversation(row)
+}
+
+// ConversationWithTurnsByDiscussion loads the discussion ownership check,
+// planning conversation, and ordered turns in one round trip. The returned
+// exists flag is true when the owner can see the discussion, even when no
+// planning conversation has been created yet.
+func (s *PlanningStore) ConversationWithTurnsByDiscussion(ctx context.Context, owner, discussionID string) (bool, *PlanningConversation, []planningTurnRow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,
+		c.id, COALESCE(c.discussion_id, ''), COALESCE(c.owner_user_id, ''), COALESCE(c.status, ''),
+		COALESCE(c.points_charged, 0), COALESCE(c.flat_charged, 0), COALESCE(c.created_at, 0), COALESCE(c.updated_at, 0),
+		t.id, COALESCE(t.seq, 0), COALESCE(t.role, ''), COALESCE(t.text, ''), COALESCE(t.attachments_json, ''),
+		COALESCE(t.references_json, ''), COALESCE(t.tool_calls_json, ''), COALESCE(t.tool_call_id, ''),
+		COALESCE(t.tool_name, ''), COALESCE(t.result_text, ''), COALESCE(t.is_error, 0),
+		COALESCE(t.script_json, ''), COALESCE(t.sources_json, ''), COALESCE(t.markdown, ''),
+		COALESCE(t.question_id, ''), COALESCE(t.questions_json, ''), COALESCE(t.answers_json, ''),
+		COALESCE(t.question_status, ''), COALESCE(t.created_at, 0)
+		FROM native_discussions d
+		LEFT JOIN planning_conversations c
+			ON c.discussion_id = d.id AND c.owner_user_id = d.owner_user_id
+		LEFT JOIN planning_turns t ON t.conversation_id = c.id
+		WHERE d.owner_user_id = ? AND d.id = ?
+		ORDER BY t.seq ASC`, owner, discussionID)
+	if err != nil {
+		return false, nil, nil, err
+	}
+	defer rows.Close()
+
+	exists := false
+	var conv *PlanningConversation
+	turns := make([]planningTurnRow, 0)
+	for rows.Next() {
+		exists = true
+		var (
+			discussionRowID string
+			convID          sql.NullString
+			convDiscussion  string
+			convOwner       string
+			convStatus      string
+			pointsCharged   int64
+			flatCharged     int64
+			convCreated     int64
+			convUpdated     int64
+			turnID          sql.NullInt64
+			turn            planningTurnRow
+			turnIsError     int64
+		)
+		if err := rows.Scan(&discussionRowID,
+			&convID, &convDiscussion, &convOwner, &convStatus, &pointsCharged, &flatCharged, &convCreated, &convUpdated,
+			&turnID, &turn.Seq, &turn.Role, &turn.Text, &turn.AttachmentsJSON, &turn.ReferencesJSON, &turn.ToolCallsJSON,
+			&turn.ToolCallID, &turn.ToolName, &turn.ResultText, &turnIsError, &turn.ScriptJSON, &turn.SourcesJSON,
+			&turn.Markdown, &turn.QuestionID, &turn.QuestionsJSON, &turn.AnswersJSON, &turn.QuestionStatus, &turn.CreatedAt); err != nil {
+			return false, nil, nil, err
+		}
+		if convID.Valid && conv == nil {
+			conv = &PlanningConversation{
+				ID:            convID.String,
+				DiscussionID:  convDiscussion,
+				OwnerUserID:   convOwner,
+				Status:        PlanningConversationStatus(convStatus),
+				PointsCharged: pointsCharged,
+				FlatCharged:   flatCharged != 0,
+				CreatedAt:     time.UnixMilli(convCreated),
+				UpdatedAt:     time.UnixMilli(convUpdated),
+			}
+		}
+		if turnID.Valid {
+			turn.ID = turnID.Int64
+			turn.IsError = turnIsError != 0
+			turns = append(turns, turn)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, nil, nil, err
+	}
+	return exists, conv, turns, nil
 }
 
 func scanPlanningConversation(row interface{ Scan(...any) error }) (*PlanningConversation, error) {
@@ -350,10 +399,10 @@ func (s *PlanningStore) AppendTurn(ctx context.Context, conversationID string, i
 		sourcesJSON = string(b)
 	}
 	now := time.Now().UnixMilli()
-	_, err := s.exec(ctx, `INSERT OR IGNORE INTO planning_turns
+	_, err := s.exec(ctx, `INSERT INTO planning_turns
 		(op_id, conversation_id, seq, role, text, attachments_json, references_json, tool_calls_json, tool_call_id, tool_name, result_text, is_error,
 		 script_json, sources_json, markdown, question_id, questions_json, answers_json, question_status, created_at)
-		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		opID, conversationID, conversationID, in.Role, in.Text, attachmentsJSON, referencesJSON, toolCallsJSON, in.ToolCallID, in.ToolName, in.ResultText, boolInt(in.IsError),
 		scriptJSON, sourcesJSON, in.Markdown, in.QuestionID, in.QuestionsJSON, in.AnswersJSON, in.QuestionStatus, now)
 	if err != nil {

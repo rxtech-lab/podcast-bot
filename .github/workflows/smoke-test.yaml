@@ -5,7 +5,21 @@ on:
 jobs:
   go-tests:
     name: Go tests
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: debate_bot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d debate_bot_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -22,6 +36,8 @@ jobs:
       - name: Fetch style font
         run: make style-font
       - name: Run Go tests
+        env:
+          POSTGRES_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/debate_bot_test?sslmode=disable
         run: go test ./...
 
   style-smoke:

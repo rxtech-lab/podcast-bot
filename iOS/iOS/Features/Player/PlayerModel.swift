@@ -23,9 +23,13 @@ struct LiveLine: Identifiable, Equatable {
     var senderUserID: String? = nil
     /// Playback URL when this line is a voice message; nil for text-only lines.
     var audioURL: String? = nil
-    /// Illustration URL when this line is an image-only bubble (audiobook
-    /// content); nil for ordinary lines.
+    /// Illustration URL when this line is an image bubble (audiobook content);
+    /// nil for ordinary lines. The line's text may carry the artwork caption.
     var imageURL: String? = nil
+    /// Audio-timeline position (seconds) of an audiobook illustration line,
+    /// used to switch the player artwork in sync with playback. Nil when the
+    /// server didn't record timing (legacy runs, non-image lines).
+    var audioOffsetSeconds: Double? = nil
     var sources: [SourceDTO]? = nil
     var judgementComment: String? = nil
 
@@ -316,6 +320,107 @@ final class PlayerModel {
             ?? cues.lastIndex(where: { $0.start <= t })
     }
 
+    // MARK: - Timed illustrations (audiobook artwork)
+
+    /// Whether the player is still on the live (non-seekable) timeline. Live
+    /// artwork shows the most recently arrived illustration; playback artwork
+    /// is looked up by `currentTime` against `illustrationTimeline`.
+    var isLivePlayback: Bool { usesLiveCaptionTiming }
+
+    /// One audiobook illustration with its audio-timeline start.
+    struct IllustrationCue: Equatable {
+        let start: Double
+        let url: URL
+        let caption: String
+    }
+
+    // Memoized like `lyricGroupsCache`: rebuilt only when the line count or
+    // the known duration moves (duration matters for the legacy even-split
+    // synthesis below).
+    @ObservationIgnored private var illustrationTimelineCache: [IllustrationCue] = []
+    @ObservationIgnored private var illustrationTimelineCacheKey = (-1, -1)
+
+    /// Illustration cues ordered by audio offset. When the discussion has
+    /// image lines but none carry server timing (audiobooks generated before
+    /// offsets existed), synthesize an even split across the known duration —
+    /// the same spacing the legacy slideshow video used. Empty when there are
+    /// no images (or no way to time them), in which case the artwork stays on
+    /// the cover.
+    var illustrationTimeline: [IllustrationCue] {
+        let key = (lines.count, Int(duration))
+        if key != illustrationTimelineCacheKey {
+            illustrationTimelineCache = Self.buildIllustrationTimeline(lines: lines, duration: duration)
+            illustrationTimelineCacheKey = key
+        }
+        return illustrationTimelineCache
+    }
+
+    /// The most recently arrived illustration — what live streaming shows.
+    var latestIllustrationCue: IllustrationCue? {
+        for line in lines.reversed() where line.hasImage {
+            if let raw = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+               let url = URL(string: raw) {
+                return IllustrationCue(start: line.audioOffsetSeconds ?? 0,
+                                       url: url,
+                                       caption: line.displayText)
+            }
+        }
+        return nil
+    }
+
+    var latestIllustrationURL: URL? {
+        latestIllustrationCue?.url
+    }
+
+    /// The illustration on screen at playback time `time`, or nil before the
+    /// first cue (artwork falls back to the cover).
+    func illustrationCue(at time: Double) -> IllustrationCue? {
+        illustrationTimeline.last(where: { $0.start <= time })
+    }
+
+    func illustrationURL(at time: Double) -> URL? {
+        illustrationCue(at: time)?.url
+    }
+
+    nonisolated static func buildIllustrationTimeline(lines: [LiveLine], duration: Double) -> [IllustrationCue] {
+        struct ImageEntry {
+            let url: URL
+            let offset: Double?
+            let caption: String
+        }
+        var entries: [ImageEntry] = []
+        var seen = Set<String>()
+        for line in lines where line.hasImage {
+            guard let raw = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let url = URL(string: raw),
+                  !seen.contains(raw) else { continue }
+            seen.insert(raw)
+            entries.append(ImageEntry(url: url,
+                                      offset: line.audioOffsetSeconds,
+                                      caption: line.displayText))
+        }
+        guard !entries.isEmpty else { return [] }
+        let timed = entries.compactMap { entry -> IllustrationCue? in
+            guard let offset = entry.offset else { return nil }
+            return IllustrationCue(start: offset, url: entry.url, caption: entry.caption)
+        }
+        if !timed.isEmpty {
+            return timed.sorted { $0.start < $1.start }
+        }
+        // Legacy fallback: no offsets recorded — approximate with an even
+        // split in transcript order, mirroring the legacy slideshow video.
+        guard duration > 0 else { return [] }
+        let per = duration / Double(entries.count)
+        return entries.enumerated().map { i, entry in
+            IllustrationCue(start: Double(i) * per, url: entry.url, caption: entry.caption)
+        }
+    }
+
+    nonisolated static func audioOffsetSeconds(fromMS ms: Int?) -> Double? {
+        guard let ms, ms > 0 else { return nil }
+        return Double(ms) / 1000.0
+    }
+
     /// Id of the lyric group at the current playback time. Stored (not computed)
     /// and republished only when it actually changes, via `updateActiveLyricGroup`
     /// — so the lyrics list re-renders on a boundary crossing (a few times a
@@ -385,16 +490,19 @@ final class PlayerModel {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true,
                      senderUserID: $0.senderUserID, audioURL: $0.audioURL,
                      imageURL: $0.imageURL,
+                     audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: $0.startMS),
                      sources: $0.sources, judgementComment: $0.judgementComment)
         }
         if discussion.jobID != nil && !hasPodcastTranscript {
             showTranscriptLoadingIfNeeded()
         }
         if let s = discussion.downloadURLString { downloadURL = URL(string: s) }
-        // Pick up cover art that may have been generated in the background after
-        // the library handed us this discussion (e.g. the new-discussion toggle).
-        tasks.append(Task { await self.refreshCover() })
-        guard let jobID = discussion.jobID else { return }
+        guard let jobID = discussion.jobID else {
+            // Pick up cover art that may have been generated in the background
+            // after the library handed us this discussion.
+            tasks.append(Task { await self.refreshCover() })
+            return
+        }
         listenForJobUpdatesIfNeeded()
 
         configureRemoteCommands()
@@ -1080,6 +1188,10 @@ final class PlayerModel {
            line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             line.imageURL = image
         }
+        if line.audioOffsetSeconds == nil,
+           let offset = audioOffsetSeconds(fromMS: dto.startMS) {
+            line.audioOffsetSeconds = offset
+        }
         if let sources = dto.sources, !(sources.isEmpty) {
             line.sources = sources
         }
@@ -1214,10 +1326,11 @@ final class PlayerModel {
                 LiveLine.finalizeLastOpenAgentLine(in: &lines)
                 let imgLine = LiveLine(speaker: data.speaker ?? "",
                                        role: data.role ?? "",
-                                       text: "",
+                                       text: data.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
                                        isUser: false,
                                        done: true,
-                                       imageURL: img)
+                                       imageURL: img,
+                                       audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: data.audio_offset_ms))
                 lines.append(imgLine)
                 hideTranscriptLoadingIfReady()
                 return
@@ -1298,7 +1411,7 @@ final class PlayerModel {
     private func refreshPodcastFromServer() {
         tasks.append(Task { [weak self] in
             guard let self else { return }
-            guard let fresh = try? await self.api.discussion(id: self.discussion.id) else { return }
+            guard let fresh = try? await self.api.discussion(id: self.discussion.id, includeEditTurns: false) else { return }
             self.discussion = Self.mergingLocalDiscussionState(current: self.discussion, fresh: fresh)
             self.listenForJobUpdatesIfNeeded()
         })
@@ -1443,7 +1556,7 @@ final class PlayerModel {
     /// text-only job-transcript snapshot an existing audio line to recognize, so it
     /// won't re-persist the utterance as a duplicate plain-text row.
     private func hydratePersistedLines() async {
-        guard let fresh = try? await api.discussion(id: discussion.id) else { return }
+        guard let fresh = try? await api.discussion(id: discussion.id, includeEditTurns: false) else { return }
         // The library/market list responses omit the presigned audio download
         // URL (it is resolved only on the detail endpoint to keep lists fast), so
         // adopt it here to give the export/share action a direct link. Playback
@@ -1453,9 +1566,15 @@ final class PlayerModel {
             downloadURL = URL(string: url)
         }
         discussion.summary = fresh.summary
+        if let cover = fresh.cover, cover.hasImage || cover.hasGradient {
+            discussion.cover = cover
+        }
         listenForJobUpdatesIfNeeded()
         let persisted = fresh.sortedLines
-        guard !persisted.isEmpty else { return }
+        guard !persisted.isEmpty else {
+            await refreshCoverAssets()
+            return
+        }
 
         // Adopt persisted lines as the authoritative cache without dropping any
         // local lines not yet synced server-side.
@@ -1482,6 +1601,7 @@ final class PlayerModel {
             }
         }
         hideTranscriptLoadingIfReady()
+        await refreshCoverAssets()
     }
 
     private nonisolated static func hasDisplayablePayload(_ dto: DiscussionLineDTO) -> Bool {
@@ -1533,13 +1653,27 @@ final class PlayerModel {
             if let imageURL = item.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
                !imageURL.isEmpty {
                 let role = item.role
-                if !lines.contains(where: { $0.imageURL == imageURL }) {
+                let offset = Self.audioOffsetSeconds(fromMS: item.audioOffsetMS)
+                if let existing = lines.firstIndex(where: { $0.imageURL == imageURL }) {
+                    // Backfill timing onto an image bubble that arrived over the
+                    // socket before the snapshot (or from an older client state).
+                    if lines[existing].audioOffsetSeconds == nil, let offset {
+                        lines[existing].audioOffsetSeconds = offset
+                        didChange = true
+                    }
+                    let caption = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !caption.isEmpty, lines[existing].displayText.isEmpty {
+                        lines[existing].text = caption
+                        didChange = true
+                    }
+                } else {
                     lines.append(LiveLine(speaker: item.speaker,
                                           role: role,
-                                          text: "",
+                                          text: item.text.trimmingCharacters(in: .whitespacesAndNewlines),
                                           isUser: false,
                                           done: true,
-                                          imageURL: imageURL))
+                                          imageURL: imageURL,
+                                          audioOffsetSeconds: offset))
                     didChange = true
                 }
                 continue
@@ -1792,7 +1926,7 @@ final class PlayerModel {
     }
 
     private func refreshDiscussionAfterJobDone(job: JobStatusDTO) async {
-        if let fresh = try? await api.discussion(id: discussion.id) {
+        if let fresh = try? await api.discussion(id: discussion.id, includeEditTurns: false) {
             discussion = Self.mergingLocalDiscussionState(current: discussion, fresh: fresh)
         } else {
             // Avoid showing a stale planning-only points badge when the terminal
@@ -1816,7 +1950,7 @@ final class PlayerModel {
     /// Fetches the latest discussion solely to pick up cover art generated in
     /// the background, without disturbing live transcript/playback state.
     private func refreshCover() async {
-        if let fresh = try? await api.discussion(id: discussion.id) {
+        if let fresh = try? await api.discussion(id: discussion.id, includeEditTurns: false) {
             discussion.summary = fresh.summary
             listenForJobUpdatesIfNeeded()
             if let cover = fresh.cover, cover.hasImage || cover.hasGradient {
@@ -1848,6 +1982,27 @@ final class PlayerModel {
               let urlString = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
               let url = URL(string: urlString),
               let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+        let colors = await Task.detached(priority: .utility) {
+            CoverPalette.dominantColors(from: data, count: 2)
+        }.value
+        guard colors.count >= 2 else { return }
+        coverColorsSourceKey = key
+        coverColors = colors
+    }
+
+    /// Adopts the tint palette from the artwork actually on screen: the timed
+    /// illustration when one is showing, falling back to the cover palette
+    /// otherwise. Shares `coverColorsSourceKey` with `loadCoverColors`, so
+    /// repeated calls within one illustration's window are free and returning
+    /// to the cover re-samples it.
+    func adoptArtworkColors(from illustrationURL: URL?) async {
+        guard let illustrationURL else {
+            await loadCoverColors()
+            return
+        }
+        let key = illustrationURL.absoluteString
+        guard key != coverColorsSourceKey else { return }
+        guard let (data, _) = try? await URLSession.shared.data(from: illustrationURL) else { return }
         let colors = await Task.detached(priority: .utility) {
             CoverPalette.dominantColors(from: data, count: 2)
         }.value

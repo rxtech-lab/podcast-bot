@@ -2,19 +2,15 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	stdlog "log"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	libsql "github.com/tursodatabase/libsql-client-go/libsql"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
@@ -214,9 +210,9 @@ type videoJobLogRecord struct {
 func (videoJobLogRecord) TableName() string { return "video_job_logs" }
 
 // NewJobRegistry opens the job registry. When primaryURL is set it talks to a
-// shared Turso/libSQL database (so every pod in a horizontally-scaled
-// deployment sees the same jobs); otherwise it falls back to a local SQLite
-// file at dbPath for single-pod / dev / test use.
+// shared Postgres or Turso/libSQL database (so every pod in a horizontally-scaled
+// deployment sees the same jobs); otherwise it falls back to a local SQLite file
+// at dbPath for single-pod / dev / test use.
 func NewJobRegistry(dbPath, primaryURL, authToken string) (*JobRegistry, error) {
 	gormLogger := logger.New(
 		stdlog.New(os.Stdout, "\r\n", stdlog.LstdFlags),
@@ -228,39 +224,16 @@ func NewJobRegistry(dbPath, primaryURL, authToken string) (*JobRegistry, error) 
 	)
 
 	var (
-		db     *gorm.DB
-		err    error
-		remote = primaryURL != ""
+		db   *gorm.DB
+		err  error
+		kind databaseKind
 	)
-	if remote {
-		var opts []libsql.Option
-		if authToken != "" {
-			opts = append(opts, libsql.WithAuthToken(authToken))
-		}
-		c, cerr := libsql.NewConnector(primaryURL, opts...)
-		if cerr != nil {
-			return nil, fmt.Errorf("jobs libsql connector: %w", cerr)
-		}
-		sqlDB := sql.OpenDB(c)
-		// libSQL is single-writer; keep one conn to serialise writes and avoid
-		// "database is locked" churn, mirroring the local SQLite tuning.
-		sqlDB.SetMaxOpenConns(1)
-		// Turso/libSQL keeps a long-lived stream per connection. Recycle it
-		// before an idle production stream is likely to be closed remotely.
-		sqlDB.SetConnMaxIdleTime(30 * time.Second)
-		sqlDB.SetConnMaxLifetime(5 * time.Minute)
-		db, err = gorm.Open(sqlite.New(sqlite.Config{Conn: sqlDB}), &gorm.Config{Logger: gormLogger})
-	} else {
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-			return nil, err
-		}
-		db, err = gorm.Open(sqlite.Open(sqliteDSN(dbPath)), &gorm.Config{Logger: gormLogger})
-	}
+	db, kind, err = openGormDatabase(dbPath, primaryURL, authToken, gormLogger)
 	if err != nil {
 		return nil, err
 	}
 
-	if !remote {
+	if kind == databaseSQLite {
 		sqlDB, derr := db.DB()
 		if derr != nil {
 			return nil, derr
@@ -403,6 +376,16 @@ func (r *JobRegistry) Add(id string) *Job {
 
 // Get returns a snapshot of the named job, or nil when unknown.
 func (r *JobRegistry) Get(id string) *Job {
+	return r.get(id, true)
+}
+
+// GetWithoutLogs returns a job snapshot without loading its progress log rows.
+// Use this on read paths that only need status, artifacts, and usage metadata.
+func (r *JobRegistry) GetWithoutLogs(id string) *Job {
+	return r.get(id, false)
+}
+
+func (r *JobRegistry) get(id string, includeLogs bool) *Job {
 	var rec videoJobRecord
 	query := func() error {
 		return r.db.First(&rec, "id = ?", id).Error
@@ -414,7 +397,9 @@ func (r *JobRegistry) Get(id string) *Job {
 		}
 	}
 	j := jobFromRecord(rec)
-	j.Logs = r.logs(id)
+	if includeLogs {
+		j.Logs = r.logs(id)
+	}
 	return &j
 }
 

@@ -248,9 +248,12 @@ type Env struct {
 	S3AccessKeyID     string
 	S3SecretAccessKey string
 
-	// Turso/libSQL database for durable native-client discussion storage.
-	// TURSO_CONNECTION_URL is the primary database URL. TURSO_AUTH_TOKEN is
-	// required for remote Turso databases and may be empty for local testing.
+	// DatabaseURL is the shared metadata database for jobs, native discussions,
+	// points, summaries, planning state, and push tokens. PostgreSQL URLs
+	// (postgres:// or postgresql://) use Postgres; libSQL/Turso URLs use Turso;
+	// empty falls back to local SQLite. DATABASE_URL is preferred, with
+	// TURSO_CONNECTION_URL kept as a compatibility fallback.
+	DatabaseURL        string
 	TursoConnectionURL string
 	TursoAuthToken     string
 
@@ -375,6 +378,7 @@ func LoadEnv() (*Env, error) {
 		S3AccessKeyID:     strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID")),
 		S3SecretAccessKey: strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY")),
 
+		DatabaseURL:        firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("TURSO_CONNECTION_URL")),
 		TursoConnectionURL: strings.TrimSpace(os.Getenv("TURSO_CONNECTION_URL")),
 		TursoAuthToken:     strings.TrimSpace(os.Getenv("TURSO_AUTH_TOKEN")),
 		RedisURL:           strings.TrimSpace(os.Getenv("REDIS_URL")),
@@ -430,10 +434,11 @@ func LoadEnv() (*Env, error) {
 	// and skip the required-env validation below.
 	if e.E2EMode {
 		// Safety: never let E2E mode touch the cloud database or cache, even when a
-		// real TURSO_CONNECTION_URL / REDIS_URL is present in .env (godotenv.Overload
-		// makes .env win over the process environment, so the orchestration script
-		// cannot reliably blank these from the outside). Forcing them empty here
-		// guarantees a local SQLite file and a disabled Redis for every E2E run.
+		// real DATABASE_URL / TURSO_CONNECTION_URL / REDIS_URL is present in .env
+		// (godotenv.Overload makes .env win over the process environment, so the
+		// orchestration script cannot reliably blank these from the outside). Forcing
+		// them empty here guarantees a local SQLite file and disabled Redis.
+		e.DatabaseURL = ""
 		e.TursoConnectionURL = ""
 		e.TursoAuthToken = ""
 		e.RedisURL = ""
@@ -518,6 +523,15 @@ func splitCSV(s string) []string {
 		return nil
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func parseFloatEnv(key string) float64 {

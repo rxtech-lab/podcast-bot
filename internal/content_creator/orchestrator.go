@@ -149,6 +149,14 @@ type Orchestrator struct {
 	// geometric avatars.
 	audioBookAvatars []AudioBookAvatar
 
+	// audioBookImageOffsets records, per scene beat, the audio-timeline
+	// position (seconds, VTT cue space) at which the pipeline emitted that
+	// beat's illustration during the live run. The video post-pass uses it
+	// to hold each image for the span it was actually on screen. Guarded by
+	// audioBookImageOffsetsMu — the pipeline writes from timer goroutines.
+	audioBookImageOffsetsMu sync.Mutex
+	audioBookImageOffsets   map[int]float64
+
 	subtitleCues []SubtitleCue
 
 	// livePipe is the running pipeline, published while Run is in flight so
@@ -295,7 +303,7 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	if err := o.buildAgents(); err != nil {
 		return err
 	}
-	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log)
+	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log, o.speakerVoiceOverrides())
 	for _, a := range o.Registry.All() {
 		o.Log.Info("agent ready",
 			"name", a.Name(),
@@ -309,6 +317,26 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	o.Send(StatusMsg{Text: ""})
 	o.Send(PhaseMsg{Phase: agent.PhaseOpening})
 	return nil
+}
+
+// speakerVoiceOverrides collects the user's per-speaker TTS voice choices from
+// the plan (agent name → Azure voice ShortName) for AssignVoices. Speakers
+// without a stored choice are absent and keep the automatic pick.
+func (o *Orchestrator) speakerVoiceOverrides() map[string]string {
+	out := map[string]string{}
+	add := func(spec config.AgentSpec) {
+		name := strings.TrimSpace(spec.Name)
+		voice := strings.TrimSpace(spec.Voice)
+		if name != "" && voice != "" {
+			out[name] = voice
+		}
+	}
+	add(o.Topic.Host)
+	add(o.Topic.AudioBookHost)
+	for _, d := range o.Topic.Discussants {
+		add(d)
+	}
+	return out
 }
 
 // makeAgent constructs one role-typed agent from a config.AgentSpec, falling
@@ -508,8 +536,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		NarrationFrames:  len(o.seriesNarrationPlan),
 		HasSeriesPreviouslyOn: o.Topic.Type == config.ContentTypeSeries &&
 			strings.TrimSpace(o.seriesPreviouslyOn) != "",
-		SoundPaths:         soundPaths,
-		AudioBookImageURLs: o.audioBookImageURLs(),
+		SoundPaths:                 soundPaths,
+		AudioBookImageURLs:         o.audioBookImageURLs(),
+		AudioBookImageCaptions:     o.audioBookImageCaptions(),
+		RecordAudioBookImageOffset: o.recordAudioBookImageOffset,
 	})
 	o.liveMu.Lock()
 	o.livePipe = pipe
