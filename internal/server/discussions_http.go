@@ -1039,21 +1039,30 @@ func (s *Server) applyDiscussionSummaryMeta(ctx context.Context, d *Discussion) 
 		d.Summary = nil
 		return
 	}
-	meta, err := s.d.Discussions.SummaryMetaFor(ctx, d.ID, SummaryDocTypeSummary)
-	if err != nil {
-		s.logger().Warn("summary meta lookup failed", "discussion", d.ID, "err", err)
+	if !d.summaryMetaLoaded {
+		meta, err := s.d.Discussions.SummaryMetaFor(ctx, d.ID, SummaryDocTypeSummary)
+		if err != nil {
+			s.logger().Warn("summary meta lookup failed", "discussion", d.ID, "err", err)
+			return
+		}
+		d.Summary = meta
+	}
+	finalizeDiscussionSummaryMeta(d)
+}
+
+func finalizeDiscussionSummaryMeta(d *Discussion) {
+	if d == nil {
 		return
 	}
-	if meta == nil && d.Status == DiscussionReady {
-		meta = &SummaryMeta{
+	if d.Summary == nil && d.Status == DiscussionReady {
+		d.Summary = &SummaryMeta{
 			DocType:    SummaryDocTypeSummary,
 			Generation: d.IsOwner,
 		}
 	}
-	if meta != nil && !meta.Available && !meta.Pending && d.Status == DiscussionReady {
-		meta.Generation = d.IsOwner
+	if d.Summary != nil && !d.Summary.Available && !d.Summary.Pending && d.Status == DiscussionReady {
+		d.Summary.Generation = d.IsOwner
 	}
-	d.Summary = meta
 }
 
 // handleDiscussionSummaryGenerate lets the discussion owner manually start or

@@ -1,6 +1,6 @@
 # Load-balanced entry point. The Ingress targets this; it round-robins
 # requests across all ready pods. Uploads, job listing, status polling, and
-# any finished-job download can be answered by any pod (shared Turso + S3).
+# any finished-job download can be answered by any pod (shared metadata DB + S3).
 # Requests for an *in-flight* job that land on the wrong pod are transparently
 # reverse-proxied to the owner by the app (see PEER_HOST_TEMPLATE).
 apiVersion: v1

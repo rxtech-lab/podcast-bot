@@ -63,7 +63,7 @@ func pointsForUSD(env *config.Env, usd float64) int64 {
 // a transaction and made conditional so a balance can never go negative and a
 // charge can never be silently lost or double-applied.
 type PointsStore struct {
-	db *sql.DB
+	db *sqlDB
 }
 
 // NewPointsStore builds a PointsStore over the discussion store's database so
@@ -245,7 +245,7 @@ func (s *PointsStore) RepairLegacyGenerationOvercharges(ctx context.Context) (in
 	return len(repairs), total, nil
 }
 
-func (s *PointsStore) repairLegacyGenerationOvercharge(ctx context.Context, tx *sql.Tx, r legacyGenerationOvercharge, excess int64) (int64, error) {
+func (s *PointsStore) repairLegacyGenerationOvercharge(ctx context.Context, tx *sqlTx, r legacyGenerationOvercharge, excess int64) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, delta
 		FROM points_ledger
 		WHERE user_id = ? AND discussion_id = ?
@@ -863,7 +863,7 @@ func (s *PointsStore) ReserveWithLedgerID(ctx context.Context, userID, discussio
 // zero, and points_charged is capped to the debited amount so a podcast can
 // never display/store more points than were really taken (the invariant
 // points_charged == sum of debits holds even when actual exceeds the balance).
-func (s *PointsStore) settle(ctx context.Context, tx *sql.Tx, userID, discussionID string, reserved, actual int64, kind string, detail PointsUsageDetail, now int64) (int64, error) {
+func (s *PointsStore) settle(ctx context.Context, tx *sqlTx, userID, discussionID string, reserved, actual int64, kind string, detail PointsUsageDetail, now int64) (int64, error) {
 	bal, err := txBalance(ctx, tx, userID)
 	if err != nil {
 		return 0, err
@@ -986,7 +986,7 @@ func (s *PointsStore) settleGenerationOnce(ctx context.Context, discussionID str
 	return tx.Commit()
 }
 
-func (s *PointsStore) upgradeGenerationSettlement(ctx context.Context, tx *sql.Tx, discussionID string, actual int64, detail PointsUsageDetail) error {
+func (s *PointsStore) upgradeGenerationSettlement(ctx context.Context, tx *sqlTx, discussionID string, actual int64, detail PointsUsageDetail) error {
 	if actual <= 0 {
 		return nil
 	}
@@ -1182,7 +1182,19 @@ type ledgerRow struct {
 	createdAt    int64
 }
 
-func insertLedger(ctx context.Context, tx *sql.Tx, row ledgerRow) (int64, error) {
+func insertLedger(ctx context.Context, tx *sqlTx, row ledgerRow) (int64, error) {
+	if tx.kind == databasePostgres {
+		var id int64
+		err := tx.QueryRowContext(ctx, `INSERT INTO points_ledger
+			(user_id, discussion_id, delta, reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
+			 llm_cost_usd, tts_cost_usd, music_cost_usd, rc_event_id, balance_after, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			row.userID, row.discussionID, row.delta, row.reason, row.detail.CostUSD,
+			row.detail.PromptTokens, row.detail.CompletionTokens, row.detail.TotalTokens,
+			row.detail.LLMCostUSD, row.detail.TTSCostUSD, row.detail.MusicCostUSD,
+			row.rcEventID, row.balanceAfter, row.createdAt).Scan(&id)
+		return id, err
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO points_ledger
 		(user_id, discussion_id, delta, reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
 		 llm_cost_usd, tts_cost_usd, music_cost_usd, rc_event_id, balance_after, created_at)
@@ -1197,7 +1209,7 @@ func insertLedger(ctx context.Context, tx *sql.Tx, row ledgerRow) (int64, error)
 	return result.LastInsertId()
 }
 
-func txBalance(ctx context.Context, tx *sql.Tx, userID string) (int64, error) {
+func txBalance(ctx context.Context, tx *sqlTx, userID string) (int64, error) {
 	var bal int64
 	err := tx.QueryRowContext(ctx, `SELECT balance FROM user_points_balance WHERE user_id = ?`, userID).Scan(&bal)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1206,7 +1218,7 @@ func txBalance(ctx context.Context, tx *sql.Tx, userID string) (int64, error) {
 	return bal, err
 }
 
-func repairCachedBalanceFromLatestLedger(ctx context.Context, tx *sql.Tx, userID string) error {
+func repairCachedBalanceFromLatestLedger(ctx context.Context, tx *sqlTx, userID string) error {
 	var bal int64
 	err := tx.QueryRowContext(ctx, `SELECT balance_after FROM points_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 1`, userID).Scan(&bal)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1218,7 +1230,7 @@ func repairCachedBalanceFromLatestLedger(ctx context.Context, tx *sql.Tx, userID
 	return upsertBalance(ctx, tx, userID, bal, time.Now().UnixMilli())
 }
 
-func upsertBalance(ctx context.Context, tx *sql.Tx, userID string, balance, now int64) error {
+func upsertBalance(ctx context.Context, tx *sqlTx, userID string, balance, now int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO user_points_balance (user_id, balance, updated_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at`,

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -133,7 +132,7 @@ type PlanningConversationView struct {
 // discussion store's *sql.DB (single connection) so a turn write and a points
 // debit serialize against the same handle — constructed like NewPointsStore.
 type PlanningStore struct {
-	db *sql.DB
+	db *sqlDB
 }
 
 // NewPlanningStore builds a PlanningStore over the discussion store's database.
@@ -190,7 +189,7 @@ func (s *PlanningStore) ensureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS planning_turns_conversation_idx
 			ON planning_turns(conversation_id, seq)`,
 		// Partial unique index: enforce op_id uniqueness only for real ids so an
-		// INSERT OR IGNORE retry collapses to a no-op.
+		// ON CONFLICT retry collapses to a no-op.
 		`CREATE UNIQUE INDEX IF NOT EXISTS planning_turns_op_idx
 			ON planning_turns(op_id) WHERE op_id != ''`,
 	}
@@ -209,32 +208,7 @@ func (s *PlanningStore) ensureSchema(ctx context.Context) error {
 }
 
 func (s *PlanningStore) ensureColumn(ctx context.Context, table, column, definition string) error {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			typ        string
-			notNull    int
-			defaultVal any
-			pk         int
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition))
-	return err
+	return s.db.ensureColumn(ctx, table, column, definition)
 }
 
 func (s *PlanningStore) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -350,10 +324,10 @@ func (s *PlanningStore) AppendTurn(ctx context.Context, conversationID string, i
 		sourcesJSON = string(b)
 	}
 	now := time.Now().UnixMilli()
-	_, err := s.exec(ctx, `INSERT OR IGNORE INTO planning_turns
+	_, err := s.exec(ctx, `INSERT INTO planning_turns
 		(op_id, conversation_id, seq, role, text, attachments_json, references_json, tool_calls_json, tool_call_id, tool_name, result_text, is_error,
 		 script_json, sources_json, markdown, question_id, questions_json, answers_json, question_status, created_at)
-		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		opID, conversationID, conversationID, in.Role, in.Text, attachmentsJSON, referencesJSON, toolCallsJSON, in.ToolCallID, in.ToolName, in.ResultText, boolInt(in.IsError),
 		scriptJSON, sourcesJSON, in.Markdown, in.QuestionID, in.QuestionsJSON, in.AnswersJSON, in.QuestionStatus, now)
 	if err != nil {

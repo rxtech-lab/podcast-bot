@@ -8,7 +8,7 @@
 # proxied to the pod that owns the job's live audio stream (PEER_HOST_TEMPLATE).
 #
 # Shared state lives off-pod so any replica can serve any finished job:
-#   - job + discussion metadata -> Turso/libSQL (TURSO_CONNECTION_URL)
+#   - job + discussion metadata -> Postgres or Turso/libSQL (DATABASE_URL)
 #   - finished mp3/mp4/vtt        -> S3 / R2 (S3_* in the Secret)
 # Each pod keeps only its own scratch render output on a per-pod PVC
 # (volumeClaimTemplates), so we can run RollingUpdate with N replicas.

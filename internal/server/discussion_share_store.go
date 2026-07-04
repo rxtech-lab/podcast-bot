@@ -167,8 +167,8 @@ func (s *DiscussionStore) JoinDiscussion(ctx context.Context, discussionID, owne
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_participants
-		(discussion_id, user_id, joined_at) VALUES (?, ?, ?)`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO native_discussion_participants
+		(discussion_id, user_id, joined_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
 		discussionID, userID, time.Now().UnixMilli())
 	if err != nil {
 		return err
