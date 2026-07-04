@@ -2322,6 +2322,12 @@ struct AudioBookVideoView: View {
     @State private var isDownloading = false
     @State private var message: String?
     @State private var showingShareSheet = false
+    @State private var showChrome = false
+    @State private var hideChromeTask: Task<Void, Never>?
+
+    private var chromeVisible: Bool {
+        showChrome || isDownloading || message != nil
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -2365,7 +2371,9 @@ struct AudioBookVideoView: View {
                     .disabled(isDownloading)
                     .accessibilityLabel("Save to Camera Roll")
                 }
-                .padding()
+                .padding(.horizontal, 16)
+                .padding(.top, 58)
+                .padding(.bottom, 12)
 
                 if isDownloading || message != nil {
                     HStack(spacing: 10) {
@@ -2385,7 +2393,14 @@ struct AudioBookVideoView: View {
 
                 Spacer()
             }
+            .opacity(chromeVisible ? 1 : 0)
+            .allowsHitTesting(chromeVisible)
+            .animation(.easeInOut(duration: 0.18), value: chromeVisible)
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded {
+            revealChromeTemporarily()
+        })
         .sheet(isPresented: $showingShareSheet) {
             if let localFile {
                 FileShareSheet(url: localFile)
@@ -2397,12 +2412,25 @@ struct AudioBookVideoView: View {
             p.play()
         }
         .onDisappear {
+            hideChromeTask?.cancel()
             player?.pause()
             player = nil
         }
     }
 
+    private func revealChromeTemporarily() {
+        hideChromeTask?.cancel()
+        showChrome = true
+        hideChromeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            if !isDownloading && message == nil {
+                showChrome = false
+            }
+        }
+    }
+
     private func shareVideo() {
+        revealChromeTemporarily()
         Task {
             if let file = await localVideoFile() {
                 localFile = file
@@ -2412,6 +2440,7 @@ struct AudioBookVideoView: View {
     }
 
     private func saveToCameraRoll() {
+        revealChromeTemporarily()
         Task {
             guard let file = await localVideoFile() else { return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
@@ -2455,6 +2484,7 @@ struct AudioBookVideoView: View {
 
     private func showMessage(_ text: String) {
         message = text
+        revealChromeTemporarily()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             if message == text {
