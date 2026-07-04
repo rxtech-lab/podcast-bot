@@ -3,20 +3,30 @@ import SwiftUI
 import TipKit
 import UIKit
 
-/// Home: the user's server-owned discussions, newest first.
+/// A pushable destination in the library's navigation: an individual podcast
+/// (plan or player, by status) or an album's episode list.
+enum LibraryDestination: Hashable {
+    case discussion(Discussion)
+    case album(id: String)
+}
+
+/// Home: the user's server-owned discussions, newest first. Podcasts that
+/// belong to an album (audiobook chapter batches, follow-ups, manual groups)
+/// collapse into one album row that opens the album's episode list.
 struct LibraryView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
     @Environment(\.horizontalSizeClass) private var hSize
     @State private var discussions: [Discussion] = []
     @State private var showingNew = false
+    @State private var showingNewAlbum = false
     @State private var showingPointsHistory = false
     @State private var showingSettings = false
     @State private var showingWhatsNew = false
     @State private var showingMarketplace = false
-    @State private var path: [Discussion] = []
+    @State private var path: [LibraryDestination] = []
     /// Detail selection for the iPad split-view layout.
-    @State private var selection: Discussion?
+    @State private var selection: LibraryDestination?
     @State private var isLoading = false
     @State private var hasLoadedInitialPage = false
     @State private var isLoadingMore = false
@@ -33,64 +43,83 @@ struct LibraryView: View {
     private var isRegular: Bool { hSize == .regular }
 
     var body: some View {
-        Group {
-            if isRegular { splitView } else { stackView }
-        }
-        .onChange(of: hSize) { _, newValue in
-            syncNavigation(toRegular: newValue == .regular)
-        }
-        .sheet(isPresented: $showingNew) {
-            NewDiscussionView { discussion in
-                showingNew = false
-                upsert(discussion)
-                navigate(to: discussion)
+        withLifecycle(withPresentations(
+            Group {
+                if isRegular { splitView } else { stackView }
             }
-        }
-        .alert("Could not load \(AppStringLiteral.stationsNameRaw)", isPresented: errorBinding) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
-        .sheet(isPresented: $showingPointsHistory) {
-            PointsHistoryView()
-        }
-        .fullScreenCover(isPresented: $showingSettings) {
-            LibrarySettingsView(
-                userName: auth.currentUser?.name,
-                userID: auth.currentUser?.id,
-                canManageSubscription: purchases.isConfigured,
-                pointsLabel: purchases.isConfigured ? pointsMenuLabel : nil
-            )
-        }
-        .sheet(isPresented: $showingWhatsNew) {
-            WhatsNewSheet(features: WhatsNewFeature.all,
-                          allowsInteractiveDismiss: true)
-            {
-                showingWhatsNew = false
+        ))
+    }
+
+    /// Sheets, covers, and alerts hung off the root view. Split out of `body`
+    /// (with `withLifecycle`) to keep the expression type-checkable.
+    private func withPresentations(_ content: some View) -> some View {
+        content
+            .sheet(isPresented: $showingNew) {
+                NewDiscussionView { discussion in
+                    showingNew = false
+                    upsert(discussion)
+                    navigate(to: discussion)
+                }
             }
-        }
-        .fullScreenCover(isPresented: $showingMarketplace) {
-            MarketplaceView { discussion in
-                showingMarketplace = false
-                upsert(discussion)
-                navigate(to: discussion)
+            .sheet(isPresented: $showingNewAlbum) {
+                NewAlbumSheet { album in
+                    showingNewAlbum = false
+                    navigateToAlbum(id: album.id)
+                }
             }
-        }
-        .task { await load() }
-        .task { await purchases.refreshBalance() }
-        .onChange(of: searchText) { _, newValue in
-            scheduleSearch(for: newValue)
-        }
-        .onChange(of: visibilityFilter) { _, newValue in
-            searchTask?.cancel()
-            Task {
-                await load(visibility: newValue, showsSearchOverlay: hasLoadedInitialPage)
+            .alert("Could not load \(AppStringLiteral.stationsNameRaw)", isPresented: errorBinding) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
             }
-        }
-        .onDisappear {
-            searchTask?.cancel()
-            isSearchLoading = false
-        }
+            .sheet(isPresented: $showingPointsHistory) {
+                PointsHistoryView()
+            }
+            .fullScreenCover(isPresented: $showingSettings) {
+                LibrarySettingsView(
+                    userName: auth.currentUser?.name,
+                    userID: auth.currentUser?.id,
+                    canManageSubscription: purchases.isConfigured,
+                    pointsLabel: purchases.isConfigured ? pointsMenuLabel : nil
+                )
+            }
+            .sheet(isPresented: $showingWhatsNew) {
+                WhatsNewSheet(features: WhatsNewFeature.all,
+                              allowsInteractiveDismiss: true)
+                {
+                    showingWhatsNew = false
+                }
+            }
+            .fullScreenCover(isPresented: $showingMarketplace) {
+                MarketplaceView { discussion in
+                    showingMarketplace = false
+                    upsert(discussion)
+                    navigate(to: discussion)
+                }
+            }
+    }
+
+    /// Load tasks and change observers hung off the root view.
+    private func withLifecycle(_ content: some View) -> some View {
+        content
+            .onChange(of: hSize) { _, newValue in
+                syncNavigation(toRegular: newValue == .regular)
+            }
+            .task { await load() }
+            .task { await purchases.refreshBalance() }
+            .onChange(of: searchText) { _, newValue in
+                scheduleSearch(for: newValue)
+            }
+            .onChange(of: visibilityFilter) { _, newValue in
+                searchTask?.cancel()
+                Task {
+                    await load(visibility: newValue, showsSearchOverlay: hasLoadedInitialPage)
+                }
+            }
+            .onDisappear {
+                searchTask?.cancel()
+                isSearchLoading = false
+            }
     }
 
     /// iPhone / compact: single-column stack-based navigation.
@@ -102,8 +131,8 @@ struct LibraryView: View {
                 .searchable(text: $searchText,
                             placement: .navigationBarDrawer(displayMode: .always),
                             prompt: "Search \(AppStringLiteral.stationsNameRaw)")
-                .navigationDestination(for: Discussion.self) { discussion in
-                    destination(for: discussion)
+                .navigationDestination(for: LibraryDestination.self) { destination in
+                    destinationView(destination)
                 }
         }
     }
@@ -120,8 +149,11 @@ struct LibraryView: View {
         } detail: {
             NavigationStack {
                 if let selection {
-                    destination(for: selection)
-                        .id(selection.id)
+                    destinationView(selection)
+                        .id(selectionIdentity(selection))
+                        .navigationDestination(for: LibraryDestination.self) { destination in
+                            destinationView(destination)
+                        }
                 } else {
                     placeholder
                 }
@@ -181,8 +213,19 @@ struct LibraryView: View {
                 .popoverTip(OpenMarketTip(), arrowEdge: .top)
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button { showingNew = true } label: { Image(systemName: "plus") }
-                .accessibilityIdentifier("library.new")
+            Menu {
+                Button { showingNew = true } label: {
+                    Label("New \(AppStringLiteral.stationNameRaw)", systemImage: "waveform")
+                }
+                .accessibilityIdentifier("library.new.station")
+                Button { showingNewAlbum = true } label: {
+                    Label("New Album", systemImage: "rectangle.stack.badge.plus")
+                }
+                .accessibilityIdentifier("library.new.album")
+            } label: {
+                Image(systemName: "plus")
+            }
+            .accessibilityIdentifier("library.new")
         }
         ToolbarItem(placement: .topBarLeading) {
             Menu {
@@ -227,26 +270,60 @@ struct LibraryView: View {
         }
     }
 
-    private var list: some View {
-        List {
-            ForEach(discussions) { d in
-                Button {
-                    navigate(to: d)
-                } label: {
-                    DiscussionRow(discussion: d, isSelected: isRegular && selection?.id == d.id)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("discussion.row.\(d.id)")
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
-                .onAppear {
-                    if d.id == discussions.last?.id {
-                        Task { await loadMore() }
-                    }
-                }
+    /// One rendered row of the home list: an ungrouped podcast, or a whole
+    /// album collapsed into a single group row (positioned by its newest
+    /// member on the page).
+    private enum LibraryListRow: Identifiable {
+        case discussion(Discussion)
+        case album(summary: AlbumSummaryDTO, newest: Discussion, count: Int)
+
+        var id: String {
+            switch self {
+            case .discussion(let d): return "discussion:\(d.id)"
+            case .album(let summary, _, _): return "album:\(summary.id)"
             }
-            .onDelete(perform: deleteDiscussions)
+        }
+    }
+
+    /// Collapses the page's discussions into rows, grouping album members
+    /// (matched by the server-attached `album` summary) into one row placed at
+    /// the newest member's position.
+    private var listRows: [LibraryListRow] {
+        var pageCounts: [String: Int] = [:]
+        for d in discussions {
+            if let albumID = d.album?.id {
+                pageCounts[albumID, default: 0] += 1
+            }
+        }
+        var seenAlbums = Set<String>()
+        var rows: [LibraryListRow] = []
+        for d in discussions {
+            if let album = d.album {
+                if seenAlbums.insert(album.id).inserted {
+                    let count = max(Int(album.episodeCount ?? 0), pageCounts[album.id] ?? 1)
+                    rows.append(.album(summary: album, newest: d, count: count))
+                }
+            } else {
+                rows.append(.discussion(d))
+            }
+        }
+        return rows
+    }
+
+    private var list: some View {
+        let rows = listRows
+        return List {
+            ForEach(rows) { row in
+                listRow(row)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .onAppear {
+                        if row.id == rows.last?.id {
+                            Task { await loadMore() }
+                        }
+                    }
+            }
 
             if isLoadingMore {
                 HStack {
@@ -263,6 +340,38 @@ struct LibraryView: View {
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await load() }
         .background(Color.clear)
+    }
+
+    @ViewBuilder
+    private func listRow(_ row: LibraryListRow) -> some View {
+        switch row {
+        case .discussion(let d):
+            Button {
+                navigate(to: d)
+            } label: {
+                DiscussionRow(discussion: d, isSelected: isRegular && selectedDiscussionID == d.id)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("discussion.row.\(d.id)")
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) {
+                    deleteDiscussion(d)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        case .album(let summary, let newest, let count):
+            Button {
+                navigateToAlbum(id: summary.id)
+            } label: {
+                AlbumGroupRow(summary: summary,
+                              newest: newest,
+                              episodeCount: count,
+                              isSelected: isRegular && selection == .album(id: summary.id))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("album.row.\(summary.id)")
+        }
     }
 
     private var errorBinding: Binding<Bool> {
@@ -328,7 +437,7 @@ struct LibraryView: View {
                 visibility: filter.apiVisibility
             )
             guard normalizedSearchQuery(searchText) == query, visibilityFilter == filter else { return }
-            let selectedID = selection?.id
+            let selectedID = selectedDiscussionID
             loadedSearchQuery = query
             loadedVisibilityFilter = filter
             discussions = items
@@ -338,7 +447,7 @@ struct LibraryView: View {
             // from a later page must not be dropped by a first-page refresh.
             // (Explicit deletion is what clears selection.)
             if let selectedID, let refreshed = items.first(where: { $0.id == selectedID }) {
-                selection = refreshed
+                selection = .discussion(refreshed)
             }
             canLoadMore = items.count == pageSize
         } catch {
@@ -372,23 +481,38 @@ struct LibraryView: View {
         }
     }
 
-    private func deleteDiscussions(at offsets: IndexSet) {
-        let targets = offsets.map { discussions[$0] }
-        let targetIDs = Set(targets.map(\.id))
-        discussions.removeAll { targetIDs.contains($0.id) }
-        path.removeAll { targetIDs.contains($0.id) }
-        if let sel = selection, targetIDs.contains(sel.id) { selection = nil }
+    private func deleteDiscussion(_ target: Discussion) {
+        discussions.removeAll { $0.id == target.id }
+        path.removeAll { destinationDiscussionID($0) == target.id }
+        if let selection, destinationDiscussionID(selection) == target.id { self.selection = nil }
         Task {
-            let api = APIClient(tokens: auth)
-            for target in targets {
-                do {
-                    try await api.deleteDiscussion(id: target.id)
-                } catch {
-                    reportLoadError(error)
-                    await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter)
-                    return
-                }
+            do {
+                try await APIClient(tokens: auth).deleteDiscussion(id: target.id)
+            } catch {
+                reportLoadError(error)
+                await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter)
             }
+        }
+    }
+
+    private func destinationDiscussionID(_ destination: LibraryDestination) -> String? {
+        if case .discussion(let d) = destination { return d.id }
+        return nil
+    }
+
+    /// The id of the discussion shown in the iPad detail column, for row
+    /// highlighting; nil when an album (or nothing) is selected.
+    private var selectedDiscussionID: String? {
+        guard let selection else { return nil }
+        return destinationDiscussionID(selection)
+    }
+
+    /// Stable identity for the iPad detail column so switching selections
+    /// rebuilds the destination view.
+    private func selectionIdentity(_ destination: LibraryDestination) -> String {
+        switch destination {
+        case .discussion(let d): return "discussion:\(d.id)"
+        case .album(let id): return "album:\(id)"
         }
     }
 
@@ -501,9 +625,18 @@ struct LibraryView: View {
     /// `path` on iPhone.
     private func navigate(to discussion: Discussion) {
         if isRegular {
-            selection = discussion
+            selection = .discussion(discussion)
         } else {
-            path.append(discussion)
+            path.append(.discussion(discussion))
+        }
+    }
+
+    /// Open an album's episode list.
+    private func navigateToAlbum(id: String) {
+        if isRegular {
+            selection = .album(id: id)
+        } else {
+            path.append(.album(id: id))
         }
     }
 
@@ -511,16 +644,26 @@ struct LibraryView: View {
     /// discussion transitions in place to a player, in whichever model is active.
     private func replaceCurrent(with generated: Discussion) {
         if isRegular {
-            selection = generated
-        } else if let index = path.lastIndex(where: { $0.id == generated.id }) {
-            path[index] = generated
+            selection = .discussion(generated)
+        } else if let index = path.lastIndex(where: { destinationDiscussionID($0) == generated.id }) {
+            path[index] = .discussion(generated)
         } else {
-            path.append(generated)
+            path.append(.discussion(generated))
         }
     }
 
     @ViewBuilder
-    private func destination(for discussion: Discussion) -> some View {
+    private func destinationView(_ destination: LibraryDestination) -> some View {
+        switch destination {
+        case .discussion(let discussion):
+            discussionDestination(discussion)
+        case .album(let id):
+            AlbumView(albumID: id)
+        }
+    }
+
+    @ViewBuilder
+    private func discussionDestination(_ discussion: Discussion) -> some View {
         switch discussion.status {
         case .planning, .failed:
             // New discussions plan conversationally; legacy plans are seeded into
@@ -538,6 +681,36 @@ struct LibraryView: View {
     }
 }
 
+/// Home-list row for an album group: the album cover, title, and episode
+/// count. Opens the album's episode list.
+private struct AlbumGroupRow: View {
+    let summary: AlbumSummaryDTO
+    let newest: Discussion
+    let episodeCount: Int
+    var isSelected: Bool = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            AlbumCoverThumbnail(cover: summary.cover, size: 40)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary.title.isEmpty ? newest.displayTitle : summary.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                HStack(spacing: 8) {
+                    Label("\(episodeCount) episode\(episodeCount == 1 ? "" : "s")",
+                          systemImage: "rectangle.stack")
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right").foregroundStyle(Theme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(tint: isSelected ? Theme.accent.opacity(0.55) : nil)
+    }
+}
+
 private struct LibrarySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     let userName: String?
@@ -545,6 +718,10 @@ private struct LibrarySettingsView: View {
     let canManageSubscription: Bool
     let pointsLabel: String?
     @State private var didCopyUserID = false
+    /// Preferred chapters per audiobook generation batch. The server hard-caps
+    /// a batch at 5; this only controls how many chapters the checklist
+    /// preselects.
+    @AppStorage("audiobook.defaultBatchChapters") private var audiobookBatchChapters = 3
 
     private var displayName: String {
         let trimmed = userName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -569,6 +746,18 @@ private struct LibrarySettingsView: View {
 
                 Section("Account") {
                     userIDRow
+                }
+
+                Section {
+                    Stepper(value: $audiobookBatchChapters, in: 1...5) {
+                        SettingsRowLabel(title: String(localized: "Max chapters per generation: \(audiobookBatchChapters)"),
+                                         systemImage: "text.book.closed")
+                    }
+                    .accessibilityIdentifier("settings.maxChaptersPerGeneration")
+                } header: {
+                    Text("Audiobooks")
+                } footer: {
+                    Text("Long audiobooks generate in batches of up to 5 chapters. Remaining chapters can be generated later from the podcast.")
                 }
 
                 if canManageSubscription {

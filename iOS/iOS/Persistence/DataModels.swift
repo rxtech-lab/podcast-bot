@@ -144,6 +144,11 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var sources: [SourceDTO]?
     var researched: Bool?
     var referenceDiscussionID: String?
+    /// Album this podcast belongs to (audiobook chapter batches and follow-ups
+    /// are auto-bundled; users can also group podcasts manually). `album` is
+    /// the compact summary attached to list rows for home-screen grouping.
+    var albumID: String?
+    var album: AlbumSummaryDTO?
     var lines: [DiscussionLineDTO]?
     var editTurns: [DiscussionEditTurnDTO]?
     var editTurnsHasMore: Bool?
@@ -189,6 +194,8 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case sources
         case researched
         case referenceDiscussionID = "reference_discussion_id"
+        case albumID = "album_id"
+        case album
         case lines
         case editTurns = "edit_turns"
         case editTurnsHasMore = "edit_turns_has_more"

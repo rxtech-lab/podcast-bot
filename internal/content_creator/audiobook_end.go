@@ -14,11 +14,29 @@ import (
 const endAudioBookToolName = "end_audio_book"
 
 type audioBookEndState struct {
-	done atomic.Bool
+	requested atomic.Bool
+	done      atomic.Bool
+}
+
+func (s *audioBookEndState) RequestDone() {
+	if s != nil {
+		s.requested.Store(true)
+	}
+}
+
+func (s *audioBookEndState) EndRequested() bool {
+	return s != nil && s.requested.Load()
+}
+
+func (s *audioBookEndState) ClearRequest() {
+	if s != nil {
+		s.requested.Store(false)
+	}
 }
 
 func (s *audioBookEndState) MarkDone() {
 	if s != nil {
+		s.requested.Store(false)
 		s.done.Store(true)
 	}
 }
@@ -45,8 +63,8 @@ func (t endAudioBookTool) Schema() map[string]any {
 }
 
 func (t endAudioBookTool) Call(_ context.Context, _ map[string]any, _ tools.AgentContext) (string, error) {
-	t.state.MarkDone()
-	return "audiobook marked complete", nil
+	t.state.RequestDone()
+	return "audiobook completion requested; backend will verify the final planned beat before stopping", nil
 }
 
 // AudioBookPlanner keeps asking the narrator to continue until the narrator
@@ -89,4 +107,16 @@ func (p *AudioBookPlanner) Next(ctx context.Context) (*Turn, bool) {
 
 func (p *AudioBookPlanner) Done() bool {
 	return p != nil && p.state.Done()
+}
+
+func (p *AudioBookPlanner) ValidateEndAfterTurn(maxSceneIndex, requiredFinalSceneIndex int) (requested, accepted bool) {
+	if p == nil || p.state == nil || !p.state.EndRequested() {
+		return false, false
+	}
+	if requiredFinalSceneIndex > 0 && maxSceneIndex < requiredFinalSceneIndex {
+		p.state.ClearRequest()
+		return true, false
+	}
+	p.state.MarkDone()
+	return true, true
 }

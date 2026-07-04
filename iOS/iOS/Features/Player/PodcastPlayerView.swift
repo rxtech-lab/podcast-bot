@@ -43,6 +43,10 @@ struct PodcastPlayerView: View {
     @State private var showingShareSheet = false
     @State private var showingCreatorProfile = false
     @State private var showingFollowUpForm = false
+    @State private var showingChapterChecklist = false
+    @State private var showingAlbum = false
+    @State private var showingAlbumPicker = false
+    @State private var chapterProgress: ChaptersResponse?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingRecorder = false
     @State private var selectedTranscriptSources: TranscriptSourcesSelection?
@@ -65,6 +69,8 @@ struct PodcastPlayerView: View {
     /// Stable id for the optional points-summary accessory row so it doesn't
     /// churn its identity across renders.
     private static let usageItemID = UUID()
+    /// Stable id for the optional "generate more chapters" accessory row.
+    private static let generateMoreItemID = UUID()
 
     var body: some View {
         ZStack {
@@ -126,6 +132,15 @@ struct PodcastPlayerView: View {
         }
         .sheet(isPresented: $showingFollowUpForm) {
             followUpFormSheet
+        }
+        .sheet(isPresented: $showingChapterChecklist) {
+            chapterChecklistSheet
+        }
+        .sheet(isPresented: $showingAlbum) {
+            albumSheet
+        }
+        .sheet(isPresented: $showingAlbumPicker) {
+            albumPickerSheet
         }
         .sheet(isPresented: downloadDialogBinding) {
             downloadProgressSheet
@@ -250,6 +265,7 @@ struct PodcastPlayerView: View {
             d.summary?.generation == true ? "summary-generation" : "summary-no-generation",
             d.jobID ?? "",
             d.downloadURLString ?? "",
+            d.albumID ?? "",
             "\(model?.uiActionsRefreshVersion ?? 0)",
             onCreatedFollowUp == nil ? "no-follow-up" : "follow-up",
             onCreatedFromPlan == nil ? "no-create-from-plan" : "create-from-plan",
@@ -291,12 +307,28 @@ struct PodcastPlayerView: View {
                 supportsPoints: purchases.isConfigured,
                 supportsFollowUp: onCreatedFollowUp != nil,
                 supportsCreateFromPlan: onCreatedFromPlan != nil,
-                supportsSignOut: onSignOut != nil
+                supportsSignOut: onSignOut != nil,
+                supportsChapterBatches: onCreatedFollowUp != nil,
+                supportsAlbums: true
             )
             podcastActionItems = actions.items
         } catch {
             podcastActionItems = []
         }
+        await refreshChapterProgress()
+    }
+
+    /// Loads which chapters of the audiobook chain are generated/pending; the
+    /// pending set drives the "Generate more chapters" transcript footer.
+    private func refreshChapterProgress() async {
+        guard currentDiscussion.script?.type == "audio-book",
+              currentDiscussion.status == .ready,
+              currentDiscussion.isOwner != false,
+              onCreatedFollowUp != nil else {
+            chapterProgress = nil
+            return
+        }
+        chapterProgress = try? await APIClient(tokens: auth).discussionChapters(id: currentDiscussion.id)
     }
 
     private func performDocumentAction(_ item: DiscussionUIActionItem) {
@@ -336,6 +368,12 @@ struct PodcastPlayerView: View {
             showingShareSheet = true
         case ["sheet", "follow-up"]:
             showingFollowUpForm = true
+        case ["sheet", "generate-chapters"]:
+            showingChapterChecklist = true
+        case ["sheet", "album"]:
+            showingAlbum = true
+        case ["sheet", "add-to-album"]:
+            showingAlbumPicker = true
         case ["action", "create-from-plan"]:
             createFromPlan()
         case ["action", "make-private"]:
@@ -440,6 +478,33 @@ struct PodcastPlayerView: View {
         NewDiscussionView(reference: currentPodcastReference) { created in
             showingFollowUpForm = false
             onCreatedFollowUp?(created)
+        }
+    }
+
+    /// Chapter batch picker for "generate more chapters": creates a follow-up
+    /// podcast narrating the checked chapters. The server's 400 (over the
+    /// 5-chapter batch limit, or chapters already generated) surfaces as an
+    /// alert inside the sheet.
+    private var chapterChecklistSheet: some View {
+        ChapterChecklistSheet(mode: .discussion(id: currentDiscussion.id)) { indices in
+            let created = try await APIClient(tokens: auth).generateChapters(id: currentDiscussion.id, chapters: indices)
+            showingChapterChecklist = false
+            await refreshChapterProgress()
+            onCreatedFollowUp?(created)
+        }
+    }
+
+    private var albumSheet: some View {
+        NavigationStack {
+            AlbumView(albumID: currentDiscussion.albumID ?? chapterProgress?.albumID ?? "",
+                      ownsNavigation: true)
+        }
+    }
+
+    private var albumPickerSheet: some View {
+        AlbumPickerSheet(discussion: currentDiscussion) { album in
+            showingAlbumPicker = false
+            model?.discussion.albumID = album.id
         }
     }
 
@@ -596,7 +661,37 @@ struct PodcastPlayerView: View {
             }
         case .usage(_, let points):
             PointsSummaryBubble(points: points)
+        case .generateMore(_, let pendingCount):
+            generateMoreChaptersRow(pendingCount: pendingCount)
         }
+    }
+
+    /// Trailing transcript call-to-action shown when the audiobook chain still
+    /// has pending chapters; opens the chapter checklist sheet.
+    private func generateMoreChaptersRow(pendingCount: Int) -> some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button {
+                showingChapterChecklist = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "text.badge.plus")
+                    Text("Generate more chapters (\(pendingCount) left)")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 11)
+                .background(Theme.accent.opacity(0.12), in: .capsule)
+                .overlay {
+                    Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1)
+                }
+                .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("player.generateMoreChapters")
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
     }
 
     /// Whether a transcript line was authored by *this* participant. Only
@@ -622,6 +717,12 @@ struct PodcastPlayerView: View {
         // discussion is charged (after generation completes).
         if let points = model.discussion.pointsText {
             items.append(.usage(id: Self.usageItemID, points: points))
+        }
+        // Audiobooks with ungenerated chapters end the transcript with a
+        // "generate more chapters" call-to-action.
+        if let pending = chapterProgress?.pendingChapters.count, pending > 0,
+           model.discussion.status == .ready {
+            items.append(.generateMore(id: Self.generateMoreItemID, pendingCount: pending))
         }
         return items
     }
@@ -1357,11 +1458,13 @@ private enum TranscriptListItem: Identifiable, MessageListItem {
     /// is never pinned/scrolled as if it were my outgoing turn.
     case line(LiveLine, isMine: Bool)
     case usage(id: UUID, points: String)
+    case generateMore(id: UUID, pendingCount: Int)
 
     var id: UUID {
         switch self {
         case .line(let line, _): return line.id
         case .usage(let id, _): return id
+        case .generateMore(let id, _): return id
         }
     }
 
@@ -1373,8 +1476,10 @@ private enum TranscriptListItem: Identifiable, MessageListItem {
     /// The points summary is an accessory — it never participates in user-message
     /// pinning.
     var isMessageListAccessory: Bool {
-        if case .usage = self { return true }
-        return false
+        switch self {
+        case .usage, .generateMore: return true
+        case .line: return false
+        }
     }
 }
 

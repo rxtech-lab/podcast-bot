@@ -23,6 +23,7 @@ struct PlanConversationView: View {
     @State private var selectedChapters: PlanChaptersPresentation?
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
+    @State private var showingChapterChecklist = false
     @State private var showingPaywall = false
     @State private var errorOffersTopUp = false
     @State private var showingSpeakerModels = false
@@ -100,6 +101,14 @@ struct PlanConversationView: View {
         }
         .sheet(item: $selectedChapters) { presentation in
             AudioBookChaptersSheet(presentation: presentation)
+        }
+        .sheet(isPresented: $showingChapterChecklist) {
+            if let script = latestAudioBookScript {
+                ChapterChecklistSheet(mode: .plan(script)) { indices in
+                    showingChapterChecklist = false
+                    generate(chapters: indices)
+                }
+            }
         }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .sheet(isPresented: $showingSpeakerModels) {
@@ -304,7 +313,7 @@ struct PlanConversationView: View {
                     Divider().overlay(Theme.secondaryText.opacity(0.18))
 
                     Button {
-                        showingGenerateConfirm = true
+                        requestGenerate()
                     } label: {
                         HStack {
                             Text("Start generation")
@@ -579,13 +588,31 @@ struct PlanConversationView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                showingGenerateConfirm = true
+                requestGenerate()
             } label: {
                 if isGenerating { ProgressView() } else { Label("Generate", systemImage: "waveform") }
             }
             .labelStyle(.iconOnly)
             .disabled(isGenerating || isStreaming || !canGenerate)
         }
+    }
+
+    /// Multi-chapter audiobooks pick a batch of chapters (server caps a run at
+    /// 5) in a checklist; everything else confirms via the plain dialog.
+    private func requestGenerate() {
+        if let script = latestAudioBookScript, (script.audioBookChapters?.count ?? 0) > 1 {
+            showingChapterChecklist = true
+        } else {
+            showingGenerateConfirm = true
+        }
+    }
+
+    /// The most recent audiobook plan shown in the conversation (falls back to
+    /// the persisted discussion script); nil for non-audiobook plans.
+    private var latestAudioBookScript: ScriptDTO? {
+        let script = visibleParts.last(where: { $0.isPlanCard })?.script ?? discussion.script
+        guard let script, script.type == "audio-book" else { return nil }
+        return script
     }
 
     // MARK: - Derived state
@@ -958,12 +985,12 @@ struct PlanConversationView: View {
 
     // MARK: - Generate
 
-    private func generate() {
+    private func generate(chapters: [Int]? = nil) {
         isGenerating = true
         clearPlanningError()
         Task {
             do {
-                discussion = try await APIClient(tokens: auth).generateDiscussion(id: discussion.id, language: selectedLanguage)
+                discussion = try await APIClient(tokens: auth).generateDiscussion(id: discussion.id, language: selectedLanguage, chapters: chapters)
                 isGenerating = false
                 onGenerated(discussion)
             } catch let APIError.insufficientPoints(required, balance) {

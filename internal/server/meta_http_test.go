@@ -261,6 +261,49 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 	}
 }
 
+func TestHandlePrecheckNewAlbumForm(t *testing.T) {
+	srv := New(Deps{Bus: eventbus.New(nil), Sessions: NewSessionRegistry(), Log: slog.Default()})
+	req := httptest.NewRequest(http.MethodGet, "/api/precheck", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out precheckResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	form := out.NewAlbum.Form
+	if form.Title != "New Album" {
+		t.Fatalf("title = %q, want New Album", form.Title)
+	}
+	props, ok := form.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema.properties missing or wrong type: %#v", form.Schema["properties"])
+	}
+	title, ok := props["title"].(map[string]any)
+	if !ok {
+		t.Fatal("schema.properties missing title")
+	}
+	if title["type"] != "string" {
+		t.Fatalf("title.type = %v, want string", title["type"])
+	}
+	if !reflect.DeepEqual(form.Schema["required"], []any{"title"}) {
+		t.Fatalf("schema.required = %#v, want [title]", form.Schema["required"])
+	}
+	titleUI := form.UISchema["title"].(map[string]any)
+	if titleUI["ui:widget"] != "glassText" {
+		t.Fatalf("title.ui:widget = %v, want glassText", titleUI["ui:widget"])
+	}
+	titleOpts := titleUI["ui:options"].(map[string]any)
+	if titleOpts["multiline"] != false {
+		t.Fatalf("title multiline = %v, want false", titleOpts["multiline"])
+	}
+	if titleOpts["accessibility_id"] != "newAlbum.title" {
+		t.Fatalf("title accessibility_id = %v", titleOpts["accessibility_id"])
+	}
+}
+
 func TestHandlePrecheckLocalizesFromAcceptLanguage(t *testing.T) {
 	srv := New(Deps{Bus: eventbus.New(nil), Sessions: NewSessionRegistry(), Log: slog.Default()})
 	req := httptest.NewRequest(http.MethodGet, "/api/precheck", nil)
@@ -273,6 +316,9 @@ func TestHandlePrecheckLocalizesFromAcceptLanguage(t *testing.T) {
 	}
 	if out.NewDiscussion.Form.Title != "新增頻道" {
 		t.Fatalf("title = %q, want Traditional Chinese", out.NewDiscussion.Form.Title)
+	}
+	if out.NewAlbum.Form.Title != "新增專輯" {
+		t.Fatalf("album title = %q, want Traditional Chinese", out.NewAlbum.Form.Title)
 	}
 	props := out.NewDiscussion.Form.Schema["properties"].(map[string]any)
 	prompt := props["prompt"].(map[string]any)

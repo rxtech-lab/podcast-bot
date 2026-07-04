@@ -212,10 +212,10 @@ struct NewDiscussionView: View {
     @MainActor
     private func applyPrecheckForm(_ form: PrecheckFormDTO) {
         precheckForm = form
-        formSchemaJSON = jsonString(from: form.schema)
+        formSchemaJSON = form.schemaJSONString
         formSchema = formSchemaJSON.flatMap { try? JSONSchema(jsonString: $0) }
-        formUISchema = foundationDictionary(from: form.uiSchema)
-        formData = restoringStoredSettings(in: decodedFormData(from: form.initialData), form: form)
+        formUISchema = form.uiSchemaDictionary
+        formData = restoringStoredSettings(in: form.decodedInitialData, form: form)
         // When planning from an existing podcast, pre-fill the parent into the form
         // and cache it so the picker row shows its title.
         if let initialReference {
@@ -232,32 +232,6 @@ struct NewDiscussionView: View {
         reference["discussion_id"] = .string(id)
         root["reference"] = .object(properties: reference)
         formData = .object(properties: root)
-    }
-
-    private func jsonString(from value: some Encodable) -> String? {
-        guard let data = try? JSONEncoder().encode(value) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func foundationDictionary(from value: [String: AnyCodable]?) -> [String: Any]? {
-        guard let value,
-              let data = try? JSONEncoder().encode(value),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any]
-        else {
-            return nil
-        }
-        return dictionary
-    }
-
-    private func decodedFormData(from value: [String: AnyCodable]?) -> FormData {
-        guard let value,
-              let data = try? JSONEncoder().encode(value),
-              let decoded = try? JSONDecoder().decode(FormData.self, from: data)
-        else {
-            return .object(properties: [:])
-        }
-        return decoded
     }
 
     private func restoringStoredSettings(in data: FormData, form: PrecheckFormDTO) -> FormData {

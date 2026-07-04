@@ -131,6 +131,11 @@ const (
 type discussionGenerateRequest struct {
 	VideoConfig videoConfigJSON `json:"videoConfig"`
 	Language    string          `json:"language"`
+	// Chapters is the audiobook batch selection: 1-based indices into the
+	// plan's full chapter list, at most audioBookMaxBatchChapters per run.
+	// Empty defaults to the first pending chapters. Rejected (400) for
+	// non-audiobook scripts.
+	Chapters []int `json:"chapters,omitempty"`
 }
 
 func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +273,18 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		}
 		if updated != nil {
 			d = updated
+		}
+		// Follow-ups are auto-bundled into their parent chain's album so the
+		// home list groups them. Only possible when the parent is owned by the
+		// requester (albums are per-owner); failures are non-fatal.
+		if parent, err := s.d.Discussions.Get(r.Context(), user.ID, reference.ID); err == nil && parent != nil {
+			if root, err := s.albumChainRoot(r.Context(), user.ID, parent); err == nil && root != nil {
+				if err := s.autoBundleFollowUp(r.Context(), user.ID, root, d.ID, nil); err != nil {
+					s.logger().Warn("follow-up album bundling failed", "parent", reference.ID, "child", d.ID, "err", err)
+				} else if refreshed, err := s.d.Discussions.Get(r.Context(), user.ID, d.ID); err == nil && refreshed != nil {
+					d = refreshed
+				}
+			}
 		}
 	}
 	if settings.GenerateCover {
@@ -1566,15 +1583,31 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 		}
 		d = updated
 	}
+	// Audiobooks generate in chapter batches: validate the selection against
+	// the chain's progress and submit a derived batch script (chapters sliced,
+	// outline renumbered globally, minutes budgeted by the batch). Other
+	// content types submit the stored script unchanged.
+	genScript := d.Script
+	if discussionIsAudioBook(d) {
+		batch, status, err := s.prepareAudioBookGeneration(r.Context(), user.ID, d, req.Chapters)
+		if err != nil {
+			http.Error(w, err.Error(), status)
+			return
+		}
+		genScript = batch
+	} else if len(req.Chapters) > 0 {
+		http.Error(w, "chapter selection is only supported for audiobooks", http.StatusBadRequest)
+		return
+	}
 	// Atomically reserve enough points to cover a full podcast of this duration
 	// BEFORE submitting the job, so a run never starts uncharged and two
 	// concurrent requests can't overdraw. Reconciled to actual usage at job
 	// completion; refunded here if the job fails to start.
-	reserved, ok := s.reserveGeneration(w, r, user.ID, id, d.Script)
+	reserved, ok := s.reserveGeneration(w, r, user.ID, id, genScript)
 	if !ok {
 		return
 	}
-	jobID, err := s.submitJSONScript(d.Script, req.VideoConfig, id)
+	jobID, err := s.submitJSONScript(genScript, req.VideoConfig, id)
 	if err != nil {
 		s.refundGeneration(r.Context(), user.ID, id, reserved)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1734,6 +1767,9 @@ func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, 
 	timer.add("cover", coverDur)
 	timer.add("summary", summaryDur)
 	timer.add("usage", usageDur)
+	t0 := time.Now()
+	s.attachAlbumSummaries(r.Context(), s.requestUser(r).ID, items)
+	timer.add("albums", time.Since(t0))
 }
 
 func (s *Server) logDiscussionSummaryReturn(route string, d *Discussion) {

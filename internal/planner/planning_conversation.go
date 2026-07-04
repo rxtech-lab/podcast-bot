@@ -117,7 +117,7 @@ Audiobook-specific contract:
 - Plan an audio-book, not a panel discussion.
 - The plan should contain a narrator, optional speakers/character voices, one compact overall Markdown summary, and dedicated chapter sections in the "chapters" field.
 - Uploaded long documents are represented by bounded server digests. Do not ask the user to paste the full source into the chat, and do not dump long source text into the plan.
-- Prefer 3 chapters for most sources. Use 4 or 5 only when the source is genuinely long or has major distinct parts. Never produce more than 5 chapters.
+- Create one chapter per natural chapter or major section of the source. Prefer 3-5 chapters for short sources; long books may have as many chapters as the source genuinely has, up to ` + fmt.Sprint(audioBookMaxChapters) + ` chapters.
 - Chapter titles should not include "Chapter 1" / "Chapter 2" prefixes. Keep each chapter summary to one or two concise sentences.
 - Do not repeat the chapter list inside "overall_summary"; chapters belong only in the structured "chapters" field.
 - The generated plan is an outline only; full narration happens during the audio generation phase.`
@@ -535,7 +535,7 @@ func ConversationInitialText(req PlanRequest) string {
 		sb.WriteString("- Do not use live web research unless the user explicitly asks for it later.\n")
 	}
 	if contentType == config.ContentTypeAudioBook {
-		sb.WriteString("\nCreate an audiobook outline with a `style`, narrator, optional speakers, one compact overall Markdown summary, and dedicated ordered chapter sections in `chapters`. Style must be one of news, conversational, audiobook, podcast, or meeting; infer it from the source unless the user or selected template asks for a specific style. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose `conversational`. Prefer 3 chapters, use 4 or 5 only for long or clearly multipart sources, and never produce more than 5. Do not include full source text in the plan, do not number chapter titles, and do not repeat the chapter list in the summary.\n")
+		sb.WriteString("\nCreate an audiobook outline with a `style`, narrator, optional speakers, one compact overall Markdown summary, and dedicated ordered chapter sections in `chapters`. Style must be one of news, conversational, audiobook, podcast, or meeting; infer it from the source unless the user or selected template asks for a specific style. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose `conversational`. Create one chapter per natural chapter or major section of the source: prefer 3-5 chapters for short sources, and let long books have as many chapters as the source genuinely has (up to " + fmt.Sprint(audioBookMaxChapters) + "). Do not include full source text in the plan, do not number chapter titles, and do not repeat the chapter list in the summary.\n")
 	} else {
 		sb.WriteString(fmt.Sprintf("\nUse exactly %d discussants. Each discussant must have a distinct perspective.\n", n))
 	}

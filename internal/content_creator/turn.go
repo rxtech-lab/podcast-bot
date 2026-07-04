@@ -48,6 +48,10 @@ type Turn struct {
 	// markers at SurfaceFrames-1 — the visual director generated exactly
 	// SurfaceFrames beats and we don't want the rotation to wrap.
 	sceneAdvances int
+	// maxSceneIndex tracks the largest explicit `<scene N/>` accepted in
+	// this turn. Audiobook completion validation uses this to reject an
+	// end_audio_book call that arrives before the final planned beat.
+	maxSceneIndex int
 
 	// Played sets to true after the producer finishes; protected by mu.
 	mu     sync.Mutex
@@ -115,6 +119,19 @@ func (t *Turn) FullText() string {
 	t.textMu.Lock()
 	defer t.textMu.Unlock()
 	return t.fullText.String()
+}
+
+func (t *Turn) RecordSceneMarkers(groups ...[]int) {
+	if t == nil {
+		return
+	}
+	for _, group := range groups {
+		for _, idx := range group {
+			if idx > t.maxSceneIndex {
+				t.maxSceneIndex = idx
+			}
+		}
+	}
 }
 
 // RecordToolResult captures public source links returned by research/search

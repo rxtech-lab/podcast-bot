@@ -97,7 +97,7 @@ func TestAudioBookTemplateSchema(t *testing.T) {
 			t.Fatalf("audio-book schema missing style %q: %s", style, text)
 		}
 	}
-	for _, expected := range []string{"Prefer 3 chapters", "never provide more than 5", "do not duplicate chapters in overall_summary"} {
+	for _, expected := range []string{"Prefer 3-5 for short sources", "up to 40", "do not duplicate chapters in overall_summary"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("audio-book schema missing chapter guidance %q: %s", expected, text)
 		}
@@ -120,8 +120,8 @@ func TestConversationInitialTextConstrainsAudioBookChapters(t *testing.T) {
 	for _, expected := range []string{
 		"dedicated ordered chapter sections in `chapters`",
 		"Style must be one of news, conversational, audiobook, podcast, or meeting",
-		"Prefer 3 chapters",
-		"never produce more than 5",
+		"prefer 3-5 chapters for short sources",
+		"up to 40",
 		"do not repeat the chapter list in the summary",
 	} {
 		if !strings.Contains(got, expected) {

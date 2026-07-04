@@ -94,13 +94,20 @@ struct PlanTemplatesResponseDTO: Codable, Sendable {
 
 struct PrecheckResponseDTO: Codable, Sendable {
     var newDiscussion: PrecheckNewDiscussionDTO
+    /// Optional so older servers without album support still decode.
+    var newAlbum: PrecheckNewAlbumDTO?
 
     enum CodingKeys: String, CodingKey {
         case newDiscussion = "new_discussion"
+        case newAlbum = "new_album"
     }
 }
 
 struct PrecheckNewDiscussionDTO: Codable, Sendable {
+    var form: PrecheckFormDTO
+}
+
+struct PrecheckNewAlbumDTO: Codable, Sendable {
     var form: PrecheckFormDTO
 }
 
@@ -143,6 +150,38 @@ struct PrecheckFormActionDTO: Codable, Hashable, Sendable, Identifiable {
         case description
         case systemImage = "system_image"
         case deepLink = "deep_link"
+    }
+}
+
+/// Bridges the wire form (AnyCodable trees) into what `JSONSchemaForm` needs.
+extension PrecheckFormDTO {
+    /// The schema re-encoded as a JSON string for `JSONSchema` parsing.
+    var schemaJSONString: String? {
+        guard let data = try? JSONEncoder().encode(schema) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The ui_schema as a Foundation dictionary.
+    var uiSchemaDictionary: [String: Any]? {
+        guard let uiSchema,
+              let data = try? JSONEncoder().encode(uiSchema),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else {
+            return nil
+        }
+        return dictionary
+    }
+
+    /// The initial_data decoded into form values.
+    var decodedInitialData: FormData {
+        guard let initialData,
+              let data = try? JSONEncoder().encode(initialData),
+              let decoded = try? JSONDecoder().decode(FormData.self, from: data)
+        else {
+            return .object(properties: [:])
+        }
+        return decoded
     }
 }
 
@@ -237,6 +276,10 @@ struct ScriptDTO: Codable, Hashable, Sendable {
     var audioBookStyle: String?
     var audioBookSpeakers: [AudioBookSpeakerDTO]?
     var audioBookChapters: [AudioBookChapterDTO]?
+    /// 1-based positions (in the root plan's full chapter list) this script
+    /// narrates. Set on derived chapter-batch scripts; nil/empty means the
+    /// script narrates all of its chapters.
+    var audioBookChapterIndices: [Int]?
     var background: String?
     var surface: String?
     var sources: [SourceDTO]?
@@ -249,6 +292,7 @@ struct ScriptDTO: Codable, Hashable, Sendable {
         case audioBookStyle = "audio_book_style"
         case audioBookSpeakers = "audio_book_speakers"
         case audioBookChapters = "audio_book_chapters"
+        case audioBookChapterIndices = "audio_book_chapter_indices"
     }
 }
 
@@ -666,6 +710,126 @@ struct JobMessageRequest: Codable, Sendable {
 struct DiscussionGenerateRequest: Codable, Sendable {
     var videoConfig: VideoConfigDTO = VideoConfigDTO()
     var language: String?
+    /// Audiobook chapter batch selection (1-based indices into the plan's full
+    /// chapter list, max 5 per batch). nil lets the server default to the
+    /// first pending chapters.
+    var chapters: [Int]?
+}
+
+// MARK: - Audiobook chapter batches
+
+/// One chapter of the root plan annotated with its generation progress
+/// (GET /api/discussions/{id}/chapters).
+struct ChapterStatusDTO: Codable, Hashable, Sendable, Identifiable {
+    var index: Int
+    var title: String
+    var summary: String
+    var mode: String?
+    /// "done" | "generating" | "pending"
+    var status: String
+    var discussionID: String?
+
+    var id: Int { index }
+    var isDone: Bool { status == "done" }
+    var isGenerating: Bool { status == "generating" }
+    var isPending: Bool { status == "pending" }
+
+    enum CodingKeys: String, CodingKey {
+        case index, title, summary, mode, status
+        case discussionID = "discussion_id"
+    }
+}
+
+/// GET /api/discussions/{id}/chapters response.
+struct ChaptersResponse: Codable, Sendable {
+    var rootID: String
+    var albumID: String?
+    var maxBatchSize: Int
+    var chapters: [ChapterStatusDTO]
+
+    var pendingChapters: [ChapterStatusDTO] { chapters.filter(\.isPending) }
+
+    enum CodingKeys: String, CodingKey {
+        case rootID = "root_id"
+        case albumID = "album_id"
+        case maxBatchSize = "max_batch_size"
+        case chapters
+    }
+}
+
+/// POST /api/discussions/{id}/chapters/generate request body.
+struct ChaptersGenerateRequest: Codable, Sendable {
+    var chapters: [Int]
+    var videoConfig: VideoConfigDTO = VideoConfigDTO()
+    var language: String?
+}
+
+// MARK: - Albums
+
+/// Compact album descriptor attached to discussion list rows (`album` field)
+/// so the home screen can group linked podcasts.
+struct AlbumSummaryDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var kind: String?
+    var cover: DiscussionCover?
+    var episodeCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, kind, cover
+        case episodeCount = "episode_count"
+    }
+}
+
+/// A full album row from GET /api/albums / GET /api/albums/{id}.
+struct AlbumDTO: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var kind: String?
+    var rootDiscussionID: String?
+    var cover: DiscussionCover?
+    var episodeCount: Int?
+    var createdAt: String?
+    var updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, kind, cover
+        case rootDiscussionID = "root_discussion_id"
+        case episodeCount = "episode_count"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+/// GET /api/albums/{id} response: the album plus its episodes in album order.
+struct AlbumDetailResponse: Codable, Sendable {
+    var album: AlbumDTO
+    var episodes: [Discussion]
+}
+
+/// POST /api/albums request body.
+struct AlbumCreateRequest: Codable, Sendable {
+    var title: String
+    var discussionIDs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case discussionIDs = "discussion_ids"
+    }
+}
+
+/// PATCH /api/albums/{id} request body.
+struct AlbumRenameRequest: Codable, Sendable {
+    var title: String
+}
+
+/// POST /api/albums/{id}/discussions request body.
+struct AlbumAddMembersRequest: Codable, Sendable {
+    var discussionIDs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case discussionIDs = "discussion_ids"
+    }
 }
 
 /// GET /api/jobs/{id} response.

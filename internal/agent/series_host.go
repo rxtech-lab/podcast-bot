@@ -242,6 +242,7 @@ Directive:
 Completion rule:
 - The backend will keep asking you to continue until you call the end_audio_book tool.
 - Call end_audio_book exactly once, and only after you have fully narrated the final planned chapter. Do not call it after a partial chapter, a summary, or an unfinished sentence.
+- If illustration markers are provided, do not call end_audio_book until you have emitted the final required scene marker and narrated the beat attached to it.
 - When you reach the natural ending of the final planned chapter, the next action must be end_audio_book. Do not add encouragement, filler, "next chapter" teasers, or any other spoken text after the final chapter is complete.
 - If a continuation turn begins and the final planned chapter was already fully narrated in the recent transcript, call end_audio_book immediately with no spoken text.
 - After the end_audio_book tool result, stop. Do not emit a closing sentence, acknowledgement, or post-tool narration.
@@ -262,7 +263,19 @@ func audioBookLengthContract(p SpeakPrompt) string {
 	if minMinutes < 1 {
 		minMinutes = 1
 	}
-	return fmt.Sprintf("Length contract: target at least %d minute(s) of spoken audio. Do not collapse chapters into a short summary; give each chapter enough developed narration to stand on its own.", minMinutes)
+	minCJK := p.SecondsBudget * 4
+	targetCJK := p.SecondsBudget * 5
+	if minCJK < 1200 {
+		minCJK = 1200
+	}
+	if targetCJK < minCJK+400 {
+		targetCJK = minCJK + 400
+	}
+	return fmt.Sprintf(`Length contract:
+  * Target duration: at least %d minute(s) of spoken audio. Do not end early.
+  * For Chinese narration, write at least about %d CJK characters, with a target around %d CJK characters before markers are stripped. For English narration, use the same density goal in spoken detail rather than a short synopsis.
+  * Do not collapse chapters into a short summary; give each chapter enough developed narration to stand on its own.
+  * If you approach the ending before meeting the target, slow down by deepening the existing beats with concrete scene detail, silence, reaction, and dialogue that remains consistent with the outline.`, minMinutes, minCJK, targetCJK)
 }
 
 // audioBookSceneBlock builds the illustration-marker instructions for the

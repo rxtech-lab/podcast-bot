@@ -53,6 +53,9 @@ func (t *DebateTopic) RenderMarkdown() (string, error) {
 			fm.add("audio_book_speakers", t.AudioBookSpeakers)
 		}
 		fm.add("audio_book_chapters", t.AudioBookChapters)
+		if len(t.AudioBookChapterIndices) > 0 {
+			fm.add("audio_book_chapter_indices", t.AudioBookChapterIndices)
+		}
 	case ContentTypeDiscussion:
 		fm.add("host", t.Host)
 		fm.add("discussants", t.Discussants)

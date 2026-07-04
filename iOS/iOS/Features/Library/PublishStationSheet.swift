@@ -20,7 +20,7 @@ struct PublishStationSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                CoverEditor(discussionID: discussion.id,
+                CoverEditor(target: .discussion(id: discussion.id),
                             title: discussion.displayTitle,
                             cover: $cover,
                             isWorking: $isWorking)

@@ -54,6 +54,12 @@ extension JSONSchemaFormWidgetContext {
     /// Placeholder text for text inputs, supplied by the backend.
     var placeholder: String? { options?["placeholder"] as? String }
 
+    /// Whether a text input grows vertically; defaults to the multi-line topic box.
+    var isMultiline: Bool { options?["multiline"] as? Bool ?? true }
+
+    /// Backend-declared accessibility identifier for UI tests.
+    var accessibilityID: String? { options?["accessibility_id"] as? String }
+
     /// Backend-declared deep link used to open the parent-discussion picker.
     var deepLink: String? { options?["deep_link"] as? String }
 
@@ -166,23 +172,34 @@ private struct GlassCardGroup: View {
 
 // MARK: - Leaf widgets
 
-/// Multi-line topic field rendered as a glass text box with a caption.
+/// Text field rendered as a glass text box with a caption: the multi-line
+/// topic box by default, or a single-line input when the backend sets
+/// `ui:options.multiline` to false.
 private struct GlassTextWidget: View {
     let context: JSONSchemaFormWidgetContext
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(context.fieldTitle).font(.headline)
-            TextField(context.placeholder ?? "", text: context.stringValue, axis: .vertical)
-                .lineLimit(10...15)
+            textField
                 .textFieldStyle(.plain)
                 .padding(12)
                 .glassEffect(in: .rect(cornerRadius: 16))
-                .accessibilityIdentifier("newPlan.field")
+                .accessibilityIdentifier(context.accessibilityID ?? "newPlan.field")
             if let description = context.fieldDescription, !description.isEmpty {
                 Text(description)
                     .font(.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var textField: some View {
+        if context.isMultiline {
+            TextField(context.placeholder ?? "", text: context.stringValue, axis: .vertical)
+                .lineLimit(10...15)
+        } else {
+            TextField(context.placeholder ?? "", text: context.stringValue)
         }
     }
 }

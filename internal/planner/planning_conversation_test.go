@@ -74,7 +74,7 @@ func TestConversationDispatchWritePlanHiddenUntilShowPlan(t *testing.T) {
 	}
 }
 
-func TestConversationDispatchAudioBookCapsChapters(t *testing.T) {
+func TestConversationDispatchAudioBookKeepsAllChapters(t *testing.T) {
 	s := testConversationSession()
 	s.opts.Type = config.ContentTypeAudioBook
 	draft := `{"title":"Compact Book","style":"podcast","overall_summary":"A concise summary.","narrator":{"name":"Narrator"},"chapters":[{"title":"One","summary":"First."},{"title":"Two","summary":"Second."},{"title":"Three","summary":"Third."},{"title":"Four","summary":"Fourth."},{"title":"Five","summary":"Fifth."},{"title":"Six","summary":"Sixth."}]}`
@@ -88,11 +88,13 @@ func TestConversationDispatchAudioBookCapsChapters(t *testing.T) {
 	if res == nil || res.Script == nil {
 		t.Fatalf("write_plan should produce an assembled audiobook plan")
 	}
-	if got := len(res.Script.AudioBookChapters); got != audioBookMaxChapters {
-		t.Fatalf("audio-book chapters = %d, want %d", got, audioBookMaxChapters)
+	// Plans keep every chapter the source has (up to the audioBookMaxChapters
+	// sanity bound); only generation batches are capped, at the HTTP layer.
+	if got := len(res.Script.AudioBookChapters); got != 6 {
+		t.Fatalf("audio-book chapters = %d, want 6", got)
 	}
-	if res.Script.AudioBookChapters[audioBookMaxChapters-1].Title != "Five" {
-		t.Fatalf("last retained chapter = %+v, want Five", res.Script.AudioBookChapters[audioBookMaxChapters-1])
+	if res.Script.AudioBookChapters[5].Title != "Six" {
+		t.Fatalf("last retained chapter = %+v, want Six", res.Script.AudioBookChapters[5])
 	}
 	if res.Script.AudioBookStyle != config.AudioBookStylePodcast {
 		t.Fatalf("audio-book style = %q, want podcast", res.Script.AudioBookStyle)

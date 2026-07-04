@@ -29,7 +29,11 @@ type Planner struct {
 	usageRecorder func(llm.Usage)
 }
 
-const audioBookMaxChapters = 5
+// audioBookMaxChapters is a sanity bound on how many chapters a plan may hold
+// (protects prompt size against LLM runaways). It is NOT the per-generation
+// limit: generation batches are capped separately at the HTTP layer
+// (audioBookMaxBatchChapters in internal/server).
+const audioBookMaxChapters = 40
 
 // New builds a Planner from engine env. Returns an error when env is nil so
 // the HTTP layer can 503 cleanly rather than panic.
@@ -225,7 +229,7 @@ Return STRICT JSON with this exact shape:
   "chapters": [ { "title": "chapter title without a Chapter 1 prefix", "summary": "one or two concise sentences describing what this chapter should narrate", "mode": "narration" | "dialogue", "speakers": ["additional guest/character speakers who talk in this chapter; do not list the narrator"] } ]
 }
 
-Use dedicated chapter objects instead of embedding chapters in overall_summary. Prefer 3 chapters for most sources. Use 4 or 5 only when the source is genuinely long or split into major distinct parts. Never produce more than %d chapters.
+Use dedicated chapter objects instead of embedding chapters in overall_summary. Create one chapter per natural chapter or major section of the source. Prefer 3-5 chapters for short sources; long books may have as many chapters as the source genuinely has, up to %d. Keep each chapter summary to one or two concise sentences.
 Style direction: choose one style from news, conversational, audiobook, podcast, or meeting. Record the user's requested style when they ask for one, or infer the best fit from the source. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose "conversational". In conversational, podcast, meeting, and news styles the piece is a genuine multi-voice conversation: the narrator/main host anchors it, but the other speakers actively talk in their own turns — asking, answering, clarifying, challenging, adding — not merely being quoted by the narrator. Do not add the narrator/main host again to "speakers". In audiobook style, keep the narrator primary and use other speakers only for characters or quoted voices.
 Multi-speaker direction:
 - For "conversational", "podcast", "meeting", and "news" styles you MUST define at least one additional speaker (aim for 1-2), and MOST chapters (at least all but one) MUST use "mode": "dialogue" with those speakers listed in the chapter "speakers". This is not conditional on the source already being a conversation — reframe prose sources into a back-and-forth discussion between the narrator and the guest(s). A conversational plan whose chapters are all "narration" is wrong.
@@ -695,6 +699,9 @@ func (p *Planner) assembleAudioBookWithModel(d *audioBookDraft, lang, channel st
 			break
 		}
 	}
+	// TotalMinutes is display-only for audiobooks: generation runs on a derived
+	// batch script whose minutes are recomputed from the batch's chapter count
+	// (see internal/server deriveAudioBookBatchScript).
 	totalMinutes := len(chapters) * 8
 	if totalMinutes < 15 {
 		totalMinutes = 15
@@ -766,15 +773,31 @@ func inferAudioBookStyle(d *audioBookDraft) string {
 }
 
 func renderAudioBookOutline(summary string, chapters []config.AudioBookChapter, narratorName string) string {
+	return RenderAudioBookOutlineIndexed(summary, chapters, nil, narratorName)
+}
+
+// RenderAudioBookOutlineIndexed renders the audiobook outline with explicit
+// global chapter numbers. numbers[i] is the 1-based position of chapters[i] in
+// the full plan; pass nil to number sequentially from 1. Batch generation uses
+// this so a batch covering chapters 6-8 still narrates "Chapter 6".
+func RenderAudioBookOutlineIndexed(summary string, chapters []config.AudioBookChapter, numbers []int, narratorName string) string {
 	var sb strings.Builder
 	sb.WriteString("# Audiobook Outline\n\n")
 	if strings.TrimSpace(summary) != "" {
-		sb.WriteString("## Overall Summary\n\n")
+		// h3, not h2: this outline lives inside the plan's `## Surface`
+		// section, and parseSections treats any `## ` line as a section
+		// boundary — an h2 here truncates Surface on the script.md
+		// round-trip.
+		sb.WriteString("### Overall Summary\n\n")
 		sb.WriteString(strings.TrimSpace(summary))
 		sb.WriteString("\n\n")
 	}
 	for i, ch := range chapters {
-		fmt.Fprintf(&sb, "### Chapter %d: %s\n\n", i+1, strings.TrimSpace(ch.Title))
+		number := i + 1
+		if i < len(numbers) {
+			number = numbers[i]
+		}
+		fmt.Fprintf(&sb, "### Chapter %d: %s\n\n", number, strings.TrimSpace(ch.Title))
 		if ch.Mode == config.AudioBookModeDialogue && len(ch.Speakers) > 0 {
 			mainSpeaker := strings.TrimSpace(narratorName)
 			if mainSpeaker == "" {
