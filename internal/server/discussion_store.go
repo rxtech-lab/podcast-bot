@@ -1977,7 +1977,7 @@ func (s *DiscussionStore) replaceTranscriptOnce(ctx context.Context, id string, 
 		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO native_discussion_lines
 			(discussion_id, speaker, role, side, text, start_ms, is_user, image_url, sources_json, judgement_comment, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, l.Speaker, string(l.Role), string(l.Side), text, 0, 0,
+			id, l.Speaker, string(l.Role), string(l.Side), text, l.AudioOffsetMS, 0,
 			imageURL, sourcesJSON, strings.TrimSpace(l.JudgementComment), createdAt)
 		if err != nil {
 			return err

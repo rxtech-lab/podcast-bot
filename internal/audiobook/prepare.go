@@ -13,6 +13,7 @@ package audiobook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,8 +26,10 @@ import (
 	"github.com/sirily11/debate-bot/internal/audio/musicgen"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/storage"
 	"github.com/sirily11/debate-bot/internal/video/imagegen"
+	"github.com/sirily11/debate-bot/internal/video/scenes"
 )
 
 // illustrationSize is the requested image size — 16:9 so the same PNG feeds
@@ -39,10 +42,11 @@ const illustrationSize = "1920x1080"
 // 7 days, which comfortably covers viewing the run and its summary.
 const illustrationURLTTL = 7 * 24 * time.Hour
 
-// maxIllustrations caps how many images an audiobook generates. The user
-// asked for "just a few", and each image costs a Gemini generation + an S3
-// upload, so we keep the count small regardless of chapter count.
-const maxIllustrations = 5
+// illustrationConcurrency bounds how many illustration generations run at
+// once. The dense scene plan can call for up to 40 images; each is a Gemini
+// generation + an S3 upload, so an unbounded goroutine-per-image fan-out
+// would trip rate limits.
+const illustrationConcurrency = 5
 
 const avatarSize = "1024x1024"
 
@@ -204,12 +208,13 @@ func buildAudioBookCueSpecs(topic *config.DebateTopic) []audioBookCueSpec {
 	return specs
 }
 
-// PrepareImages generates a small set of illustration images (one per chapter,
-// capped at maxIllustrations), saves them to disk for the video stage, uploads
-// each to object storage for the chat transcript + companion text, and installs
-// the scene plan + image set on the orchestrator before Run. Best-effort: any
-// failure (no image creds, generation error, upload error) is logged and the
-// run continues without that image.
+// PrepareImages plans a dense illustration beat list (~2 per configured
+// minute, like the series) and generates one image per beat, saves them to
+// disk for the video stage, uploads each to object storage for the chat
+// transcript + companion text, and installs the scene plan + image set on
+// the orchestrator before Run. Best-effort: any failure (no image creds,
+// generation error, upload error) is logged and the run continues without
+// that image.
 func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 	topic *config.DebateTopic, orch *contentcreator.Orchestrator, uploader *storage.Uploader, audioBookID string,
 ) {
@@ -231,30 +236,45 @@ func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 	scenesDir := filepath.Join(env.OutDir, "audiobook", "scenes")
 	_ = os.MkdirAll(scenesDir, 0o755)
 
-	// One beat per chapter, capped. beats/anchors drive the host's <scene N/>
-	// markers; the anchor is the chapter title the host opens each chapter with.
-	chapters := topic.AudioBookChapters
-	if len(chapters) > maxIllustrations {
-		chapters = chapters[:maxIllustrations]
+	// Plan the dense illustration beat list (~2 per configured minute, like
+	// the series). beats/anchors drive the host's <scene N/> markers; each
+	// chapter's opening beat is anchored on the chapter title the host speaks.
+	status("planning illustrations…")
+	plan := planIllustrationScenes(ctx, log, env, topic)
+	if plan == nil || len(plan.Narration) == 0 {
+		status("illustrations unavailable (no scene plan)")
+		return
 	}
-	beats := make([]string, len(chapters))
-	anchors := make([]string, len(chapters))
-	prompts := make([]string, len(chapters))
+	if err := writeIllustrationPlan(plan, filepath.Join(scenesDir, "plan.json")); err != nil {
+		log.Warn("audiobook scene plan write failed", "err", err)
+	}
+	beats := plan.Narration
+	anchors := plan.NarrationAnchors
+	anims := plan.NarrationAnimations
+	prompts := make([]string, len(beats))
 	visualGuide := audioBookIllustrationVisualGuide(topic)
-	for i, ch := range chapters {
-		title := strings.TrimSpace(ch.Title)
-		beats[i] = title
-		anchors[i] = title
-		prompts[i] = audioBookIllustrationPrompt(topic, ch, i, len(chapters), visualGuide)
+	for i := range beats {
+		chIdx := 0
+		if i < len(plan.BeatChapters) {
+			chIdx = plan.BeatChapters[i]
+		}
+		var ch config.AudioBookChapter
+		if chIdx >= 0 && chIdx < len(topic.AudioBookChapters) {
+			ch = topic.AudioBookChapters[chIdx]
+		}
+		prompts[i] = audioBookIllustrationPrompt(topic, beats[i], ch, i, len(beats), visualGuide)
 	}
 
-	status(fmt.Sprintf("generating %d illustration(s)…", len(chapters)))
-	imgs := make([]contentcreator.AudioBookImage, len(chapters))
+	status(fmt.Sprintf("generating %d illustration(s)…", len(beats)))
+	imgs := make([]contentcreator.AudioBookImage, len(beats))
+	sem := make(chan struct{}, illustrationConcurrency)
 	var wg sync.WaitGroup
-	for i := range chapters {
+	for i := range beats {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			raw, gerr := client.Generate(ctx, imagegen.Request{
 				Model:  imagegen.PuzzleSceneModel,
 				Prompt: prompts[i],
@@ -291,10 +311,12 @@ func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 
 	// Keep only beats whose image actually generated, renumbering so the
 	// scene-plan indices stay contiguous (the host emits <scene 0/>..<scene
-	// N-1/> against this compacted list).
+	// N-1/> against this compacted list). Animations compact in lockstep so
+	// the video post-pass applies the planned camera move to the right image.
 	var (
 		keptBeats   []string
 		keptAnchors []string
+		keptAnims   []string
 		keptImgs    []contentcreator.AudioBookImage
 	)
 	for i, img := range imgs {
@@ -302,8 +324,10 @@ func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 			continue
 		}
 		img.Beat = len(keptImgs)
+		img.Animation = anims[i]
 		keptBeats = append(keptBeats, beats[i])
 		keptAnchors = append(keptAnchors, anchors[i])
+		keptAnims = append(keptAnims, anims[i])
 		keptImgs = append(keptImgs, img)
 	}
 	if len(keptImgs) == 0 {
@@ -314,15 +338,62 @@ func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 		orch.SetAudioBookAvatars(avatars)
 		status(fmt.Sprintf("speaker avatars ready (%d)", len(avatars)))
 	}
-	orch.SetSeriesPlan(keptBeats, keptAnchors, nil)
+	orch.SetSeriesPlan(keptBeats, keptAnchors, keptAnims)
 	orch.SetAudioBookImages(keptImgs)
 	status(fmt.Sprintf("illustrations ready (%d)", len(keptImgs)))
 }
 
-func audioBookIllustrationPrompt(topic *config.DebateTopic, ch config.AudioBookChapter,
-	chapterIndex, chapterCount int, visualGuide string,
+// planIllustrationScenes plans the audiobook's illustration beats via the
+// LLM, falling back to the deterministic outline split when credentials are
+// missing or the call fails. Mirrors internal/series planScenes.
+func planIllustrationScenes(ctx context.Context, log *slog.Logger, env *config.Env,
+	topic *config.DebateTopic,
+) *scenes.AudioBookScenePlan {
+	if env == nil || env.OpenAIBaseURL == "" || env.OpenAIKey == "" {
+		if fb := scenes.FallbackAudioBookScenePlan(topic); fb != nil {
+			log.Info("audiobook scene plan fallback (no creds)", "beats", len(fb.Narration))
+			return fb
+		}
+		return nil
+	}
+	model := env.ScenePlannerModel
+	if model == "" {
+		model = env.HostModel
+	}
+	if model == "" {
+		return scenes.FallbackAudioBookScenePlan(topic)
+	}
+	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
+	t0 := time.Now()
+	plan, err := scenes.PlanAudioBookScenes(ctx, client, topic)
+	if err != nil || plan == nil {
+		log.Warn("audiobook scene plan llm failed, using fallback",
+			"elapsed", time.Since(t0).Round(time.Millisecond), "err", err)
+		return scenes.FallbackAudioBookScenePlan(topic)
+	}
+	log.Info("audiobook scene plan ready", "beats", len(plan.Narration),
+		"elapsed", time.Since(t0).Round(time.Millisecond))
+	return plan
+}
+
+// writeIllustrationPlan persists the scene plan next to the generated PNGs
+// so the manual video re-render endpoint can recover per-image animations
+// for a finished run.
+func writeIllustrationPlan(plan *scenes.AudioBookScenePlan, path string) error {
+	body, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(body, '\n'), 0o644)
+}
+
+func audioBookIllustrationPrompt(topic *config.DebateTopic, beatDirection string,
+	ch config.AudioBookChapter, beatIndex, beatCount int, visualGuide string,
 ) string {
 	title := strings.TrimSpace(ch.Title)
+	if title == "" {
+		title = strings.TrimSpace(topic.Title)
+	}
 	mode := strings.TrimSpace(ch.Mode)
 	if mode == "" {
 		mode = config.AudioBookModeNarration
@@ -331,33 +402,37 @@ func audioBookIllustrationPrompt(topic *config.DebateTopic, ch config.AudioBookC
 	if len(ch.Speakers) > 0 {
 		speakers = strings.Join(ch.Speakers, ", ")
 	}
+	direction := strings.TrimSpace(beatDirection)
+	if direction == "" {
+		direction = chapterMood(ch)
+	}
 	return fmt.Sprintf(`Create one 16:9 animated-film illustration for this audiobook video.
 Audiobook: %q.
 %s
-Chapter %d of %d: %q.
-Chapter focus: %s.
+Scene %d of %d, from the chapter %q.
+Scene direction: %s.
 Narration mode: %s. Featured voices: %s.
 
 Continuity requirements:
-- This image is one frame from the same animated feature film as every other chapter image.
+- This image is one frame from the same animated feature film as every other scene image.
 - Keep the main character's face, hair, wardrobe, silhouette, proportions, and color palette exactly the same across all images.
 - Keep recurring speaker designs exactly the same whenever they appear.
-- Change the setting, camera angle, action, and mood to fit this chapter, but do not redesign the main character or the film's art direction.
+- Change the setting, camera angle, action, and mood to fit this scene, but do not redesign the main character or the film's art direction.
 
 Style:
 Polished animated feature film still, expressive 2D/cel-shaded illustration, clean readable silhouettes, warm cinematic lighting, hand-painted background depth, cohesive color script, subtle painterly texture, no photorealism.
 
 Composition:
-Show a specific story moment or metaphor from the chapter. Prefer the recurring main character in-frame unless the chapter is clearly abstract or location-focused. Leave the lower third calm enough for subtitles.
+Show exactly the moment in the scene direction — one specific action, place, or emotional turn. Prefer the recurring main character in-frame unless the scene is clearly abstract or location-focused. Frame with breathing room on all sides so a slow camera pan or zoom over the image stays composed.
 
 Constraints:
-No text, no captions, no watermark, no logos, no UI, no speech bubbles.`,
+No text of any kind: no words, letters, numbers, signage lettering, captions, subtitles, watermarks, logos, UI overlays, or speech bubbles.`,
 		strings.TrimSpace(topic.Title),
 		visualGuide,
-		chapterIndex+1,
-		chapterCount,
+		beatIndex+1,
+		beatCount,
 		title,
-		chapterMood(ch),
+		direction,
 		mode,
 		speakers)
 }

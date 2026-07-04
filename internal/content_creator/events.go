@@ -49,6 +49,10 @@ type TranscriptMsg struct {
 	// Text — it's an image-only bubble the client renders at this point in the
 	// stream. Empty for ordinary sentence messages.
 	ImageURL string
+	// AudioOffsetMS is the message's position on the produced audio timeline
+	// in milliseconds (the VTT offset space). Set only on image-only audiobook
+	// messages so live clients can time artwork switches. 0 means "unknown".
+	AudioOffsetMS int64
 }
 
 // TickMsg updates the elapsed/remaining clock display.

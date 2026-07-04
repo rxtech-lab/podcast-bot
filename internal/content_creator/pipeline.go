@@ -90,6 +90,13 @@ type Deps struct {
 	// transcript shows the picture at that point in the narration. Nil/empty
 	// for non-audiobook runs; an empty entry means "no image for this beat".
 	AudioBookImageURLs []string
+
+	// RecordAudioBookImageOffset, when non-nil, is called each time an
+	// audiobook scene image is emitted, with the beat index and its position
+	// on the produced audio timeline in seconds (VTT cue space). The
+	// orchestrator collects these so the video post-pass can hold each
+	// illustration for exactly the span it was on screen during the live run.
+	RecordAudioBookImageOffset func(beat int, seconds float64)
 }
 
 // surfaceTTSScale is the multiplier applied to the mixer's default
@@ -165,6 +172,11 @@ type Pipeline struct {
 	// an empty cue list (no caption file is written for an audio-only
 	// run with zero TTS output).
 	vtt *vttWriter
+
+	// openingImageEmitted marks that the audiobook's beat-0 illustration was
+	// already surfaced at the start of the first narration turn. Only touched
+	// from produce(), which runs turns serially.
+	openingImageEmitted bool
 
 	// nextPlayAt is the wall-clock moment the next-to-be-synthesized
 	// sentence's first audio byte is expected to reach the listener.
@@ -568,6 +580,15 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 		p.d.Transcript.AcknowledgeUserLines()
 	}
 
+	// An audiobook's host starts at `<scene 1/>` — beat 0 is the opening
+	// frame and never gets its own marker, so surface it in the transcript
+	// (and record its offset) at the start of the first narration turn.
+	if p.d.ContentType == config.ContentTypeAudioBook &&
+		strings.HasPrefix(t.Directive, "narrate") && !p.openingImageEmitted {
+		p.openingImageEmitted = true
+		p.emitSceneImage(t, 0, p.audioOffsetNow())
+	}
+
 	// Inline the predecessor's actual rendered text into directives whose
 	// payload is not known at planner time (today: the puzzle host's
 	// "answer:" / "evaluate-solution:" turns reference the player's just-
@@ -743,9 +764,11 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 
 // emitSceneImage sends an image-only TranscriptMsg for the illustration
 // anchored to scene-beat idx, so an audiobook's chat transcript shows the
-// generated picture at the moment the host advances to that beat. No-op when
-// there's no image for idx (non-audiobook runs, out-of-range, or empty URL).
-func (p *Pipeline) emitSceneImage(t *Turn, idx int) {
+// generated picture at the moment the host advances to that beat. offset is
+// the image's position on the produced audio timeline (VTT cue space);
+// negative values clamp to zero. No-op when there's no image for idx
+// (non-audiobook runs, out-of-range, or empty URL).
+func (p *Pipeline) emitSceneImage(t *Turn, idx int, offset time.Duration) {
 	if idx < 0 || idx >= len(p.d.AudioBookImageURLs) {
 		return
 	}
@@ -753,19 +776,53 @@ func (p *Pipeline) emitSceneImage(t *Turn, idx int) {
 	if url == "" {
 		return
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	offsetMS := offset.Milliseconds()
+	if p.d.RecordAudioBookImageOffset != nil {
+		p.d.RecordAudioBookImageOffset(idx, offset.Seconds())
+	}
 	p.d.Transcript.AppendLine(agent.TranscriptLine{
-		Speaker:  t.Speaker.Name(),
-		Role:     t.Speaker.Role(),
-		Side:     t.Speaker.Side(),
-		ImageURL: url,
-		At:       time.Now(),
+		Speaker:       t.Speaker.Name(),
+		Role:          t.Speaker.Role(),
+		Side:          t.Speaker.Side(),
+		ImageURL:      url,
+		At:            time.Now(),
+		AudioOffsetMS: offsetMS,
 	})
 	p.d.Send(TranscriptMsg{
-		Speaker:  t.Speaker.Name(),
-		Role:     t.Speaker.Role(),
-		ImageURL: url,
-		Done:     true,
+		Speaker:       t.Speaker.Name(),
+		Role:          t.Speaker.Role(),
+		ImageURL:      url,
+		Done:          true,
+		AudioOffsetMS: offsetMS,
 	})
+}
+
+// audioOffsetNow returns the running playhead's position on the produced
+// audio timeline (the same offset space as the VTT cues) — used for events
+// that fire between sentences, where no per-sentence cueStart is available.
+// Zero when the stream hasn't started writing yet.
+func (p *Pipeline) audioOffsetNow() time.Duration {
+	if p.d.LiveStream == nil {
+		return 0
+	}
+	firstWrite := p.d.LiveStream.FirstWriteAt()
+	if firstWrite.IsZero() {
+		return 0
+	}
+	p.playheadMu.Lock()
+	playAt := p.nextPlayAt
+	p.playheadMu.Unlock()
+	if playAt.IsZero() {
+		return 0
+	}
+	off := playAt.Sub(firstWrite) - subtitleClientLatency + p.vttBias() + p.vttCaptionDelay()
+	if off < 0 {
+		off = 0
+	}
+	return off
 }
 
 // transcriptSegment is one contiguous run of a sentence spoken by a single
@@ -903,14 +960,16 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	if cleaned == "" && !naturalChunksHaveAudio(naturalChunks) {
 		// Marker-only sentence (rare — usually only the surface narration's
 		// final paragraph break). Both buckets fire immediately; there's
-		// no audio gap to defer trailing advances against.
+		// no audio gap to defer trailing advances against. The audio offset
+		// is the running playhead — no per-sentence cueStart exists here.
+		markerOffset := p.audioOffsetNow()
 		for _, idx := range leadAdvances {
 			p.d.Send(SceneAdvanceMsg{Index: idx})
-			p.emitSceneImage(t, idx)
+			p.emitSceneImage(t, idx, markerOffset)
 		}
 		for _, idx := range trailAdvances {
 			p.d.Send(SceneAdvanceMsg{Index: idx})
-			p.emitSceneImage(t, idx)
+			p.emitSceneImage(t, idx, markerOffset)
 		}
 		for _, m := range leadSounds {
 			p.d.Send(SoundCueMsg{Index: m.Index, Mode: m.Mode})
@@ -1051,13 +1110,15 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	fireLeadingScenes := func() {
 		for _, idx := range leadAdvances {
 			send(SceneAdvanceMsg{Index: idx})
-			p.emitSceneImage(t, idx)
+			// Leading markers swap the image at this sentence's audio start.
+			p.emitSceneImage(t, idx, cueStart)
 		}
 	}
 	fireTrailing := func() {
 		for _, idx := range trailAdvances {
 			send(SceneAdvanceMsg{Index: idx})
-			p.emitSceneImage(t, idx)
+			// Trailing markers advance after this sentence's audio finishes.
+			p.emitSceneImage(t, idx, cueStart+audioDuration)
 		}
 	}
 	if len(segMsgs) > 0 {

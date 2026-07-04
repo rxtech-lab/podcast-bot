@@ -149,6 +149,14 @@ type Orchestrator struct {
 	// geometric avatars.
 	audioBookAvatars []AudioBookAvatar
 
+	// audioBookImageOffsets records, per scene beat, the audio-timeline
+	// position (seconds, VTT cue space) at which the pipeline emitted that
+	// beat's illustration during the live run. The video post-pass uses it
+	// to hold each image for the span it was actually on screen. Guarded by
+	// audioBookImageOffsetsMu — the pipeline writes from timer goroutines.
+	audioBookImageOffsetsMu sync.Mutex
+	audioBookImageOffsets   map[int]float64
+
 	subtitleCues []SubtitleCue
 
 	// livePipe is the running pipeline, published while Run is in flight so
@@ -508,8 +516,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		NarrationFrames:  len(o.seriesNarrationPlan),
 		HasSeriesPreviouslyOn: o.Topic.Type == config.ContentTypeSeries &&
 			strings.TrimSpace(o.seriesPreviouslyOn) != "",
-		SoundPaths:         soundPaths,
-		AudioBookImageURLs: o.audioBookImageURLs(),
+		SoundPaths:                 soundPaths,
+		AudioBookImageURLs:         o.audioBookImageURLs(),
+		RecordAudioBookImageOffset: o.recordAudioBookImageOffset,
 	})
 	o.liveMu.Lock()
 	o.livePipe = pipe

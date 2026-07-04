@@ -276,7 +276,7 @@ func audioBookSceneBlock(plan, anchors []string) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("Illustration markers — a few images have been generated to illustrate this audiobook. Emit `<scene N/>` on its own line, IMMEDIATELY BEFORE the sentence that begins the matching beat, so the image appears in the chat transcript, the companion text, and the video at that moment. N is the 0-based beat index. Frame 0 shows automatically at the opening, so begin with `<scene 1/>`. Markers are silent — never spoken, never shown in subtitles.\n")
+	sb.WriteString("Illustration markers — an ordered sequence of images has been generated to illustrate this audiobook, roughly one per scene of the narration. Emit `<scene N/>` on its own line, IMMEDIATELY BEFORE the sentence that begins the matching beat, so the image appears in the chat transcript, the companion text, and the video at that moment. N is the 0-based beat index. Frame 0 shows automatically at the opening, so begin with `<scene 1/>`. Walk the beats strictly in order and spread them evenly through the narration — roughly one marker every 25-35 seconds of speech; never dump several markers back-to-back and never leave a long stretch with none. When a beat opens a new chapter, place its marker immediately before you speak that chapter's title. Markers are silent — never spoken, never shown in subtitles.\n")
 	sb.WriteString(seriesNarrationBlock(plan, anchors))
 	return sb.String()
 }

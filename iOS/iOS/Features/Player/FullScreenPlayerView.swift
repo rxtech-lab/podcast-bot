@@ -29,14 +29,37 @@ struct FullScreenPlayerView: View {
         cover?.hasImage == true || cover?.hasGradient == true
     }
 
+    /// Timed audiobook illustrations replace the cover artwork while they
+    /// apply: the latest arrived image during a live stream, or the image at
+    /// the playback position for a finished audiobook. Nil falls back to the
+    /// cover.
+    private var currentIllustrationURL: URL? {
+        if model.isLivePlayback { return model.latestIllustrationURL }
+        return model.illustrationURL(at: model.currentTime)
+    }
+
+    /// The next timeline entry, prefetched so the hard cut lands instantly.
+    private var nextIllustrationURL: URL? {
+        guard !model.isLivePlayback else { return nil }
+        return model.illustrationTimeline.first(where: { $0.start > model.currentTime })?.url
+    }
+
+    private var hasIllustrations: Bool {
+        model.isLivePlayback ? model.latestIllustrationURL != nil : !model.illustrationTimeline.isEmpty
+    }
+
+    /// Anything worth showing in the artwork slot — a cover or timed
+    /// illustrations (an audiobook without a cover still gets its artwork).
+    private var hasArtwork: Bool { hasCover || hasIllustrations }
+
     /// Whether the center currently shows the transcript rather than the art.
-    private var transcriptVisible: Bool { showingTranscript || !hasCover }
+    private var transcriptVisible: Bool { showingTranscript || !hasArtwork }
 
     /// The cover rides along in the header (small) while the transcript shows,
     /// and fills the center (large) otherwise. Mutually exclusive, so the same
     /// matched-geometry id is only ever present once.
-    private var showsHeaderCover: Bool { hasCover && showingTranscript }
-    private var showsCenterCover: Bool { hasCover && !showingTranscript }
+    private var showsHeaderCover: Bool { hasArtwork && showingTranscript }
+    private var showsCenterCover: Bool { hasArtwork && !showingTranscript }
     private var foregroundPalette: FullScreenForegroundPalette {
         FullScreenForegroundPalette(backgroundColors: model.coverColors)
     }
@@ -136,6 +159,19 @@ struct FullScreenPlayerView: View {
 
     @ViewBuilder
     private var coverImage: some View {
+        if let illustration = currentIllustrationURL {
+            // Timed audiobook illustration: hard cut, no animation. The base
+            // cover keeps showing until the first illustration has loaded.
+            IllustrationImageView(url: illustration, prefetchURL: nextIllustrationURL) {
+                baseCoverImage
+            }
+        } else {
+            baseCoverImage
+        }
+    }
+
+    @ViewBuilder
+    private var baseCoverImage: some View {
         if let url = coverImageURL {
             AsyncImage(url: url) { phase in
                 switch phase {
@@ -562,5 +598,83 @@ private struct FullScreenForegroundPalette {
         }
 
         return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue)
+    }
+}
+
+/// Displays a timed audiobook illustration with hard cuts: the incoming image
+/// is downloaded off-screen and swapped in only once decoded, inside a
+/// transaction with animations disabled — the artwork never crossfades and
+/// never flashes a placeholder between switches. The previous illustration
+/// (or the cover placeholder on first load) stays up until the next one is
+/// ready.
+private struct IllustrationImageView<Placeholder: View>: View {
+    let url: URL
+    let prefetchURL: URL?
+    @ViewBuilder var placeholder: () -> Placeholder
+
+    @State private var current: LoadedIllustration?
+
+    private struct LoadedIllustration: Equatable {
+        let url: URL
+        let image: Image
+
+        static func == (lhs: LoadedIllustration, rhs: LoadedIllustration) -> Bool {
+            lhs.url == rhs.url
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            if let current {
+                current.image.resizable().scaledToFill()
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            if current?.url != url,
+               let image = await IllustrationImageLoader.shared.load(url),
+               !Task.isCancelled {
+                withTransaction(Transaction(animation: nil)) {
+                    current = LoadedIllustration(url: url, image: image)
+                }
+            }
+            if let prefetchURL {
+                await IllustrationImageLoader.shared.prefetch(prefetchURL)
+            }
+        }
+    }
+}
+
+/// Small in-memory cache for player artwork illustrations, so hard cuts land
+/// instantly and scrubbing back re-shows earlier images without a re-fetch.
+actor IllustrationImageLoader {
+    static let shared = IllustrationImageLoader()
+
+    private var cache: [URL: Image] = [:]
+    private var inflight: [URL: Task<Image?, Never>] = [:]
+
+    func load(_ url: URL) async -> Image? {
+        if let cached = cache[url] { return cached }
+        if let task = inflight[url] { return await task.value }
+        let task = Task<Image?, Never> {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let uiImage = UIImage(data: data) else { return nil }
+            return Image(uiImage: uiImage)
+        }
+        inflight[url] = task
+        let image = await task.value
+        inflight[url] = nil
+        if let image {
+            // A dense audiobook plan tops out at ~40 images; a blunt reset
+            // guards the pathological case without an LRU.
+            if cache.count > 64 { cache.removeAll() }
+            cache[url] = image
+        }
+        return image
+    }
+
+    func prefetch(_ url: URL) async {
+        _ = await load(url)
     }
 }

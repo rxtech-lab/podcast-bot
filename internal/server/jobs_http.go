@@ -521,6 +521,7 @@ func (s *Server) nativeDiscussionTranscript(r *http.Request, jobID string) []age
 			ImageURL:         line.ImageURL,
 			Sources:          line.Sources,
 			JudgementComment: line.JudgementComment,
+			AudioOffsetMS:    line.StartMS,
 		})
 	}
 	return normalizedTranscriptLines(out)

@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -81,6 +83,7 @@ func (s *Server) enqueueDiscussionAudioBookVideo(ctx context.Context, d *Discuss
 	}
 	outPath := filepath.Join(jobDir, "video.mp4")
 	opts := discussionAudioBookVideoOptions(d.Script, d.Lines, audioBookAvatarPaths(jobDir))
+	opts.Animations, opts.ImageOffsets = audioBookVideoTimings(jobDir, len(imagePaths))
 	res := video.Resolution(d.Script.Resolution)
 	if res == "" {
 		res = video.Resolution1080p
@@ -181,8 +184,58 @@ func (s *Server) ensureAudioBookSubtitles(ctx context.Context, jobDir string, jo
 
 func audioBookIllustrationPaths(jobDir string) []string {
 	paths, _ := filepath.Glob(filepath.Join(jobDir, "audiobook", "scenes", "narration-v*.png"))
-	sort.Strings(paths)
+	// Numeric sort on the beat index — a plain string sort puts
+	// narration-v10.png before narration-v2.png once the dense plan pushes
+	// past 9 images, scrambling the slideshow order.
+	sort.Slice(paths, func(i, j int) bool {
+		return audioBookIllustrationBeat(paths[i]) < audioBookIllustrationBeat(paths[j])
+	})
 	return paths
+}
+
+// audioBookIllustrationBeat extracts N from a ".../narration-vN.png" path;
+// non-matching names sort last.
+func audioBookIllustrationBeat(path string) int {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	numStr := strings.TrimPrefix(base, "narration-v")
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		return int(^uint(0) >> 1)
+	}
+	return n
+}
+
+// audioBookVideoTimings loads the animation + audio-offset sidecar the
+// original render job wrote next to the scene PNGs (timings.json). Falls
+// back to the prepare step's plan.json for animations alone. Empty slices
+// mean "no metadata" — the renderer then uses its fallback motion cycle and
+// even image spacing, which is also the compat path for audiobooks rendered
+// before this metadata existed.
+func audioBookVideoTimings(jobDir string, imageCount int) (anims []string, offsets []float64) {
+	scenesDir := filepath.Join(jobDir, "audiobook", "scenes")
+	var timings struct {
+		Animations   []string  `json:"animations"`
+		ImageOffsets []float64 `json:"image_offsets"`
+	}
+	if data, err := os.ReadFile(filepath.Join(scenesDir, "timings.json")); err == nil {
+		if json.Unmarshal(data, &timings) == nil {
+			anims = timings.Animations
+			if len(timings.ImageOffsets) == imageCount {
+				offsets = timings.ImageOffsets
+			}
+		}
+	}
+	if len(anims) == 0 {
+		var plan struct {
+			NarrationAnimations []string `json:"narration_animations"`
+		}
+		if data, err := os.ReadFile(filepath.Join(scenesDir, "plan.json")); err == nil {
+			if json.Unmarshal(data, &plan) == nil {
+				anims = plan.NarrationAnimations
+			}
+		}
+	}
+	return anims, offsets
 }
 
 func audioBookAvatarPaths(jobDir string) []video.AudioBookVideoAvatar {

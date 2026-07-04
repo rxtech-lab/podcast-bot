@@ -67,7 +67,9 @@ func TestAudioBookIllustrationPromptKeepsAnimatedFilmContinuity(t *testing.T) {
 	}
 
 	visualGuide := audioBookIllustrationVisualGuide(topic)
-	prompt := audioBookIllustrationPrompt(topic, ch, 0, 3, visualGuide)
+	prompt := audioBookIllustrationPrompt(topic,
+		"Mina and Jordan step into the dim archive as dust drifts through a shaft of light.",
+		ch, 0, 3, visualGuide)
 
 	for _, want := range []string{
 		"animated-film illustration",
@@ -77,6 +79,8 @@ func TestAudioBookIllustrationPromptKeepsAnimatedFilmContinuity(t *testing.T) {
 		"Recurring speaker: Jordan",
 		"Featured voices: Jordan",
 		"no photorealism",
+		"Scene direction: Mina and Jordan step into the dim archive",
+		"No text of any kind",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("illustration prompt missing %q:\n%s", want, prompt)
@@ -84,6 +88,9 @@ func TestAudioBookIllustrationPromptKeepsAnimatedFilmContinuity(t *testing.T) {
 	}
 	if strings.Contains(prompt, "unique composition, subject, setting, and color accents") {
 		t.Fatalf("illustration prompt kept old anti-continuity wording:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Leave the lower third calm enough for subtitles") {
+		t.Fatalf("illustration prompt kept the subtitle lower-third wording:\n%s", prompt)
 	}
 
 	avatars := audioBookAvatarSpeakers(topic)

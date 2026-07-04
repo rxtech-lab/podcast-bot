@@ -26,6 +26,10 @@ struct LiveLine: Identifiable, Equatable {
     /// Illustration URL when this line is an image-only bubble (audiobook
     /// content); nil for ordinary lines.
     var imageURL: String? = nil
+    /// Audio-timeline position (seconds) of an audiobook illustration line,
+    /// used to switch the player artwork in sync with playback. Nil when the
+    /// server didn't record timing (legacy runs, non-image lines).
+    var audioOffsetSeconds: Double? = nil
     var sources: [SourceDTO]? = nil
     var judgementComment: String? = nil
 
@@ -316,6 +320,93 @@ final class PlayerModel {
             ?? cues.lastIndex(where: { $0.start <= t })
     }
 
+    // MARK: - Timed illustrations (audiobook artwork)
+
+    /// Whether the player is still on the live (non-seekable) timeline. Live
+    /// artwork shows the most recently arrived illustration; playback artwork
+    /// is looked up by `currentTime` against `illustrationTimeline`.
+    var isLivePlayback: Bool { usesLiveCaptionTiming }
+
+    /// One audiobook illustration with its audio-timeline start.
+    struct IllustrationCue: Equatable {
+        let start: Double
+        let url: URL
+    }
+
+    // Memoized like `lyricGroupsCache`: rebuilt only when the line count or
+    // the known duration moves (duration matters for the legacy even-split
+    // synthesis below).
+    @ObservationIgnored private var illustrationTimelineCache: [IllustrationCue] = []
+    @ObservationIgnored private var illustrationTimelineCacheKey = (-1, -1)
+
+    /// Illustration cues ordered by audio offset. When the discussion has
+    /// image lines but none carry server timing (audiobooks generated before
+    /// offsets existed), synthesize an even split across the known duration —
+    /// the same spacing the legacy slideshow video used. Empty when there are
+    /// no images (or no way to time them), in which case the artwork stays on
+    /// the cover.
+    var illustrationTimeline: [IllustrationCue] {
+        let key = (lines.count, Int(duration))
+        if key != illustrationTimelineCacheKey {
+            illustrationTimelineCache = Self.buildIllustrationTimeline(lines: lines, duration: duration)
+            illustrationTimelineCacheKey = key
+        }
+        return illustrationTimelineCache
+    }
+
+    /// The most recently arrived illustration — what live streaming shows.
+    var latestIllustrationURL: URL? {
+        for line in lines.reversed() where line.hasImage {
+            if let raw = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+               let url = URL(string: raw) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// The illustration on screen at playback time `time`, or nil before the
+    /// first cue (artwork falls back to the cover).
+    func illustrationURL(at time: Double) -> URL? {
+        illustrationTimeline.last(where: { $0.start <= time })?.url
+    }
+
+    nonisolated static func buildIllustrationTimeline(lines: [LiveLine], duration: Double) -> [IllustrationCue] {
+        struct ImageEntry {
+            let url: URL
+            let offset: Double?
+        }
+        var entries: [ImageEntry] = []
+        var seen = Set<String>()
+        for line in lines where line.hasImage {
+            guard let raw = line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let url = URL(string: raw),
+                  !seen.contains(raw) else { continue }
+            seen.insert(raw)
+            entries.append(ImageEntry(url: url, offset: line.audioOffsetSeconds))
+        }
+        guard !entries.isEmpty else { return [] }
+        let timed = entries.compactMap { entry -> IllustrationCue? in
+            guard let offset = entry.offset else { return nil }
+            return IllustrationCue(start: offset, url: entry.url)
+        }
+        if !timed.isEmpty {
+            return timed.sorted { $0.start < $1.start }
+        }
+        // Legacy fallback: no offsets recorded — approximate with an even
+        // split in transcript order, mirroring the legacy slideshow video.
+        guard duration > 0 else { return [] }
+        let per = duration / Double(entries.count)
+        return entries.enumerated().map { i, entry in
+            IllustrationCue(start: Double(i) * per, url: entry.url)
+        }
+    }
+
+    nonisolated static func audioOffsetSeconds(fromMS ms: Int?) -> Double? {
+        guard let ms, ms > 0 else { return nil }
+        return Double(ms) / 1000.0
+    }
+
     /// Id of the lyric group at the current playback time. Stored (not computed)
     /// and republished only when it actually changes, via `updateActiveLyricGroup`
     /// — so the lyrics list re-renders on a boundary crossing (a few times a
@@ -385,6 +476,7 @@ final class PlayerModel {
             LiveLine(speaker: $0.speaker, role: $0.role, text: $0.text, isUser: $0.isUser, done: true,
                      senderUserID: $0.senderUserID, audioURL: $0.audioURL,
                      imageURL: $0.imageURL,
+                     audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: $0.startMS),
                      sources: $0.sources, judgementComment: $0.judgementComment)
         }
         if discussion.jobID != nil && !hasPodcastTranscript {
@@ -1080,6 +1172,10 @@ final class PlayerModel {
            line.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             line.imageURL = image
         }
+        if line.audioOffsetSeconds == nil,
+           let offset = audioOffsetSeconds(fromMS: dto.startMS) {
+            line.audioOffsetSeconds = offset
+        }
         if let sources = dto.sources, !(sources.isEmpty) {
             line.sources = sources
         }
@@ -1217,7 +1313,8 @@ final class PlayerModel {
                                        text: "",
                                        isUser: false,
                                        done: true,
-                                       imageURL: img)
+                                       imageURL: img,
+                                       audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: data.audio_offset_ms))
                 lines.append(imgLine)
                 hideTranscriptLoadingIfReady()
                 return
@@ -1533,13 +1630,22 @@ final class PlayerModel {
             if let imageURL = item.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
                !imageURL.isEmpty {
                 let role = item.role
-                if !lines.contains(where: { $0.imageURL == imageURL }) {
+                let offset = Self.audioOffsetSeconds(fromMS: item.audioOffsetMS)
+                if let existing = lines.firstIndex(where: { $0.imageURL == imageURL }) {
+                    // Backfill timing onto an image bubble that arrived over the
+                    // socket before the snapshot (or from an older client state).
+                    if lines[existing].audioOffsetSeconds == nil, let offset {
+                        lines[existing].audioOffsetSeconds = offset
+                        didChange = true
+                    }
+                } else {
                     lines.append(LiveLine(speaker: item.speaker,
                                           role: role,
                                           text: "",
                                           isUser: false,
                                           done: true,
-                                          imageURL: imageURL))
+                                          imageURL: imageURL,
+                                          audioOffsetSeconds: offset))
                     didChange = true
                 }
                 continue

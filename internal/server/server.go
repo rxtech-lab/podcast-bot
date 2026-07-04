@@ -502,6 +502,9 @@ type transcriptDTO struct {
 	At               time.Time                `json:"at"`
 	Sources          []agent.TranscriptSource `json:"sources,omitempty"`
 	JudgementComment string                   `json:"judgement_comment,omitempty"`
+	// AudioOffsetMS is the line's position on the audio timeline in
+	// milliseconds (audiobook image lines only; 0/omitted = unknown).
+	AudioOffsetMS int64 `json:"audio_offset_ms,omitempty"`
 }
 
 func toDTO(l agent.TranscriptLine) transcriptDTO {
@@ -509,6 +512,7 @@ func toDTO(l agent.TranscriptLine) transcriptDTO {
 		Speaker: l.Speaker, Role: string(l.Role), Side: l.Side,
 		Text: l.Text, ImageURL: l.ImageURL, At: l.At, Sources: l.Sources,
 		JudgementComment: l.JudgementComment,
+		AudioOffsetMS:    l.AudioOffsetMS,
 	}
 }
 
@@ -681,6 +685,9 @@ func envelope(v any, lang contentcreator.Lang) (eventEnvelope, bool) {
 		}
 		if m.ImageURL != "" {
 			payload["image_url"] = m.ImageURL
+		}
+		if m.AudioOffsetMS > 0 {
+			payload["audio_offset_ms"] = m.AudioOffsetMS
 		}
 		return eventEnvelope{"transcript", payload}, true
 	case contentcreator.TickMsg:

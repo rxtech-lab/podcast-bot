@@ -701,6 +701,9 @@ struct TranscriptDTO: Codable, Hashable, Sendable {
     var sources: [SourceDTO]? = nil
     var judgementComment: String? = nil
     var imageURL: String? = nil
+    /// Audio-timeline position of this line in milliseconds (audiobook
+    /// illustration lines only). Drives time-synced artwork switching.
+    var audioOffsetMS: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case speaker
@@ -711,6 +714,7 @@ struct TranscriptDTO: Codable, Hashable, Sendable {
         case sources
         case judgementComment = "judgement_comment"
         case imageURL = "image_url"
+        case audioOffsetMS = "audio_offset_ms"
     }
 }
 
@@ -732,6 +736,9 @@ struct JobEventData: Decodable, Sendable {
     /// Carried by an audiobook's image-only transcript event: a generated
     /// illustration to render inline in the chat at this point in the stream.
     var image_url: String?
+    /// Audio-timeline position (ms) of an image-only transcript event, so the
+    /// player can switch artwork in sync with playback.
+    var audio_offset_ms: Int?
     var sources: [SourceDTO]?
     var judgement_comment: String?
     var agent: String?
