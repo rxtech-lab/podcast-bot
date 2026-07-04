@@ -10,6 +10,7 @@ import UIKit
 struct FullScreenPlayerView: View {
     @Bindable var model: PlayerModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     /// When the podcast has a cover, the center starts on the artwork and the
     /// listener taps the transcript button to flip to the captions. Without a
@@ -17,6 +18,19 @@ struct FullScreenPlayerView: View {
     @State private var showingTranscript = false
     @State private var showingCoverEditor = false
     @State private var showingShareSheet = false
+
+    /// Landscape chrome visibility: like a video player, the header and
+    /// transport controls fade out after a few idle seconds of playback and
+    /// come back on tap. The synced caption stays up like a subtitle track.
+    @State private var controlsVisible = true
+    @State private var isScrubbing = false
+    /// Bumped by any control interaction so the auto-hide timer restarts.
+    @State private var interactionCount = 0
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
+
+    private static let autoHideDelay: Duration = .seconds(4)
+    private static let controlsFade = Animation.easeInOut(duration: 0.25)
 
     /// Drives the "magic move" of the cover between the large centered artwork
     /// and the small header thumbnail shown in transcription mode.
@@ -79,31 +93,18 @@ struct FullScreenPlayerView: View {
     var body: some View {
         ZStack {
             background
-            VStack(spacing: 0) {
-                // The hero fills everything above the controls, so its blurred
-                // bottom edge always lands just above the seek bar.
-                ZStack(alignment: .top) {
-                    if showsCenterCover {
-                        coverHero
-                    }
-                    VStack(spacing: 0) {
-                        header
-                        ZStack {
-                            if transcriptVisible {
-                                transcript
-                                    .transition(.opacity)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .padding(.horizontal, 20)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                controls
-                    .padding(.horizontal, 20)
+            if isLandscape {
+                landscapeLayout
+            } else {
+                portraitLayout
             }
-            .padding(.bottom, 24)
         }
+        .onChange(of: isLandscape) { _, _ in revealControls() }
+        .onChange(of: model.isPlaying) { _, _ in revealControls() }
+        .onChange(of: showingTranscript) { _, _ in revealControls() }
+        .task(id: autoHideKey) { await autoHideControlsAfterIdle() }
+        .statusBarHidden(isLandscape && !controlsVisible)
+        .persistentSystemOverlays(isLandscape && !controlsVisible ? .hidden : .automatic)
         .sheet(isPresented: Binding(
             get: { model.showsDownloadDialog },
             set: { if !$0 { model.showsDownloadDialog = false } }
@@ -137,6 +138,162 @@ struct FullScreenPlayerView: View {
     private var artworkColorKey: String {
         if let url = currentIllustrationURL { return url.absoluteString }
         return "\(cover?.imageURL ?? "")|\(cover?.gradientStart ?? "")|\(cover?.gradientEnd ?? "")"
+    }
+
+    // MARK: - Portrait
+
+    private var portraitLayout: some View {
+        VStack(spacing: 0) {
+            // The hero fills everything above the controls, so its blurred
+            // bottom edge always lands just above the seek bar.
+            ZStack(alignment: .top) {
+                if showsCenterCover {
+                    coverHero
+                }
+                VStack(spacing: 0) {
+                    header
+                    ZStack {
+                        if transcriptVisible {
+                            transcript
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .padding(.horizontal, 20)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            controls
+                .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 24)
+    }
+
+    // MARK: - Landscape (video-player style)
+
+    /// Landscape mirrors a video player: the artwork bleeds across the whole
+    /// screen, the caption sits above the controls like a subtitle track, and
+    /// the chrome (header, scrubber, transport) overlays the art and fades out
+    /// after a few seconds of playback. Tapping anywhere brings it back.
+    private var landscapeLayout: some View {
+        ZStack {
+            landscapeArtwork
+            landscapeScrim
+            VStack(spacing: 0) {
+                if controlsVisible {
+                    header
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                if transcriptVisible {
+                    transcript
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                } else {
+                    Spacer(minLength: 0)
+                }
+                if !transcriptVisible, !artworkCaption.isEmpty {
+                    heroCaption
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, controlsVisible ? 14 : 24)
+                }
+                if controlsVisible {
+                    landscapeControls
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+            .animation(.easeInOut(duration: 0.2), value: artworkCaption)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Lyric rows own their taps; the toggle only applies in art mode.
+            guard !transcriptVisible else { return }
+            withAnimation(Self.controlsFade) { controlsVisible.toggle() }
+            interactionCount += 1
+        }
+    }
+
+    private var landscapeArtwork: some View {
+        GeometryReader { geo in
+            coverImage
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+                .opacity(transcriptVisible ? 0.2 : 1)
+        }
+        .ignoresSafeArea()
+    }
+
+    /// Legibility scrim over the full-bleed art: a light band up top for the
+    /// header and a heavier one at the bottom for the caption and controls,
+    /// both easing off while the chrome is hidden.
+    private var landscapeScrim: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(controlsVisible ? 0.45 : 0), location: 0),
+                .init(color: .clear, location: 0.35),
+                .init(color: .clear, location: 0.5),
+                .init(color: .black.opacity(controlsVisible ? 0.75 : 0.35), location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+
+    private var landscapeControls: some View {
+        VStack(spacing: 2) {
+            SeekBar(
+                model: model,
+                foregroundPalette: landscapePalette,
+                onScrubbingChanged: { scrubbing in
+                    isScrubbing = scrubbing
+                    interactionCount += 1
+                }
+            )
+            transportButtons(playDiameter: 60, skipFont: .title2, palette: landscapePalette)
+                // Full width before the overlay: the toggle anchors to the
+                // screen edge instead of covering the back-15s button.
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    if hasArtwork {
+                        transcriptToggleButton(palette: landscapePalette)
+                    }
+                }
+                .overlay(alignment: .trailing) {
+                    fullscreenToggleButton(palette: landscapePalette)
+                }
+        }
+    }
+
+    /// Over full-bleed art with a dark bottom scrim the chrome is always
+    /// light; the sampled palette only applies in transcript mode where the
+    /// tinted gradient background shows through.
+    private var landscapePalette: FullScreenForegroundPalette {
+        transcriptVisible ? foregroundPalette : .overArtwork
+    }
+
+    // MARK: - Auto-hide
+
+    /// Any change to this key cancels the pending hide and, if the conditions
+    /// still hold, arms a fresh timer — so every interaction buys the chrome
+    /// another few seconds.
+    private var autoHideKey: String {
+        "\(isLandscape)|\(controlsVisible)|\(model.isPlaying)|\(transcriptVisible)|\(isScrubbing)|\(interactionCount)"
+    }
+
+    private func autoHideControlsAfterIdle() async {
+        guard isLandscape, controlsVisible, model.isPlaying, !transcriptVisible, !isScrubbing else { return }
+        try? await Task.sleep(for: Self.autoHideDelay)
+        guard !Task.isCancelled else { return }
+        withAnimation(Self.controlsFade) { controlsVisible = false }
+    }
+
+    private func revealControls() {
+        interactionCount += 1
+        guard !controlsVisible else { return }
+        withAnimation(Self.controlsFade) { controlsVisible = true }
     }
 
     @ViewBuilder
@@ -261,14 +418,7 @@ struct FullScreenPlayerView: View {
     }
 
     private var coverGradient: some View {
-        LinearGradient(
-            colors: [
-                Color(hex: cover?.gradientStart ?? "#8E5CF7"),
-                Color(hex: cover?.gradientEnd ?? "#00A3FF"),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        Color(hex: cover?.gradientStart ?? "#8E5CF7")
     }
 
     private var coverImageURL: URL? {
@@ -395,52 +545,96 @@ struct FullScreenPlayerView: View {
     private var controls: some View {
         VStack(spacing: 20) {
             SeekBar(model: model, foregroundPalette: foregroundPalette)
-            HStack(spacing: 40) {
-                Button { model.skipBackward() } label: {
-                    Image(systemName: "gobackward.15").font(.title)
-                }
-                .disabled(!model.canSeek)
+            transportButtons(playDiameter: 76, skipFont: .title, palette: foregroundPalette)
 
-                Button(action: model.togglePlay) {
-                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(foregroundPalette.primary)
-                        .frame(width: 76, height: 76)
-                        .glassEffect(in: .circle)
+            HStack {
+                if hasArtwork {
+                    transcriptToggleButton(palette: foregroundPalette)
                 }
-
-                Button { model.skipForward() } label: {
-                    Image(systemName: "goforward.15").font(.title)
-                }
-                .disabled(!model.canSeek)
-            }
-            .foregroundStyle(foregroundPalette.primary)
-
-            if hasCover {
-                transcriptToggle
+                Spacer()
+                fullscreenToggleButton(palette: foregroundPalette)
             }
         }
     }
 
-    /// Flips the center between the artwork and the transcript, echoing the
-    /// system player's lyrics button. Hidden when there's no cover to flip from.
-    private var transcriptToggle: some View {
-        HStack {
+    private func transportButtons(
+        playDiameter: CGFloat,
+        skipFont: Font,
+        palette: FullScreenForegroundPalette
+    ) -> some View {
+        HStack(spacing: 40) {
             Button {
-                withAnimation(.spring(duration: 0.45)) {
-                    showingTranscript.toggle()
-                }
+                model.skipBackward()
+                interactionCount += 1
             } label: {
-                Image(systemName: "quote.bubble.fill")
-                    .font(.title3)
-                    .foregroundStyle(showingTranscript ? foregroundPalette.accent : foregroundPalette.primary)
-                    .frame(width: 44, height: 44)
+                Image(systemName: "gobackward.15").font(skipFont)
+            }
+            .disabled(!model.canSeek)
+
+            Button {
+                model.togglePlay()
+                interactionCount += 1
+            } label: {
+                Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: playDiameter * 0.42, weight: .bold))
+                    .foregroundStyle(palette.primary)
+                    .frame(width: playDiameter, height: playDiameter)
                     .glassEffect(in: .circle)
             }
-            .accessibilityLabel(showingTranscript ? "Show cover" : "Show transcript")
-            .popoverTip(FullScreenCaptionTip(), arrowEdge: .bottom)
-            Spacer()
+
+            Button {
+                model.skipForward()
+                interactionCount += 1
+            } label: {
+                Image(systemName: "goforward.15").font(skipFont)
+            }
+            .disabled(!model.canSeek)
         }
+        .foregroundStyle(palette.primary)
+    }
+
+    /// Flips the center between the artwork and the transcript, echoing the
+    /// system player's lyrics button. Hidden when there's no cover to flip from.
+    private func transcriptToggleButton(palette: FullScreenForegroundPalette) -> some View {
+        Button {
+            withAnimation(.spring(duration: 0.45)) {
+                showingTranscript.toggle()
+            }
+        } label: {
+            Image(systemName: "quote.bubble.fill")
+                .font(.title3)
+                .foregroundStyle(showingTranscript ? palette.accent : palette.primary)
+                .frame(width: 44, height: 44)
+                .glassEffect(in: .circle)
+        }
+        .accessibilityLabel(showingTranscript ? "Show cover" : "Show transcript")
+        .popoverTip(FullScreenCaptionTip(), arrowEdge: .bottom)
+    }
+
+    /// Flips the interface into the video-style landscape presentation (and
+    /// back), like a video player's fullscreen button. It only nudges the
+    /// orientation once — the listener can still rotate the device physically.
+    private func fullscreenToggleButton(palette: FullScreenForegroundPalette) -> some View {
+        Button {
+            requestInterfaceOrientation(isLandscape ? .portrait : .landscapeRight)
+            interactionCount += 1
+        } label: {
+            Image(systemName: isLandscape
+                ? "arrow.down.right.and.arrow.up.left"
+                : "arrow.up.left.and.arrow.down.right")
+                .font(.title3)
+                .foregroundStyle(palette.primary)
+                .frame(width: 44, height: 44)
+                .glassEffect(in: .circle)
+        }
+        .accessibilityLabel(isLandscape ? "Exit fullscreen" : "Enter fullscreen")
+    }
+
+    private func requestInterfaceOrientation(_ orientation: UIInterfaceOrientationMask) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
+        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 }
 
@@ -503,6 +697,8 @@ extension View {
 private struct SeekBar: View {
     @Bindable var model: PlayerModel
     let foregroundPalette: FullScreenForegroundPalette
+    /// Lets the landscape chrome pause its auto-hide timer mid-drag.
+    var onScrubbingChanged: ((Bool) -> Void)? = nil
     @State private var isScrubbing = false
     @State private var scrubTime = 0.0
 
@@ -523,6 +719,7 @@ private struct SeekBar: View {
                         model.seek(to: scrubTime)
                         isScrubbing = false
                     }
+                    onScrubbingChanged?(editing)
                 })
                 .tint(foregroundPalette.accent)
             } else {
@@ -632,6 +829,20 @@ private struct FullScreenForegroundPalette {
     let primary: Color
     let secondary: Color
     let accent: Color
+
+    /// Fixed light chrome for landscape, where the controls sit on full-bleed
+    /// artwork behind a dark scrim regardless of the sampled cover colors.
+    static let overArtwork = FullScreenForegroundPalette(
+        primary: .white,
+        secondary: .white.opacity(0.68),
+        accent: .white
+    )
+
+    private init(primary: Color, secondary: Color, accent: Color) {
+        self.primary = primary
+        self.secondary = secondary
+        self.accent = accent
+    }
 
     init(backgroundColors: [Color]) {
         let luminance = Self.averageScrimmedLuminance(for: backgroundColors)
@@ -766,10 +977,16 @@ private struct PreviewTokenProvider: TokenProviding {
 /// called, so nothing plays and no sockets open; the seeded `caption` /
 /// `lines` / `duration` drive the artwork, VTT caption, and scrubber layout.
 @MainActor
-private func fullScreenPreviewModel(withArtwork: Bool) -> PlayerModel {
-    let coverJSON = withArtwork
-        ? ", \"cover\": {\"type\": \"gradient\", \"gradient_start\": \"#6D5BD0\", \"gradient_end\": \"#2B2350\"}"
-        : ""
+private func fullScreenPreviewModel(withArtwork: Bool, colorOnly: Bool = false, colorCoverImageURL: String? = nil) -> PlayerModel {
+    let coverJSON: String
+    if withArtwork {
+        coverJSON = ", \"cover\": {\"type\": \"gradient\", \"gradient_start\": \"#6D5BD0\", \"gradient_end\": \"#2B2350\"}"
+    } else if colorOnly {
+        let imageField = colorCoverImageURL.map { ", \"image_url\": \"\($0)\"" } ?? ""
+        coverJSON = ", \"cover\": {\"type\": \"gradient\", \"gradient_start\": \"#6D5BD0\", \"gradient_end\": \"#6D5BD0\"\(imageField)}"
+    } else {
+        coverJSON = ""
+    }
     let discussion = try! JSONDecoder().decode(Discussion.self, from: Data("""
     {
       "id": "preview-full-screen-player",
@@ -816,5 +1033,17 @@ private func fullScreenPreviewModel(withArtwork: Bool) -> PlayerModel {
 
 #Preview("No artwork · live caption") {
     FullScreenPlayerView(model: fullScreenPreviewModel(withArtwork: false))
+}
+
+#Preview("Single color cover · with image") {
+    FullScreenPlayerView(model: fullScreenPreviewModel(
+        withArtwork: false,
+        colorOnly: true,
+        colorCoverImageURL: "https://picsum.photos/seed/color-cover/900"
+    ))
+}
+
+#Preview("Single color cover · no image") {
+    FullScreenPlayerView(model: fullScreenPreviewModel(withArtwork: false, colorOnly: true))
 }
 #endif

@@ -28,10 +28,11 @@ const (
 )
 
 const (
-	PodcastAudioDir          = "podcast-audio"
-	PodcastAudioFilename     = "audio.mp3"
-	PodcastSubtitlesFilename = "subtitles.vtt"
-	PodcastRawMusicObjectDir = "raw-music"
+	PodcastAudioDir              = "podcast-audio"
+	PodcastAudioFilename         = "audio.mp3"
+	PodcastSubtitlesFilename     = "subtitles.vtt"
+	PodcastIllustrationsFilename = "illustrations.json"
+	PodcastRawMusicObjectDir     = "raw-music"
 )
 
 // JobLog is one persisted progress/log line for a video-mode job.
@@ -86,6 +87,10 @@ type Job struct {
 	// it the sidecar lives only on the owner pod's local disk, so a finished
 	// podcast loses its synced captions once that pod is gone.
 	SubtitlesS3Key string `json:"-"`
+	// IllustrationsS3Key is the object key of the uploaded illustrations.json
+	// sidecar — the canonical audiobook timed-artwork timeline served by
+	// /api/jobs/{id}/illustrations. Durable like SubtitlesS3Key.
+	IllustrationsS3Key string `json:"-"`
 	// DownloadURL is a presigned S3 link populated on the job-detail response
 	// when the finished artefact (mp4 or, for audio-only jobs, mp3) lives in
 	// object storage; empty when served from disk.
@@ -164,36 +169,37 @@ type videoJobRecord struct {
 	// reverse-proxies in-flight job requests to this pod so the caller always
 	// reaches the instance holding the live LiveStream. Empty for local /
 	// single-pod runs.
-	OwnerPod         string
-	Title            string
-	Type             string
-	Show             string
-	Season           int
-	Episode          int
-	Error            string
-	VideoPath        string
-	ArchivePath      string
-	AudioPath        string
-	HasVideo         bool
-	HasArchive       bool
-	HasAudio         bool
-	AudioOnly        bool
-	S3Key            string
-	AudioS3Key       string
-	SubtitlesS3Key   string
-	ElapsedMS        int64
-	RemainingMS      int64
-	Phase            string
-	PhaseLabel       string
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	LLMCostUSD       float64
-	LLMCostKnown     bool
-	TTSCostUSD       float64
-	MusicCostUSD     float64
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	OwnerPod           string
+	Title              string
+	Type               string
+	Show               string
+	Season             int
+	Episode            int
+	Error              string
+	VideoPath          string
+	ArchivePath        string
+	AudioPath          string
+	HasVideo           bool
+	HasArchive         bool
+	HasAudio           bool
+	AudioOnly          bool
+	S3Key              string
+	AudioS3Key         string
+	SubtitlesS3Key     string
+	IllustrationsS3Key string
+	ElapsedMS          int64
+	RemainingMS        int64
+	Phase              string
+	PhaseLabel         string
+	PromptTokens       int64
+	CompletionTokens   int64
+	TotalTokens        int64
+	LLMCostUSD         float64
+	LLMCostKnown       bool
+	TTSCostUSD         float64
+	MusicCostUSD       float64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (videoJobRecord) TableName() string { return "video_jobs" }
@@ -525,74 +531,76 @@ func (r *JobRegistry) logs(jobID string) []JobLog {
 
 func jobFromRecord(rec videoJobRecord) Job {
 	return Job{
-		ID:               rec.ID,
-		Status:           JobStatus(rec.Status),
-		OwnerPod:         rec.OwnerPod,
-		Title:            rec.Title,
-		Type:             rec.Type,
-		Show:             rec.Show,
-		Season:           rec.Season,
-		Episode:          rec.Episode,
-		Error:            rec.Error,
-		CreatedAt:        rec.CreatedAt,
-		UpdatedAt:        rec.UpdatedAt,
-		VideoPath:        rec.VideoPath,
-		ArchivePath:      rec.ArchivePath,
-		AudioPath:        rec.AudioPath,
-		HasVideo:         rec.HasVideo,
-		HasArchive:       rec.HasArchive,
-		HasAudio:         rec.HasAudio,
-		AudioOnly:        rec.AudioOnly,
-		S3Key:            rec.S3Key,
-		AudioS3Key:       rec.AudioS3Key,
-		SubtitlesS3Key:   rec.SubtitlesS3Key,
-		ElapsedMS:        rec.ElapsedMS,
-		RemainingMS:      rec.RemainingMS,
-		Phase:            rec.Phase,
-		PhaseLabel:       rec.PhaseLabel,
-		PromptTokens:     rec.PromptTokens,
-		CompletionTokens: rec.CompletionTokens,
-		TotalTokens:      rec.TotalTokens,
-		LLMCostUSD:       rec.LLMCostUSD,
-		LLMCostKnown:     rec.LLMCostKnown,
-		TTSCostUSD:       rec.TTSCostUSD,
-		MusicCostUSD:     rec.MusicCostUSD,
+		ID:                 rec.ID,
+		Status:             JobStatus(rec.Status),
+		OwnerPod:           rec.OwnerPod,
+		Title:              rec.Title,
+		Type:               rec.Type,
+		Show:               rec.Show,
+		Season:             rec.Season,
+		Episode:            rec.Episode,
+		Error:              rec.Error,
+		CreatedAt:          rec.CreatedAt,
+		UpdatedAt:          rec.UpdatedAt,
+		VideoPath:          rec.VideoPath,
+		ArchivePath:        rec.ArchivePath,
+		AudioPath:          rec.AudioPath,
+		HasVideo:           rec.HasVideo,
+		HasArchive:         rec.HasArchive,
+		HasAudio:           rec.HasAudio,
+		AudioOnly:          rec.AudioOnly,
+		S3Key:              rec.S3Key,
+		AudioS3Key:         rec.AudioS3Key,
+		SubtitlesS3Key:     rec.SubtitlesS3Key,
+		IllustrationsS3Key: rec.IllustrationsS3Key,
+		ElapsedMS:          rec.ElapsedMS,
+		RemainingMS:        rec.RemainingMS,
+		Phase:              rec.Phase,
+		PhaseLabel:         rec.PhaseLabel,
+		PromptTokens:       rec.PromptTokens,
+		CompletionTokens:   rec.CompletionTokens,
+		TotalTokens:        rec.TotalTokens,
+		LLMCostUSD:         rec.LLMCostUSD,
+		LLMCostKnown:       rec.LLMCostKnown,
+		TTSCostUSD:         rec.TTSCostUSD,
+		MusicCostUSD:       rec.MusicCostUSD,
 	}
 }
 
 func recordFromJob(j Job) videoJobRecord {
 	return videoJobRecord{
-		ID:               j.ID,
-		Status:           string(j.Status),
-		OwnerPod:         j.OwnerPod,
-		Title:            j.Title,
-		Type:             j.Type,
-		Show:             j.Show,
-		Season:           j.Season,
-		Episode:          j.Episode,
-		Error:            j.Error,
-		VideoPath:        j.VideoPath,
-		ArchivePath:      j.ArchivePath,
-		AudioPath:        j.AudioPath,
-		HasVideo:         j.HasVideo,
-		HasArchive:       j.HasArchive,
-		HasAudio:         j.HasAudio,
-		AudioOnly:        j.AudioOnly,
-		S3Key:            j.S3Key,
-		AudioS3Key:       j.AudioS3Key,
-		SubtitlesS3Key:   j.SubtitlesS3Key,
-		ElapsedMS:        j.ElapsedMS,
-		RemainingMS:      j.RemainingMS,
-		Phase:            j.Phase,
-		PhaseLabel:       j.PhaseLabel,
-		PromptTokens:     j.PromptTokens,
-		CompletionTokens: j.CompletionTokens,
-		TotalTokens:      j.TotalTokens,
-		LLMCostUSD:       j.LLMCostUSD,
-		LLMCostKnown:     j.LLMCostKnown,
-		TTSCostUSD:       j.TTSCostUSD,
-		MusicCostUSD:     j.MusicCostUSD,
-		CreatedAt:        j.CreatedAt,
-		UpdatedAt:        j.UpdatedAt,
+		ID:                 j.ID,
+		Status:             string(j.Status),
+		OwnerPod:           j.OwnerPod,
+		Title:              j.Title,
+		Type:               j.Type,
+		Show:               j.Show,
+		Season:             j.Season,
+		Episode:            j.Episode,
+		Error:              j.Error,
+		VideoPath:          j.VideoPath,
+		ArchivePath:        j.ArchivePath,
+		AudioPath:          j.AudioPath,
+		HasVideo:           j.HasVideo,
+		HasArchive:         j.HasArchive,
+		HasAudio:           j.HasAudio,
+		AudioOnly:          j.AudioOnly,
+		S3Key:              j.S3Key,
+		AudioS3Key:         j.AudioS3Key,
+		SubtitlesS3Key:     j.SubtitlesS3Key,
+		IllustrationsS3Key: j.IllustrationsS3Key,
+		ElapsedMS:          j.ElapsedMS,
+		RemainingMS:        j.RemainingMS,
+		Phase:              j.Phase,
+		PhaseLabel:         j.PhaseLabel,
+		PromptTokens:       j.PromptTokens,
+		CompletionTokens:   j.CompletionTokens,
+		TotalTokens:        j.TotalTokens,
+		LLMCostUSD:         j.LLMCostUSD,
+		LLMCostKnown:       j.LLMCostKnown,
+		TTSCostUSD:         j.TTSCostUSD,
+		MusicCostUSD:       j.MusicCostUSD,
+		CreatedAt:          j.CreatedAt,
+		UpdatedAt:          j.UpdatedAt,
 	}
 }

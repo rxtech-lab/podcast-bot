@@ -299,6 +299,7 @@ func PrepareImages(ctx context.Context, log *slog.Logger, env *config.Env,
 						log.Warn("audiobook illustration upload failed", "beat", i, "err", uerr)
 					} else if url, derr := uploader.DownloadURL(ctx, key, illustrationURLTTL); derr == nil {
 						img.URL = url
+						img.Key = key
 					} else {
 						log.Warn("audiobook illustration url failed", "beat", i, "err", derr)
 					}

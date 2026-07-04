@@ -12,6 +12,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -744,6 +746,204 @@ func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	_, _ = io.WriteString(w, "WEBVTT\n\n")
+}
+
+// illustrationCueDTO is one client-facing entry of the audiobook illustration
+// timeline. It intentionally omits the internal storage key.
+type illustrationCueDTO struct {
+	StartMS  int64  `json:"start_ms"`
+	ImageURL string `json:"image_url"`
+	Caption  string `json:"caption,omitempty"`
+}
+
+type illustrationsResponse struct {
+	Illustrations []illustrationCueDTO `json:"illustrations"`
+}
+
+// handleJobIllustrations serves the canonical audiobook illustration timeline
+// — the {start_ms, image_url, caption} array a player uses to switch artwork
+// in sync with playback. Clients treat this as the only source of
+// illustration timing; they never reconstruct it from transcript lines.
+// Resolution order:
+//  1. a running orchestrator's live timeline (cues recorded so far),
+//  2. the illustrations.json sidecar (S3, then owner-local disk),
+//  3. legacy synthesis from persisted discussion lines (timed start_ms rows;
+//     else an even split over the optional ?duration_ms=).
+//
+// Non-audiobook jobs simply return an empty array.
+func (s *Server) handleJobIllustrations(w http.ResponseWriter, r *http.Request) {
+	if s.d.Jobs == nil {
+		http.Error(w, "video mode not configured", http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if orch := s.d.Jobs.Orch(id); orch != nil {
+		writeIllustrations(w, orch.AudioBookIllustrationTimeline())
+		return
+	}
+	j := s.d.Jobs.Get(id)
+	if j == nil {
+		j = s.recoverJob(id)
+	}
+	if cues, ok := s.illustrationsFromSidecar(r.Context(), id, j); ok {
+		writeIllustrations(w, cues)
+		return
+	}
+	writeIllustrations(w, s.legacyIllustrations(r, id))
+}
+
+func writeIllustrations(w http.ResponseWriter, cues []contentcreator.IllustrationCue) {
+	out := illustrationsResponse{Illustrations: make([]illustrationCueDTO, 0, len(cues))}
+	for _, c := range cues {
+		if strings.TrimSpace(c.ImageURL) == "" {
+			continue
+		}
+		out.Illustrations = append(out.Illustrations, illustrationCueDTO{
+			StartMS:  c.StartMS,
+			ImageURL: c.ImageURL,
+			Caption:  c.Caption,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// illustrationsFromSidecar loads the persisted illustrations.json for a
+// finished job — the shared-storage copy first (durable across pod recycles),
+// then the owner-local sidecar — and re-mints each cue's image URL from its
+// durable key so a presigned URL stored at generation time can't expire out
+// from under old audiobooks.
+func (s *Server) illustrationsFromSidecar(ctx context.Context, id string, j *Job) ([]contentcreator.IllustrationCue, bool) {
+	var raw []byte
+	if s.d.Uploader != nil && s.d.Uploader.Enabled() {
+		key := ""
+		if j != nil {
+			key = j.IllustrationsS3Key
+		}
+		if key == "" {
+			candidate := s.d.Uploader.Key(path.Join(PodcastAudioDir, id+".illustrations.json"))
+			if info, err := s.d.Uploader.Head(ctx, candidate); err == nil && info.ContentLength > 0 {
+				key = candidate
+			}
+		}
+		if key != "" {
+			if data, err := s.d.Uploader.Download(ctx, key); err == nil && len(data) > 0 {
+				raw = data
+			} else if err != nil {
+				s.logger().Warn("illustrations sidecar download failed", "job", id, "key", key, "err", err)
+			}
+		}
+	}
+	if raw == nil {
+		if jobDir := s.jobArtifactDir(id); jobDir != "" {
+			localPath := filepath.Join(jobDir, PodcastAudioDir, PodcastIllustrationsFilename)
+			if data, err := os.ReadFile(localPath); err == nil && len(data) > 0 {
+				raw = data
+			}
+		}
+	}
+	if raw == nil {
+		return nil, false
+	}
+	var doc struct {
+		Illustrations []contentcreator.IllustrationCue `json:"illustrations"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		s.logger().Warn("illustrations sidecar decode failed", "job", id, "err", err)
+		return nil, false
+	}
+	if len(doc.Illustrations) == 0 {
+		return nil, false
+	}
+	if s.d.Uploader != nil && s.d.Uploader.Enabled() {
+		for i := range doc.Illustrations {
+			key := strings.TrimSpace(doc.Illustrations[i].ImageKey)
+			if key == "" {
+				continue
+			}
+			if url, err := s.d.Uploader.DownloadURL(ctx, key, time.Hour); err == nil && url != "" {
+				doc.Illustrations[i].ImageURL = url
+			}
+		}
+	}
+	return doc.Illustrations, true
+}
+
+// legacyIllustrations synthesizes a timeline for audiobooks generated before
+// the sidecar existed, from the image lines persisted with the discussion.
+func (s *Server) legacyIllustrations(r *http.Request, id string) []contentcreator.IllustrationCue {
+	if s.d.Discussions == nil {
+		return nil
+	}
+	lines, err := s.d.Discussions.LinesByJob(r.Context(), id)
+	if err != nil {
+		s.logger().Warn("legacy illustrations line load failed", "job", id, "err", err)
+		return nil
+	}
+	var durationMS int64
+	if v := strings.TrimSpace(r.URL.Query().Get("duration_ms")); v != "" {
+		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil && n > 0 {
+			durationMS = n
+		}
+	}
+	return synthesizeIllustrationTimeline(lines, durationMS)
+}
+
+// synthesizeIllustrationTimeline builds a best-effort timeline from persisted
+// discussion lines. Rows with a recorded start_ms (> 0 — 0 is the column
+// default and means "unknown") are used as-is, with the transcript's first
+// image anchored to 0 when it lacks one (the opening illustration is emitted
+// at offset ~0, indistinguishable from the default). With no timed rows at
+// all, the images are split evenly across durationMS, mirroring the legacy
+// client slideshow; without a duration only the first image is returned so
+// the artwork still opens on something.
+func synthesizeIllustrationTimeline(lines []DiscussionLine, durationMS int64) []contentcreator.IllustrationCue {
+	type entry struct {
+		url     string
+		startMS int64
+		caption string
+	}
+	var entries []entry
+	seen := map[string]bool{}
+	for _, l := range lines {
+		url := strings.TrimSpace(l.ImageURL)
+		if url == "" || seen[url] {
+			continue
+		}
+		seen[url] = true
+		entries = append(entries, entry{url: url, startMS: l.StartMS, caption: strings.TrimSpace(l.Text)})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	var timed []contentcreator.IllustrationCue
+	for _, e := range entries {
+		if e.startMS > 0 {
+			timed = append(timed, contentcreator.IllustrationCue{StartMS: e.startMS, ImageURL: e.url, Caption: e.caption})
+		}
+	}
+	if len(timed) > 0 {
+		sort.Slice(timed, func(i, j int) bool { return timed[i].StartMS < timed[j].StartMS })
+		if entries[0].startMS <= 0 {
+			timed = append([]contentcreator.IllustrationCue{
+				{StartMS: 0, ImageURL: entries[0].url, Caption: entries[0].caption},
+			}, timed...)
+		}
+		return timed
+	}
+	if durationMS <= 0 {
+		return []contentcreator.IllustrationCue{{StartMS: 0, ImageURL: entries[0].url, Caption: entries[0].caption}}
+	}
+	per := durationMS / int64(len(entries))
+	out := make([]contentcreator.IllustrationCue, 0, len(entries))
+	for i, e := range entries {
+		out = append(out, contentcreator.IllustrationCue{StartMS: int64(i) * per, ImageURL: e.url, Caption: e.caption})
+	}
+	return out
 }
 
 // handleJobArchive serves the per-job zip of the persistent show

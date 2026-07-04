@@ -13,6 +13,7 @@ package videojob
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -538,6 +539,15 @@ func run(ctx context.Context, deps Deps, jobID string,
 			}
 		}
 
+		// Audiobook illustration timeline sidecar: the canonical
+		// {start_ms, image} array clients use to switch artwork in sync
+		// with playback (served by /api/jobs/{id}/illustrations).
+		// Best-effort like the subtitles sidecar.
+		var illustrationsS3Key string
+		if topic.Type == config.ContentTypeAudioBook {
+			illustrationsS3Key = publishAudioBookIllustrations(ctx, deps, logger, jobID, jobOutDir, orch)
+		}
+
 		// Audiobook companion "text-based content": a readable book of the
 		// narration with the generated illustrations inline. Best-effort.
 		if topic.Type == config.ContentTypeAudioBook {
@@ -557,6 +567,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			j.AudioOnly = true
 			j.AudioS3Key = s3Key
 			j.SubtitlesS3Key = subtitlesS3Key
+			j.IllustrationsS3Key = illustrationsS3Key
 			j.DownloadURL = downloadURL
 		})
 		persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
@@ -810,6 +821,46 @@ func stagePodcastSubtitles(jobOutDir string, log *slog.Logger) string {
 		log.Warn("remove legacy subtitles after move failed", "path", src, "err", err)
 	}
 	return dst
+}
+
+func podcastIllustrationsPath(jobOutDir string) string {
+	return filepath.Join(jobOutDir, server.PodcastAudioDir, server.PodcastIllustrationsFilename)
+}
+
+// publishAudioBookIllustrations writes the canonical illustration timeline
+// (illustrations.json) next to the podcast audio and uploads it to shared
+// storage, mirroring the subtitles sidecar. The sidecar is what clients use
+// to switch artwork in sync with playback — they no longer reconstruct the
+// timing from transcript lines. Returns the uploaded object key ("" when
+// nothing was produced or the upload failed); never fails the job.
+func publishAudioBookIllustrations(ctx context.Context, deps Deps, log *slog.Logger,
+	jobID, jobOutDir string, orch *contentcreator.Orchestrator) string {
+	cues := orch.AudioBookIllustrationTimeline()
+	if len(cues) == 0 {
+		return ""
+	}
+	payload, err := json.Marshal(struct {
+		Illustrations []contentcreator.IllustrationCue `json:"illustrations"`
+	}{cues})
+	if err != nil {
+		log.Warn("illustrations sidecar marshal failed", "err", err)
+		return ""
+	}
+	localPath := podcastIllustrationsPath(jobOutDir)
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		log.Warn("illustrations sidecar dir create failed", "path", filepath.Dir(localPath), "err", err)
+	} else if err := os.WriteFile(localPath, payload, 0o644); err != nil {
+		log.Warn("illustrations sidecar write failed", "path", localPath, "err", err)
+	}
+	if !deps.Uploader.Enabled() {
+		return ""
+	}
+	key := deps.Uploader.Key(podcastAudioObjectName(jobID, "illustrations.json"))
+	if err := deps.Uploader.UploadBytes(ctx, key, "application/json", payload); err != nil {
+		log.Warn("illustrations sidecar upload failed", "key", key, "err", err)
+		return ""
+	}
+	return key
 }
 
 func uploadRawPodcastMusic(ctx context.Context, deps Deps, log *slog.Logger, jobID string, music discussion.Music) {

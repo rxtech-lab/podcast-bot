@@ -942,6 +942,20 @@ final class APIClient: Sendable {
         try await get("/api/jobs/\(id)/transcript")
     }
 
+    /// Canonical audiobook illustration timeline for a running or finished
+    /// job — the only source of timed-artwork switching; the client never
+    /// reconstructs it from transcript lines. `durationMS` (when known) lets
+    /// the server synthesize an even split for legacy audiobooks that
+    /// recorded no per-image offsets.
+    func jobIllustrations(id: String, durationMS: Int? = nil) async throws -> [IllustrationCueDTO] {
+        var query: [URLQueryItem] = []
+        if let durationMS, durationMS > 0 {
+            query.append(URLQueryItem(name: "duration_ms", value: String(durationMS)))
+        }
+        let response: IllustrationsResponseDTO = try await get("/api/jobs/\(id)/illustrations", query: query)
+        return response.illustrations
+    }
+
     /// Current captions (WebVTT text) for a running or finished job.
     func liveSubtitles(id: String) async throws -> String {
         let (data, _) = try await perform(request(method: "GET", path: "/api/jobs/\(id)/subtitles/live"))

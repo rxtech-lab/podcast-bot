@@ -789,6 +789,25 @@ struct TranscriptDTO: Codable, Hashable, Sendable {
     }
 }
 
+/// One entry of the canonical audiobook illustration timeline returned by
+/// GET /api/jobs/{id}/illustrations: the image on screen from `startMS` until
+/// the next cue. The backend owns all timing; the player consumes it verbatim.
+struct IllustrationCueDTO: Codable, Hashable, Sendable {
+    var startMS: Int
+    var imageURL: String
+    var caption: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case startMS = "start_ms"
+        case imageURL = "image_url"
+        case caption
+    }
+}
+
+struct IllustrationsResponseDTO: Decodable, Sendable {
+    var illustrations: [IllustrationCueDTO]
+}
+
 /// One event from GET /api/jobs/{id}/ws: `{ "event": ..., "data": {...} }`.
 struct JobEventEnvelope: Decodable, Sendable {
     var event: String

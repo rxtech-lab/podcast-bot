@@ -56,6 +56,11 @@ func ownerLocalWhenDone(sub string, j *Job) bool {
 		return j.AudioS3Key == "" // shared mp3 in S3 -> any pod can serve it
 	case sub == "subtitles" || strings.HasPrefix(sub, "subtitles/"):
 		return j.SubtitlesS3Key == "" // shared VTT in S3 -> any pod can serve it
+	case sub == "illustrations":
+		// Shared sidecar in S3 -> any pod; otherwise only the owner pod's
+		// disk has it (legacy synthesis from the shared DB works anywhere,
+		// but prefer the owner's sidecar when that's the only copy).
+		return j.IllustrationsS3Key == ""
 	case sub == "archive",
 		sub == "transcript",
 		strings.HasPrefix(sub, "hls/"):
