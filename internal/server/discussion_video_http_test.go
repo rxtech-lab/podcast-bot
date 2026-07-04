@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sirily11/debate-bot/internal/config"
 )
 
 func TestAudioBookIllustrationPathsNumericSort(t *testing.T) {
@@ -71,6 +73,16 @@ func TestAudioBookVideoTimings(t *testing.T) {
 	_, offsets = audioBookVideoTimings(dir, 5)
 	if len(offsets) != 0 {
 		t.Errorf("mismatched offset count should be dropped, got %v", offsets)
+	}
+}
+
+func TestDiscussionAudioBookVideoOptionsCarryPodcastLanguage(t *testing.T) {
+	opts := discussionAudioBookVideoOptions(&config.DebateTopic{
+		Title:    "History",
+		Language: "zh-CN",
+	}, nil, nil)
+	if opts.Language != "zh-CN" {
+		t.Fatalf("Language = %q, want zh-CN", opts.Language)
 	}
 }
 

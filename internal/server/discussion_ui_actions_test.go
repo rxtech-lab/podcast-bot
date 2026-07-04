@@ -95,6 +95,36 @@ func TestDiscussionUIActionsSummaryActionsIncludeRealIDExports(t *testing.T) {
 	}
 }
 
+func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
+	srv, _ := newUIActionsTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/home/ui-actions?supports_points=true&visibility=public", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out discussionUIActionsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	account := findAction(t, out.Toolbars, "account")
+	if len(account.Children) == 0 {
+		t.Fatalf("account toolbar children missing: %+v", account)
+	}
+	if !hasAction(account.Children, "points") {
+		t.Fatalf("points child missing when supports_points=true: %+v", account.Children)
+	}
+	create := findAction(t, out.Toolbars, "create")
+	if !hasAction(create.Children, "new-station") || !hasAction(create.Children, "new-album") {
+		t.Fatalf("create children missing station/album actions: %+v", create.Children)
+	}
+	filter := findAction(t, out.Toolbars, "filter")
+	publicFilter := findAction(t, filter.Children, "filter-public")
+	if publicFilter.SystemImage != "checkmark" {
+		t.Fatalf("public filter image = %q, want checkmark", publicFilter.SystemImage)
+	}
+}
+
 func getUIActions(t *testing.T, srv *Server, id, query string) discussionUIActionsResponse {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/discussions/"+id+"/ui-actions?surface="+query, nil)

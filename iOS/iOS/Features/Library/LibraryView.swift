@@ -36,6 +36,7 @@ struct LibraryView: View {
     @State private var loadedSearchQuery = ""
     @State private var visibilityFilter: LibraryVisibilityFilter = .all
     @State private var loadedVisibilityFilter: LibraryVisibilityFilter = .all
+    @State private var toolbarItems: [DiscussionUIActionItem] = []
     @State private var isSearchLoading = false
     @State private var searchTask: Task<Void, Never>?
     private let pageSize = 20
@@ -106,13 +107,18 @@ struct LibraryView: View {
                 syncNavigation(toRegular: newValue == .regular)
             }
             .task { await load() }
+            .task { await loadHomeToolbar() }
             .task { await purchases.refreshBalance() }
+            .onChange(of: purchases.isConfigured) { _, _ in
+                Task { await loadHomeToolbar() }
+            }
             .onChange(of: searchText) { _, newValue in
                 scheduleSearch(for: newValue)
             }
             .onChange(of: visibilityFilter) { _, newValue in
                 searchTask?.cancel()
                 Task {
+                    await loadHomeToolbar()
                     await load(visibility: newValue, showsSearchOverlay: hasLoadedInitialPage)
                 }
             }
@@ -193,58 +199,102 @@ struct LibraryView: View {
     @ToolbarContentBuilder
     private var libraryToolbar: some ToolbarContent {
         DefaultToolbarItem(kind: .search, placement: .bottomBar)
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarLeading) {
+            ForEach(leadingToolbarItems) { item in
+                homeToolbarItem(item)
+            }
+        }
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            ForEach(trailingToolbarItems) { item in
+                homeToolbarItem(item)
+            }
+        }
+    }
+
+    private var leadingToolbarItems: [DiscussionUIActionItem] {
+        toolbarItems.filter { $0.placement == "topBarLeading" }
+    }
+
+    private var trailingToolbarItems: [DiscussionUIActionItem] {
+        toolbarItems.filter { $0.placement != "topBarLeading" }
+    }
+
+    @ViewBuilder
+    private func homeToolbarItem(_ item: DiscussionUIActionItem) -> some View {
+        if item.children.count > 1 {
             Menu {
-                ForEach(LibraryVisibilityFilter.allCases) { filter in
-                    Button {
-                        visibilityFilter = filter
-                    } label: {
-                        Label(filter.title, systemImage: visibilityFilter == filter ? "checkmark" : filter.icon)
-                    }
+                ForEach(item.children) { child in
+                    homeToolbarMenuLeaf(child)
                 }
             } label: {
-                Image(systemName: "line.3.horizontal.decrease.circle")
+                homeToolbarIcon(item)
             }
-            .accessibilityLabel("Filter \(AppStringLiteral.stationsNameRaw)")
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { showingMarketplace = true } label: { Image(systemName: "square.grid.2x2.fill") }
-                .accessibilityLabel("Open market")
-                .popoverTip(OpenMarketTip(), arrowEdge: .top)
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button { showingNew = true } label: {
-                    Label("New \(AppStringLiteral.stationNameRaw)", systemImage: "waveform")
-                }
-                .accessibilityIdentifier("library.new.station")
-                Button { showingNewAlbum = true } label: {
-                    Label("New Album", systemImage: "rectangle.stack.badge.plus")
-                }
-                .accessibilityIdentifier("library.new.album")
+            .accessibilityLabel(item.title)
+            .accessibilityIdentifier("library.\(item.id)")
+            .disabled(!item.enabled)
+            .modifier(HomeToolbarTipModifier(itemID: item.id))
+        } else if let child = item.children.first {
+            Button(role: buttonRole(for: child)) {
+                performHomeToolbarAction(child)
             } label: {
-                Image(systemName: "plus")
+                homeToolbarIcon(child)
             }
-            .accessibilityIdentifier("library.new")
+            .accessibilityLabel(homeToolbarTitle(child))
+            .accessibilityIdentifier("library.\(item.id)")
+            .disabled(!child.enabled)
+            .modifier(HomeToolbarTipModifier(itemID: item.id))
+        } else {
+            Button(role: buttonRole(for: item)) {
+                performHomeToolbarAction(item)
+            } label: {
+                homeToolbarIcon(item)
+            }
+            .accessibilityLabel(homeToolbarTitle(item))
+            .accessibilityIdentifier("library.\(item.id)")
+            .disabled(!item.enabled)
+            .modifier(HomeToolbarTipModifier(itemID: item.id))
         }
-        ToolbarItem(placement: .topBarLeading) {
-            Menu {
-                if purchases.isConfigured {
-                    Button(pointsMenuLabel) { showingPointsHistory = true }
-                }
-                Button("Settings") { showingSettings = true }
-                Divider()
-                Button("What's New") { showingWhatsNew = true }
-                Button("Refresh") {
-                    Task {
-                        await load(searchQuery: searchText, visibility: visibilityFilter)
-                        await purchases.refreshBalance()
-                    }
-                }
-                Button("Sign Out", role: .destructive) { Task { await auth.signOut() } }
-            } label: { Image(systemName: "person.crop.circle") }
-            .accessibilityIdentifier("library.account")
+    }
+
+    @ViewBuilder
+    private func homeToolbarMenuLeaf(_ item: DiscussionUIActionItem) -> some View {
+        let actionItem = item.children.first ?? item
+        Button(role: buttonRole(for: actionItem)) {
+            performHomeToolbarAction(actionItem)
+        } label: {
+            homeToolbarLabel(actionItem)
         }
+        .disabled(!actionItem.enabled)
+    }
+
+    @ViewBuilder
+    private func homeToolbarIcon(_ item: DiscussionUIActionItem) -> some View {
+        Image(systemName: homeToolbarSystemImage(item))
+    }
+
+    @ViewBuilder
+    private func homeToolbarLabel(_ item: DiscussionUIActionItem) -> some View {
+        let title = homeToolbarTitle(item)
+        if let systemImage = item.systemImage, !systemImage.isEmpty {
+            Label(title, systemImage: systemImage)
+        } else {
+            Text(title)
+        }
+    }
+
+    private func homeToolbarTitle(_ item: DiscussionUIActionItem) -> String {
+        item.id == "points" ? pointsMenuLabel : item.title
+    }
+
+    private func homeToolbarSystemImage(_ item: DiscussionUIActionItem) -> String {
+        guard let systemImage = item.systemImage, !systemImage.isEmpty else {
+            return "ellipsis"
+        }
+        return systemImage
+    }
+
+    private func buttonRole(for item: DiscussionUIActionItem) -> ButtonRole? {
+        item.role == "destructive" ? .destructive : nil
     }
 
     /// Balance label for the user menu, e.g. "Points (Balance 1,200 Points)".
@@ -257,6 +307,60 @@ struct LibraryView: View {
             : String(localized: "Points", comment: "Plural unit for a points balance")
         return String(localized: "Balance (\(UsageSummary.formatInt(balance)) \(unit))",
                       comment: "User menu points label; first value is the formatted balance, second is the localized unit")
+    }
+
+    private func loadHomeToolbar() async {
+        do {
+            let response = try await APIClient(tokens: auth).homeUIActions(
+                supportsPoints: purchases.isConfigured,
+                visibility: visibilityFilter.rawValue
+            )
+            toolbarItems = response.toolbars
+        } catch {
+            toolbarItems = []
+        }
+    }
+
+    private func performHomeToolbarAction(_ item: DiscussionUIActionItem) {
+        guard item.action.type != "none",
+              let path = validatedHomeActionPath(item) else { return }
+        switch path {
+        case ["sheet", "points"]:
+            showingPointsHistory = true
+        case ["sheet", "settings"]:
+            showingSettings = true
+        case ["sheet", "whats-new"]:
+            showingWhatsNew = true
+        case ["sheet", "market"]:
+            showingMarketplace = true
+        case ["sheet", "new-station"]:
+            showingNew = true
+        case ["sheet", "new-album"]:
+            showingNewAlbum = true
+        case ["filter", "all"]:
+            visibilityFilter = .all
+        case ["filter", "public"]:
+            visibilityFilter = .public
+        case ["filter", "private"]:
+            visibilityFilter = .private
+        case ["action", "refresh"]:
+            Task {
+                await load(searchQuery: searchText, visibility: visibilityFilter)
+                await purchases.refreshBalance()
+                await loadHomeToolbar()
+            }
+        case ["action", "sign-out"]:
+            Task { await auth.signOut() }
+        default:
+            break
+        }
+    }
+
+    private func validatedHomeActionPath(_ item: DiscussionUIActionItem) -> [String]? {
+        guard let url = URL(string: item.action.link),
+              url.scheme == "debatepod",
+              url.host == "home" else { return nil }
+        return url.pathComponents.filter { $0 != "/" }
     }
 
     private var placeholder: some View {
@@ -859,6 +963,19 @@ private struct SettingsRowLabel: View {
             Text(title)
                 .foregroundStyle(.primary)
             Spacer()
+        }
+    }
+}
+
+private struct HomeToolbarTipModifier: ViewModifier {
+    let itemID: String
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if itemID == "market" {
+            content.popoverTip(OpenMarketTip(), arrowEdge: .top)
+        } else {
+            content
         }
     }
 }

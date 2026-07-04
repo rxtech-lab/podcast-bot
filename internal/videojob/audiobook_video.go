@@ -231,6 +231,7 @@ func audioBookVideoOptions(topic *config.DebateTopic, lines []agent.TranscriptLi
 	return video.AudioBookVideoOptions{
 		Style:    topic.AudioBookStyle,
 		Title:    topic.Title,
+		Language: topic.Language,
 		Host:     host,
 		Speakers: speakers,
 		Lines:    outLines,

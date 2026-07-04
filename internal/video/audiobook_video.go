@@ -45,6 +45,7 @@ type AudioBookVideoAvatar struct {
 type AudioBookVideoOptions struct {
 	Style    string
 	Title    string
+	Language string
 	Host     string
 	Speakers []string
 	Lines    []AudioBookVideoLine
@@ -138,6 +139,10 @@ func RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath string, imagePa
 	)
 	if hasSubs {
 		args = append(args, "-c:s", "mov_text")
+		args = appendSubtitleTrackMetadata(args, []SubtitleTrack{{
+			Language: opts.Language,
+			Default:  true,
+		}})
 	}
 	args = append(args, "-movflags", "+faststart", outPath)
 

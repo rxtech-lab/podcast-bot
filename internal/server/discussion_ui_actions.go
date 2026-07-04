@@ -10,23 +10,34 @@ import (
 )
 
 type discussionUIActionsResponse struct {
-	ID    string                   `json:"id"`
-	Items []discussionUIActionItem `json:"items"`
+	ID       string                   `json:"id"`
+	Items    []discussionUIActionItem `json:"items"`
+	Toolbars []discussionUIActionItem `json:"toolbars,omitempty"`
 }
 
 type discussionUIActionItem struct {
-	ID           string             `json:"id"`
-	Title        string             `json:"title"`
-	LoadingTitle string             `json:"loading_title,omitempty"`
-	SystemImage  string             `json:"system_image,omitempty"`
-	Role         string             `json:"role,omitempty"`
-	Enabled      bool               `json:"enabled"`
-	Action       discussionUIAction `json:"action"`
+	ID           string                   `json:"id"`
+	Title        string                   `json:"title"`
+	LoadingTitle string                   `json:"loading_title,omitempty"`
+	SystemImage  string                   `json:"system_image,omitempty"`
+	Role         string                   `json:"role,omitempty"`
+	Placement    string                   `json:"placement,omitempty"`
+	Enabled      bool                     `json:"enabled"`
+	Action       discussionUIAction       `json:"action"`
+	Children     []discussionUIActionItem `json:"children,omitempty"`
 }
 
 type discussionUIAction struct {
 	Type string `json:"type"`
 	Link string `json:"link"`
+}
+
+func (s *Server) handleHomeUIActions(w http.ResponseWriter, r *http.Request) {
+	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
+	writeJSON(w, discussionUIActionsResponse{
+		ID:       "home-toolbar",
+		Toolbars: s.homeToolbarActions(r, lang),
+	})
 }
 
 func (s *Server) handleDiscussionUIActions(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +121,7 @@ func (s *Server) audioBookVideoAction(r *http.Request, d *Discussion, lang conte
 		return actionItem("video-rendering", phrase(lang, "Generating Video", "正在生成视频", "正在產生影片"), "", "hourglass", "", false, "none", discussionActionLink(d.ID, "video", "rendering")), true
 	}
 	if d.IsOwner && d.Status == DiscussionReady && strings.TrimSpace(d.JobID) != "" && s.d.Jobs != nil && s.d.UploadRoot != "" {
-		return actionItem("generate-video", phrase(lang, "Generate Video", "生成视频", "產生影片"), phrase(lang, "Generating Video", "正在生成视频", "正在產生影片"), "film.badge.plus", "", true, "request", discussionActionLink(d.ID, "action", "video-generate")), true
+		return actionItem("generate-video", phrase(lang, "Generate Video", "生成视频", "產生影片"), phrase(lang, "Generating Video", "正在生成视频", "正在產生影片"), "video.badge.plus", "", true, "request", discussionActionLink(d.ID, "action", "video-generate")), true
 	}
 	return discussionUIActionItem{}, false
 }
@@ -231,6 +242,62 @@ func (s *Server) summaryMenuActions(r *http.Request, d *Discussion, lang content
 	return items
 }
 
+func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) []discussionUIActionItem {
+	visibility := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("visibility")))
+	switch visibility {
+	case "public", "private":
+	default:
+		visibility = "all"
+	}
+	filterItems := []discussionUIActionItem{
+		actionItem("filter-all", phrase(lang, "All", "全部", "全部"), "", filterSystemImage(visibility, "all", "tray.full"), "",
+			true, "select", homeActionLink("filter", "all")),
+		actionItem("filter-public", phrase(lang, "Public", "公开", "公開"), "", filterSystemImage(visibility, "public", "globe"), "",
+			true, "select", homeActionLink("filter", "public")),
+		actionItem("filter-private", phrase(lang, "Private", "私密", "私密"), "", filterSystemImage(visibility, "private", "lock.fill"), "",
+			true, "select", homeActionLink("filter", "private")),
+	}
+	accountItems := make([]discussionUIActionItem, 0, 5)
+	if queryBool(r, "supports_points") {
+		accountItems = append(accountItems, actionItem("points",
+			phrase(lang, "Points", "点数", "點數"), "", "sparkles", "",
+			true, "open-sheet", homeActionLink("sheet", "points")))
+	}
+	accountItems = append(accountItems,
+		actionItem("settings", phrase(lang, "Settings", "设置", "設定"), "", "gearshape", "",
+			true, "open-sheet", homeActionLink("sheet", "settings")),
+		actionItem("whats-new", phrase(lang, "What's New", "新功能", "新功能"), "", "sparkles.rectangle.stack", "",
+			true, "open-sheet", homeActionLink("sheet", "whats-new")),
+		actionItem("refresh", phrase(lang, "Refresh", "刷新", "重新整理"), "", "arrow.clockwise", "",
+			true, "request", homeActionLink("action", "refresh")),
+		actionItem("sign-out", phrase(lang, "Sign Out", "退出登录", "登出"), "", "rectangle.portrait.and.arrow.right", "destructive",
+			true, "request", homeActionLink("action", "sign-out")),
+	)
+
+	return []discussionUIActionItem{
+		actionItem("account", phrase(lang, "Account", "账号", "帳號"), "", "person.crop.circle", "",
+			true, "none", homeActionLink("toolbar", "account")).withPlacement("topBarLeading").withChildren(accountItems),
+		actionItem("filter", phrase(lang, "Filter", "筛选", "篩選"), "", "line.3.horizontal.decrease.circle", "",
+			true, "none", homeActionLink("toolbar", "filter")).withPlacement("topBarTrailing").withChildren(filterItems),
+		actionItem("market", phrase(lang, "Market", "市场", "市場"), "", "square.grid.2x2.fill", "",
+			true, "open-sheet", homeActionLink("sheet", "market")).withPlacement("topBarTrailing"),
+		actionItem("create", phrase(lang, "Create", "创建", "建立"), "", "plus", "",
+			true, "none", homeActionLink("toolbar", "create")).withPlacement("topBarTrailing").withChildren([]discussionUIActionItem{
+			actionItem("new-station", phrase(lang, "New Station", "新建频道", "新增頻道"), "", "waveform", "",
+				true, "open-sheet", homeActionLink("sheet", "new-station")),
+			actionItem("new-album", phrase(lang, "New Album", "新建专辑", "新增專輯"), "", "rectangle.stack.badge.plus", "",
+				true, "open-sheet", homeActionLink("sheet", "new-album")),
+		}),
+	}
+}
+
+func filterSystemImage(selected, value, fallback string) string {
+	if selected == value {
+		return "checkmark"
+	}
+	return fallback
+}
+
 func actionItem(id, title, loadingTitle, systemImage, role string, enabled bool, actionType, link string) discussionUIActionItem {
 	return discussionUIActionItem{
 		ID:           id,
@@ -246,6 +313,16 @@ func actionItem(id, title, loadingTitle, systemImage, role string, enabled bool,
 	}
 }
 
+func (item discussionUIActionItem) withPlacement(placement string) discussionUIActionItem {
+	item.Placement = placement
+	return item
+}
+
+func (item discussionUIActionItem) withChildren(children []discussionUIActionItem) discussionUIActionItem {
+	item.Children = children
+	return item
+}
+
 func discussionActionLink(id string, parts ...string) string {
 	escaped := make([]string, 0, len(parts)+1)
 	escaped = append(escaped, url.PathEscape(id))
@@ -253,6 +330,14 @@ func discussionActionLink(id string, parts ...string) string {
 		escaped = append(escaped, url.PathEscape(part))
 	}
 	return "debatepod://discussion/" + strings.Join(escaped, "/")
+}
+
+func homeActionLink(parts ...string) string {
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, url.PathEscape(part))
+	}
+	return "debatepod://home/" + strings.Join(escaped, "/")
 }
 
 func queryBool(r *http.Request, key string) bool {

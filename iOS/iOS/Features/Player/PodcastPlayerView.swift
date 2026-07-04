@@ -1104,6 +1104,24 @@ struct DiscussionActionsMenu: View {
 
     @ViewBuilder
     private func actionRow(_ item: DiscussionUIActionItem) -> some View {
+        if item.children.count > 1 {
+            Menu {
+                ForEach(item.children) { child in
+                    leafActionRow(child)
+                }
+            } label: {
+                rowLabel(item, busy: false)
+            }
+            .disabled(!item.enabled)
+        } else if let child = item.children.first {
+            leafActionRow(child)
+        } else {
+            leafActionRow(item)
+        }
+    }
+
+    @ViewBuilder
+    private func leafActionRow(_ item: DiscussionUIActionItem) -> some View {
         let busy = isBusy(item)
         let disabled = !item.enabled || busy
         if item.action.type == "share-link", let url = URL(string: item.action.link) {

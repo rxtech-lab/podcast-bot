@@ -281,6 +281,7 @@ func New(d Deps) *Server {
 
 	if d.Discussions != nil {
 		s.mux.HandleFunc("GET /api/discussions", s.handleDiscussionList)
+		s.mux.HandleFunc("GET /api/home/ui-actions", s.handleHomeUIActions)
 		s.mux.HandleFunc("POST /api/discussions", s.handleDiscussionCreate)
 		s.mux.HandleFunc("GET /api/discussions/parent-podcasts", s.handleDiscussionParentPodcastList)
 		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)

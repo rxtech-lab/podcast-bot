@@ -992,6 +992,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
 	// the last frame for the rest of the turn. Unnumbered legacy markers
 	// (-1) are kept; the renderer treats them as "advance one".
+	leadAdvances, trailAdvances = p.normalizeSceneMarkerTiming(t, leadAdvances, trailAdvances)
 	leadAdvances, trailAdvances = p.clampLeadTrail(t, leadAdvances, trailAdvances)
 	if len(leadAdvances) > 0 || len(trailAdvances) > 0 {
 		p.d.Log.Info("scene marker",
@@ -1266,6 +1267,16 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	}
 	t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 	return n, nil
+}
+
+func (p *Pipeline) normalizeSceneMarkerTiming(t *Turn, lead, trail []int) ([]int, []int) {
+	if p == nil || t == nil || p.d.ContentType != config.ContentTypeAudioBook {
+		return lead, trail
+	}
+	if !strings.HasPrefix(t.Directive, "narrate") || len(lead) > 0 || len(trail) == 0 {
+		return lead, trail
+	}
+	return trail, nil
 }
 
 // dispatchSoundCue resolves marker → on-disk clip path and asks the

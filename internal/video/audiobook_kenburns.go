@@ -166,6 +166,10 @@ func renderKenBurnsAudioBookVideo(outPath, audioPath, vttPath string,
 	)
 	if hasSubs {
 		args = append(args, "-c:s", "mov_text")
+		args = appendSubtitleTrackMetadata(args, []SubtitleTrack{{
+			Language: opts.Language,
+			Default:  true,
+		}})
 	}
 	args = append(args, "-movflags", "+faststart", outPath)
 

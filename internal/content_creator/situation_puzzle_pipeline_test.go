@@ -3,6 +3,8 @@ package contentcreator
 import (
 	"reflect"
 	"testing"
+
+	"github.com/sirily11/debate-bot/internal/config"
 )
 
 func TestStripSceneMarkers(t *testing.T) {
@@ -46,6 +48,30 @@ func TestStripSceneMarkers(t *testing.T) {
 				t.Errorf("trailing = %v, want %v", gotTrail, c.wantTrailing)
 			}
 		})
+	}
+}
+
+func TestNormalizeSceneMarkerTimingPromotesAudioBookTrailingOnly(t *testing.T) {
+	p := NewPipeline(Deps{ContentType: config.ContentTypeAudioBook})
+	lead, trail := p.normalizeSceneMarkerTiming(&Turn{Directive: "narrate"}, nil, []int{3})
+	if !reflect.DeepEqual(lead, []int{3}) || len(trail) != 0 {
+		t.Fatalf("audiobook trailing-only = lead %v trail %v, want lead [3] trail []", lead, trail)
+	}
+}
+
+func TestNormalizeSceneMarkerTimingPreservesPuzzleTrailing(t *testing.T) {
+	p := NewPipeline(Deps{ContentType: config.ContentTypeSituationPuzzle})
+	lead, trail := p.normalizeSceneMarkerTiming(&Turn{Directive: "surface"}, nil, []int{3})
+	if len(lead) != 0 || !reflect.DeepEqual(trail, []int{3}) {
+		t.Fatalf("puzzle trailing = lead %v trail %v, want lead [] trail [3]", lead, trail)
+	}
+}
+
+func TestNormalizeSceneMarkerTimingKeepsAudioBookSandwich(t *testing.T) {
+	p := NewPipeline(Deps{ContentType: config.ContentTypeAudioBook})
+	lead, trail := p.normalizeSceneMarkerTiming(&Turn{Directive: "narrate continuation"}, []int{2}, []int{3})
+	if !reflect.DeepEqual(lead, []int{2}) || !reflect.DeepEqual(trail, []int{3}) {
+		t.Fatalf("audiobook sandwich = lead %v trail %v, want lead [2] trail [3]", lead, trail)
 	}
 }
 
