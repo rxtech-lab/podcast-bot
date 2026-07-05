@@ -35,6 +35,11 @@ jobs:
           key: style-font-${{ hashFiles('scripts/fetch-style-font.sh') }}
       - name: Fetch style font
         run: make style-font
+      - name: Install ffmpeg
+        # The audio/caption sync regression tests (internal/content_creator,
+        # internal/video, internal/tts) exercise real ffmpeg/ffprobe and
+        # self-skip without them — install so every push actually runs them.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Run Go tests
         env:
           POSTGRES_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/debate_bot_test?sslmode=disable

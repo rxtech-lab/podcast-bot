@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
@@ -24,8 +25,15 @@ import (
 //
 // Image paths are snapshotted synchronously before enqueuing so the task never
 // touches the orchestrator after it has been shut down.
+//
+// recDone closes once the audio.mp3 recorder has flushed the full LiveStream.
+// The queued render waits on it (bounded) and then confirms the file has
+// stopped growing before probing its duration: rendering against a
+// still-draining recording produced a video sized to a stale (short) probe,
+// which is how audio tails got truncated. nil recDone skips the wait.
 func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	topic *config.DebateTopic, orch *contentcreator.Orchestrator, audioPath, jobOutDir string,
+	recDone <-chan struct{},
 ) {
 	logger := slog.Default().With("job", jobID)
 	if deps.Log != nil {
@@ -94,6 +102,19 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 				})
 			}
 		}()
+		// The recorder is normally drained before this task is scheduled;
+		// this guards the drain-timeout path where audio.mp3 may still be
+		// receiving the realtime-paced tail.
+		if recDone != nil {
+			select {
+			case <-recDone:
+			case <-time.After(3 * time.Minute):
+				logger.Warn("audiobook video: audio recorder still draining — verifying file stability")
+				waitForStableFile(runCtx, logger, audioPath, 2*time.Second, 30*time.Second)
+			case <-runCtx.Done():
+				return
+			}
+		}
 		logger.Info("audiobook video render starting", "images", len(paths), "resolution", string(res), "style", opts.Style)
 		deps.Jobs.Update(jobID, func(j *server.Job) {
 			j.Phase = "video-rendering"

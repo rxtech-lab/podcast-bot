@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/storage"
 )
 
 func newUIActionsTestServer(t *testing.T) (*Server, *DiscussionStore) {
@@ -92,6 +95,60 @@ func TestDiscussionUIActionsSummaryActionsIncludeRealIDExports(t *testing.T) {
 	}
 	if pdf.Action.Link != "debatepod://discussion/"+d.ID+"/summary/export/pdf" {
 		t.Fatalf("download-pdf link = %q, want concrete export link", pdf.Action.Link)
+	}
+}
+
+func TestDiscussionUIActionsShowVideoRenderingWhileAudioBookVideoRuns(t *testing.T) {
+	srv, store := newUIActionsTestServer(t)
+	ctx := context.Background()
+	jobs, err := NewJobRegistry(filepath.Join(t.TempDir(), "jobs.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewJobRegistry: %v", err)
+	}
+	uploader, err := storage.New(ctx, storage.Config{
+		Bucket:          "podcasts",
+		Region:          "auto",
+		DownloadBaseURL: "https://media.example.com",
+	})
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
+	srv.d.Jobs = jobs
+	srv.d.Uploader = uploader
+	srv.d.UploadRoot = t.TempDir()
+
+	d, err := store.Create(ctx, "anonymous", "Audio Book", planResponse{
+		Script: &config.DebateTopic{
+			Title: "Audio Book",
+			Type:  config.ContentTypeAudioBook,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	const jobID = "job-video-rendering"
+	if _, err := store.SetJob(ctx, "anonymous", d.ID, jobID); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.SetJobResult(ctx, d.ID, DiscussionReady, "https://audio.example/ready.mp3"); err != nil {
+		t.Fatalf("SetJobResult: %v", err)
+	}
+	jobs.Add(jobID)
+	jobs.Update(jobID, func(j *Job) {
+		j.Phase = "video-rendering"
+		j.PhaseLabel = "Rendering video"
+	})
+
+	resp := getUIActions(t, srv, d.ID, "podcast-documents")
+	rendering := findAction(t, resp.Items, "video-rendering")
+	if rendering.Enabled {
+		t.Fatalf("video-rendering enabled = true, want disabled")
+	}
+	if rendering.Title != "Generating Video" {
+		t.Fatalf("video-rendering title = %q, want Generating Video", rendering.Title)
+	}
+	if hasAction(resp.Items, "generate-video") {
+		t.Fatalf("generate-video action shown while video job is rendering: %+v", resp.Items)
 	}
 }
 

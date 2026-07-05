@@ -96,7 +96,7 @@ func renderConversationalAudioBookVideo(outPath, audioPath, vttPath string,
 		"-vf", "fps=25,format=yuv420p",
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 		"-c:a", "aac", "-b:a", "128k",
-		"-shortest",
+		// No -shortest: never truncate the narration to the frame track.
 	)
 	if hasSubs {
 		args = append(args, "-c:s", "mov_text")

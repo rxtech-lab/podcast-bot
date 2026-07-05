@@ -241,6 +241,7 @@ Directive:
 
 Completion rule:
 - The backend will keep asking you to continue until you call the end_audio_book tool.
+- Narrate only the chapters explicitly listed in the source-derived outline. Never invent, preview, title, or continue into a chapter that is not listed there.
 - Call end_audio_book exactly once, and only after you have fully narrated the final planned chapter. Do not call it after a partial chapter, a summary, or an unfinished sentence.
 - If illustration markers are provided, do not call end_audio_book until you have emitted the final required scene marker and narrated the beat attached to it.
 - When you reach the natural ending of the final planned chapter, the next action must be end_audio_book. Do not add encouragement, filler, "next chapter" teasers, or any other spoken text after the final chapter is complete.

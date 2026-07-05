@@ -140,7 +140,7 @@ func TestRenderKenBurnsAudioBookVideoSmoke(t *testing.T) {
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("output missing/empty: %v", err)
 	}
-	dur, err := probeDurationSeconds(outPath)
+	dur, err := ProbeDurationSeconds(outPath)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}

@@ -99,6 +99,22 @@ func (s *Stream) Usage() Usage {
 	return s.usage
 }
 
+// NewStaticStream builds a pre-filled Stream that replays the given text
+// chunks and then finishes cleanly. Intended for tests and fakes that need
+// a Speak-compatible stream without a live provider connection.
+func NewStaticStream(chunks ...string) *Stream {
+	deltas := make(chan Delta, len(chunks)+1)
+	for _, c := range chunks {
+		deltas <- Delta{TextChunk: c}
+	}
+	deltas <- Delta{Done: true}
+	close(deltas)
+	return &Stream{
+		deltas: deltas,
+		errCh:  make(chan error, 1),
+	}
+}
+
 func (s *Stream) addUsage(u Usage) {
 	if s == nil || u.TotalTokens == 0 {
 		return

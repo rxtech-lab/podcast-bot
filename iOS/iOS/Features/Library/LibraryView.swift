@@ -32,6 +32,7 @@ struct LibraryView: View {
     @State private var isLoadingMore = false
     @State private var canLoadMore = true
     @State private var errorMessage: String?
+    @State private var loadErrorMessage: String?
     @State private var searchText = ""
     @State private var loadedSearchQuery = ""
     @State private var visibilityFilter: LibraryVisibilityFilter = .all
@@ -185,6 +186,8 @@ struct LibraryView: View {
     private var libraryContent: some View {
         if shouldShowInitialLoader {
             initialLibraryLoadingView
+        } else if shouldShowLoadError {
+            loadErrorState
         } else if discussions.isEmpty && !loadedSearchQuery.isEmpty {
             searchEmptyState
         } else if discussions.isEmpty && loadedVisibilityFilter != .all {
@@ -265,6 +268,7 @@ struct LibraryView: View {
             homeToolbarLabel(actionItem)
         }
         .disabled(!actionItem.enabled)
+        .accessibilityIdentifier("library.\(actionItem.id)")
     }
 
     @ViewBuilder
@@ -489,6 +493,10 @@ struct LibraryView: View {
         discussions.isEmpty && (isLoading || !hasLoadedInitialPage)
     }
 
+    private var shouldShowLoadError: Bool {
+        discussions.isEmpty && loadErrorMessage != nil
+    }
+
     private var initialLibraryLoadingView: some View {
         VStack(spacing: 12) {
             ZStack {
@@ -545,6 +553,7 @@ struct LibraryView: View {
             loadedSearchQuery = query
             loadedVisibilityFilter = filter
             discussions = items
+            loadErrorMessage = nil
             // Reconcile the iPad detail selection with the refreshed list so the
             // selected row stays highlighted and the detail reflects the newest copy.
             // Only update when the refreshed page still contains it — a selection
@@ -555,7 +564,7 @@ struct LibraryView: View {
             }
             canLoadMore = items.count == pageSize
         } catch {
-            reportLoadError(error)
+            reportLoadError(error, inlineWhenEmpty: true)
         }
     }
 
@@ -581,7 +590,7 @@ struct LibraryView: View {
             discussions.append(contentsOf: items.filter { !existing.contains($0.id) })
             canLoadMore = items.count == pageSize
         } catch {
-            reportLoadError(error)
+            reportLoadError(error, inlineWhenEmpty: false)
         }
     }
 
@@ -593,7 +602,7 @@ struct LibraryView: View {
             do {
                 try await APIClient(tokens: auth).deleteDiscussion(id: target.id)
             } catch {
-                reportLoadError(error)
+                reportLoadError(error, inlineWhenEmpty: false)
                 await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter)
             }
         }
@@ -620,12 +629,18 @@ struct LibraryView: View {
         }
     }
 
-    private func reportLoadError(_ error: Error) {
+    private func reportLoadError(_ error: Error, inlineWhenEmpty: Bool) {
         guard !APIClient.isCancellation(error) else { return }
-        errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        let message = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        if inlineWhenEmpty && discussions.isEmpty {
+            loadErrorMessage = message
+        } else {
+            errorMessage = message
+        }
     }
 
     private func upsert(_ discussion: Discussion) {
+        loadErrorMessage = nil
         discussions.removeAll { $0.id == discussion.id }
         discussions.insert(discussion, at: 0)
     }
@@ -678,6 +693,35 @@ struct LibraryView: View {
             .tint(Theme.accent)
         }
         .padding(40)
+    }
+
+    private var loadErrorState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 52, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            Text("Could not load \(AppStringLiteral.stationsNameRaw)")
+                .font(.title3.weight(.semibold))
+            Text(loadErrorMessage ?? "Check your connection and try again.")
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondaryText)
+                .multilineTextAlignment(.center)
+            Button {
+                loadErrorMessage = nil
+                Task {
+                    await load(searchQuery: searchText, visibility: visibilityFilter)
+                    await loadHomeToolbar()
+                }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .padding(.horizontal, 8)
+            }
+            .buttonStyle(.glassProminent)
+            .tint(Theme.accent)
+            .accessibilityIdentifier("library.refresh")
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var searchEmptyState: some View {

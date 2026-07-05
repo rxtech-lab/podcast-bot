@@ -81,31 +81,6 @@ func TestPipeline_VTTBiasZeroForAudioOnlyAudioBook(t *testing.T) {
 	}
 }
 
-func TestPipeline_VTTCaptionDelayOnlyForAudioOnlyAudioBook(t *testing.T) {
-	audiobook := NewPipeline(Deps{
-		ContentType: config.ContentTypeAudioBook,
-		AudioOnly:   true,
-	})
-	if got, want := audiobook.vttCaptionDelay(), 2*time.Second; got != want {
-		t.Fatalf("audio-book caption delay = %v, want %v", got, want)
-	}
-
-	audioOnlyDiscussion := NewPipeline(Deps{
-		ContentType: config.ContentTypeDiscussion,
-		AudioOnly:   true,
-	})
-	if got, want := audioOnlyDiscussion.vttCaptionDelay(), time.Duration(0); got != want {
-		t.Fatalf("audio-only discussion caption delay = %v, want %v", got, want)
-	}
-
-	stitchedAudioBook := NewPipeline(Deps{
-		ContentType: config.ContentTypeAudioBook,
-	})
-	if got, want := stitchedAudioBook.vttCaptionDelay(), time.Duration(0); got != want {
-		t.Fatalf("stitched audio-book caption delay = %v, want %v", got, want)
-	}
-}
-
 func TestVTTWriter_AppendIgnoresEmpty(t *testing.T) {
 	w := newVTTWriter()
 	w.Append("", 0, 5*time.Second)

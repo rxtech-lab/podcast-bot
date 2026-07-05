@@ -58,6 +58,7 @@ struct PodcastPlayerView: View {
     @State private var isGeneratingSummary = false
     @State private var summaryGenerateError: String?
     @State private var isGeneratingVideo = false
+    @State private var isVideoGenerationPending = false
     @State private var videoGenerateError: String?
     @State private var documentActionItems: [DiscussionUIActionItem] = []
     @State private var podcastActionItems: [DiscussionUIActionItem] = []
@@ -297,6 +298,7 @@ struct PodcastPlayerView: View {
             let documents = try await api.discussionUIActions(id: currentDiscussion.id,
                                                               surface: "podcast-documents")
             documentActionItems = documents.items
+            reconcileVideoGenerationPending(with: documents.items)
         } catch {
             documentActionItems = []
         }
@@ -413,9 +415,16 @@ struct PodcastPlayerView: View {
         case "generate-summary":
             return isGeneratingSummary
         case "generate-video":
-            return isGeneratingVideo
+            return isGeneratingVideo || isVideoGenerationPending
         default:
             return false
+        }
+    }
+
+    private func reconcileVideoGenerationPending(with items: [DiscussionUIActionItem]) {
+        guard isVideoGenerationPending else { return }
+        if items.contains(where: { $0.id == "video-rendering" || $0.id == "view-video" }) {
+            isVideoGenerationPending = false
         }
     }
 
@@ -961,10 +970,9 @@ struct PodcastPlayerView: View {
     }
 
     private func generateVideo() {
-        guard !isGeneratingVideo else { return }
+        guard !isGeneratingVideo && !isVideoGenerationPending else { return }
         isGeneratingVideo = true
         Task { @MainActor in
-            defer { isGeneratingVideo = false }
             do {
                 let updated = try await APIClient(tokens: auth).generateVideo(id: currentDiscussion.id)
                 if let model {
@@ -974,8 +982,12 @@ struct PodcastPlayerView: View {
                     )
                     model.listenForJobUpdatesIfNeeded()
                 }
+                isVideoGenerationPending = true
                 await loadUIActions()
+                isGeneratingVideo = false
             } catch {
+                isGeneratingVideo = false
+                isVideoGenerationPending = false
                 guard !APIClient.isCancellation(error) else { return }
                 videoGenerateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
@@ -2352,6 +2364,10 @@ struct AudioBookVideoView: View {
             Color.black.ignoresSafeArea()
             VideoPlayer(player: player)
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded {
+                    toggleChromeFromVideoTap()
+                })
 
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
@@ -2368,6 +2384,7 @@ struct AudioBookVideoView: View {
                     Spacer()
 
                     Button {
+                        revealChromeTemporarily()
                         shareVideo()
                     } label: {
                         Image(systemName: "folder")
@@ -2379,6 +2396,7 @@ struct AudioBookVideoView: View {
                     .accessibilityLabel("Save to Files")
 
                     Button {
+                        revealChromeTemporarily()
                         saveToCameraRoll()
                     } label: {
                         Image(systemName: "square.and.arrow.down")
@@ -2415,10 +2433,6 @@ struct AudioBookVideoView: View {
             .allowsHitTesting(chromeVisible)
             .animation(.easeInOut(duration: 0.18), value: chromeVisible)
         }
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded {
-            revealChromeTemporarily()
-        })
         .sheet(isPresented: $showingShareSheet) {
             if let localFile {
                 FileShareSheet(url: localFile)
@@ -2433,6 +2447,19 @@ struct AudioBookVideoView: View {
             hideChromeTask?.cancel()
             player?.pause()
             player = nil
+        }
+    }
+
+    private func toggleChromeFromVideoTap() {
+        if isDownloading || message != nil {
+            revealChromeTemporarily()
+            return
+        }
+        if chromeVisible {
+            hideChromeTask?.cancel()
+            showChrome = false
+        } else {
+            revealChromeTemporarily()
         }
     }
 

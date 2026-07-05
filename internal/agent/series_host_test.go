@@ -17,6 +17,7 @@ func TestAudioBookPromptRequiresImmediateEndToolAtCompletion(t *testing.T) {
 	)
 
 	required := []string{
+		"Narrate only the chapters explicitly listed",
 		"the next action must be end_audio_book",
 		"Do not add encouragement, filler, \"next chapter\" teasers",
 		"do not call end_audio_book until you have emitted the final required scene marker",

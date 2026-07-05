@@ -187,9 +187,9 @@ final class AudiobookAlbumTests: E2ETestCase {
     func testCreateAlbumFromLibraryToolbar() throws {
         let app = launch()
 
-        // The + toolbar button is a dropdown: New Station / New Album.
-        app.buttons["library.new"].tap()
-        let newAlbum = app.buttons["library.new.album"]
+        // The + toolbar button is backend-rendered as a dropdown.
+        app.buttons["library.create"].tap()
+        let newAlbum = app.buttons["library.new-album"]
         XCTAssertTrue(newAlbum.waitForExistence(timeout: 5), "new-album menu item not found")
         newAlbum.tap()
 
@@ -246,7 +246,7 @@ final class AudiobookAlbumTests: E2ETestCase {
 
     func testOtherUserViewsPublishedAlbumFromPodcastToolbarWithoutPrivateEpisodes() throws {
         let app = launch(userID: "test2")
-        app.buttons["Open market"].tap()
+        app.buttons["library.market"].firstMatch.tap()
 
         let publicCard = findMarketStation(app, id: "test-market-public")
         XCTAssertTrue(publicCard.waitForExistence(timeout: 20), "published market podcast not visible")
