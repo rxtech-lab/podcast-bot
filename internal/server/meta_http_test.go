@@ -176,10 +176,31 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 	}
 	settings := props["settings"].(map[string]any)
 	settingsProps := settings["properties"].(map[string]any)
-	for _, key := range []string{"type", "template", "discussants", "language", "generate_cover"} {
+	for _, key := range []string{"type", "template", "language", "generate_cover"} {
 		if _, ok := settingsProps[key]; !ok {
 			t.Fatalf("settings.properties missing %q", key)
 		}
+	}
+	// Panelists live in an if/then conditional (discussion type only), not in
+	// the base properties.
+	if _, ok := settingsProps["discussants"]; ok {
+		t.Fatal("settings.properties should not contain discussants (moved to if/then)")
+	}
+	settingsIf := settings["if"].(map[string]any)
+	ifType := settingsIf["properties"].(map[string]any)["type"].(map[string]any)
+	if got := ifType["const"]; got != config.ContentTypeDiscussion {
+		t.Fatalf("settings.if type const = %v, want %q", got, config.ContentTypeDiscussion)
+	}
+	settingsThen := settings["then"].(map[string]any)
+	discussants := settingsThen["properties"].(map[string]any)["discussants"].(map[string]any)
+	if discussants["minimum"] != float64(2) || discussants["maximum"] != float64(6) {
+		t.Fatalf("discussants bounds = %v..%v, want 2..6", discussants["minimum"], discussants["maximum"])
+	}
+	if !reflect.DeepEqual(settingsThen["required"], []any{"discussants"}) {
+		t.Fatalf("settings.then.required = %#v, want [discussants]", settingsThen["required"])
+	}
+	if !reflect.DeepEqual(settings["required"], []any{"type", "template", "language"}) {
+		t.Fatalf("settings.required = %#v, want [type template language]", settings["required"])
 	}
 	template := settingsProps["template"].(map[string]any)
 	templateEnumByType := template["x-enum-by-type"].(map[string]any)

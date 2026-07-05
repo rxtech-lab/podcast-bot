@@ -1,3 +1,4 @@
+import Kingfisher
 import RxAuthSwift
 import SwiftUI
 import TipKit
@@ -40,6 +41,10 @@ struct LibraryView: View {
     @State private var toolbarItems: [DiscussionUIActionItem] = []
     @State private var isSearchLoading = false
     @State private var searchTask: Task<Void, Never>?
+    @State private var renamingDiscussion: Discussion?
+    @State private var renamingDiscussionTitle = ""
+    @State private var renamingAlbum: AlbumSummaryDTO?
+    @State private var renamingAlbumTitle = ""
     private let pageSize = 20
 
     private var isRegular: Bool { hSize == .regular }
@@ -73,6 +78,16 @@ struct LibraryView: View {
                 Button("OK", role: .cancel) { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
+            }
+            .alert("Rename Podcast", isPresented: renamingDiscussionBinding) {
+                TextField("Podcast name", text: $renamingDiscussionTitle)
+                Button("Rename") { renameSelectedDiscussion() }
+                Button("Cancel", role: .cancel) { renamingDiscussion = nil }
+            }
+            .alert("Rename Album", isPresented: renamingAlbumBinding) {
+                TextField("Album name", text: $renamingAlbumTitle)
+                Button("Rename") { renameSelectedAlbum() }
+                Button("Cancel", role: .cancel) { renamingAlbum = nil }
             }
             .sheet(isPresented: $showingPointsHistory) {
                 PointsHistoryView()
@@ -467,6 +482,12 @@ struct LibraryView: View {
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
+                Button {
+                    beginRenameDiscussion(d)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .tint(Theme.accent)
             }
         case .album(let summary, let newest, let count):
             Button {
@@ -479,6 +500,14 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("album.row.\(summary.id)")
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button {
+                    beginRenameAlbum(summary)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .tint(Theme.accent)
+            }
         }
     }
 
@@ -486,6 +515,20 @@ struct LibraryView: View {
         Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
+        )
+    }
+
+    private var renamingDiscussionBinding: Binding<Bool> {
+        Binding(
+            get: { renamingDiscussion != nil },
+            set: { if !$0 { renamingDiscussion = nil } }
+        )
+    }
+
+    private var renamingAlbumBinding: Binding<Bool> {
+        Binding(
+            get: { renamingAlbum != nil },
+            set: { if !$0 { renamingAlbum = nil } }
         )
     }
 
@@ -605,6 +648,70 @@ struct LibraryView: View {
                 reportLoadError(error, inlineWhenEmpty: false)
                 await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter)
             }
+        }
+    }
+
+    private func beginRenameDiscussion(_ discussion: Discussion) {
+        renamingDiscussion = discussion
+        renamingDiscussionTitle = discussion.displayTitle
+    }
+
+    private func beginRenameAlbum(_ album: AlbumSummaryDTO) {
+        renamingAlbum = album
+        renamingAlbumTitle = album.title
+    }
+
+    private func renameSelectedDiscussion() {
+        guard let target = renamingDiscussion else { return }
+        let title = renamingDiscussionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        renamingDiscussion = nil
+        Task {
+            do {
+                let updated = try await APIClient(tokens: auth).renameDiscussion(id: target.id, title: title)
+                replaceDiscussion(updated)
+            } catch {
+                reportLoadError(error, inlineWhenEmpty: false)
+            }
+        }
+    }
+
+    private func renameSelectedAlbum() {
+        guard let target = renamingAlbum else { return }
+        let title = renamingAlbumTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        renamingAlbum = nil
+        Task {
+            do {
+                let updated = try await APIClient(tokens: auth).renameAlbum(id: target.id, title: title)
+                replaceAlbumSummary(updated)
+            } catch {
+                reportLoadError(error, inlineWhenEmpty: false)
+            }
+        }
+    }
+
+    private func replaceDiscussion(_ updated: Discussion) {
+        if let index = discussions.firstIndex(where: { $0.id == updated.id }) {
+            discussions[index] = updated
+        }
+        path = path.map { destination in
+            if case .discussion(let d) = destination, d.id == updated.id {
+                return .discussion(updated)
+            }
+            return destination
+        }
+        if let selection, destinationDiscussionID(selection) == updated.id {
+            self.selection = .discussion(updated)
+        }
+    }
+
+    private func replaceAlbumSummary(_ updated: AlbumDTO) {
+        for index in discussions.indices {
+            guard discussions[index].album?.id == updated.id else { continue }
+            discussions[index].album?.title = updated.title
+            discussions[index].album?.cover = updated.cover
+            discussions[index].album?.episodeCount = updated.episodeCount
         }
     }
 
@@ -1126,14 +1233,14 @@ private struct DiscussionRow: View {
     private func coverThumbnail(_ cover: DiscussionCover) -> some View {
         if let urlString = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
            !urlString.isEmpty, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                default:
+            KFImage.url(url)
+                .placeholder {
                     coverGradient(cover)
                 }
-            }
+                .cancelOnDisappear(false)
+                .retry(maxCount: 3, interval: .seconds(1))
+                .resizable()
+                .scaledToFill()
         } else {
             coverGradient(cover)
         }

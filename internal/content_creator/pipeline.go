@@ -772,6 +772,15 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	splitter := &audio.SentenceSplitter{MinChars: 6}
 	t.curCharIdx = -1
 	defer close(t.TextOut)
+	// The audiobook narrator can fall into an endless sign-off loop inside a
+	// single turn (see fillerWatchdog); the post-turn boundary judge never
+	// sees it, so watch the spoken sentences here and cut the turn as soon
+	// as the loop is unmistakable.
+	var watchdog *fillerWatchdog
+	if p.d.ContentType == config.ContentTypeAudioBook && strings.HasPrefix(t.Directive, "narrate") {
+		watchdog = &fillerWatchdog{}
+	}
+	fillerStop := false
 	for d := range stream.Deltas() {
 		if d.Done {
 			break
@@ -792,6 +801,16 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 			p.d.Log.Warn("script chunk write", "turn", t.ID, "err", err)
 		}
 		for _, sent := range splitter.Push(d.TextChunk) {
+			if watchdog.Observe(sent) {
+				p.d.Log.Warn("audiobook filler loop detected — stopping narration",
+					"turn", t.ID,
+					"sentence_preview", truncatePreview(sent, 120))
+				p.forceAudioBookDone()
+				stream.Close()
+				closedAfterPlannerDone = true
+				fillerStop = true
+				break
+			}
 			n, err := p.synthSentence(ctx, t, sent, sink)
 			if err != nil {
 				p.d.Log.Warn("tts error", "turn", t.ID, "err", err)
@@ -800,14 +819,19 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 				wroteAny = true
 			}
 		}
-	}
-	for _, sent := range splitter.Flush() {
-		n, err := p.synthSentence(ctx, t, sent, sink)
-		if err != nil {
-			p.d.Log.Warn("tts error", "turn", t.ID, "err", err)
+		if fillerStop {
+			break
 		}
-		if n > 0 {
-			wroteAny = true
+	}
+	if !fillerStop {
+		for _, sent := range splitter.Flush() {
+			n, err := p.synthSentence(ctx, t, sent, sink)
+			if err != nil {
+				p.d.Log.Warn("tts error", "turn", t.ID, "err", err)
+			}
+			if n > 0 {
+				wroteAny = true
+			}
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -838,6 +862,15 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	}
 
 	return nil
+}
+
+// forceAudioBookDone marks the audiobook planner finished from inside a turn
+// (used by the filler watchdog, which detects a degenerate narration loop
+// mid-stream and must stop the planner from asking for another loop).
+func (p *Pipeline) forceAudioBookDone() {
+	if f, ok := p.d.Planner.(interface{ ForceDoneAtChapterBoundary() }); ok {
+		f.ForceDoneAtChapterBoundary()
+	}
 }
 
 func (p *Pipeline) reviewAudioBookLoop(ctx context.Context, t *Turn) bool {

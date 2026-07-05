@@ -90,6 +90,30 @@ func apiJSONWithHeaders(t *testing.T, method, url string, body any, headers map[
 	return resp.StatusCode, string(raw)
 }
 
+func TestDiscussionRenameUpdatesDisplayTitleOnly(t *testing.T) {
+	env := newDiscussionAPITestEnv(t)
+	d := seedAudioBook(t, env.store, 2)
+
+	var renamed Discussion
+	status, body := apiJSON(t, "PATCH", env.ts.URL+"/api/discussions/"+d.ID,
+		map[string]any{"title": "My Renamed Podcast"}, &renamed)
+	if status != http.StatusOK {
+		t.Fatalf("rename status = %d body=%s", status, body)
+	}
+	if renamed.Title != "My Renamed Podcast" {
+		t.Fatalf("display title = %q, want renamed title", renamed.Title)
+	}
+	if renamed.Script == nil || renamed.Script.Title != d.Script.Title {
+		t.Fatalf("script title changed: got %+v want %q", renamed.Script, d.Script.Title)
+	}
+
+	status, body = apiJSON(t, "PATCH", env.ts.URL+"/api/discussions/"+d.ID,
+		map[string]any{"title": "  "}, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("blank rename status = %d body=%s", status, body)
+	}
+}
+
 func TestDiscussionChaptersEndpointTracksProgress(t *testing.T) {
 	env := newDiscussionAPITestEnv(t)
 	root := seedAudioBook(t, env.store, 8)

@@ -41,7 +41,7 @@ func TestAssignVoicesHonorsOverrides(t *testing.T) {
 	// Alice's override is cross-locale (zh-CN voice on an en-US plan, matched
 	// case-insensitively against the full list); Bob has none and auto-picks.
 	AssignVoices(voices, []Agent{alice, bob}, "en-US", 1, log,
-		map[string]string{"Alice": "zh-cn-xiaochenneural"})
+		map[string]string{"Alice": "zh-cn-xiaochenneural"}, nil)
 
 	if got := alice.Voice().ShortName; got != "zh-CN-XiaochenNeural" {
 		t.Fatalf("Alice voice = %q, want override zh-CN-XiaochenNeural", got)
@@ -53,9 +53,84 @@ func TestAssignVoicesHonorsOverrides(t *testing.T) {
 	// An override naming a voice absent from the list falls back to auto-pick.
 	carol := &stubAgent{name: "Carol"}
 	AssignVoices(voices, []Agent{carol}, "en-US", 1, log,
-		map[string]string{"Carol": "en-US-DoesNotExistNeural"})
+		map[string]string{"Carol": "en-US-DoesNotExistNeural"}, nil)
 	if got := carol.Voice().ShortName; got == "" || got == "en-US-DoesNotExistNeural" {
 		t.Fatalf("Carol voice = %q, want automatic fallback pick", got)
+	}
+}
+
+func TestAssignVoicesRecyclesGenderMatchOverFreshMismatch(t *testing.T) {
+	voices := []tts.Voice{
+		{ShortName: "en-US-AvaNeural", Locale: "en-US", Gender: "Female", VoiceType: "Neural"},
+		{ShortName: "en-US-GuyNeural", Locale: "en-US", Gender: "Male", VoiceType: "Neural"},
+		{ShortName: "en-US-TonyNeural", Locale: "en-US", Gender: "Male", VoiceType: "Neural"},
+	}
+	first := &stubAgent{name: "Speaker One"}
+	second := &stubAgent{name: "Speaker Two"}
+	log := slog.New(slog.DiscardHandler)
+
+	genders := map[string]string{"Speaker One": "female", "Speaker Two": "female"}
+	AssignVoices(voices, []Agent{first, second}, "en-US", 1, log, nil, genders)
+
+	if got := first.Voice().Gender; got != "Female" {
+		t.Fatalf("first agent gender = %q, want Female", got)
+	}
+	// The only female voice is taken, but a female agent must still never get
+	// a fresh male voice — the female one is recycled instead.
+	if got := second.Voice().ShortName; got != "en-US-AvaNeural" {
+		t.Fatalf("second agent voice = %q, want recycled en-US-AvaNeural", got)
+	}
+}
+
+func TestAssignVoicesExplicitGenderBeatsNameInference(t *testing.T) {
+	voices := []tts.Voice{
+		{ShortName: "en-US-AvaNeural", Locale: "en-US", Gender: "Female", VoiceType: "Neural"},
+		{ShortName: "en-US-GuyNeural", Locale: "en-US", Gender: "Male", VoiceType: "Neural"},
+	}
+	// "Bob" infers male from the name table; the explicit plan gender wins.
+	bob := &stubAgent{name: "Bob"}
+	log := slog.New(slog.DiscardHandler)
+
+	AssignVoices(voices, []Agent{bob}, "en-US", 1, log, nil,
+		map[string]string{"Bob": "female"})
+
+	if got := bob.Voice().Gender; got != "Female" {
+		t.Fatalf("Bob voice gender = %q, want Female (explicit gender wins)", got)
+	}
+}
+
+func TestAssignCharacterVoicesFallsBackToNameGender(t *testing.T) {
+	voices := []tts.Voice{
+		{ShortName: "en-US-GuyNeural", Locale: "en-US", Gender: "Male", VoiceType: "Neural"},
+		{ShortName: "en-US-AvaNeural", Locale: "en-US", Gender: "Female", VoiceType: "Neural"},
+	}
+	log := slog.New(slog.DiscardHandler)
+
+	// No plan-authored gender for Linda; the name table infers female.
+	out := AssignCharacterVoices(voices, []string{"Linda"}, map[string]string{},
+		"en-US", 1, nil, log)
+
+	if got := out["Linda"]; got != "en-US-AvaNeural" {
+		t.Fatalf("Linda voice = %q, want en-US-AvaNeural via name inference", got)
+	}
+}
+
+func TestAssignCharacterVoicesRecyclesGenderMatch(t *testing.T) {
+	voices := []tts.Voice{
+		{ShortName: "en-US-AvaNeural", Locale: "en-US", Gender: "Female", VoiceType: "Neural"},
+		{ShortName: "en-US-GuyNeural", Locale: "en-US", Gender: "Male", VoiceType: "Neural"},
+		{ShortName: "en-US-TonyNeural", Locale: "en-US", Gender: "Male", VoiceType: "Neural"},
+	}
+	log := slog.New(slog.DiscardHandler)
+
+	genders := map[string]string{"Queen": "female", "Princess": "female"}
+	out := AssignCharacterVoices(voices, []string{"Queen", "Princess"}, genders,
+		"en-US", 1, nil, log)
+
+	for name, want := range map[string]string{"Queen": "en-US-AvaNeural", "Princess": "en-US-AvaNeural"} {
+		if got := out[name]; got != want {
+			t.Fatalf("%s voice = %q, want %q (never a fresh male voice)", name, got, want)
+		}
 	}
 }
 

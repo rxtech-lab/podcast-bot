@@ -47,4 +47,34 @@ func TestAudioBookLengthContractIncludesConcreteDensity(t *testing.T) {
 			t.Fatalf("audiobook length contract missing %q:\n%s", want, contract)
 		}
 	}
+	for _, want := range []string{
+		"NEVER justifies filler",
+		"call end_audio_book immediately",
+	} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("audiobook length contract missing anti-filler clause %q:\n%s", want, contract)
+		}
+	}
+}
+
+func TestAudioBookLengthContractContinuationHasNoPerLoopMinimum(t *testing.T) {
+	contract := audioBookLengthContract(SpeakPrompt{
+		SecondsBudget: 600,
+		Instructions:  "narrate continuation: keep going",
+	})
+	for _, want := range []string{
+		"does NOT apply to this continuation loop alone",
+		"Never pad this loop",
+		"NEVER justifies filler",
+		"call end_audio_book immediately",
+	} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("continuation length contract missing %q:\n%s", want, contract)
+		}
+	}
+	for _, banned := range []string{"CJK characters", "Target duration"} {
+		if strings.Contains(contract, banned) {
+			t.Fatalf("continuation length contract must not restate the per-loop minimum (%q):\n%s", banned, contract)
+		}
+	}
 }

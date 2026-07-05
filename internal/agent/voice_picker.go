@@ -20,10 +20,11 @@ var cinematicVoicePriority = []string{
 // filtered by the topic language (locale prefix), then ranked so HD voices
 // (e.g. "...DragonHDFlashLatestNeural") and standard un-accented locales
 // (e.g. "zh-CN" rather than "zh-CN-shaanxi") are picked first. For each
-// agent the picker also prefers voices whose Gender matches the agent's
-// name (Bob → Male, Linda → Female via the nameGender table). Duplicates
-// are avoided when supply allows; otherwise voices recycle and a warning
-// is logged.
+// agent the picker prefers voices whose Gender matches the entry in the
+// genders map (agent name → "male"/"female", usually authored by the
+// planner), falling back to inferring from the agent's name (Bob → Male,
+// Linda → Female via the nameGender table). Duplicates are avoided when
+// supply allows; otherwise voices recycle and a warning is logged.
 //
 // overrides maps an agent name to a user-chosen voice ShortName; matching
 // agents skip the automatic pick entirely. Overrides are resolved against the
@@ -33,7 +34,7 @@ var cinematicVoicePriority = []string{
 // carry Azure names).
 //
 // seed makes intra-tier ordering deterministic when desired.
-func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int64, log *slog.Logger, overrides map[string]string) {
+func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int64, log *slog.Logger, overrides map[string]string, genders map[string]string) {
 	prefix := strings.ToLower(strings.SplitN(language, "-", 2)[0])
 	var pool []tts.Voice
 	for _, v := range voices {
@@ -68,7 +69,7 @@ func AssignVoices(voices []tts.Voice, agents []Agent, language string, seed int6
 			log.Warn("voice override not found; falling back to automatic pick",
 				"agent", a.Name(), "voice", want)
 		}
-		v, ok := pickVoiceFor(pool, a.Name(), used)
+		v, ok := pickVoiceFor(pool, a.Name(), genders[a.Name()], used)
 		if !ok {
 			log.Warn("no voices available; agent will use default", "agent", a.Name())
 			continue
@@ -130,8 +131,7 @@ func AssignCharacterVoices(voices []tts.Voice, names []string, genders map[strin
 	}
 	out := map[string]string{}
 	for _, name := range names {
-		gender := genders[name]
-		v, ok := pickCharacterVoice(pool, gender, used)
+		v, ok := pickCharacterVoice(pool, name, genders[name], used)
 		if !ok {
 			log.Warn("no voice available for character", "name", name)
 			continue
@@ -145,51 +145,45 @@ func AssignCharacterVoices(voices []tts.Voice, names []string, genders map[strin
 	return out
 }
 
-func pickCharacterVoice(pool []tts.Voice, wantGender string, used map[string]bool) (tts.Voice, bool) {
+// pickCharacterVoice returns the best voice for a character. wantGender is
+// the plan-authored gender; when blank the character's name is used as a
+// fallback hint (Linda → Female). Preference order matches pickVoiceFor:
+// a wrong-gender voice is never chosen while any voice of the wanted
+// gender exists, even if that means recycling one.
+func pickCharacterVoice(pool []tts.Voice, name, wantGender string, used map[string]bool) (tts.Voice, bool) {
 	if len(pool) == 0 {
 		return tts.Voice{}, false
 	}
-	pick := func(matchGender, freshOnly bool) (tts.Voice, bool) {
-		for _, v := range pool {
-			if freshOnly && used[v.ShortName] {
-				continue
-			}
-			if matchGender && wantGender != "" && !strings.EqualFold(v.Gender, wantGender) {
-				continue
-			}
-			return v, true
-		}
-		return tts.Voice{}, false
+	if wantGender == "" {
+		wantGender = nameGender(name)
 	}
-	if wantGender != "" {
-		if v, ok := pick(true, true); ok {
-			return v, true
-		}
-	}
-	if v, ok := pick(false, true); ok {
-		return v, true
-	}
-	if wantGender != "" {
-		if v, ok := pick(true, false); ok {
-			return v, true
-		}
-	}
-	return pool[0], true
+	return pickGendered(pool, wantGender, used)
 }
 
-// pickVoiceFor returns the best unused voice for an agent. Preference order:
-//  1. unused voice whose Gender matches the agent's name (Bob → Male)
-//  2. unused voice with no gender match
-//  3. used voice whose Gender matches (recycled to keep gender right)
+// pickVoiceFor returns the best unused voice for an agent. explicitGender
+// (from the plan's gender field) wins; blank falls back to inferring from
+// the agent's name (Bob → Male). Preference order:
+//  1. unused voice whose Gender matches
+//  2. used voice whose Gender matches (recycled — keeping the gender right
+//     beats handing the agent a fresh wrong-gender voice)
+//  3. unused voice, any gender
 //  4. any voice (recycled)
 //
 // Returns ok=false only if pool is empty.
-func pickVoiceFor(pool []tts.Voice, agentName string, used map[string]bool) (tts.Voice, bool) {
+func pickVoiceFor(pool []tts.Voice, agentName, explicitGender string, used map[string]bool) (tts.Voice, bool) {
 	if len(pool) == 0 {
 		return tts.Voice{}, false
 	}
-	wantGender := nameGender(agentName)
+	wantGender := explicitGender
+	if wantGender == "" {
+		wantGender = nameGender(agentName)
+	}
+	return pickGendered(pool, wantGender, used)
+}
 
+// pickGendered walks the score-sorted pool with the shared preference order:
+// unused+gender-match, used+gender-match, unused any-gender, pool[0].
+func pickGendered(pool []tts.Voice, wantGender string, used map[string]bool) (tts.Voice, bool) {
 	pick := func(matchGender, freshOnly bool) (tts.Voice, bool) {
 		for _, v := range pool {
 			if freshOnly && used[v.ShortName] {
@@ -207,14 +201,12 @@ func pickVoiceFor(pool []tts.Voice, agentName string, used map[string]bool) (tts
 		if v, ok := pick(true, true); ok {
 			return v, true
 		}
-	}
-	if v, ok := pick(false, true); ok {
-		return v, true
-	}
-	if wantGender != "" {
 		if v, ok := pick(true, false); ok {
 			return v, true
 		}
+	}
+	if v, ok := pick(false, true); ok {
+		return v, true
 	}
 	return pool[0], true
 }

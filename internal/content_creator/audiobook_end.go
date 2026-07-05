@@ -17,14 +17,23 @@ import (
 const endAudioBookToolName = "end_audio_book"
 
 type audioBookEndState struct {
-	requested atomic.Bool
-	done      atomic.Bool
+	requested     atomic.Bool
+	everRequested atomic.Bool
+	done          atomic.Bool
 }
 
 func (s *audioBookEndState) RequestDone() {
 	if s != nil {
 		s.requested.Store(true)
+		s.everRequested.Store(true)
 	}
+}
+
+// EverRequested reports whether the narrator has asked to end at least once,
+// including requests the backend later rejected. Past this point the loop is
+// living on borrowed time — guards should fail toward stopping.
+func (s *audioBookEndState) EverRequested() bool {
+	return s != nil && s.everRequested.Load()
 }
 
 func (s *audioBookEndState) EndRequested() bool {
@@ -79,10 +88,20 @@ type AudioBookPlanner struct {
 	registry *agent.Registry
 	state    *audioBookEndState
 	turnN    int
+	// endRejections counts end_audio_book requests refused because the final
+	// scene marker had not been reached. Accessed only from the producer
+	// goroutine (via ValidateEndAfterTurn).
+	endRejections int
 
 	boundaryReason atomic.Value
 	boundaryJudge  func(context.Context, string, string, int) (audioBookBoundaryDecision, bool)
 }
+
+// maxAudioBookEndRejections caps how many times the backend may refuse an
+// end_audio_book request over a missing final scene marker. Past the cap the
+// narrator clearly believes the book is done, and holding the loop open for
+// a marker only produces filler narration — accept the end instead.
+const maxAudioBookEndRejections = 2
 
 func NewAudioBookPlanner(topic *config.DebateTopic, reg *agent.Registry, state *audioBookEndState) *AudioBookPlanner {
 	return &AudioBookPlanner{topic: topic, registry: reg, state: state}
@@ -96,6 +115,9 @@ func (p *AudioBookPlanner) Next(ctx context.Context) (*Turn, bool) {
 	directive := "narrate"
 	if p.turnN > 1 {
 		directive = "narrate continuation: Continue exactly from where the previous audiobook narration stopped. Do not restart, recap, summarize earlier material, or add filler. Keep following the planned chapter order. If the recent transcript already fully narrated the final planned chapter, call end_audio_book immediately with no spoken text. Otherwise call end_audio_book exactly once as soon as the final planned chapter is fully narrated."
+		if p.endRejections > 0 {
+			directive += " Your previous end_audio_book call was refused because the final illustration scene markers were missing. Do not narrate new story material: emit the remaining <scene N/> markers in order, each immediately before one short sentence that closes the matching beat, then call end_audio_book."
+		}
 	}
 	if boundary := p.chapterBoundaryInstruction(); boundary != "" {
 		directive = strings.TrimSpace(directive + "\n\n" + boundary)
@@ -122,7 +144,9 @@ func (p *AudioBookPlanner) ValidateEndAfterTurn(maxSceneIndex, requiredFinalScen
 	if p == nil || p.state == nil || !p.state.EndRequested() {
 		return false, false
 	}
-	if requiredFinalSceneIndex > 0 && maxSceneIndex < requiredFinalSceneIndex {
+	if requiredFinalSceneIndex > 0 && maxSceneIndex < requiredFinalSceneIndex &&
+		p.endRejections < maxAudioBookEndRejections {
+		p.endRejections++
 		p.state.ClearRequest()
 		return true, false
 	}
@@ -143,6 +167,15 @@ func (p *AudioBookPlanner) ReviewAudioBookLoop(ctx context.Context, generated st
 	}
 	decision, ok := p.judgeChapterBoundary(ctx, "", generated, first, last)
 	if !ok {
+		// The judge is advisory while narration is still progressing, but
+		// once the narrator has asked to end at least once, a judge failure
+		// must not silently keep the loop alive — that is exactly the state
+		// where the loop degenerates into sign-off filler.
+		if p.state.EverRequested() {
+			p.setBoundaryReason("boundary judge unavailable after narrator requested end")
+			p.ForceDoneAtChapterBoundary()
+			return true
+		}
 		return false
 	}
 	p.setBoundaryReason(decision.Reason)

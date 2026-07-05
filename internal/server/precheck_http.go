@@ -313,14 +313,6 @@ func newDiscussionSettingsSchema(lang contentcreator.Lang, templateIDs, template
 				"default":     planner.DefaultTemplateID,
 				"x-options":   templateOptions,
 			},
-			"discussants": map[string]any{
-				"type":        "integer",
-				"title":       phrase(lang, "Panelists", "嘉宾", "來賓"),
-				"description": phrase(lang, "How many people should join the conversation.", "参与讨论的人数。", "參與討論的人數。"),
-				"minimum":     2,
-				"maximum":     6,
-				"default":     3,
-			},
 			"language": map[string]any{
 				"type":        "string",
 				"title":       phrase(lang, "Language", "语言", "語言"),
@@ -336,7 +328,33 @@ func newDiscussionSettingsSchema(lang contentcreator.Lang, templateIDs, template
 				"default":     false,
 			},
 		},
-		"required": []any{"type", "template", "discussants", "language"},
+		"required": []any{"type", "template", "language"},
+		// Panelists only make sense for discussions, so the field lives in a
+		// standard JSON Schema if/then conditional keyed on the selected type;
+		// the iOS form renderer shows/hides the row as the type changes.
+		// Note: additionalProperties=false above plus a then-only property is
+		// technically strict-draft-07-unfriendly (additionalProperties can't
+		// see then-branch properties), but nothing in the stack validates
+		// submissions against this schema — it drives rendering only.
+		"if": map[string]any{
+			"properties": map[string]any{
+				"type": map[string]any{"const": config.ContentTypeDiscussion},
+			},
+			"required": []any{"type"},
+		},
+		"then": map[string]any{
+			"properties": map[string]any{
+				"discussants": map[string]any{
+					"type":        "integer",
+					"title":       phrase(lang, "Panelists", "嘉宾", "來賓"),
+					"description": phrase(lang, "How many people should join the conversation.", "参与讨论的人数。", "參與討論的人數。"),
+					"minimum":     2,
+					"maximum":     6,
+					"default":     3,
+				},
+			},
+			"required": []any{"discussants"},
+		},
 	}
 }
 

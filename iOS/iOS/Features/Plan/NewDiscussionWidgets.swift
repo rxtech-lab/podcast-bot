@@ -451,10 +451,19 @@ private struct AttachmentsPickerWidget: View {
                 } label: {
                     Label("Files", systemImage: "folder")
                 }
+                if AppConfig.isE2E {
+                    Button {
+                        coordinator.importE2ESampleImage()
+                    } label: {
+                        Label("Sample Image (E2E)", systemImage: "photo")
+                    }
+                    .accessibilityIdentifier("attachments.e2e-sample-image")
+                }
             } label: {
                 attachCard
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("newPlan.attachments.add")
         }
         .task {
             coordinator.configure(api: APIClient(tokens: auth))

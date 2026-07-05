@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 import TipKit
 import UIKit
@@ -404,16 +405,14 @@ struct FullScreenPlayerView: View {
     @ViewBuilder
     private var baseCoverImage: some View {
         if let url = coverImageURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .empty:
+            KFImage.url(url)
+                .placeholder {
                     ZStack { coverGradient; ProgressView().tint(.white) }
-                default:
-                    coverGradient
                 }
-            }
+                .cancelOnDisappear(false)
+                .retry(maxCount: 3, interval: .seconds(1))
+                .resizable()
+                .scaledToFill()
         } else {
             coverGradient
         }

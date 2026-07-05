@@ -129,6 +129,35 @@ func TestConversationDispatchAudioBookDedupesNarratorSpeaker(t *testing.T) {
 	}
 }
 
+func TestConversationAudioBookPromptsRequireSourceCastVoices(t *testing.T) {
+	system := conversationSystemForType(config.ContentTypeAudioBook, DefaultTemplateID)
+	for _, expected := range []string{
+		"identify the source cast",
+		"Include most of the book/source's speaking cast",
+		"Do not shrink a real book cast down to one generic guest",
+		"Each speaker should appear in at least one chapter's \"speakers\" list",
+	} {
+		if !strings.Contains(system, expected) {
+			t.Fatalf("audio-book system prompt missing %q:\n%s", expected, system)
+		}
+	}
+
+	initial := ConversationInitialText(PlanRequest{
+		Type:     config.ContentTypeAudioBook,
+		Topic:    "Turn this novel into an audiobook",
+		Language: "en-US",
+	})
+	for _, expected := range []string{
+		"source-cast speakers",
+		"include most central or recurring voices",
+		"chapter `speakers` references wherever that voice speaks",
+	} {
+		if !strings.Contains(initial, expected) {
+			t.Fatalf("audio-book initial prompt missing %q:\n%s", expected, initial)
+		}
+	}
+}
+
 func TestConversationDispatchUpdatePlanReassembles(t *testing.T) {
 	s := testConversationSession()
 	draft := `{"title":"Revised","background":"Para one here. Para two here.","host":{"name":"Mod"},"discussants":[{"name":"X","aspect":"tech"},{"name":"Y","aspect":"policy"}]}`

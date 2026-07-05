@@ -1,4 +1,5 @@
 import AuthenticationServices
+import Kingfisher
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -256,6 +257,7 @@ final class NewDiscussionAttachmentsCoordinator {
         attachments[idx].markdown = response?.markdown
         attachments[idx].url = response?.url
         attachments[idx].mimeType = response?.mimeType
+        attachments[idx].key = response?.key
         syncReady()
     }
 
@@ -263,6 +265,26 @@ final class NewDiscussionAttachmentsCoordinator {
     private func syncReady() {
         onReady?(attachments.apiAttachments)
     }
+
+    /// E2E only: inject a tiny ready image attachment as a data URL. The
+    /// hermetic backend has no S3 and the simulator's photo picker is
+    /// out-of-process, so this bypasses only the upload — the attachment then
+    /// travels the real path through the form, the server's persisted planning
+    /// turn, and the (fake) model as an image part.
+    func importE2ESampleImage() {
+        attachments.append(PendingAttachment(
+            filename: "E2E-Sample.png",
+            status: .ready,
+            markdown: nil,
+            url: Self.e2eSampleImageDataURL,
+            mimeType: "image/png"
+        ))
+        syncReady()
+    }
+
+    /// A 1×1 PNG, small enough to persist in the planning turn verbatim.
+    private static let e2eSampleImageDataURL =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
     // MARK: - Notion connection
 
@@ -438,16 +460,14 @@ struct DiscussionCoverThumbnail: View {
     var body: some View {
         Group {
             if let url = discussion.cover?.renderableImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
+                KFImage.url(url)
+                    .placeholder {
                         fallback
                     }
-                }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .resizable()
+                    .scaledToFill()
             } else if let cover = discussion.cover, cover.hasGradient {
                 LinearGradient(colors: [color(cover.gradientStart), color(cover.gradientEnd)],
                                startPoint: .topLeading,

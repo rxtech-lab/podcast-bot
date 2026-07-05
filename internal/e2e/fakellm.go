@@ -143,6 +143,39 @@ func (r fakeChatReq) toolMsgsContain(sub string) bool {
 	return false
 }
 
+// hasImagePart reports whether the message content is a parts array carrying
+// at least one image_url entry (the OpenAI multimodal shape).
+func (m fakeMsg) hasImagePart() bool {
+	if len(m.Content) == 0 {
+		return false
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if json.Unmarshal(m.Content, &parts) != nil {
+		return false
+	}
+	for _, p := range parts {
+		if p.Type == "image_url" || p.ImageURL.URL != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasUserImagePart reports whether any user turn carries an image part.
+func (r fakeChatReq) hasUserImagePart() bool {
+	for _, m := range r.Messages {
+		if m.Role == "user" && m.hasImagePart() {
+			return true
+		}
+	}
+	return false
+}
+
 func (r fakeChatReq) allText() string {
 	var b strings.Builder
 	for _, m := range r.Messages {
@@ -214,9 +247,29 @@ func (f *FakeLLM) handleChat(w http.ResponseWriter, r *http.Request) {
 	sw.usage()
 }
 
+// Image-probe reply markers. UI tests assert on these strings, so treat them
+// as a stable contract.
+const (
+	ImageProbeSuccess = "E2E: I can see the attached image."
+	ImageProbeFailure = "E2E ERROR: no image attachment reached the model."
+)
+
 // streamConversationalPlanner drives the iOS PlanConversationView loop:
 // write_plan (round 0) → show_plan (round 1) → short acknowledgement (round 2).
 func (f *FakeLLM) streamConversationalPlanner(sw *sseWriter, req fakeChatReq) {
+	// Image-grounding probe: when the prompt references "this image" the fake
+	// verifies the multimodal pipeline instead of planning — success when a
+	// user turn actually carries an image part, a loud error when the image was
+	// dropped on the way to the model. The UI test asserts on the reply text.
+	if strings.Contains(strings.ToLower(req.allText()), "this image") {
+		if req.hasUserImagePart() {
+			sw.text(ImageProbeSuccess + " Tell me how you'd like the story to go.")
+		} else {
+			sw.text(ImageProbeFailure)
+		}
+		sw.finish("stop")
+		return
+	}
 	switch {
 	case req.toolMsgsContain("Plan shown to the user"):
 		// Plan already visible — end the turn with a short plain-text ack.

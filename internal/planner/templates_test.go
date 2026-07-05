@@ -102,6 +102,16 @@ func TestAudioBookTemplateSchema(t *testing.T) {
 			t.Fatalf("audio-book schema missing chapter guidance %q: %s", expected, text)
 		}
 	}
+	for _, expected := range []string{`"gender"`, "REQUIRED voice gender", `"mode"`, "narration", "dialogue"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("audio-book schema missing voice-casting field %q: %s", expected, text)
+		}
+	}
+	for _, expected := range []string{"Source-cast voice roster", "Include most of the book/source's speaking cast", "chapter-critical one-off voices", "never fold two characters"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("audio-book schema missing source-cast guidance %q: %s", expected, text)
+		}
+	}
 }
 
 func TestAudioBookTemplateInstructionsSetStyle(t *testing.T) {

@@ -69,11 +69,15 @@ func (p *Planner) emit(phase, text string) {
 
 // Attachment is a user-uploaded reference. Documents carry markdown converted
 // by markitdown; images carry a URL and are sent to the model as image parts.
+// Key is the S3 object key of the upload; the server uses it to re-sign a fresh
+// image URL whenever a persisted conversation turn is replayed to the model
+// (presigned URLs expire, keys don't).
 type Attachment struct {
 	Filename string `json:"filename"`
 	Markdown string `json:"markdown,omitempty"`
 	URL      string `json:"url,omitempty"`
 	MIMEType string `json:"mime_type,omitempty"`
+	Key      string `json:"key,omitempty"`
 }
 
 // PodcastReference is a previously generated podcast the user wants the planner
@@ -133,7 +137,8 @@ type audioBookDraft struct {
 	Style          string `json:"style"`
 	OverallSummary string `json:"overall_summary"`
 	Narrator       struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Gender string `json:"gender"`
 	} `json:"narrator"`
 	Speakers []struct {
 		Name        string `json:"name"`
@@ -224,18 +229,26 @@ Return STRICT JSON with this exact shape:
   "title": "a concise audiobook title",
   "style": "news" | "conversational" | "audiobook" | "podcast" | "meeting",
   "overall_summary": "Compact Markdown summary of the source and the proposed audiobook direction. Do not include the chapter list here.",
-  "narrator": { "name": "narrator/main host display name" },
-  "speakers": [ { "name": "additional guest or character voice; never repeat the narrator/main host", "gender": "optional male/female", "description": "how this voice should sound or what role it covers" } ],
+  "narrator": { "name": "narrator/main host display name", "gender": "REQUIRED: exactly \"male\" or \"female\"" },
+  "speakers": [ { "name": "recurring speaking character or guest voice from the book/source; never repeat the narrator/main host", "gender": "REQUIRED: exactly \"male\" or \"female\"", "description": "a concrete voice-casting brief for this speaker" } ],
   "chapters": [ { "title": "chapter title without a Chapter 1 prefix", "summary": "one or two concise sentences describing what this chapter should narrate", "mode": "narration" | "dialogue", "speakers": ["additional guest/character speakers who talk in this chapter; do not list the narrator"] } ]
 }
 
 Use dedicated chapter objects instead of embedding chapters in overall_summary. Create one chapter per natural chapter or major section of the source. Prefer 3-5 chapters for short sources; long books may have as many chapters as the source genuinely has, up to %d. Keep each chapter summary to one or two concise sentences.
 Style direction: choose one style from news, conversational, audiobook, podcast, or meeting. Record the user's requested style when they ask for one, or infer the best fit from the source. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose "conversational". In conversational, podcast, meeting, and news styles the piece is a genuine multi-voice conversation: the narrator/main host anchors it, but the other speakers actively talk in their own turns — asking, answering, clarifying, challenging, adding — not merely being quoted by the narrator. Do not add the narrator/main host again to "speakers". In audiobook style, keep the narrator primary and use other speakers only for characters or quoted voices.
 Multi-speaker direction:
-- For "conversational", "podcast", "meeting", and "news" styles you MUST define at least one additional speaker (aim for 1-2), and MOST chapters (at least all but one) MUST use "mode": "dialogue" with those speakers listed in the chapter "speakers". This is not conditional on the source already being a conversation — reframe prose sources into a back-and-forth discussion between the narrator and the guest(s). A conversational plan whose chapters are all "narration" is wrong.
+- For "conversational", "podcast", "meeting", and "news" styles you MUST define at least one additional speaker, and MOST chapters (at least all but one) MUST use "mode": "dialogue" with those speakers listed in the chapter "speakers". This is not conditional on the source already being a conversation — reframe prose sources into a back-and-forth discussion between the narrator and the guest(s). A conversational plan whose chapters are all "narration" is wrong.
 - For "audiobook" style, keep chapters mostly "narration"; only mark a chapter "dialogue" when the source contains actual character conversation or a Q&A exchange.
 - A "dialogue" chapter is a real exchange where the narrator/main host and the listed guest speakers each get several turns — never a monologue that quotes the others. Leave "speakers" empty only for "narration" chapters the narrator reads alone.
 - Only reference speaker names that appear in the top-level "speakers" list, and never list the narrator in chapter "speakers".
+Voice casting direction:
+- Before writing chapters, identify the source cast: named characters, interviewees, quoted speakers, and recurring point-of-view voices that speak or are directly quoted in the book/source.
+- Include most of the book/source's speaking cast in the top-level "speakers" list: all central and recurring voices plus chapter-critical one-off voices. Omit only unnamed, background, or truly incidental speakers. Do not shrink a real book cast down to one generic guest or narrator-only plan.
+- Create one dedicated entry in "speakers" for each included character or guest who speaks anywhere in the audiobook. If a chapter's dialogue involves a character, that character MUST have their own "speakers" entry — never fold two characters into one shared voice.
+- Each included speaker should be referenced in at least one chapter's "speakers" list when that character or guest speaks in that chapter.
+- Every speaker entry MUST include "gender", exactly "male" or "female". Infer it from the source material; if ambiguous, pick the most plausible gender and keep it consistent across chapters. Never leave gender empty — a female character must be cast with a female voice and a male character with a male voice.
+- The narrator MUST also include "gender" ("male" or "female").
+- Make each speaker "description" a concrete voice-casting brief: approximate age, vocal tone and register, personality, and speaking energy (e.g. "elderly male mentor, deep gravelly voice, slow and warm").
 For long uploaded documents, use only the bounded source digests supplied below. Do not ask for or require the full document in the prompt. Keep chapter summaries concise while still giving the generation stage enough direction to narrate each chapter in order.%s%s`,
 		req.Topic, lang, audioBookMaxChapters, templatePrompt(req.Template), audioBookAttachmentsPrompt(req.Attachments))
 
@@ -475,6 +488,17 @@ func referencePrompt(ref *PodcastReference) string {
 	return sb.String()
 }
 
+// UserTurnMessage builds the LLM user message for one persisted conversation
+// turn. Image attachments become multimodal image parts so the model can
+// inspect them on every rebuild of the history; turns without images stay
+// plain-text Content (identical to the previous behavior).
+func UserTurnMessage(text string, attachments []Attachment) llm.Message {
+	if len(imageAttachments(attachments)) == 0 {
+		return llm.Message{Role: llm.RoleUser, Content: text}
+	}
+	return llm.Message{Role: llm.RoleUser, Parts: attachmentInputParts(text, attachments)}
+}
+
 func attachmentInputParts(user string, attachments []Attachment) []llm.InputPart {
 	parts := []llm.InputPart{{Text: user}}
 	images := imageAttachments(attachments)
@@ -640,7 +664,7 @@ func (p *Planner) assembleAudioBookWithModel(d *audioBookDraft, lang, channel st
 	if strings.TrimSpace(model) == "" {
 		model = p.agentModel()
 	}
-	narrator := config.AgentSpec{Name: d.Narrator.Name, Model: model}
+	narrator := config.AgentSpec{Name: d.Narrator.Name, Model: model, Gender: normalizeSpeakerGender(d.Narrator.Gender)}
 	if strings.TrimSpace(narrator.Name) == "" {
 		narrator.Name = "Narrator"
 	}
@@ -656,7 +680,7 @@ func (p *Planner) assembleAudioBookWithModel(d *audioBookDraft, lang, channel st
 		}
 		speakers = append(speakers, config.AudioBookSpeaker{
 			Name:        name,
-			Gender:      strings.TrimSpace(s.Gender),
+			Gender:      normalizeSpeakerGender(s.Gender),
 			Description: strings.TrimSpace(s.Description),
 			Model:       model,
 		})
@@ -709,8 +733,12 @@ func (p *Planner) assembleAudioBookWithModel(d *audioBookDraft, lang, channel st
 	if p.env.E2EMode {
 		totalMinutes = 1
 	}
+	title := strings.TrimSpace(d.Title)
+	if len(chapters) == 1 {
+		title = strings.TrimSpace(chapters[0].Title)
+	}
 	topic := &config.DebateTopic{
-		Title:             strings.TrimSpace(d.Title),
+		Title:             title,
 		Type:              config.ContentTypeAudioBook,
 		Language:          lang,
 		TotalMinutes:      totalMinutes,
@@ -755,6 +783,21 @@ func normalizeAudioBookStyle(style string) string {
 
 func normalizedSpeakerName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+}
+
+// normalizeSpeakerGender maps the planner's free-form gender onto the
+// lowercase "male"/"female" the voice picker matches against Azure's voice
+// genders (case-insensitively). Anything unrecognisable becomes "" so the
+// picker falls back to inferring gender from the speaker's name.
+func normalizeSpeakerGender(gender string) string {
+	switch strings.ToLower(strings.TrimSpace(gender)) {
+	case "male", "m", "man", "boy":
+		return "male"
+	case "female", "f", "woman", "girl":
+		return "female"
+	default:
+		return ""
+	}
 }
 
 func inferAudioBookStyle(d *audioBookDraft) string {

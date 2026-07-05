@@ -379,7 +379,17 @@ private struct SettingsMetadata {
               case let .object(settingsProperties)? = settingsSchema["properties"] else {
             return [:]
         }
-        return settingsProperties
+        // Conditional fields (e.g. discussants inside the schema's if/then
+        // branch) still need their metadata (min/max) here; merge them in
+        // with base properties winning.
+        var merged = settingsProperties
+        if case let .object(thenSchema)? = settingsSchema["then"],
+           case let .object(thenProperties)? = thenSchema["properties"] {
+            for (key, value) in thenProperties where merged[key] == nil {
+                merged[key] = value
+            }
+        }
+        return merged
     }
 
     private static func stringArray(_ value: AnyCodable?) -> [String] {

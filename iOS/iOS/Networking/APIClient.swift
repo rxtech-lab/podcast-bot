@@ -766,6 +766,10 @@ final class APIClient: Sendable {
         _ = try await perform(request(method: "DELETE", path: "/api/discussions/\(id)"))
     }
 
+    func renameDiscussion(id: String, title: String) async throws -> Discussion {
+        try await send("PATCH", "/api/discussions/\(id)", body: DiscussionRenameRequest(title: title))
+    }
+
     func updateDiscussionVisibility(id: String,
                                     visibility: DiscussionVisibility,
                                     cover: DiscussionCover? = nil) async throws -> Discussion {

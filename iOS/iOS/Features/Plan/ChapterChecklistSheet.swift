@@ -20,6 +20,7 @@ struct ChapterChecklistSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let mode: Mode
+    var editableDiscussion: Binding<Discussion>?
     /// Performs the generation for the checked chapters. Errors thrown here
     /// (including the server's 400 over-limit message) surface as an alert in
     /// the sheet; on success the sheet dismisses.
@@ -37,6 +38,9 @@ struct ChapterChecklistSheet: View {
     @State private var loadError: String?
     @State private var submitError: String?
     @State private var didLoad = false
+    @State private var speakerDiscussion: Discussion?
+    @State private var speakerLoadError: String?
+    @State private var showingSpeakerModels = false
 
     var body: some View {
         NavigationStack {
@@ -73,11 +77,39 @@ struct ChapterChecklistSheet: View {
             Text(submitError ?? "")
         }
         .task { await loadIfNeeded() }
+        .sheet(isPresented: $showingSpeakerModels) {
+            speakerEditorSheet
+        }
         .accessibilityIdentifier("chapters.checklist")
     }
 
     private var chapterList: some View {
         List {
+            Section {
+                Button {
+                    showingSpeakerModels = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Label("Speaker Models", systemImage: "person.wave.2.fill")
+                            .foregroundStyle(canEditSpeakers ? Theme.accent : Theme.secondaryText)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canEditSpeakers || isSubmitting)
+                .accessibilityIdentifier("chapters.speakerModels")
+            } footer: {
+                if let speakerLoadError {
+                    Text(speakerLoadError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+
             Section {
                 ForEach(chapters) { chapter in
                     chapterRow(chapter)
@@ -91,6 +123,50 @@ struct ChapterChecklistSheet: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+
+    @ViewBuilder
+    private var speakerEditorSheet: some View {
+        if let binding = speakerEditorBinding {
+            SpeakerModelsSheet(discussion: binding,
+                               visibleSpeakerNames: selectedSpeakerNames)
+        } else {
+            NavigationStack {
+                ContentUnavailableView {
+                    Label("Couldn't load speakers", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(speakerLoadError ?? "Speaker editing is unavailable for this audiobook.")
+                }
+            }
+        }
+    }
+
+    private var speakerEditorBinding: Binding<Discussion>? {
+        if let editableDiscussion {
+            return editableDiscussion
+        }
+        guard speakerDiscussion != nil else { return nil }
+        return Binding(
+            get: { speakerDiscussion! },
+            set: { speakerDiscussion = $0 }
+        )
+    }
+
+    private var canEditSpeakers: Bool {
+        speakerEditorBinding != nil
+    }
+
+    private var selectedSpeakerNames: Set<String> {
+        var names = Set<String>()
+        for chapter in chapters where selected.contains(chapter.index) {
+            for name in chapter.speakers ?? [] {
+                let key = Self.normalizedSpeakerName(name)
+                if !key.isEmpty {
+                    names.insert(key)
+                }
+            }
+        }
+        return names
     }
 
     @ViewBuilder
@@ -206,16 +282,24 @@ struct ChapterChecklistSheet: View {
                                  title: chapter.title,
                                  summary: chapter.summary,
                                  mode: chapter.mode,
+                                 speakers: chapter.speakers,
                                  status: "pending")
             }
             preselectDefaults()
         case .discussion(let id):
             isLoading = true
+            speakerLoadError = nil
             do {
-                let response = try await APIClient(tokens: auth).discussionChapters(id: id)
+                let client = APIClient(tokens: auth)
+                let response = try await client.discussionChapters(id: id)
                 chapters = response.chapters
                 maxBatchSize = max(1, response.maxBatchSize)
                 preselectDefaults()
+                do {
+                    speakerDiscussion = try await client.discussion(id: response.rootID, includeEditTurns: false)
+                } catch {
+                    speakerLoadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                }
             } catch {
                 loadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
@@ -244,5 +328,9 @@ struct ChapterChecklistSheet: View {
                 submitError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+
+    nonisolated private static func normalizedSpeakerName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

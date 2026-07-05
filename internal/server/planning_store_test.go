@@ -147,7 +147,7 @@ func TestPlanningTurnsRebuildAndQuestionRoundTrip(t *testing.T) {
 	}
 
 	// LLM rebuild: user, assistant(with tool call), tool — question turn skipped.
-	msgs := planningMessagesForLLM(turns)
+	msgs := planningMessagesForLLM(turns, nil)
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 LLM messages, got %d: %+v", len(msgs), msgs)
 	}
@@ -180,6 +180,60 @@ func TestPlanningTurnsRebuildAndQuestionRoundTrip(t *testing.T) {
 	}
 	if !sawUser || !sawQuestion {
 		t.Fatalf("expected a user part and a question tool part (user=%v question=%v)", sawUser, sawQuestion)
+	}
+}
+
+func TestPlanningMessagesForLLMReplaysImageAttachments(t *testing.T) {
+	_, ps, discID := newTestPlanningStore(t)
+	ctx := context.Background()
+	conv, _ := ps.EnsureConversation(ctx, "u1", discID)
+
+	if err := ps.AppendTurn(ctx, conv.ID, planningTurnInput{
+		Role: "user",
+		Text: "Tell a story from this image",
+		Attachments: []planner.Attachment{{
+			Filename: "photo.jpeg",
+			URL:      "https://bucket.example/photo.jpeg?sig=stale",
+			MIMEType: "image/jpeg",
+			Key:      "uploads/u1/photo.jpeg",
+		}},
+	}); err != nil {
+		t.Fatalf("AppendTurn: %v", err)
+	}
+	turns, err := ps.Turns(ctx, conv.ID)
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+
+	msgs := planningMessagesForLLM(turns, func(key string) string {
+		if key != "uploads/u1/photo.jpeg" {
+			t.Fatalf("refresh called with key %q", key)
+		}
+		return "https://bucket.example/photo.jpeg?sig=fresh"
+	})
+	if len(msgs) != 1 || msgs[0].Role != llm.RoleUser {
+		t.Fatalf("expected 1 user message, got %+v", msgs)
+	}
+	var imageURL string
+	for _, part := range msgs[0].Parts {
+		if part.ImageURL != "" {
+			imageURL = part.ImageURL
+		}
+	}
+	if imageURL != "https://bucket.example/photo.jpeg?sig=fresh" {
+		t.Fatalf("image part URL = %q, want the re-signed URL", imageURL)
+	}
+
+	// Without a refresher the stored URL is still replayed (best effort).
+	msgs = planningMessagesForLLM(turns, nil)
+	var staleURL string
+	for _, part := range msgs[0].Parts {
+		if part.ImageURL != "" {
+			staleURL = part.ImageURL
+		}
+	}
+	if staleURL != "https://bucket.example/photo.jpeg?sig=stale" {
+		t.Fatalf("image part URL without refresher = %q, want stored URL", staleURL)
 	}
 }
 

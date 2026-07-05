@@ -298,6 +298,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/summary/generate", s.handleDiscussionSummaryGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/video/generate", s.handleDiscussionVideoGenerate)
 		s.mux.HandleFunc("POST /api/discussions/{id}/summary/notion", s.handleExportSummaryToNotion)
+		s.mux.HandleFunc("PATCH /api/discussions/{id}", s.handleDiscussionRename)
 		s.mux.HandleFunc("DELETE /api/discussions/{id}", s.handleDiscussionDelete)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve", s.handleDiscussionImprove)
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)

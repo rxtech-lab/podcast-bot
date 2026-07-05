@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/video"
 )
 
@@ -83,7 +84,28 @@ func (s *Server) enqueueDiscussionAudioBookVideo(ctx context.Context, d *Discuss
 	}
 	outPath := filepath.Join(jobDir, "video.mp4")
 	opts := discussionAudioBookVideoOptions(d.Script, d.Lines, audioBookAvatarPaths(jobDir))
-	opts.Animations, opts.ImageOffsets = audioBookVideoTimings(jobDir, len(imagePaths))
+	anims, offsets, beats := audioBookVideoTimings(jobDir, len(imagePaths))
+	if len(beats) == 0 && len(offsets) == 0 {
+		// Books rendered before the beats-aware timings sidecar existed have
+		// their real per-beat offsets in the illustrations timeline sidecar —
+		// use those rather than even-splitting every generated image.
+		offsets, beats = audioBookOffsetsFromIllustrations(jobDir)
+		// Legacy animation lists are indexed by beat (one entry per planned
+		// image); re-select them to parallel the recovered beats.
+		if len(beats) > 0 && len(anims) > 0 {
+			picked := make([]string, len(beats))
+			for i, b := range beats {
+				if b >= 0 && b < len(anims) {
+					picked[i] = anims[b]
+				}
+			}
+			anims = picked
+		}
+	}
+	imagePaths, opts.Animations, opts.ImageOffsets = applyAudioBookTimingBeats(imagePaths, anims, offsets, beats)
+	if len(imagePaths) == 0 {
+		return fmt.Errorf("no audiobook illustrations found for video")
+	}
 	res := video.Resolution(d.Script.Resolution)
 	if res == "" {
 		res = video.Resolution1080p
@@ -211,16 +233,30 @@ func audioBookIllustrationBeat(path string) int {
 // mean "no metadata" — the renderer then uses its fallback motion cycle and
 // even image spacing, which is also the compat path for audiobooks rendered
 // before this metadata existed.
-func audioBookVideoTimings(jobDir string, imageCount int) (anims []string, offsets []float64) {
+//
+// beats, when present in the sidecar, names the narration beat behind each
+// parallel animations/offsets entry: the original render may have dropped
+// illustrations whose scene marker never fired (never-narrated beats), so
+// the entries no longer line up 1:1 with the globbed scene PNGs — the caller
+// narrows the image list via applyAudioBookTimingBeats. Legacy sidecars have
+// no beats field; there offsets are only trusted when they cover every image.
+func audioBookVideoTimings(jobDir string, imageCount int) (anims []string, offsets []float64, beats []int) {
 	scenesDir := filepath.Join(jobDir, "audiobook", "scenes")
 	var timings struct {
 		Animations   []string  `json:"animations"`
 		ImageOffsets []float64 `json:"image_offsets"`
+		Beats        []int     `json:"beats"`
 	}
 	if data, err := os.ReadFile(filepath.Join(scenesDir, "timings.json")); err == nil {
 		if json.Unmarshal(data, &timings) == nil {
 			anims = timings.Animations
-			if len(timings.ImageOffsets) == imageCount {
+			switch {
+			case len(timings.Beats) > 0:
+				beats = timings.Beats
+				if len(timings.ImageOffsets) == len(beats) {
+					offsets = timings.ImageOffsets
+				}
+			case len(timings.ImageOffsets) == imageCount:
 				offsets = timings.ImageOffsets
 			}
 		}
@@ -235,7 +271,95 @@ func audioBookVideoTimings(jobDir string, imageCount int) (anims []string, offse
 			}
 		}
 	}
-	return anims, offsets
+	return anims, offsets, beats
+}
+
+// audioBookOffsetsFromIllustrations derives per-beat audio offsets from the
+// illustrations timeline sidecar (podcast-audio/illustrations.json), which
+// records when each fired illustration actually appeared on the audio
+// timeline. The beat is recovered from the durable image key
+// ("…/image-K.webp" is beat K-1 — see audiobook/prepare.go). Cues without a
+// parseable key are skipped; returns nils when the sidecar is missing or
+// yields nothing. Cue order (sorted by start time) is preserved so the
+// offsets stay non-decreasing for the renderer's validation.
+func audioBookOffsetsFromIllustrations(jobDir string) (offsets []float64, beats []int) {
+	data, err := os.ReadFile(filepath.Join(jobDir, PodcastAudioDir, PodcastIllustrationsFilename))
+	if err != nil {
+		return nil, nil
+	}
+	var sidecar struct {
+		Illustrations []contentcreator.IllustrationCue `json:"illustrations"`
+	}
+	if json.Unmarshal(data, &sidecar) != nil {
+		return nil, nil
+	}
+	for _, cue := range sidecar.Illustrations {
+		key := cue.ImageKey
+		if strings.TrimSpace(key) == "" {
+			key = cue.ImageURL
+		}
+		beat, ok := audioBookImageKeyBeat(key)
+		if !ok {
+			continue
+		}
+		beats = append(beats, beat)
+		offsets = append(offsets, float64(cue.StartMS)/1000)
+	}
+	return offsets, beats
+}
+
+// audioBookImageKeyBeat extracts the 0-based beat index from a durable
+// audiobook image key or URL of the form "…/image-K.webp" (K is 1-based).
+func audioBookImageKeyBeat(key string) (int, bool) {
+	base := filepath.Base(strings.TrimSpace(key))
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	numStr := strings.TrimPrefix(base, "image-")
+	if numStr == base {
+		return 0, false
+	}
+	n, err := strconv.Atoi(numStr)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n - 1, true
+}
+
+// applyAudioBookTimingBeats narrows the globbed scene PNGs to the beats the
+// timings sidecar recorded, keeping the animation/offset slices parallel to
+// the returned paths. A beat with no matching PNG on disk drops its timing
+// entries too so the three slices stay aligned. nil beats (legacy sidecar or
+// no sidecar) returns the inputs unchanged.
+func applyAudioBookTimingBeats(imagePaths, anims []string, offsets []float64, beats []int) ([]string, []string, []float64) {
+	if len(beats) == 0 {
+		return imagePaths, anims, offsets
+	}
+	byBeat := make(map[int]string, len(imagePaths))
+	for _, p := range imagePaths {
+		byBeat[audioBookIllustrationBeat(p)] = p
+	}
+	outPaths := make([]string, 0, len(beats))
+	outAnims := make([]string, 0, len(beats))
+	outOffsets := make([]float64, 0, len(beats))
+	for i, b := range beats {
+		p, ok := byBeat[b]
+		if !ok {
+			continue
+		}
+		outPaths = append(outPaths, p)
+		if i < len(anims) {
+			outAnims = append(outAnims, anims[i])
+		} else {
+			outAnims = append(outAnims, "")
+		}
+		if i < len(offsets) {
+			outOffsets = append(outOffsets, offsets[i])
+		}
+	}
+	if len(outOffsets) != len(outPaths) {
+		// Offsets were absent (or a PNG gap desynced them) — even split.
+		outOffsets = nil
+	}
+	return outPaths, outAnims, outOffsets
 }
 
 func audioBookAvatarPaths(jobDir string) []video.AudioBookVideoAvatar {

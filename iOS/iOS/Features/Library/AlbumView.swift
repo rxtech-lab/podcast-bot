@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 
 enum AlbumViewMode {
@@ -34,9 +35,11 @@ struct AlbumView: View {
     @State private var showingRename = false
     @State private var showingRemoveConfirm = false
     @State private var renameTitle = ""
+    @State private var renamingEpisode: Discussion?
+    @State private var renamingEpisodeTitle = ""
 
     var body: some View {
-        if ownsNavigation {
+        if ownsNavigation || mode == .publicMarket {
             core.navigationDestination(for: LibraryDestination.self) { destination in
                 albumDestination(destination)
             }
@@ -81,6 +84,11 @@ struct AlbumView: View {
             TextField("Album name", text: $renameTitle)
             Button("Rename") { rename() }
             Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Podcast", isPresented: renamingEpisodeBinding) {
+            TextField("Podcast name", text: $renamingEpisodeTitle)
+            Button("Rename") { renameEpisode() }
+            Button("Cancel", role: .cancel) { renamingEpisode = nil }
         }
         .confirmationDialog(
             "Remove this album?",
@@ -235,6 +243,13 @@ struct AlbumView: View {
         )
     }
 
+    private var renamingEpisodeBinding: Binding<Bool> {
+        Binding(
+            get: { renamingEpisode != nil },
+            set: { if !$0 { renamingEpisode = nil } }
+        )
+    }
+
     private func rename() {
         let title = renameTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
@@ -264,6 +279,28 @@ struct AlbumView: View {
             do {
                 try await APIClient(tokens: auth).removeFromAlbum(id: albumID, discussionID: episode.id)
                 await load()
+            } catch {
+                actionError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func beginRenameEpisode(_ episode: Discussion) {
+        renamingEpisode = episode
+        renamingEpisodeTitle = episode.displayTitle
+    }
+
+    private func renameEpisode() {
+        guard let episode = renamingEpisode else { return }
+        let title = renamingEpisodeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        renamingEpisode = nil
+        Task {
+            do {
+                let updated = try await APIClient(tokens: auth).renameDiscussion(id: episode.id, title: title)
+                if let index = detail?.episodes.firstIndex(where: { $0.id == updated.id }) {
+                    detail?.episodes[index] = updated
+                }
             } catch {
                 actionError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
@@ -301,6 +338,12 @@ struct AlbumView: View {
                 } label: {
                     Label("Remove from Album", systemImage: "rectangle.stack.badge.minus")
                 }
+                Button {
+                    beginRenameEpisode(episode)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .tint(Theme.accent)
             }
         } else {
             NavigationLink(value: LibraryDestination.discussion(episode)) {
@@ -685,6 +728,8 @@ private struct AlbumEpisodeRow: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.secondaryText)
                 .frame(width: 26)
+            DiscussionCoverThumbnail(discussion: episode, size: 44)
+                .accessibilityIdentifier("album.episode.cover.\(episode.id)")
             VStack(alignment: .leading, spacing: 3) {
                 Text(episode.displayTitle)
                     .font(.body.weight(.medium))
@@ -766,16 +811,14 @@ struct AlbumCoverThumbnail: View {
     var body: some View {
         Group {
             if let url = cover?.renderableImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
+                KFImage.url(url)
+                    .placeholder {
                         fallback
                     }
-                }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .resizable()
+                    .scaledToFill()
             } else if let cover, cover.hasGradient {
                 LinearGradient(colors: [color(cover.gradientStart), color(cover.gradientEnd)],
                                startPoint: .topLeading,

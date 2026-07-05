@@ -303,7 +303,7 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 	if err := o.buildAgents(); err != nil {
 		return err
 	}
-	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log, o.speakerVoiceOverrides())
+	agent.AssignVoices(voices, o.Registry.All(), o.Topic.Language, time.Now().UnixNano(), o.Log, o.speakerVoiceOverrides(), o.speakerGenders())
 	for _, a := range o.Registry.All() {
 		o.Log.Info("agent ready",
 			"name", a.Name(),
@@ -329,6 +329,26 @@ func (o *Orchestrator) speakerVoiceOverrides() map[string]string {
 		voice := strings.TrimSpace(spec.Voice)
 		if name != "" && voice != "" {
 			out[name] = voice
+		}
+	}
+	add(o.Topic.Host)
+	add(o.Topic.AudioBookHost)
+	for _, d := range o.Topic.Discussants {
+		add(d)
+	}
+	return out
+}
+
+// speakerGenders collects the plan-authored voice genders (agent name →
+// "male"/"female") for AssignVoices. Specs without a recognisable gender are
+// absent, so the picker falls back to inferring from the name.
+func (o *Orchestrator) speakerGenders() map[string]string {
+	out := map[string]string{}
+	add := func(spec config.AgentSpec) {
+		name := strings.TrimSpace(spec.Name)
+		gender := strings.ToLower(strings.TrimSpace(spec.Gender))
+		if name != "" && (gender == "male" || gender == "female") {
+			out[name] = gender
 		}
 	}
 	add(o.Topic.Host)

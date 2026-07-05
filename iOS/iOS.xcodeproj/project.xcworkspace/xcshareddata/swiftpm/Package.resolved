@@ -1,5 +1,5 @@
 {
-  "originHash" : "59da49e5caca4482bf7f13d879558bc1b6bc1a3c4c7a524995cad1ffce9f08fc",
+  "originHash" : "776eaabbb21a4dad34698aace22800c004498288371a80b746e151fcf4d622e8",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -112,8 +112,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sirily11/swift-jsonschema-form.git",
       "state" : {
-        "revision" : "16639236ffc71713042d144dc1e92b4e8f1bc689",
-        "version" : "1.0.5"
+        "branch" : "main",
+        "revision" : "ef60305109d6b7ac95a34083bf0f4fe3381ed458"
       }
     },
     {

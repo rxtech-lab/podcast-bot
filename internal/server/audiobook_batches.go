@@ -27,11 +27,12 @@ const (
 // audioBookChapterState is one chapter of the root plan annotated with its
 // generation progress across the follow-up chain.
 type audioBookChapterState struct {
-	Index   int    `json:"index"` // 1-based position in the root plan
-	Title   string `json:"title"`
-	Summary string `json:"summary"`
-	Mode    string `json:"mode,omitempty"`
-	Status  string `json:"status"`
+	Index    int      `json:"index"` // 1-based position in the root plan
+	Title    string   `json:"title"`
+	Summary  string   `json:"summary"`
+	Mode     string   `json:"mode,omitempty"`
+	Speakers []string `json:"speakers,omitempty"`
+	Status   string   `json:"status"`
 	// DiscussionID is the discussion that generated (or is generating) this
 	// chapter; empty while pending.
 	DiscussionID string `json:"discussion_id,omitempty"`
@@ -104,11 +105,12 @@ func (s *Server) audioBookChapterStates(ctx context.Context, owner string, root 
 	states := make([]audioBookChapterState, total)
 	for i, ch := range root.Script.AudioBookChapters {
 		states[i] = audioBookChapterState{
-			Index:   i + 1,
-			Title:   ch.Title,
-			Summary: ch.Summary,
-			Mode:    ch.Mode,
-			Status:  chapterStatusPending,
+			Index:    i + 1,
+			Title:    ch.Title,
+			Summary:  ch.Summary,
+			Mode:     ch.Mode,
+			Speakers: append([]string(nil), ch.Speakers...),
+			Status:   chapterStatusPending,
 		}
 	}
 	children, err := s.d.Discussions.ListByReference(ctx, owner, root.ID)
@@ -211,7 +213,9 @@ func deriveAudioBookBatchScript(root *config.DebateTopic, indices []int, previou
 	if e2e {
 		batch.TotalMinutes = 1
 	}
-	if len(sorted) < len(root.AudioBookChapters) {
+	if len(chapters) == 1 {
+		batch.Title = strings.TrimSpace(chapters[0].Title)
+	} else if len(sorted) < len(root.AudioBookChapters) {
 		title := strings.TrimSpace(root.Title)
 		if title == "" {
 			title = "Audiobook"
