@@ -3109,6 +3109,7 @@
       }
     },
     "Filter %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -5132,6 +5133,7 @@
       }
     },
     "Open market" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

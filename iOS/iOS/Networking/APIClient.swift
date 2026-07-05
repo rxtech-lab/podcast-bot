@@ -204,6 +204,18 @@ final class APIClient: Sendable {
         return try await get("/api/discussions/\(id)/ui-actions", query: query)
     }
 
+    func homeUIActions(supportsPoints: Bool = false,
+                       visibility: String? = nil) async throws -> DiscussionUIActionsResponse {
+        var query: [URLQueryItem] = []
+        if supportsPoints {
+            query.append(URLQueryItem(name: "supports_points", value: "true"))
+        }
+        if let visibility, !visibility.isEmpty {
+            query.append(URLQueryItem(name: "visibility", value: visibility))
+        }
+        return try await get("/api/home/ui-actions", query: query)
+    }
+
     /// Downloads the summary rendered as a PDF (produced server-side via
     /// Cloudflare Browser Rendering, with ```mermaid blocks drawn as real
     /// diagrams) and writes it to a temporary file, returning the local URL ready

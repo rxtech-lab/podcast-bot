@@ -58,10 +58,28 @@ const vttMaxRunesPerCue = 44
 type vttWriter struct {
 	mu   sync.Mutex
 	cues []vttCue
+	// mapper, when set, translates stored cue offsets to the exported
+	// timeline at read time. Audio-only mixer-backed runs store cues on
+	// the TTS byte timeline and export them on the recorded audio.mp3
+	// timeline via the mixer's TTS→output sync map. Applied late (in
+	// Cues/WriteTo, not Append) so sync points that land after a cue was
+	// appended still count. nil means identity.
+	mapper func(time.Duration) time.Duration
 }
 
 // newVTTWriter constructs an empty writer. Pipeline holds one per Run.
 func newVTTWriter() *vttWriter { return &vttWriter{} }
+
+// SetTimelineMapper installs the stored→exported timeline translation.
+// Call before cues are consumed; safe to call once at pipeline start.
+func (w *vttWriter) SetTimelineMapper(f func(time.Duration) time.Duration) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.mapper = f
+	w.mu.Unlock()
+}
 
 // Append records cue(s) covering this sentence's spoken audio. start
 // is the offset from mp4 t=0 (already adjusted for the music-bed
@@ -152,14 +170,15 @@ func (w *vttWriter) CueCount() int {
 	return len(w.cues)
 }
 
-// Cues returns a stable snapshot of the writer's timed cue list.
+// Cues returns a stable snapshot of the writer's timed cue list, on the
+// exported timeline (mapper applied).
 func (w *vttWriter) Cues() []SubtitleCue {
 	if w == nil {
 		return nil
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return exportVTTCues(w.cues)
+	return exportVTTCues(w.cues, w.mapper)
 }
 
 // WriteTo emits the WebVTT file at path. No-op when the writer holds
@@ -170,7 +189,7 @@ func (w *vttWriter) WriteTo(path string) error {
 		return nil
 	}
 	w.mu.Lock()
-	cues := exportVTTCues(w.cues)
+	cues := exportVTTCues(w.cues, w.mapper)
 	w.mu.Unlock()
 	return WriteSubtitleCues(path, cues)
 }
@@ -202,10 +221,14 @@ func FormatSubtitleCues(cues []SubtitleCue) string {
 	return sb.String()
 }
 
-func exportVTTCues(cues []vttCue) []SubtitleCue {
+func exportVTTCues(cues []vttCue, mapper func(time.Duration) time.Duration) []SubtitleCue {
 	out := make([]SubtitleCue, len(cues))
 	for i, c := range cues {
-		out[i] = SubtitleCue{Start: c.Start, End: c.End, Text: c.Text}
+		start, end := c.Start, c.End
+		if mapper != nil {
+			start, end = mapper(start), mapper(end)
+		}
+		out[i] = SubtitleCue{Start: start, End: end, Text: c.Text}
 	}
 	return out
 }

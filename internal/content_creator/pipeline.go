@@ -134,11 +134,11 @@ const subtitleClientLatency = 3100 * time.Millisecond
 // the last sentence mid-word. A flat sleep is simpler and more
 // reliable than the previous mixer-Close-then-poll-BytesAhead path,
 // which has shown pathological hangs that pin the channel runner.
-const postProducerGrace = 20 * time.Second
+// A var (not const) so integration tests can shrink the tail wait.
+var postProducerGrace = 20 * time.Second
 
 const vttBaseBias = 1 * time.Second
 const vttPreviouslyOnBias = 1 * time.Second
-const vttAudioBookCaptionDelay = 2 * time.Second
 
 // vttDiscussionBias is an extra sidecar-subtitle delay applied only to
 // discussion content. The cue offset is anchored to LiveStream's first
@@ -201,6 +201,14 @@ type Pipeline struct {
 	// inter-turn idle still counts toward when the next chunk plays.
 	playheadMu sync.Mutex
 	nextPlayAt time.Time
+
+	// ttsTimelinePos is the cumulative duration of synthesized TTS audio
+	// written so far, derived purely from byte counts (bytes ÷
+	// audio.AudioBytesPerSec) — the exact position the NEXT sentence
+	// starts at on the TTS timeline. Audio-only subtitle cues are stamped
+	// with this and translated to the recorded file's timeline via
+	// recordedPos. Guarded by playheadMu alongside nextPlayAt.
+	ttsTimelinePos time.Duration
 
 	stopMu      sync.Mutex
 	stopProduce context.CancelFunc
@@ -302,11 +310,19 @@ func (p *Pipeline) vttBias() time.Duration {
 	return bias
 }
 
-func (p *Pipeline) vttCaptionDelay() time.Duration {
-	if p != nil && p.d.AudioOnly && p.d.ContentType == config.ContentTypeAudioBook {
-		return vttAudioBookCaptionDelay
+// recordedPos maps a position on the TTS byte timeline (cumulative
+// duration of synthesized audio, exact via byte counts) to the position
+// in the recorded audio.mp3. Dry audio-only recordings ARE the raw TTS
+// byte stream, so the mapping is identity. Mixer-backed recordings run
+// at realtime with the music bed filling any production stall, so every
+// bed-only gap shifts all narration after it — the mixer tracks exactly
+// where each TTS burst landed in its output and MapTTSToOutput replays
+// that. Non-audio-only (stitched) runs never call this.
+func (p *Pipeline) recordedPos(tts time.Duration) time.Duration {
+	if p != nil && p.d.AudioOnly && p.sessionMixer != nil {
+		return p.sessionMixer.MapTTSToOutput(tts)
 	}
-	return 0
+	return tts
 }
 
 // Run boots all stages and blocks until the planner stops emitting turns
@@ -343,6 +359,12 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 				"music", path, "err", err)
 		} else {
 			p.sessionMixer = m
+			if p.d.AudioOnly {
+				// Audio-only cues are stamped on the TTS byte timeline;
+				// export them on the recorded file's timeline via the
+				// mixer's TTS→output sync map (captures bed-only gaps).
+				p.vtt.SetTimelineMapper(m.MapTTSToOutput)
+			}
 			p.d.Log.Info("session music mixer attached", "music", path)
 			defer func() {
 				if cerr := p.sessionMixer.Close(); cerr != nil {
@@ -423,6 +445,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 					t.ID, t.Speaker.Name(),
 					time.Since(start).Round(time.Second))})
 			}
+			p.reviewAudioBookLoop(produceCtx, t)
 			p.d.Tracker.AddSpeaking(t.Speaker.Name(), time.Since(start))
 			p.validateAudioBookCompletionRequest(t)
 			t.MarkPlayed()
@@ -817,6 +840,30 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	return nil
 }
 
+func (p *Pipeline) reviewAudioBookLoop(ctx context.Context, t *Turn) bool {
+	if p == nil || t == nil || p.d.ContentType != config.ContentTypeAudioBook || !strings.HasPrefix(t.Directive, "narrate") {
+		return false
+	}
+	guard, ok := p.d.Planner.(interface {
+		ReviewAudioBookLoop(context.Context, string) bool
+	})
+	if !ok {
+		return false
+	}
+	stop := guard.ReviewAudioBookLoop(ctx, t.FullText())
+	if stop && p.d.Log != nil {
+		reason := ""
+		if reporter, ok := p.d.Planner.(interface{ ChapterBoundaryReason() string }); ok {
+			reason = reporter.ChapterBoundaryReason()
+		}
+		p.d.Log.Warn("audiobook boundary judge stopped narration",
+			"turn", t.ID,
+			"reason", reason,
+			"turn_preview", truncatePreview(t.FullText(), 140))
+	}
+	return stop
+}
+
 // emitSceneImage sends an image-only TranscriptMsg for the illustration
 // anchored to scene-beat idx, so an audiobook's chat transcript shows the
 // generated picture at the moment the host advances to that beat. offset is
@@ -861,11 +908,17 @@ func (p *Pipeline) emitSceneImage(t *Turn, idx int, offset time.Duration) {
 	})
 }
 
-// audioOffsetNow returns the running playhead's position on the produced
-// audio timeline (the same offset space as the VTT cues) — used for events
-// that fire between sentences, where no per-sentence cueStart is available.
-// Zero when the stream hasn't started writing yet.
+// audioOffsetNow returns the running playhead's position on the recorded
+// audio timeline (the same offset space as the exported VTT cues) — used
+// for events that fire between sentences, where no per-sentence cueStart
+// is available. Zero when the stream hasn't started writing yet.
 func (p *Pipeline) audioOffsetNow() time.Duration {
+	if p.d.AudioOnly {
+		p.playheadMu.Lock()
+		tts := p.ttsTimelinePos
+		p.playheadMu.Unlock()
+		return p.recordedPos(tts)
+	}
 	if p.d.LiveStream == nil {
 		return 0
 	}
@@ -879,7 +932,7 @@ func (p *Pipeline) audioOffsetNow() time.Duration {
 	if playAt.IsZero() {
 		return 0
 	}
-	off := playAt.Sub(firstWrite) - subtitleClientLatency + p.vttBias() + p.vttCaptionDelay()
+	off := playAt.Sub(firstWrite) - subtitleClientLatency + p.vttBias()
 	if off < 0 {
 		off = 0
 	}
@@ -992,6 +1045,7 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	// this phase so a stray "<scene 99/>" doesn't pin the rotation on
 	// the last frame for the rest of the turn. Unnumbered legacy markers
 	// (-1) are kept; the renderer treats them as "advance one".
+	leadAdvances, trailAdvances = p.normalizeSceneMarkerTiming(t, leadAdvances, trailAdvances)
 	leadAdvances, trailAdvances = p.clampLeadTrail(t, leadAdvances, trailAdvances)
 	if len(leadAdvances) > 0 || len(trailAdvances) > 0 {
 		p.d.Log.Info("scene marker",
@@ -1095,34 +1149,31 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 		float64(audio.AudioBytesPerSec) * float64(time.Second))
 	p.playheadMu.Lock()
 	p.nextPlayAt = p.nextPlayAt.Add(audioDuration)
+	ttsStart := p.ttsTimelinePos
+	p.ttsTimelinePos += audioDuration
 	p.playheadMu.Unlock()
 
-	// Sidecar WebVTT cue for this sentence. The cue offset is the
-	// listener-clock playhead (targetSend) minus the wall-clock when
-	// the producer first wrote into LiveStream — that "first write"
-	// is what the encoder's audio pump treats as first-real-audio,
-	// and stitch.StartOffset trims the mp4's silent prep prefix to
-	// that same anchor. Subtracting subtitleClientLatency removes the
-	// player-side buffering the listener clock includes; the static
-	// mp4 timeline doesn't need it. The result is the encoded-stream
-	// offset of this sentence's first byte: silence padded by the
-	// pump between turns shows up as a real gap, and the music-bed
-	// pre-roll before speech keeps the first cue from collapsing
-	// onto 00:00. See subtitle.go.
+	// Sidecar WebVTT cue for this sentence.
 	//
-	// vttBias adds a constant offset on top — empirically the
-	// computed offset still lands ~1 s ahead of the audio in the
-	// stitched mp4 (likely the LiveStream ffmpeg `-re` pacer's
-	// startup buffering plus encoder-side input buffering between
-	// FirstWriteAt and the moment those bytes actually appear in
-	// the HLS segment that survives the StartOffset trim). A small
-	// constant nudge is far cheaper than wiring through the precise
-	// pump-side first-real-audio timestamp, and any small drift it
-	// introduces in long shows is dwarfed by the 1-2 s segment-
-	// boundary trim already in stitch.go.
+	// Audio-only runs: the cue is stamped with the sentence's exact
+	// position on the TTS byte timeline (cumulative synthesized audio
+	// before it). For dry recordings that IS the file position; for
+	// mixer-backed recordings the vttWriter's timeline mapper (the
+	// mixer's TTS→output sync map, see recordedPos) translates it at
+	// export time, including any bed-only gaps the session accumulated.
+	// Wall clocks are never involved, so slow LLM/TTS production cannot
+	// skew the cue timeline.
+	//
+	// Stitched-video runs: the cue offset is the listener-clock playhead
+	// (targetSend) minus LiveStream's first write — the same anchor the
+	// encoder pump treats as first-real-audio and stitch.StartOffset
+	// trims the mp4 to — minus the player-side buffering the listener
+	// clock includes, plus the empirically tuned vttBias.
 	var cueStart time.Duration
-	if firstWrite := p.d.LiveStream.FirstWriteAt(); !firstWrite.IsZero() {
-		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + p.vttBias() + p.vttCaptionDelay()
+	if p.d.AudioOnly {
+		cueStart = ttsStart
+	} else if firstWrite := p.d.LiveStream.FirstWriteAt(); !firstWrite.IsZero() {
+		cueStart = targetSend.Sub(firstWrite) - subtitleClientLatency + p.vttBias()
 	}
 	if sent != "" {
 		p.vtt.Append(sent, cueStart, audioDuration)
@@ -1170,18 +1221,22 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 			send(m)
 		}
 	}
+	// Scene-image offsets are recorded on the recorded-file timeline.
+	// recordedPos is evaluated inside the closures — they fire at listener
+	// time, several seconds after the sentence was mixed, so the mixer's
+	// TTS→output sync point for this sentence exists by then.
 	fireLeadingScenes := func() {
 		for _, idx := range leadAdvances {
 			send(SceneAdvanceMsg{Index: idx})
 			// Leading markers swap the image at this sentence's audio start.
-			p.emitSceneImage(t, idx, cueStart)
+			p.emitSceneImage(t, idx, p.recordedPos(cueStart))
 		}
 	}
 	fireTrailing := func() {
 		for _, idx := range trailAdvances {
 			send(SceneAdvanceMsg{Index: idx})
 			// Trailing markers advance after this sentence's audio finishes.
-			p.emitSceneImage(t, idx, cueStart+audioDuration)
+			p.emitSceneImage(t, idx, p.recordedPos(cueStart+audioDuration))
 		}
 	}
 	if len(segMsgs) > 0 {
@@ -1266,6 +1321,16 @@ func (p *Pipeline) synthSentence(ctx context.Context, t *Turn, sent string, sink
 	}
 	t.sceneAdvances += len(leadAdvances) + len(trailAdvances)
 	return n, nil
+}
+
+func (p *Pipeline) normalizeSceneMarkerTiming(t *Turn, lead, trail []int) ([]int, []int) {
+	if p == nil || t == nil || p.d.ContentType != config.ContentTypeAudioBook {
+		return lead, trail
+	}
+	if !strings.HasPrefix(t.Directive, "narrate") || len(lead) > 0 || len(trail) == 0 {
+		return lead, trail
+	}
+	return trail, nil
 }
 
 // dispatchSoundCue resolves marker → on-disk clip path and asks the

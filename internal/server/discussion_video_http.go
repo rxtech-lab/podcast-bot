@@ -279,6 +279,7 @@ func discussionAudioBookVideoOptions(topic *config.DebateTopic, lines []Discussi
 	return video.AudioBookVideoOptions{
 		Style:    string(topic.AudioBookStyle),
 		Title:    strings.TrimSpace(topic.Title),
+		Language: strings.TrimSpace(topic.Language),
 		Host:     host,
 		Speakers: speakers,
 		Lines:    outLines,

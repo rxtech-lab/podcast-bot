@@ -58,6 +58,7 @@ struct PodcastPlayerView: View {
     @State private var isGeneratingSummary = false
     @State private var summaryGenerateError: String?
     @State private var isGeneratingVideo = false
+    @State private var isVideoGenerationPending = false
     @State private var videoGenerateError: String?
     @State private var documentActionItems: [DiscussionUIActionItem] = []
     @State private var podcastActionItems: [DiscussionUIActionItem] = []
@@ -297,6 +298,7 @@ struct PodcastPlayerView: View {
             let documents = try await api.discussionUIActions(id: currentDiscussion.id,
                                                               surface: "podcast-documents")
             documentActionItems = documents.items
+            reconcileVideoGenerationPending(with: documents.items)
         } catch {
             documentActionItems = []
         }
@@ -413,9 +415,16 @@ struct PodcastPlayerView: View {
         case "generate-summary":
             return isGeneratingSummary
         case "generate-video":
-            return isGeneratingVideo
+            return isGeneratingVideo || isVideoGenerationPending
         default:
             return false
+        }
+    }
+
+    private func reconcileVideoGenerationPending(with items: [DiscussionUIActionItem]) {
+        guard isVideoGenerationPending else { return }
+        if items.contains(where: { $0.id == "video-rendering" || $0.id == "view-video" }) {
+            isVideoGenerationPending = false
         }
     }
 
@@ -961,10 +970,9 @@ struct PodcastPlayerView: View {
     }
 
     private func generateVideo() {
-        guard !isGeneratingVideo else { return }
+        guard !isGeneratingVideo && !isVideoGenerationPending else { return }
         isGeneratingVideo = true
         Task { @MainActor in
-            defer { isGeneratingVideo = false }
             do {
                 let updated = try await APIClient(tokens: auth).generateVideo(id: currentDiscussion.id)
                 if let model {
@@ -974,8 +982,12 @@ struct PodcastPlayerView: View {
                     )
                     model.listenForJobUpdatesIfNeeded()
                 }
+                isVideoGenerationPending = true
                 await loadUIActions()
+                isGeneratingVideo = false
             } catch {
+                isGeneratingVideo = false
+                isVideoGenerationPending = false
                 guard !APIClient.isCancellation(error) else { return }
                 videoGenerateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
@@ -1104,6 +1116,24 @@ struct DiscussionActionsMenu: View {
 
     @ViewBuilder
     private func actionRow(_ item: DiscussionUIActionItem) -> some View {
+        if item.children.count > 1 {
+            Menu {
+                ForEach(item.children) { child in
+                    leafActionRow(child)
+                }
+            } label: {
+                rowLabel(item, busy: false)
+            }
+            .disabled(!item.enabled)
+        } else if let child = item.children.first {
+            leafActionRow(child)
+        } else {
+            leafActionRow(item)
+        }
+    }
+
+    @ViewBuilder
+    private func leafActionRow(_ item: DiscussionUIActionItem) -> some View {
         let busy = isBusy(item)
         let disabled = !item.enabled || busy
         if item.action.type == "share-link", let url = URL(string: item.action.link) {
@@ -2322,12 +2352,22 @@ struct AudioBookVideoView: View {
     @State private var isDownloading = false
     @State private var message: String?
     @State private var showingShareSheet = false
+    @State private var showChrome = false
+    @State private var hideChromeTask: Task<Void, Never>?
+
+    private var chromeVisible: Bool {
+        showChrome || isDownloading || message != nil
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
             VideoPlayer(player: player)
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded {
+                    toggleChromeFromVideoTap()
+                })
 
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
@@ -2344,6 +2384,7 @@ struct AudioBookVideoView: View {
                     Spacer()
 
                     Button {
+                        revealChromeTemporarily()
                         shareVideo()
                     } label: {
                         Image(systemName: "folder")
@@ -2355,6 +2396,7 @@ struct AudioBookVideoView: View {
                     .accessibilityLabel("Save to Files")
 
                     Button {
+                        revealChromeTemporarily()
                         saveToCameraRoll()
                     } label: {
                         Image(systemName: "square.and.arrow.down")
@@ -2365,7 +2407,9 @@ struct AudioBookVideoView: View {
                     .disabled(isDownloading)
                     .accessibilityLabel("Save to Camera Roll")
                 }
-                .padding()
+                .padding(.horizontal, 16)
+                .padding(.top, 58)
+                .padding(.bottom, 12)
 
                 if isDownloading || message != nil {
                     HStack(spacing: 10) {
@@ -2385,6 +2429,9 @@ struct AudioBookVideoView: View {
 
                 Spacer()
             }
+            .opacity(chromeVisible ? 1 : 0)
+            .allowsHitTesting(chromeVisible)
+            .animation(.easeInOut(duration: 0.18), value: chromeVisible)
         }
         .sheet(isPresented: $showingShareSheet) {
             if let localFile {
@@ -2397,12 +2444,38 @@ struct AudioBookVideoView: View {
             p.play()
         }
         .onDisappear {
+            hideChromeTask?.cancel()
             player?.pause()
             player = nil
         }
     }
 
+    private func toggleChromeFromVideoTap() {
+        if isDownloading || message != nil {
+            revealChromeTemporarily()
+            return
+        }
+        if chromeVisible {
+            hideChromeTask?.cancel()
+            showChrome = false
+        } else {
+            revealChromeTemporarily()
+        }
+    }
+
+    private func revealChromeTemporarily() {
+        hideChromeTask?.cancel()
+        showChrome = true
+        hideChromeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            if !isDownloading && message == nil {
+                showChrome = false
+            }
+        }
+    }
+
     private func shareVideo() {
+        revealChromeTemporarily()
         Task {
             if let file = await localVideoFile() {
                 localFile = file
@@ -2412,6 +2485,7 @@ struct AudioBookVideoView: View {
     }
 
     private func saveToCameraRoll() {
+        revealChromeTemporarily()
         Task {
             guard let file = await localVideoFile() else { return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
@@ -2455,6 +2529,7 @@ struct AudioBookVideoView: View {
 
     private func showMessage(_ text: String) {
         message = text
+        revealChromeTemporarily()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             if message == text {

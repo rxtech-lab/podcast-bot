@@ -162,10 +162,16 @@ func renderKenBurnsAudioBookVideo(outPath, audioPath, vttPath string,
 	args = append(args,
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 		"-c:a", "aac", "-b:a", "128k",
-		"-shortest",
+		// No -shortest: if dur underestimates the audio (e.g. a probe that
+		// raced the recorder), the audio must survive intact — a frozen
+		// final frame beats an amputated narration tail.
 	)
 	if hasSubs {
 		args = append(args, "-c:s", "mov_text")
+		args = appendSubtitleTrackMetadata(args, []SubtitleTrack{{
+			Language: opts.Language,
+			Default:  true,
+		}})
 	}
 	args = append(args, "-movflags", "+faststart", outPath)
 

@@ -524,6 +524,26 @@ struct NotionExportResponse: Codable, Sendable {
 struct DiscussionUIActionsResponse: Codable, Sendable {
     var id: String
     var items: [DiscussionUIActionItem]
+    var toolbars: [DiscussionUIActionItem]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case items
+        case toolbars
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        items = try container.decodeIfPresent([DiscussionUIActionItem].self, forKey: .items) ?? []
+        toolbars = try container.decodeIfPresent([DiscussionUIActionItem].self, forKey: .toolbars) ?? []
+    }
+
+    init(id: String, items: [DiscussionUIActionItem] = [], toolbars: [DiscussionUIActionItem] = []) {
+        self.id = id
+        self.items = items
+        self.toolbars = toolbars
+    }
 }
 
 struct DiscussionUIActionItem: Codable, Hashable, Sendable, Identifiable {
@@ -532,8 +552,10 @@ struct DiscussionUIActionItem: Codable, Hashable, Sendable, Identifiable {
     var loadingTitle: String?
     var systemImage: String?
     var role: String?
+    var placement: String?
     var enabled: Bool
     var action: DiscussionUIAction
+    var children: [DiscussionUIActionItem]
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -541,8 +563,23 @@ struct DiscussionUIActionItem: Codable, Hashable, Sendable, Identifiable {
         case loadingTitle = "loading_title"
         case systemImage = "system_image"
         case role
+        case placement
         case enabled
         case action
+        case children
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        loadingTitle = try container.decodeIfPresent(String.self, forKey: .loadingTitle)
+        systemImage = try container.decodeIfPresent(String.self, forKey: .systemImage)
+        role = try container.decodeIfPresent(String.self, forKey: .role)
+        placement = try container.decodeIfPresent(String.self, forKey: .placement)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        action = try container.decode(DiscussionUIAction.self, forKey: .action)
+        children = try container.decodeIfPresent([DiscussionUIActionItem].self, forKey: .children) ?? []
     }
 }
 

@@ -41,6 +41,8 @@ func renderConversationalAudioBookVideo(outPath, audioPath, vttPath string,
 	if len(segments) == 0 {
 		return fmt.Errorf("render audiobook conversational video: no transcript lines")
 	}
+	backgroundStarts := audioBookImageStarts(opts.ImageOffsets, len(backgrounds), audioSeconds)
+	backgroundIndices := audioBookConversationBackgroundIndices(segments, backgroundStarts)
 
 	frameDir := outPath + ".frames"
 	if err := os.MkdirAll(frameDir, 0o755); err != nil {
@@ -51,7 +53,7 @@ func renderConversationalAudioBookVideo(outPath, audioPath, vttPath string,
 	var list strings.Builder
 	for i, seg := range segments {
 		img := rend.renderAudioBookConversationFrame(
-			backgrounds[i%len(backgrounds)],
+			backgrounds[backgroundIndices[i]],
 			audioBookConversationCast(opts, seg.Speaker),
 			avatars,
 			seg,
@@ -94,10 +96,14 @@ func renderConversationalAudioBookVideo(outPath, audioPath, vttPath string,
 		"-vf", "fps=25,format=yuv420p",
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 		"-c:a", "aac", "-b:a", "128k",
-		"-shortest",
+		// No -shortest: never truncate the narration to the frame track.
 	)
 	if hasSubs {
 		args = append(args, "-c:s", "mov_text")
+		args = appendSubtitleTrackMetadata(args, []SubtitleTrack{{
+			Language: opts.Language,
+			Default:  true,
+		}})
 	}
 	args = append(args, "-movflags", "+faststart", outPath)
 
@@ -188,6 +194,23 @@ func buildAudioBookConversationSegments(opts AudioBookVideoOptions, audioSeconds
 			Text:    strings.TrimSpace(line.Text),
 			Seconds: sec,
 		})
+	}
+	return out
+}
+
+func audioBookConversationBackgroundIndices(segments []audioBookConversationSegment, starts []float64) []int {
+	out := make([]int, len(segments))
+	if len(starts) == 0 {
+		return out
+	}
+	bg := 0
+	elapsed := 0.0
+	for i, seg := range segments {
+		for bg+1 < len(starts) && elapsed >= starts[bg+1] {
+			bg++
+		}
+		out[i] = bg
+		elapsed += seg.Seconds
 	}
 	return out
 }

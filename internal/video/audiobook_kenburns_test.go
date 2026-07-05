@@ -61,6 +61,25 @@ func TestAudioBookImageMovements(t *testing.T) {
 	}
 }
 
+func TestAudioBookConversationBackgroundIndicesFollowImageOffsets(t *testing.T) {
+	segments := []audioBookConversationSegment{
+		{Seconds: 4},
+		{Seconds: 4},
+		{Seconds: 4},
+		{Seconds: 4},
+		{Seconds: 4},
+	}
+	starts := []float64{0, 10, 18}
+
+	got := audioBookConversationBackgroundIndices(segments, starts)
+	want := []int{0, 0, 0, 1, 1}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("background indices = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestKenBurnsProgressHoldsAfterMove(t *testing.T) {
 	starts := []float64{0, 30}
 	// Move plays over kenBurnsMaxMoveSeconds then holds at 1.
@@ -121,7 +140,7 @@ func TestRenderKenBurnsAudioBookVideoSmoke(t *testing.T) {
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("output missing/empty: %v", err)
 	}
-	dur, err := probeDurationSeconds(outPath)
+	dur, err := ProbeDurationSeconds(outPath)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}

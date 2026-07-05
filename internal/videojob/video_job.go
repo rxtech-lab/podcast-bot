@@ -42,6 +42,77 @@ type Queue interface {
 	Add(context.Context, func(context.Context))
 }
 
+// recorderDrainTimeout bounds the wait for the audio.mp3 recorder to see the
+// LiveStream close after the pipeline finishes. The `-re` pacer plus the
+// session mixer can hold well over 30s of tail audio on long runs; a timeout
+// here means the recorded file is truncated and every consumer downstream
+// (S3 upload, video render, duration probe) ships a short artifact, so match
+// the pipeline's cleanup hard cap rather than cutting early.
+const recorderDrainTimeout = 90 * time.Second
+
+// logSubtitleAudioSync compares the persisted subtitle timeline against the
+// actual (ffprobe-measured) duration of the recorded audio and flags suspects.
+// Purely observational — it never fails the job — so per-job logs surface
+// caption/audio drift regressions that would otherwise ship silently.
+func logSubtitleAudioSync(logger *slog.Logger, orch *contentcreator.Orchestrator, audioPath string) {
+	if orch == nil {
+		return
+	}
+	cues := orch.SubtitleCues()
+	if len(cues) == 0 {
+		return
+	}
+	audioSecs, err := video.ProbeDurationSeconds(audioPath)
+	if err != nil {
+		logger.Warn("subtitle/audio sync check skipped — probe failed", "path", audioPath, "err", err)
+		return
+	}
+	first, last := cues[0], cues[len(cues)-1]
+	logger.Info("subtitle/audio sync",
+		"cues", len(cues),
+		"first_cue_start_s", first.Start.Seconds(),
+		"last_cue_end_s", last.End.Seconds(),
+		"audio_duration_s", audioSecs)
+	const overrunTolerance = 500 * time.Millisecond
+	if overrun := last.End - time.Duration(audioSecs*float64(time.Second)); overrun > overrunTolerance {
+		logger.Warn("subtitle/audio sync suspect — cues overrun the recorded audio",
+			"overrun_s", overrun.Seconds())
+	}
+	if first.Start < 0 {
+		logger.Warn("subtitle/audio sync suspect — negative first cue", "start_s", first.Start.Seconds())
+	}
+}
+
+// waitForStableFile blocks until path's size stops changing for quiet (or max
+// elapses / ctx is done). Guards downstream readers against a recorder that
+// outlived its drain timeout and is still appending.
+func waitForStableFile(ctx context.Context, logger *slog.Logger, path string, quiet, max time.Duration) {
+	const poll = 500 * time.Millisecond
+	deadline := time.Now().Add(max)
+	lastSize := int64(-1)
+	stableSince := time.Now()
+	for {
+		if info, err := os.Stat(path); err == nil {
+			if info.Size() != lastSize {
+				lastSize = info.Size()
+				stableSince = time.Now()
+			} else if time.Since(stableSince) >= quiet {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			logger.Warn("file did not stabilise before deadline — proceeding",
+				"path", path, "size", lastSize, "max", max)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(poll):
+		}
+	}
+}
+
 // Deps wires the runner to long-lived process state. Env is the
 // LoadEnv-produced config (its OutDir is the session root, not the
 // per-job dir — the runner appends jobs/<id>/). MCPCfg is forwarded
@@ -461,10 +532,12 @@ func run(ctx context.Context, deps Deps, jobID string,
 		status("finalising audio output…")
 		_ = live.CloseInput()
 		liveClosed = true
+		recorderDrained := recDone == nil
 		if recDone != nil {
 			select {
 			case <-recDone:
-			case <-time.After(30 * time.Second):
+				recorderDrained = true
+			case <-time.After(recorderDrainTimeout):
 				logger.Warn("audio recorder drain timed out — output may be truncated")
 			case <-ctx.Done():
 			}
@@ -482,6 +555,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 			}
 		}
 
+		// If the recorder drain timed out above, the file may still be
+		// growing; wait for it to stop changing before anything (S3 upload,
+		// video render, duration probe) reads it.
+		if !recorderDrained {
+			waitForStableFile(ctx, logger, audioPath, 2*time.Second, 30*time.Second)
+		}
+
 		info, statErr := os.Stat(audioPath)
 		if statErr != nil || info.Size() == 0 {
 			fail(deps, jobID, logger, fmt.Errorf("audio output missing or empty: %v", statErr))
@@ -489,6 +569,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 		}
 		status(fmt.Sprintf("audio ready · %.1f MB", float64(info.Size())/(1024*1024)))
 		subtitlesPath := stagePodcastSubtitles(jobOutDir, logger)
+		logSubtitleAudioSync(logger, orch, audioPath)
 
 		var s3Key string
 		var downloadURL string
@@ -584,7 +665,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 		// the context menu when done. Runs through the queue so encoders stay
 		// bounded; the job is already marked done for audio playback.
 		if topic.Type == config.ContentTypeAudioBook {
-			scheduleAudioBookVideo(deps, jobID, sub, topic, orch, audioPath, jobOutDir)
+			scheduleAudioBookVideo(deps, jobID, sub, topic, orch, audioPath, jobOutDir, recDone)
 		}
 		return
 	}

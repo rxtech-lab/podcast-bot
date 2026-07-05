@@ -192,8 +192,92 @@ type Mixer struct {
 	// at the top of each iteration to decide when it's safe to exit.
 	drainCh chan struct{}
 
+	// syncMu guards the TTS→output timeline map. The mix loop appends a
+	// sync point at every idle→active TTS transition: TTS that arrives
+	// while the loop is idle starts playing at the CURRENT output
+	// position, so any bed-only gap the session accumulated (slow LLM,
+	// TTS retries) shifts everything after it. Subtitle cue offsets are
+	// exact on the TTS byte timeline; MapTTSToOutput converts them to
+	// positions in the recorded output file.
+	syncMu     sync.Mutex
+	syncPoints []timelineSyncPoint
+	ttsMixed   int64 // cumulative TTS PCM bytes mixed into output
+	outMixed   int64 // cumulative output PCM bytes handed to the encoder
+
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// timelineSyncPoint records that TTS-timeline position tts started
+// playing at output-timeline position out. Between consecutive points
+// TTS plays continuously, so interior positions map linearly.
+type timelineSyncPoint struct {
+	tts time.Duration
+	out time.Duration
+}
+
+// pcmBytesToDuration converts a count of s16le PCM bytes at the
+// pipeline format to play time.
+func pcmBytesToDuration(n int64) time.Duration {
+	return time.Duration(n) * time.Second /
+		time.Duration(pcmSampleRate*pcmChannels*pcmSampleBytes)
+}
+
+// recordTTSBurstStart appends a sync point marking that the TTS stream
+// (at cumulative position ttsMixed) resumed at the current output
+// position. Called by the mix loop on every idle→active transition.
+func (m *Mixer) recordTTSBurstStart() {
+	m.syncMu.Lock()
+	m.syncPoints = append(m.syncPoints, timelineSyncPoint{
+		tts: pcmBytesToDuration(m.ttsMixed),
+		out: pcmBytesToDuration(m.outMixed),
+	})
+	m.syncMu.Unlock()
+}
+
+// advanceTimeline accounts one mix iteration: ttsBytes of TTS PCM were
+// mixed into an output chunk of outBytes.
+func (m *Mixer) advanceTimeline(ttsBytes, outBytes int) {
+	m.syncMu.Lock()
+	m.ttsMixed += int64(ttsBytes)
+	m.outMixed += int64(outBytes)
+	m.syncMu.Unlock()
+}
+
+// MapTTSToOutput converts a position on the TTS input timeline (the
+// cumulative duration of TTS audio written via Write, e.g. a subtitle
+// cue offset derived from byte counts) to the corresponding position in
+// the mixer's output stream — i.e. in the recorded audio file. Bed-only
+// gaps that the session accumulated between TTS bursts are reflected by
+// the sync points; positions between points map linearly, and positions
+// past the newest point extrapolate from it (exact unless another gap
+// follows, in which case a later call self-corrects). Identity before
+// any TTS has been mixed.
+func (m *Mixer) MapTTSToOutput(tts time.Duration) time.Duration {
+	if m == nil {
+		return tts
+	}
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	pts := m.syncPoints
+	if len(pts) == 0 {
+		return tts
+	}
+	// Binary search: last point with pts[i].tts <= tts.
+	lo, hi := 0, len(pts)-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if pts[mid].tts <= tts {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if pts[lo].tts > tts {
+		// Position precedes the first burst — clamp onto it.
+		return pts[0].out
+	}
+	return pts[lo].out + (tts - pts[lo].tts)
 }
 
 // overlayStream tracks one in-flight clip dispatched via OverlapClip.
@@ -829,10 +913,16 @@ func (m *Mixer) mixLoop() {
 		}
 		if len(ttsFrame) > 0 {
 			fadeIn := !ttsActive
+			if fadeIn {
+				// TTS resumed after a bed-only gap: pin this TTS position
+				// to the current output position for the subtitle timeline.
+				m.recordTTSBurstStart()
+			}
 			fadeOut := len(residual) <= len(mixBuf) && len(m.ttsCh) == 0
 			applyTTSDeClick(ttsFrame, fadeIn, fadeOut)
 		}
 		mixInto(mixBuf, ttsFrame, 1.0, ttsVolume*m.currentTTSScale())
+		m.advanceTimeline(len(ttsFrame), len(mixBuf))
 		if len(overlays) > 0 {
 			for _, ov := range overlays {
 				ovChunk := drainOverlayChunk(ov, len(mixBuf))

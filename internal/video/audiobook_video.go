@@ -45,6 +45,7 @@ type AudioBookVideoAvatar struct {
 type AudioBookVideoOptions struct {
 	Style    string
 	Title    string
+	Language string
 	Host     string
 	Speakers []string
 	Lines    []AudioBookVideoLine
@@ -72,7 +73,7 @@ func RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath string, imagePa
 	if _, err := os.Stat(audioPath); err != nil {
 		return fmt.Errorf("render audiobook video: audio missing: %w", err)
 	}
-	dur, err := probeDurationSeconds(audioPath)
+	dur, err := ProbeDurationSeconds(audioPath)
 	if err != nil || dur <= 0 {
 		return fmt.Errorf("render audiobook video: probe audio duration: %w", err)
 	}
@@ -134,10 +135,14 @@ func RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath string, imagePa
 		"-vf", vf,
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 		"-c:a", "aac", "-b:a", "128k",
-		"-shortest",
+		// No -shortest: never truncate the narration to the slideshow length.
 	)
 	if hasSubs {
 		args = append(args, "-c:s", "mov_text")
+		args = appendSubtitleTrackMetadata(args, []SubtitleTrack{{
+			Language: opts.Language,
+			Default:  true,
+		}})
 	}
 	args = append(args, "-movflags", "+faststart", outPath)
 
@@ -158,9 +163,9 @@ func isConversationalAudioBookStyle(style string) bool {
 	}
 }
 
-// probeDurationSeconds returns the container duration of a media file via
+// ProbeDurationSeconds returns the container duration of a media file via
 // ffprobe (shipped alongside ffmpeg).
-func probeDurationSeconds(path string) (float64, error) {
+func ProbeDurationSeconds(path string) (float64, error) {
 	out, err := exec.Command("ffprobe",
 		"-v", "error",
 		"-show_entries", "format=duration",

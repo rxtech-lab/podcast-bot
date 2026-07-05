@@ -12,9 +12,9 @@ final class PodcastTests: E2ETestCase {
 
     func testCreatePlanAcceptReady() throws {
         let app = launch()
-        app.buttons["library.new"].tap()
-        // The + button is now a menu: pick "New Station" from the dropdown.
-        let newStation = app.buttons["library.new.station"]
+        app.buttons["library.create"].tap()
+        // The + button is backend-rendered as a menu: pick the server action.
+        let newStation = app.buttons["library.new-station"]
         XCTAssertTrue(newStation.waitForExistence(timeout: 5), "new-station menu item not found")
         newStation.tap()
 

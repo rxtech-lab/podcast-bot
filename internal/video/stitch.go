@@ -170,23 +170,28 @@ func buildStitchArgs(hlsDir, outPath string, opts StitchOpts) ([]string, error) 
 		//      language code.
 		//   3. `default` disposition so AVPlayer's "Auto (Recommended)"
 		//      actually picks this track instead of falling back to off.
-		for i, track := range tracks {
-			iso, title := normalizeSubtitleLang(track.Language)
-			disposition := "0"
-			if track.Default {
-				disposition = "default"
-			}
-			args = append(args,
-				fmt.Sprintf("-metadata:s:s:%d", i), "language="+iso,
-				fmt.Sprintf("-metadata:s:s:%d", i), "title="+title,
-				fmt.Sprintf("-metadata:s:s:%d", i), "handler_name="+title,
-				fmt.Sprintf("-disposition:s:%d", i), disposition,
-			)
-		}
+		args = appendSubtitleTrackMetadata(args, tracks)
 	}
 
 	args = append(args, outPath)
 	return args, nil
+}
+
+func appendSubtitleTrackMetadata(args []string, tracks []SubtitleTrack) []string {
+	for i, track := range tracks {
+		iso, title := normalizeSubtitleLang(track.Language)
+		disposition := "0"
+		if track.Default {
+			disposition = "default"
+		}
+		args = append(args,
+			fmt.Sprintf("-metadata:s:s:%d", i), "language="+iso,
+			fmt.Sprintf("-metadata:s:s:%d", i), "title="+title,
+			fmt.Sprintf("-metadata:s:s:%d", i), "handler_name="+title,
+			fmt.Sprintf("-disposition:s:%d", i), disposition,
+		)
+	}
+	return args
 }
 
 // formatSeconds renders a Duration as a plain decimal-seconds string
