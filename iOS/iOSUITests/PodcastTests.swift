@@ -221,7 +221,7 @@ final class PodcastTests: E2ETestCase {
 
     func testPlanningShortfallDoesNotBlockHomeToolbar() throws {
         let app = launch()
-        openLibraryRow(app, id: "test-plan")
+        openLibraryRow(app, id: "test-plan-shortfall")
 
         let input = app.textFields["plan.input"]
         XCTAssertTrue(input.waitForExistence(timeout: 12), "planner input not found")

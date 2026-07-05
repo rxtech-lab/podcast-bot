@@ -152,6 +152,24 @@
             "state" : "new",
             "value" : "%1$lld episode%2$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 集%@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 集%@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 集%@"
+          }
         }
       }
     },
@@ -275,6 +293,24 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$lld. %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld. %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld. %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld. %@"
           }
         }
       }
@@ -668,6 +704,28 @@
         }
       }
     },
+    "Add child" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加子节点"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入子節點"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增子節點"
+          }
+        }
+      }
+    },
     "Add link or search" : {
       "localizations" : {
         "zh-Hans" : {
@@ -691,7 +749,48 @@
       }
     },
     "Add Podcasts" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入播客"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入播客"
+          }
+        }
+      }
+    },
+    "Add sibling" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加同级节点"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入同層節點"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增同層節點"
+          }
+        }
+      }
     },
     "Add Sources" : {
       "localizations" : {
@@ -716,7 +815,26 @@
       }
     },
     "Add to Album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加到专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入到專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入專輯"
+          }
+        }
+      }
     },
     "Added %lld source:" : {
       "comment" : "User bubble header when one source is added; followed by the URL list",
@@ -810,10 +928,48 @@
       }
     },
     "Album creation is not available on this server." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务器不支持创建专辑。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此伺服器不支援建立專輯。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此伺服器不支援建立專輯。"
+          }
+        }
+      }
     },
     "Album name" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "专辑名称"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "專輯名稱"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "專輯名稱"
+          }
+        }
+      }
     },
     "All" : {
       "comment" : "Library visibility filter: all stations",
@@ -972,6 +1128,28 @@
         }
       }
     },
+    "Audio book %@ will appear here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有声书 %@ 将显示在这里。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有聲書 %@ 會顯示喺呢度。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有聲書 %@ 會顯示在這裡。"
+          }
+        }
+      }
+    },
     "Audio message" : {
       "comment" : "Fallback label for a voice message whose transcript is unavailable",
       "localizations" : {
@@ -1019,7 +1197,26 @@
       }
     },
     "Audiobooks" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有声书"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有聲書"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有聲書"
+          }
+        }
+      }
     },
     "Auto" : {
       "comment" : "Voice message language option that uses backend transcription",
@@ -1067,10 +1264,49 @@
       }
     },
     "Automatic" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動"
+          }
+        }
+      }
     },
     "Automatic voice" : {
-      "comment" : "Voice row label when no explicit TTS voice is picked"
+      "comment" : "Voice row label when no explicit TTS voice is picked",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动语音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動語音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動語音"
+          }
+        }
+      }
     },
     "Balance" : {
       "comment" : "User menu label when the points balance is unknown",
@@ -1236,7 +1472,26 @@
       }
     },
     "Chapter %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 章"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 章"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 章"
+          }
+        }
+      }
     },
     "Chapters" : {
       "localizations" : {
@@ -1261,7 +1516,26 @@
       }
     },
     "Chapters %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "章节 %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "章節 %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "章節 %@"
+          }
+        }
+      }
     },
     "Chapters %lld-%lld" : {
       "localizations" : {
@@ -1269,6 +1543,24 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Chapters %1$lld-%2$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$lld-%2$lld 章"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$lld-%2$lld 章"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$lld-%2$lld 章"
           }
         }
       }
@@ -1521,7 +1813,26 @@
       }
     },
     "Close image" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭图片"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉圖片"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉圖片"
+          }
+        }
+      }
     },
     "Connect Notion" : {
       "localizations" : {
@@ -1655,6 +1966,28 @@
         }
       }
     },
+    "Could not generate mindmap" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法生成思维导图"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法生成心智圖"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法產生心智圖"
+          }
+        }
+      }
+    },
     "Could not generate summary" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1678,7 +2011,26 @@
       }
     },
     "Could not generate video" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法生成视频"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法生成影片"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法產生影片"
+          }
+        }
+      }
     },
     "Could not load %@" : {
       "localizations" : {
@@ -1791,6 +2143,72 @@
         }
       }
     },
+    "Could not render the mindmap." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法渲染思维导图。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法顯示心智圖。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法轉譯心智圖。"
+          }
+        }
+      }
+    },
+    "Could not save the SVG file." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存 SVG 文件。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法儲存 SVG 檔案。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法儲存 SVG 檔案。"
+          }
+        }
+      }
+    },
+    "Could not save to Camera Roll." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存到相机胶卷。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法儲存到相機膠卷。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法儲存到相機膠卷。"
+          }
+        }
+      }
+    },
     "Could not update the plan" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1814,10 +2232,48 @@
       }
     },
     "Couldn't add podcasts" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法添加播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法加入播客"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法加入播客"
+          }
+        }
+      }
     },
     "Couldn't add to album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法添加到专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法加入到專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法加入專輯"
+          }
+        }
+      }
     },
     "Couldn’t export" : {
       "localizations" : {
@@ -1886,13 +2342,70 @@
       }
     },
     "Couldn't load album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入專輯"
+          }
+        }
+      }
     },
     "Couldn't load chapters" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载章节"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入章節"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入章節"
+          }
+        }
+      }
     },
     "Couldn't load speakers" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载发言人"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入講者"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入講者"
+          }
+        }
+      }
     },
     "Couldn't open link" : {
       "localizations" : {
@@ -2008,10 +2521,48 @@
       }
     },
     "Couldn't start generation" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法开始生成"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開始生成"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開始產生"
+          }
+        }
+      }
     },
     "Couldn't update the album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更新专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更新專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更新專輯"
+          }
+        }
+      }
     },
     "Cover" : {
       "localizations" : {
@@ -2036,7 +2587,26 @@
       }
     },
     "Create" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立"
+          }
+        }
+      }
     },
     "Create AI cover art in the background" : {
       "extractionState" : "stale",
@@ -2062,7 +2632,26 @@
       }
     },
     "Create albums from the + menu in your library and group %@s into one collection with its own cover." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在资料库的 + 菜单中创建专辑，将 %@s 分组到一个带有专属封面的收藏中。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "喺資料庫嘅 + 選單建立專輯，將 %@s 分組成一個有專屬封面嘅收藏。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在資料庫的 + 選單建立專輯，將 %@s 分組到一個有專屬封面的收藏中。"
+          }
+        }
+      }
     },
     "Create Audio Books" : {
       "localizations" : {
@@ -2423,7 +3012,48 @@
       }
     },
     "Delete" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除"
+          }
+        }
+      }
+    },
+    "Delete this node and everything under it?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要删除此节点及其下的所有内容吗？"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要刪除此節點及其下所有內容嗎？"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要刪除此節點及其下所有內容嗎？"
+          }
+        }
+      }
     },
     "Deselect source" : {
       "localizations" : {
@@ -2512,6 +3142,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "討論"
+          }
+        }
+      }
+    },
+    "Discussion %@ will appear here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讨论 %@ 将显示在这里。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "討論 %@ 會顯示喺呢度。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "討論 %@ 會顯示在這裡。"
           }
         }
       }
@@ -2854,6 +3506,28 @@
         }
       }
     },
+    "Edit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯"
+          }
+        }
+      }
+    },
     "Edit Cover" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2872,6 +3546,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "編輯封面"
+          }
+        }
+      }
+    },
+    "Edit node" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑节点"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯節點"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯節點"
           }
         }
       }
@@ -2923,16 +3619,92 @@
       }
     },
     "Enter fullscreen" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进入全屏"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進入全螢幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進入全螢幕"
+          }
+        }
+      }
     },
     "Episode" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "单集"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "單集"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "單集"
+          }
+        }
+      }
     },
     "Every podcast already belongs to an album." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个播客都已属于一个专辑。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每個播客都已經屬於一個專輯。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每個播客都已經屬於一個專輯。"
+          }
+        }
+      }
     },
     "Exit fullscreen" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退出全屏"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "離開全螢幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "離開全螢幕"
+          }
+        }
+      }
     },
     "Expires %@" : {
       "localizations" : {
@@ -2974,6 +3746,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "匯出"
+          }
+        }
+      }
+    },
+    "Export as SVG" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出为 SVG"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出為 SVG"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯出為 SVG"
           }
         }
       }
@@ -3431,6 +4225,24 @@
             "state" : "new",
             "value" : "Generate %1$lld chapter%2$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成 %1$lld 个章节%2$@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成 %1$lld 個章節%2$@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "產生 %1$lld 個章節%2$@"
+          }
         }
       }
     },
@@ -3502,7 +4314,26 @@
       }
     },
     "Generate more chapters (%lld left)" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成更多章节（剩余 %lld）"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成更多章節（剩餘 %lld）"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "產生更多章節（剩餘 %lld）"
+          }
+        }
+      }
     },
     "Generate podcast" : {
       "extractionState" : "stale",
@@ -3661,7 +4492,26 @@
       }
     },
     "Generate up to %lld chapters at a time. Remaining chapters can be generated later as follow-up episodes in the same album." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次最多生成 %lld 章。剩余章节稍后可在同一专辑中作为后续单集生成。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次最多生成 %lld 章。剩餘章節之後可喺同一專輯生成為後續單集。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次最多產生 %lld 章。剩餘章節稍後可在同一專輯中產生成後續單集。"
+          }
+        }
+      }
     },
     "Generating" : {
       "localizations" : {
@@ -3732,7 +4582,26 @@
       }
     },
     "Generating…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在生成…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在生成…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在產生…"
+          }
+        }
+      }
     },
     "Generation failed" : {
       "comment" : "Fallback status when podcast generation failed without a server message",
@@ -3821,6 +4690,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開始使用"
+          }
+        }
+      }
+    },
+    "Give this idea a short title." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为这个想法起一个简短标题。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為呢個想法加一個簡短標題。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為這個想法加上一個簡短標題。"
           }
         }
       }
@@ -4008,7 +4899,26 @@
       }
     },
     "Let the engine pick a fitting voice" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让引擎选择合适的语音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讓引擎選擇合適嘅語音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讓引擎選擇合適的語音"
+          }
+        }
+      }
     },
     "Liked" : {
       "localizations" : {
@@ -4189,10 +5099,48 @@
       }
     },
     "Loading models" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载模型"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入模型"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入模型"
+          }
+        }
+      }
     },
     "Loading models…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载模型…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入模型…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入模型…"
+          }
+        }
+      }
     },
     "Loading podcast" : {
       "extractionState" : "stale",
@@ -4287,7 +5235,26 @@
       }
     },
     "Loading voices…" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载语音…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入語音…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入語音…"
+          }
+        }
+      }
     },
     "Loading..." : {
       "comment" : "Resolving parent discussion title",
@@ -4336,7 +5303,26 @@
       }
     },
     "Long audiobooks generate in batches of up to 5 chapters. Remaining chapters can be generated later from the podcast." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长篇有声书会按最多 5 章一批生成。剩余章节稍后可从播客中继续生成。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長篇有聲書會以最多 5 章一批生成。剩餘章節之後可從播客繼續生成。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長篇有聲書會以最多 5 章一批產生。剩餘章節稍後可從播客繼續產生。"
+          }
+        }
+      }
     },
     "Make it public" : {
       "localizations" : {
@@ -4427,7 +5413,26 @@
       }
     },
     "Max chapters per generation: %lld" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次生成的最大章节数：%lld"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次生成嘅最大章節數：%lld"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次產生的最大章節數：%lld"
+          }
+        }
+      }
     },
     "Message the planner" : {
       "localizations" : {
@@ -4518,6 +5523,28 @@
         }
       }
     },
+    "Mindmap support" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思维导图支持"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖支援"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖支援"
+          }
+        }
+      }
+    },
     "My %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4563,7 +5590,48 @@
       }
     },
     "New Album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增專輯"
+          }
+        }
+      }
+    },
+    "New idea" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新想法"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新想法"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新想法"
+          }
+        }
+      }
     },
     "New link" : {
       "localizations" : {
@@ -4698,6 +5766,50 @@
         }
       }
     },
+    "No Audio Book %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有有声书 %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有有聲書 %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有有聲書 %@"
+          }
+        }
+      }
+    },
+    "No Discussion %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有讨论 %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有討論 %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有討論 %@"
+          }
+        }
+      }
+    },
     "No Followed Creators" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4766,7 +5878,26 @@
       }
     },
     "No models available." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可用模型。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可用模型。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可用模型。"
+          }
+        }
+      }
     },
     "No podcasts yet" : {
       "extractionState" : "stale",
@@ -5015,7 +6146,26 @@
       }
     },
     "No voices available." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可用语音。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可用語音。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可用語音。"
+          }
+        }
+      }
     },
     "None" : {
       "comment" : "No parent discussion selected",
@@ -5040,8 +6190,49 @@
         }
       }
     },
+    "Note (optional)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备注（可选）"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備註（選填）"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備註（選填）"
+          }
+        }
+      }
+    },
     "Nothing to add" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可添加的内容"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可加入嘅內容"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可加入的內容"
+          }
+        }
+      }
     },
     "Notion Pages" : {
       "localizations" : {
@@ -5111,7 +6302,26 @@
       }
     },
     "Open image" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开图片"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟圖片"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟圖片"
+          }
+        }
+      }
     },
     "Open in Notion" : {
       "localizations" : {
@@ -5225,10 +6435,49 @@
       }
     },
     "Organize with albums" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用专辑整理"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用專輯整理"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用專輯整理"
+          }
+        }
+      }
     },
     "Others" : {
-      "comment" : "Model picker section for models without a company prefix"
+      "comment" : "Model picker section for models without a company prefix",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他"
+          }
+        }
+      }
     },
     "Panelists" : {
       "localizations" : {
@@ -5315,6 +6564,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "PDF、Word、簡報、圖片"
+          }
+        }
+      }
+    },
+    "Photo access was not granted." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未授予照片访问权限。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未獲授予相片存取權限。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未授予照片存取權限。"
           }
         }
       }
@@ -5677,7 +6948,26 @@
       }
     },
     "Planning" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规划中"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "規劃中"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "規劃中"
+          }
+        }
+      }
     },
     "Planning and generating %@ will show up here." : {
       "localizations" : {
@@ -5746,9 +7036,6 @@
           }
         }
       }
-    },
-    "Play" : {
-
     },
     "Please use the attached files." : {
       "comment" : "Fallback chat message when sending attachments without text",
@@ -5891,7 +7178,26 @@
       }
     },
     "Podcast name" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播客名称"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播客名稱"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播客名稱"
+          }
+        }
+      }
     },
     "Podcasts" : {
       "localizations" : {
@@ -6488,7 +7794,26 @@
       }
     },
     "Publish Album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发布专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "發布專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "發布專輯"
+          }
+        }
+      }
     },
     "Publish Station" : {
       "localizations" : {
@@ -6782,22 +8107,136 @@
       }
     },
     "Remove Album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除專輯"
+          }
+        }
+      }
     },
     "Remove from Album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从专辑中移除"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從專輯移除"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從專輯移除"
+          }
+        }
+      }
     },
     "Remove this album?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除此专辑吗？"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除此專輯嗎？"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除此專輯嗎？"
+          }
+        }
+      }
     },
     "Rename" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名"
+          }
+        }
+      }
     },
     "Rename Album" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名專輯"
+          }
+        }
+      }
     },
     "Rename Podcast" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名播客"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名播客"
+          }
+        }
+      }
     },
     "Request failed (%lld): %@" : {
       "comment" : "Generic HTTP error; code is the status code, msg is the server message",
@@ -6966,7 +8405,26 @@
       }
     },
     "Sample Image (E2E)" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "示例图片（E2E）"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "範例圖片（E2E）"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "範例圖片（E2E）"
+          }
+        }
+      }
     },
     "Save" : {
       "localizations" : {
@@ -6986,6 +8444,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "儲存"
+          }
+        }
+      }
+    },
+    "Save failed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存失败"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存失敗"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存失敗"
           }
         }
       }
@@ -7056,6 +8536,50 @@
         }
       }
     },
+    "Saved" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存"
+          }
+        }
+      }
+    },
+    "Saved to Camera Roll." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存到相机胶卷。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存到相機膠卷。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存到相機膠卷。"
+          }
+        }
+      }
+    },
     "Search %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7079,7 +8603,26 @@
       }
     },
     "Search models" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索模型"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋模型"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋模型"
+          }
+        }
+      }
     },
     "Search pages" : {
       "localizations" : {
@@ -7148,7 +8691,26 @@
       }
     },
     "Search voices" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索语音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋語音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋語音"
+          }
+        }
+      }
     },
     "Search your %@" : {
       "localizations" : {
@@ -7375,7 +8937,26 @@
       }
     },
     "Select chapters to generate" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择要生成的章节"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇要生成嘅章節"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇要產生的章節"
+          }
+        }
+      }
     },
     "Select source" : {
       "localizations" : {
@@ -8135,6 +9716,28 @@
         }
       }
     },
+    "Summaries can include mindmaps, and individual mindmaps can be exported on their own." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要现在可以包含思维导图，也可以单独导出思维导图。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要而家可以包含心智圖，亦可以單獨匯出心智圖。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要現在可以包含心智圖，也可以單獨匯出心智圖。"
+          }
+        }
+      }
+    },
     "Switch between the cover art and synced captions while listening full screen." : {
       "localizations" : {
         "zh-Hans" : {
@@ -8361,7 +9964,48 @@
       }
     },
     "The grouping is removed; the podcasts stay in your library." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组会被移除；播客仍会保留在你的资料库中。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分組會被移除；播客仍會保留喺你嘅資料庫。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分組會被移除；播客仍會保留在你的資料庫中。"
+          }
+        }
+      }
+    },
+    "The mindmap is not ready yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思维导图尚未就绪。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖尚未就緒。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖尚未就緒。"
+          }
+        }
+      }
     },
     "The plan update failed. Please try again." : {
       "comment" : "Fallback error when an SSE error event carries no message",
@@ -8662,7 +10306,26 @@
       }
     },
     "This podcast doesn't belong to an album yet." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此播客尚未属于任何专辑。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此播客尚未屬於任何專輯。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此播客尚未屬於任何專輯。"
+          }
+        }
+      }
     },
     "This share link has expired or was revoked." : {
       "comment" : "Shown when opening an expired/revoked share link",
@@ -8782,6 +10445,28 @@
         }
       }
     },
+    "Title" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標題"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標題"
+          }
+        }
+      }
+    },
     "Tool" : {
       "comment" : "Generic tool card title",
       "localizations" : {
@@ -8806,7 +10491,26 @@
       }
     },
     "Top Up" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "充值"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "增值"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲值"
+          }
+        }
+      }
     },
     "Topic" : {
       "extractionState" : "stale",
@@ -8961,6 +10665,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "類型"
+          }
+        }
+      }
+    },
+    "Undo" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還原"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "復原"
           }
         }
       }
@@ -9526,7 +11252,26 @@
       }
     },
     "Your Albums" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的专辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你嘅專輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的專輯"
+          }
+        }
+      }
     },
     "中文支持" : {
       "localizations" : {

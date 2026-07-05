@@ -159,6 +159,10 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     /// body is never carried here — it is fetched separately when the summary view
     /// mounts.
     var summary: SummaryMeta?
+    /// Content-free descriptor of the discussion's generated mindmap. Present
+    /// only for discussion-type podcasts; the node tree body is fetched
+    /// separately when the mindmap view mounts.
+    var mindmap: SummaryMeta?
     var allowSendingMessage: Bool?
     var createdAt: String?
     var updatedAt: String?
@@ -202,6 +206,7 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case editTurnsBefore = "edit_turns_before"
         case progress
         case summary
+        case mindmap
         case allowSendingMessage
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -297,6 +302,16 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     /// Whether the backend says this owner can manually trigger summary
     /// generation for a ready podcast that has no finished summary.
     var canGenerateSummary: Bool { summary?.generation == true }
+
+    /// Whether a mindmap is ready to view for this discussion podcast.
+    var hasMindmap: Bool { mindmap?.available == true }
+
+    /// Whether mindmap generation is already in progress.
+    var mindmapPending: Bool { mindmap?.pending == true || mindmap?.status == .generating }
+
+    /// Whether the backend says this owner can manually trigger mindmap
+    /// generation for a ready discussion that has no finished mindmap.
+    var canGenerateMindmap: Bool { mindmap?.generation == true }
 }
 
 /// Lifecycle of a generated summary document.

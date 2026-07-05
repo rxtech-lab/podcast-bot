@@ -1,11 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/sirily11/debate-bot/internal/summarizer"
 )
 
 // notionExportRequest is the body of POST /api/discussions/{id}/summary/notion.
@@ -74,6 +81,11 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 
 	markdown := s.summaryMarkdownWithLink(id, doc.Markdown)
 	blocks := markdownToNotionBlocks(markdown)
+	// Discussions with a ready mindmap get it embedded as a rendered SVG image
+	// (uploaded to the workspace on the fly) — richer than the in-app deep link,
+	// which would be dead inside Notion. Best-effort: an embed failure must not
+	// fail the summary export.
+	blocks = append(blocks, s.notionMindmapBlocks(r.Context(), conn.AccessToken, visible, docType)...)
 
 	pageURL, pageID, err := s.createNotionPage(r.Context(), conn.AccessToken, parentPageID, title, blocks)
 	if err != nil {
@@ -81,6 +93,95 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, notionExportResponse{URL: pageURL, PageID: pageID})
+}
+
+// notionMindmapBlocks renders the discussion's ready mindmap to SVG, uploads
+// it to the requester's workspace via Notion's file upload API, and returns a
+// heading + image block to append to the exported summary. Only applies to the
+// summary document of a discussion-type podcast. Returns nil (with a warning
+// log) on any failure so the export proceeds without the image.
+func (s *Server) notionMindmapBlocks(ctx context.Context, token string, d *Discussion, docType string) []map[string]any {
+	if docType != SummaryDocTypeSummary || !discussionIsDiscussion(d) {
+		return nil
+	}
+	doc, err := s.d.Discussions.SummaryDocumentFor(ctx, d.ID, SummaryDocTypeMindmap)
+	if err != nil || doc == nil || doc.Status != SummaryReadyState {
+		return nil
+	}
+	var spec summarizer.MindmapSpec
+	if err := json.Unmarshal([]byte(doc.Markdown), &spec); err != nil {
+		s.logger().Warn("notion mindmap embed: stored mindmap corrupted", "discussion", d.ID, "err", err)
+		return nil
+	}
+	svg := mindmapSVG(&spec)
+	if len(svg) == 0 {
+		return nil
+	}
+	uploadID, err := s.notionUploadFile(ctx, token, "mindmap.svg", "image/svg+xml", svg)
+	if err != nil {
+		s.logger().Warn("notion mindmap embed: upload failed", "discussion", d.ID, "err", err)
+		return nil
+	}
+	return []map[string]any{
+		notionTextBlockObj("heading_2", "Mindmap"),
+		{
+			"object": "block",
+			"type":   "image",
+			"image": map[string]any{
+				"type":        "file_upload",
+				"file_upload": map[string]any{"id": uploadID},
+			},
+		},
+	}
+}
+
+// notionUploadFile pushes bytes into the requester's workspace via Notion's
+// file upload API (create the upload, then send the content as multipart) and
+// returns the upload id for attaching to a block.
+func (s *Server) notionUploadFile(ctx context.Context, token, filename, contentType string, data []byte) (string, error) {
+	var created struct {
+		ID        string `json:"id"`
+		UploadURL string `json:"upload_url"`
+	}
+	if err := s.doNotionAPI(ctx, token, http.MethodPost, "/v1/file_uploads", map[string]any{
+		"mode":         "single_part",
+		"filename":     filename,
+		"content_type": contentType,
+	}, &created); err != nil {
+		return "", err
+	}
+	sendURL := strings.TrimSpace(created.UploadURL)
+	if sendURL == "" {
+		sendURL = s.d.Env.NotionAPIBaseURL + "/v1/file_uploads/" + url.PathEscape(created.ID) + "/send"
+	}
+
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	part, err := form.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {fmt.Sprintf(`form-data; name="file"; filename=%q`, filename)},
+		"Content-Type":        {contentType},
+	})
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", err
+	}
+	if err := form.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sendURL, &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Notion-Version", notionVersion)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	if err := doNotionJSON(req, nil); err != nil {
+		return "", err
+	}
+	return created.ID, nil
 }
 
 // notionMaxChildrenPerRequest is Notion's cap on the number of child blocks

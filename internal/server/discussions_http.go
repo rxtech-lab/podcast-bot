@@ -153,16 +153,21 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid visibility", http.StatusBadRequest)
 		return
 	}
+	contentType := strings.TrimSpace(r.URL.Query().Get("type"))
+	if contentType != "" && contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeAudioBook {
+		http.Error(w, "invalid type", http.StatusBadRequest)
+		return
+	}
 	timer := newStationTimer()
 	var items []Discussion
 	var err error
 	qStart := time.Now()
-	if query != "" && visibility != "" {
-		items, err = s.d.Discussions.SearchByVisibility(r.Context(), user.ID, query, visibility, limit, offset)
+	if query != "" && (visibility != "" || contentType != "") {
+		items, err = s.d.Discussions.SearchByFilters(r.Context(), user.ID, query, visibility, contentType, limit, offset)
 	} else if query != "" {
 		items, err = s.d.Discussions.Search(r.Context(), user.ID, query, limit, offset)
-	} else if visibility != "" {
-		items, err = s.d.Discussions.ListByVisibility(r.Context(), user.ID, visibility, limit, offset)
+	} else if visibility != "" || contentType != "" {
+		items, err = s.d.Discussions.ListByFilters(r.Context(), user.ID, visibility, contentType, limit, offset)
 	} else {
 		items, err = s.d.Discussions.List(r.Context(), user.ID, limit, offset)
 	}
@@ -1109,6 +1114,35 @@ func (s *Server) applyDiscussionSummaryMeta(ctx context.Context, d *Discussion) 
 	finalizeDiscussionSummaryMeta(d)
 }
 
+// applyDiscussionMindmapMeta attaches the content-free mindmap descriptor to a
+// discussion on the detail path. Mindmaps exist only for discussion-type
+// podcasts; for a ready owner discussion without a mindmap row, the descriptor
+// advertises that manual generation can be started.
+func (s *Server) applyDiscussionMindmapMeta(ctx context.Context, d *Discussion) {
+	if d == nil || s.d.Discussions == nil {
+		return
+	}
+	if !discussionIsDiscussion(d) {
+		d.Mindmap = nil
+		return
+	}
+	meta, err := s.d.Discussions.SummaryMetaFor(ctx, d.ID, SummaryDocTypeMindmap)
+	if err != nil {
+		s.logger().Warn("mindmap meta lookup failed", "discussion", d.ID, "err", err)
+		return
+	}
+	d.Mindmap = meta
+	if d.Mindmap == nil && d.Status == DiscussionReady {
+		d.Mindmap = &SummaryMeta{
+			DocType:    SummaryDocTypeMindmap,
+			Generation: d.IsOwner,
+		}
+	}
+	if d.Mindmap != nil && !d.Mindmap.Available && !d.Mindmap.Pending && d.Status == DiscussionReady {
+		d.Mindmap.Generation = d.IsOwner
+	}
+}
+
 func finalizeDiscussionSummaryMeta(d *Discussion) {
 	if d == nil {
 		return
@@ -1173,12 +1207,17 @@ func (s *Server) handleDiscussionSummaryGenerate(w http.ResponseWriter, r *http.
 		return
 	}
 	s.applyDiscussionSummaryMeta(r.Context(), updated)
+	s.applyDiscussionMindmapMeta(r.Context(), updated)
 	s.logDiscussionSummaryReturn("discussions.summary.generate", updated)
 	writeJSON(w, updated)
 }
 
 func discussionIsAudioBook(d *Discussion) bool {
 	return d != nil && d.Script != nil && strings.TrimSpace(d.Script.Type) == config.ContentTypeAudioBook
+}
+
+func discussionIsDiscussion(d *Discussion) bool {
+	return d != nil && d.Script != nil && strings.TrimSpace(d.Script.Type) == config.ContentTypeDiscussion
 }
 
 // handleDiscussionSummary serves the generated summary document's Markdown body
@@ -1213,6 +1252,9 @@ func (s *Server) handleDiscussionSummary(w http.ResponseWriter, r *http.Request)
 	// in-app summary view, which renders this body) always link back to the
 	// original podcast with the current frontend URL.
 	doc.Markdown = s.summaryMarkdownWithLink(id, doc.Markdown)
+	if normalizeDocType(docType) == SummaryDocTypeSummary {
+		doc.Markdown = s.summaryMarkdownWithMindmapLink(r.Context(), visible, doc.Markdown)
+	}
 	writeJSON(w, doc)
 }
 
@@ -1756,6 +1798,7 @@ func (s *Server) prepareDiscussionDetail(r *http.Request, d *Discussion, include
 	}
 	t0 = time.Now()
 	s.applyDiscussionSummaryMeta(r.Context(), d)
+	s.applyDiscussionMindmapMeta(r.Context(), d)
 	if timer != nil {
 		timer.mark("summary", t0)
 	}

@@ -38,6 +38,8 @@ struct LibraryView: View {
     @State private var loadedSearchQuery = ""
     @State private var visibilityFilter: LibraryVisibilityFilter = .all
     @State private var loadedVisibilityFilter: LibraryVisibilityFilter = .all
+    @State private var typeFilter: LibraryTypeFilter = .all
+    @State private var loadedTypeFilter: LibraryTypeFilter = .all
     @State private var toolbarItems: [DiscussionUIActionItem] = []
     @State private var isSearchLoading = false
     @State private var searchTask: Task<Void, Never>?
@@ -135,7 +137,14 @@ struct LibraryView: View {
                 searchTask?.cancel()
                 Task {
                     await loadHomeToolbar()
-                    await load(visibility: newValue, showsSearchOverlay: hasLoadedInitialPage)
+                    await load(visibility: newValue, type: typeFilter, showsSearchOverlay: hasLoadedInitialPage)
+                }
+            }
+            .onChange(of: typeFilter) { _, newValue in
+                searchTask?.cancel()
+                Task {
+                    await loadHomeToolbar()
+                    await load(visibility: visibilityFilter, type: newValue, showsSearchOverlay: hasLoadedInitialPage)
                 }
             }
             .onDisappear {
@@ -205,8 +214,8 @@ struct LibraryView: View {
             loadErrorState
         } else if discussions.isEmpty && !loadedSearchQuery.isEmpty {
             searchEmptyState
-        } else if discussions.isEmpty && loadedVisibilityFilter != .all {
-            visibilityEmptyState
+        } else if discussions.isEmpty && (loadedVisibilityFilter != .all || loadedTypeFilter != .all) {
+            filterEmptyState
         } else if discussions.isEmpty {
             emptyState
         } else {
@@ -277,13 +286,17 @@ struct LibraryView: View {
     @ViewBuilder
     private func homeToolbarMenuLeaf(_ item: DiscussionUIActionItem) -> some View {
         let actionItem = item.children.first ?? item
-        Button(role: buttonRole(for: actionItem)) {
-            performHomeToolbarAction(actionItem)
-        } label: {
-            homeToolbarLabel(actionItem)
+        if actionItem.isDivider {
+            Divider()
+        } else {
+            Button(role: buttonRole(for: actionItem)) {
+                performHomeToolbarAction(actionItem)
+            } label: {
+                homeToolbarLabel(actionItem)
+            }
+            .disabled(!actionItem.enabled)
+            .accessibilityIdentifier("library.\(actionItem.id)")
         }
-        .disabled(!actionItem.enabled)
-        .accessibilityIdentifier("library.\(actionItem.id)")
     }
 
     @ViewBuilder
@@ -332,7 +345,8 @@ struct LibraryView: View {
         do {
             let response = try await APIClient(tokens: auth).homeUIActions(
                 supportsPoints: purchases.isConfigured,
-                visibility: visibilityFilter.rawValue
+                visibility: visibilityFilter.rawValue,
+                type: typeFilter.rawValue
             )
             toolbarItems = response.toolbars
         } catch {
@@ -362,9 +376,15 @@ struct LibraryView: View {
             visibilityFilter = .public
         case ["filter", "private"]:
             visibilityFilter = .private
+        case ["type", "all"]:
+            typeFilter = .all
+        case ["type", "discussion"]:
+            typeFilter = .discussion
+        case ["type", "audio-book"]:
+            typeFilter = .audioBook
         case ["action", "refresh"]:
             Task {
-                await load(searchQuery: searchText, visibility: visibilityFilter)
+                await load(searchQuery: searchText, visibility: visibilityFilter, type: typeFilter)
                 await purchases.refreshBalance()
                 await loadHomeToolbar()
             }
@@ -570,16 +590,18 @@ struct LibraryView: View {
 
     private func load(searchQuery: String? = nil,
                       visibility: LibraryVisibilityFilter? = nil,
+                      type: LibraryTypeFilter? = nil,
                       showsSearchOverlay: Bool = false) async {
         let query = normalizedSearchQuery(searchQuery ?? searchText)
         let filter = visibility ?? visibilityFilter
+        let podcastType = type ?? typeFilter
         if showsSearchOverlay {
             isSearchLoading = true
         }
         isLoading = true
         defer {
             isLoading = false
-            if showsSearchOverlay && normalizedSearchQuery(searchText) == query && visibilityFilter == filter {
+            if showsSearchOverlay && normalizedSearchQuery(searchText) == query && visibilityFilter == filter && typeFilter == podcastType {
                 isSearchLoading = false
             }
             hasLoadedInitialPage = true
@@ -589,12 +611,16 @@ struct LibraryView: View {
                 limit: pageSize,
                 offset: 0,
                 query: query,
-                visibility: filter.apiVisibility
+                visibility: filter.apiVisibility,
+                type: podcastType.apiType
             )
-            guard normalizedSearchQuery(searchText) == query, visibilityFilter == filter else { return }
+            guard normalizedSearchQuery(searchText) == query,
+                  visibilityFilter == filter,
+                  typeFilter == podcastType else { return }
             let selectedID = selectedDiscussionID
             loadedSearchQuery = query
             loadedVisibilityFilter = filter
+            loadedTypeFilter = podcastType
             discussions = items
             loadErrorMessage = nil
             // Reconcile the iPad detail selection with the refreshed list so the
@@ -615,6 +641,7 @@ struct LibraryView: View {
         guard canLoadMore, !isLoadingMore, !isLoading else { return }
         let query = loadedSearchQuery
         let filter = loadedVisibilityFilter
+        let podcastType = loadedTypeFilter
         let offset = discussions.count
         isLoadingMore = true
         defer { isLoadingMore = false }
@@ -623,12 +650,15 @@ struct LibraryView: View {
                 limit: pageSize,
                 offset: offset,
                 query: query,
-                visibility: filter.apiVisibility
+                visibility: filter.apiVisibility,
+                type: podcastType.apiType
             )
             guard normalizedSearchQuery(searchText) == query,
                   loadedSearchQuery == query,
                   visibilityFilter == filter,
-                  loadedVisibilityFilter == filter else { return }
+                  loadedVisibilityFilter == filter,
+                  typeFilter == podcastType,
+                  loadedTypeFilter == podcastType else { return }
             let existing = Set(discussions.map(\.id))
             discussions.append(contentsOf: items.filter { !existing.contains($0.id) })
             canLoadMore = items.count == pageSize
@@ -646,7 +676,7 @@ struct LibraryView: View {
                 try await APIClient(tokens: auth).deleteDiscussion(id: target.id)
             } catch {
                 reportLoadError(error, inlineWhenEmpty: false)
-                await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter)
+                await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter, type: loadedTypeFilter)
             }
         }
     }
@@ -759,7 +789,7 @@ struct LibraryView: View {
             isSearchLoading = false
             guard !loadedSearchQuery.isEmpty else { return }
             searchTask = Task {
-                await load(searchQuery: "", visibility: visibilityFilter)
+                await load(searchQuery: "", visibility: visibilityFilter, type: typeFilter)
             }
             return
         }
@@ -771,7 +801,7 @@ struct LibraryView: View {
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            await load(searchQuery: text, visibility: visibilityFilter, showsSearchOverlay: true)
+            await load(searchQuery: text, visibility: visibilityFilter, type: typeFilter, showsSearchOverlay: true)
         }
     }
 
@@ -816,7 +846,7 @@ struct LibraryView: View {
             Button {
                 loadErrorMessage = nil
                 Task {
-                    await load(searchQuery: searchText, visibility: visibilityFilter)
+                    await load(searchQuery: searchText, visibility: visibilityFilter, type: typeFilter)
                     await loadHomeToolbar()
                 }
             } label: {
@@ -839,11 +869,11 @@ struct LibraryView: View {
         )
     }
 
-    private var visibilityEmptyState: some View {
+    private var filterEmptyState: some View {
         ContentUnavailableView(
-            loadedVisibilityFilter.emptyTitle,
-            systemImage: loadedVisibilityFilter.icon,
-            description: Text(loadedVisibilityFilter.emptyMessage)
+            loadedTypeFilter == .all ? loadedVisibilityFilter.emptyTitle : loadedTypeFilter.emptyTitle,
+            systemImage: loadedTypeFilter == .all ? loadedVisibilityFilter.icon : loadedTypeFilter.icon,
+            description: Text(loadedTypeFilter == .all ? loadedVisibilityFilter.emptyMessage : loadedTypeFilter.emptyMessage)
         )
     }
 
@@ -1184,6 +1214,51 @@ private enum LibraryVisibilityFilter: String, CaseIterable, Identifiable {
             return String(localized: "Published \(AppStringLiteral.stationsNameRaw) will appear here.")
         case .private:
             return String(localized: "Private \(AppStringLiteral.stationsNameRaw) stay visible only to you.")
+        }
+    }
+}
+
+private enum LibraryTypeFilter: String, CaseIterable, Identifiable {
+    case all
+    case discussion
+    case audioBook = "audio-book"
+
+    var id: String { rawValue }
+
+    var apiType: String? {
+        switch self {
+        case .all: return nil
+        case .discussion, .audioBook: return rawValue
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .all: return "square.grid.2x2"
+        case .discussion: return "person.2.wave.2"
+        case .audioBook: return "book.closed"
+        }
+    }
+
+    var emptyTitle: String {
+        switch self {
+        case .all:
+            return String(localized: "No \(AppStringLiteral.stationsNameRaw) yet")
+        case .discussion:
+            return String(localized: "No Discussion \(AppStringLiteral.stationsNameRaw)")
+        case .audioBook:
+            return String(localized: "No Audio Book \(AppStringLiteral.stationsNameRaw)")
+        }
+    }
+
+    var emptyMessage: String {
+        switch self {
+        case .all:
+            return String(localized: "Plan an AI \(AppStringLiteral.stationNameRaw) and generate the audio.")
+        case .discussion:
+            return String(localized: "Discussion \(AppStringLiteral.stationsNameRaw) will appear here.")
+        case .audioBook:
+            return String(localized: "Audio book \(AppStringLiteral.stationsNameRaw) will appear here.")
         }
     }
 }

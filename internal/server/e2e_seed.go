@@ -198,8 +198,10 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 		{"test-ongoing", "test", "E2E Ongoing Podcast", string(DiscussionGenerating), "private", false, false, false},
 		{"test-plan", "test", "E2E Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
 		{"test-plan-voice", "test", "E2E Voice Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
+		{"test-plan-shortfall", "test", "E2E Shortfall Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
 		{"test2-private", "test2", "E2E Other Private", string(DiscussionReady), "private", true, false, true},
 		{"test2-public", "test2", "E2E Other Public", string(DiscussionReady), "public", true, true, true},
+		{"test-market-podcast", "test2", "E2E Market Podcast", string(DiscussionReady), "public", true, true, true},
 	}
 	for _, f := range fixtures {
 		if err := s.seedDiscussionRow(ctx, f.id, f.owner, f.title, f.status, f.visibility, f.ready, f.public); err != nil {

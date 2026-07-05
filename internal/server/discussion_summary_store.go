@@ -25,6 +25,10 @@ const (
 	// book rendering of the narration with the generated illustrations inline
 	// and a link to the audio at the bottom.
 	SummaryDocTypeText = "text"
+	// SummaryDocTypeMindmap is the discussion mindmap: a JSON node tree
+	// (summarizer.MindmapSpec) stored in the markdown column, editable by the
+	// owner after generation.
+	SummaryDocTypeMindmap = "mindmap"
 )
 
 // SummaryMeta is the content-free descriptor returned on the discussion detail
@@ -197,6 +201,27 @@ func (s *DiscussionStore) SaveSummary(ctx context.Context, discussionID, docType
 		discussionID, docType, string(SummaryReadyState), markdown, model,
 		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, usage.LLMCostUSD, now, now, now)
 	return err
+}
+
+// UpdateSummaryMarkdown replaces only the document body of an existing ready
+// row, preserving the model and usage audit columns. Used by user edits (e.g.
+// mindmap PUT), which should not look like a fresh generation.
+func (s *DiscussionStore) UpdateSummaryMarkdown(ctx context.Context, discussionID, docType, markdown string) error {
+	if s == nil {
+		return errors.New("discussion store is not configured")
+	}
+	docType = normalizeDocType(docType)
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE native_discussion_summaries SET markdown = ?, updated_at = ?
+		 WHERE discussion_id = ? AND doc_type = ? AND status = ?`,
+		markdown, time.Now().UnixMilli(), discussionID, docType, string(SummaryReadyState))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return errors.New("document is not ready for edits")
+	}
+	return nil
 }
 
 // FailSummary marks a summary row failed with a short error message so a client
