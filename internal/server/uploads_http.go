@@ -232,6 +232,39 @@ func (s *Server) validatedAudioKey(userID, key string) string {
 	return key
 }
 
+// sanitizedAttachments drops any client-supplied storage key the authenticated
+// user does not own, so a forged key can never be re-signed by the server and
+// replayed to the model later (mirrors validatedAudioKey).
+func (s *Server) sanitizedAttachments(userID string, atts []planner.Attachment) []planner.Attachment {
+	for i := range atts {
+		key := strings.TrimSpace(atts[i].Key)
+		if key == "" {
+			continue
+		}
+		if s.d.Uploader == nil || !s.d.Uploader.Enabled() || !s.ownsUploadKey(userID, key) {
+			key = ""
+		}
+		atts[i].Key = key
+	}
+	return atts
+}
+
+// uploadURLRefresher returns a signer that maps a stored upload key to a fresh
+// presigned GET URL, used to replay persisted image attachments to the model
+// after the original upload URL has expired.
+func (s *Server) uploadURLRefresher(ctx context.Context) func(key string) string {
+	return func(key string) string {
+		if s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+			return ""
+		}
+		url, err := s.d.Uploader.PresignGet(ctx, key, uploadPresignTTL)
+		if err != nil {
+			return ""
+		}
+		return url
+	}
+}
+
 func normalizedUploadMIME(mimeType string) string {
 	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
 	if mimeType == "" {

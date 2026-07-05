@@ -476,13 +476,16 @@ func (s *PlanningStore) MarkFlatCharged(ctx context.Context, conversationID stri
 
 // messagesForLLM rebuilds the OpenAI message history from persisted turns.
 // Question turns are UI-only — the model sees the answer through the synthetic
-// tool result turn written when the user answers.
-func planningMessagesForLLM(rows []planningTurnRow) []llm.Message {
+// tool result turn written when the user answers. User turns that carry image
+// attachments are rebuilt as multimodal messages; refreshURL (optional) maps a
+// stored S3 key to a fresh presigned URL, since the URL persisted at upload
+// time expires after uploadPresignTTL.
+func planningMessagesForLLM(rows []planningTurnRow, refreshURL func(key string) string) []llm.Message {
 	out := make([]llm.Message, 0, len(rows))
 	for _, r := range rows {
 		switch r.Role {
 		case "user":
-			out = append(out, llm.Message{Role: llm.RoleUser, Content: r.Text})
+			out = append(out, planner.UserTurnMessage(r.Text, refreshedAttachments(planningTurnAttachments(r), refreshURL)))
 		case "assistant":
 			msg := llm.Message{Role: llm.RoleAssistant, Content: r.Text}
 			if strings.TrimSpace(r.ToolCallsJSON) != "" {
@@ -494,6 +497,23 @@ func planningMessagesForLLM(rows []planningTurnRow) []llm.Message {
 		}
 	}
 	return out
+}
+
+// refreshedAttachments swaps in a freshly signed URL for any attachment whose
+// S3 key is known, since the URL persisted at upload time expires. Attachments
+// without a key keep their stored URL (best effort — it may have expired).
+func refreshedAttachments(atts []planner.Attachment, refreshURL func(key string) string) []planner.Attachment {
+	if refreshURL == nil {
+		return atts
+	}
+	for i := range atts {
+		if key := strings.TrimSpace(atts[i].Key); key != "" {
+			if fresh := refreshURL(key); fresh != "" {
+				atts[i].URL = fresh
+			}
+		}
+	}
+	return atts
 }
 
 // planningConversationParts flattens turns into the ordered client display list.

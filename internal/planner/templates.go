@@ -163,20 +163,24 @@ func defaultAudioBookPlanSchema() map[string]any {
 			"style":           map[string]any{"type": "string", "enum": []string{config.AudioBookStyleNews, config.AudioBookStyleConversational, config.AudioBookStyleAudioBook, config.AudioBookStylePodcast, config.AudioBookStyleMeeting}, "description": "The high-level production style the agent selected for this audiobook."},
 			"overall_summary": map[string]any{"type": "string", "description": "A concise Markdown summary of the full source material and audiobook direction."},
 			"narrator": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"name": map[string]any{"type": "string"}},
-				"required":   []string{"name"},
+				"type": "object",
+				"properties": map[string]any{
+					"name":   map[string]any{"type": "string"},
+					"gender": map[string]any{"type": "string", "enum": []string{"male", "female"}, "description": "REQUIRED voice gender for TTS casting."},
+				},
+				"required": []string{"name", "gender"},
 			},
 			"speakers": map[string]any{
-				"type": "array",
+				"type":        "array",
+				"description": "Source-cast voice roster. Include most of the book/source's speaking cast: all central and recurring voices plus chapter-critical one-off voices. Omit only unnamed, background, or truly incidental speakers. Use one dedicated entry per included character or guest; never fold two characters into one shared voice, and never repeat the narrator here.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"name":        map[string]any{"type": "string"},
-						"gender":      map[string]any{"type": "string"},
-						"description": map[string]any{"type": "string"},
+						"gender":      map[string]any{"type": "string", "enum": []string{"male", "female"}, "description": "REQUIRED voice gender for TTS casting; infer from the source, never leave it out."},
+						"description": map[string]any{"type": "string", "description": "Concrete voice-casting brief: approximate age, vocal tone and register, personality, speaking energy."},
 					},
-					"required": []string{"name", "description"},
+					"required": []string{"name", "gender", "description"},
 				},
 			},
 			"chapters": map[string]any{
@@ -187,12 +191,18 @@ func defaultAudioBookPlanSchema() map[string]any {
 					"properties": map[string]any{
 						"title":   map[string]any{"type": "string", "description": "Chapter title only; do not include a chapter number prefix."},
 						"summary": map[string]any{"type": "string", "description": "One or two concise sentences describing what this chapter narrates."},
+						"mode":    map[string]any{"type": "string", "enum": []string{config.AudioBookModeNarration, config.AudioBookModeDialogue}, "description": "narration = the narrator reads alone; dialogue = a real exchange with the listed speakers."},
+						"speakers": map[string]any{
+							"type":        "array",
+							"items":       map[string]any{"type": "string"},
+							"description": "Names from the top-level speakers list who talk in this chapter; empty for narration chapters. Never list the narrator.",
+						},
 					},
 					"required": []string{"title", "summary"},
 				},
 			},
 		},
-		"required": []string{"title", "style", "overall_summary", "narrator", "chapters"},
+		"required": []string{"title", "style", "overall_summary", "narrator", "speakers", "chapters"},
 	}
 }
 

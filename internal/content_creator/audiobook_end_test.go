@@ -116,6 +116,75 @@ func TestPipelineRejectsPrematureAudioBookEndRequest(t *testing.T) {
 	}
 }
 
+func TestAudioBookEndAcceptedAfterRejectionCap(t *testing.T) {
+	state := &audioBookEndState{}
+	planner := NewAudioBookPlanner(&config.DebateTopic{TotalMinutes: 12}, nil, state)
+
+	for i := 0; i < maxAudioBookEndRejections; i++ {
+		state.RequestDone()
+		requested, accepted := planner.ValidateEndAfterTurn(10, 24)
+		if !requested || accepted {
+			t.Fatalf("rejection %d: requested=%v accepted=%v, want requested and rejected", i+1, requested, accepted)
+		}
+	}
+
+	state.RequestDone()
+	requested, accepted := planner.ValidateEndAfterTurn(10, 24)
+	if !requested || !accepted {
+		t.Fatalf("end request after rejection cap: requested=%v accepted=%v, want accepted", requested, accepted)
+	}
+	if !planner.Done() {
+		t.Fatalf("planner should be done once the rejection cap is exhausted")
+	}
+}
+
+func TestAudioBookContinuationDirectiveMentionsRejectedEnd(t *testing.T) {
+	base := agent.NewBase("Narrator", agent.RoleSeriesHost, nil, nil, nil, nil, nil)
+	reg := &agent.Registry{SeriesHost: agent.NewSeriesHost(base, "", 1, 1, "", "", nil, nil, nil, nil, nil)}
+	state := &audioBookEndState{}
+	planner := NewAudioBookPlanner(&config.DebateTopic{TotalMinutes: 12}, reg, state)
+	ctx := context.Background()
+
+	if _, ok := planner.Next(ctx); !ok {
+		t.Fatalf("first audiobook turn not emitted")
+	}
+	state.RequestDone()
+	if _, accepted := planner.ValidateEndAfterTurn(10, 24); accepted {
+		t.Fatalf("premature end request should be rejected")
+	}
+
+	turn, ok := planner.Next(ctx)
+	if !ok {
+		t.Fatalf("planner should continue after premature end request")
+	}
+	if !strings.Contains(turn.Directive, "previous end_audio_book call was refused") {
+		t.Fatalf("post-rejection directive missing marker recovery instruction: %q", turn.Directive)
+	}
+}
+
+func TestAudioBookJudgeFailureStopsAfterEndRequest(t *testing.T) {
+	state := &audioBookEndState{}
+	planner := NewAudioBookPlanner(&config.DebateTopic{
+		AudioBookChapters:       []config.AudioBookChapter{{Title: "One", Summary: "A"}},
+		AudioBookChapterIndices: []int{1},
+	}, nil, state)
+	planner.boundaryJudge = func(context.Context, string, string, int) (audioBookBoundaryDecision, bool) {
+		return audioBookBoundaryDecision{}, false
+	}
+
+	if planner.ReviewAudioBookLoop(context.Background(), "Chapter narration.") {
+		t.Fatalf("judge failure before any end request should keep the loop alive")
+	}
+
+	state.RequestDone()
+	if !planner.ReviewAudioBookLoop(context.Background(), "Chapter narration.") {
+		t.Fatalf("judge failure after an end request should stop the loop")
+	}
+	if !planner.Done() {
+		t.Fatalf("planner should be done after fail-closed judge decision")
+	}
+}
+
 func TestAudioBookPlannerAddsChapterBoundaryInstruction(t *testing.T) {
 	base := agent.NewBase("Narrator", agent.RoleSeriesHost, nil, nil, nil, nil, nil)
 	reg := &agent.Registry{SeriesHost: agent.NewSeriesHost(base, "", 1, 1, "", "", nil, nil, nil, nil, nil)}

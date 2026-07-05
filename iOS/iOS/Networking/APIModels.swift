@@ -298,17 +298,21 @@ struct ScriptDTO: Codable, Hashable, Sendable {
 
 /// A user-uploaded reference file. Documents carry markdown parsed by
 /// markitdown; images carry a URL so the engine can pass them to the model.
+/// `key` is the storage key from the upload response; the server uses it to
+/// re-sign a fresh image URL whenever the planning conversation is replayed.
 struct Attachment: Codable, Hashable, Sendable {
     var filename: String
     var markdown: String?
     var url: String?
     var mimeType: String?
+    var key: String?
 
     enum CodingKeys: String, CodingKey {
         case filename
         case markdown
         case url
         case mimeType = "mime_type"
+        case key
     }
 }
 
@@ -346,6 +350,11 @@ struct DiscussionCreateRequest: Codable, Sendable {
         case form
         case referenceDiscussionID = "reference_discussion_id"
     }
+}
+
+/// PATCH /api/discussions/{id} request body.
+struct DiscussionRenameRequest: Codable, Sendable {
+    var title: String
 }
 
 /// POST /api/plan request body.
@@ -762,6 +771,7 @@ struct ChapterStatusDTO: Codable, Hashable, Sendable, Identifiable {
     var title: String
     var summary: String
     var mode: String?
+    var speakers: [String]?
     /// "done" | "generating" | "pending"
     var status: String
     var discussionID: String?
@@ -772,7 +782,7 @@ struct ChapterStatusDTO: Codable, Hashable, Sendable, Identifiable {
     var isPending: Bool { status == "pending" }
 
     enum CodingKeys: String, CodingKey {
-        case index, title, summary, mode, status
+        case index, title, summary, mode, speakers, status
         case discussionID = "discussion_id"
     }
 }

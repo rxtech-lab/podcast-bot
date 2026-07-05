@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
@@ -18,14 +19,15 @@ struct PendingAttachment: Identifiable {
     var markdown: String?
     var url: String?
     var mimeType: String?
+    var key: String?
 
     var apiAttachment: Attachment? {
         guard status == .ready else { return nil }
         if let markdown, !markdown.isEmpty {
-            return Attachment(filename: filename, markdown: markdown, url: url, mimeType: mimeType)
+            return Attachment(filename: filename, markdown: markdown, url: url, mimeType: mimeType, key: key)
         }
         if let url, !url.isEmpty, mimeType?.hasPrefix("image/") == true {
-            return Attachment(filename: filename, markdown: nil, url: url, mimeType: mimeType)
+            return Attachment(filename: filename, markdown: nil, url: url, mimeType: mimeType, key: key)
         }
         return nil
     }
@@ -85,21 +87,16 @@ struct AttachmentPreviewSheet: View {
     private func imagePreview(_ url: URL) -> some View {
         GeometryReader { proxy in
             ScrollView([.horizontal, .vertical]) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
-                    case .failure:
-                        fallbackPreview
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                    default:
+                KFImage.url(url)
+                    .placeholder {
                         ProgressView()
                             .frame(width: proxy.size.width, height: proxy.size.height)
                     }
-                }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .resizable()
+                    .scaledToFit()
+                    .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
             }
             .background(Theme.background)
         }
@@ -422,6 +419,7 @@ struct AttachmentsRow: View {
         attachments[idx].markdown = response?.markdown
         attachments[idx].url = response?.url
         attachments[idx].mimeType = response?.mimeType
+        attachments[idx].key = response?.key
     }
 
     private func loadNotionStatus() async {

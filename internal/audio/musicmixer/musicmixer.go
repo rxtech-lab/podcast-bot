@@ -937,7 +937,14 @@ func (m *Mixer) mixLoop() {
 		} else {
 			residual = nil
 		}
-		ttsActive = len(residual) > 0 || len(m.ttsCh) > 0
+		// "Active" must mean "TTS went into THIS output chunk (or leftover
+		// PCM will seamlessly continue into the next one)". Sampling ttsCh
+		// occupancy here raced with the reader goroutine: PCM arriving
+		// between the drain above and this line marked the stream active
+		// without having been mixed, so the next iteration's real burst
+		// start skipped recordTTSBurstStart — and every subtitle cue after
+		// that bed-only gap exported shifted by the gap's length.
+		ttsActive = len(ttsFrame) > 0 || len(residual) > 0
 
 		if fade != nil {
 			fade.remaining--

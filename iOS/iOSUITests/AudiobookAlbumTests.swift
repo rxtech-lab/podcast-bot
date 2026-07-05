@@ -34,6 +34,26 @@ final class AudiobookAlbumTests: E2ETestCase {
         XCTAssertTrue(playerOpened(app), "player did not open for test-audiobook")
     }
 
+    private func expandChapterChecklist(_ checklist: XCUIElement) {
+        let start = checklist.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82))
+        let end = checklist.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
+        start.press(forDuration: 0.1, thenDragTo: end)
+    }
+
+    private func chapterRow(_ app: XCUIApplication, index: Int, timeout: TimeInterval = 5) -> XCUIElement {
+        let row = app.buttons["chapters.row.\(index)"]
+        if row.waitForExistence(timeout: timeout) {
+            return row
+        }
+        for _ in 0..<5 {
+            app.swipeUp()
+            if row.waitForExistence(timeout: 1) {
+                break
+            }
+        }
+        return row
+    }
+
     // MARK: - 1. Home groups linked podcasts into an album; album page lists episodes in order
 
     func testHomeGroupsAlbumAndAlbumPageListsEpisodes() throws {
@@ -85,12 +105,13 @@ final class AudiobookAlbumTests: E2ETestCase {
         let checklist = app.descendants(matching: .any)
             .matching(identifier: "chapters.checklist").firstMatch
         XCTAssertTrue(checklist.waitForExistence(timeout: 10), "chapter checklist sheet did not open")
+        expandChapterChecklist(checklist)
 
         // Generated chapters are locked; pending chapters are tappable.
-        let doneRow = app.buttons["chapters.row.1"]
+        let doneRow = chapterRow(app, index: 1, timeout: 10)
         XCTAssertTrue(doneRow.waitForExistence(timeout: 10), "chapter 1 row not shown")
         XCTAssertFalse(doneRow.isEnabled, "generated chapter 1 should be locked")
-        let firstPending = app.buttons["chapters.row.6"]
+        let firstPending = chapterRow(app, index: 6)
         XCTAssertTrue(firstPending.waitForExistence(timeout: 5), "pending chapter 6 row not shown")
         XCTAssertTrue(firstPending.isEnabled, "pending chapter 6 should be selectable")
 
@@ -110,11 +131,11 @@ final class AudiobookAlbumTests: E2ETestCase {
 
         // Selecting beyond 5 is blocked client-side: check chapters 9 and 10
         // (total 5), then chapter 11 must not raise the count.
-        app.buttons["chapters.row.9"].tap()
-        app.buttons["chapters.row.10"].tap()
+        chapterRow(app, index: 9).tap()
+        chapterRow(app, index: 10).tap()
         XCTAssertTrue(waitForLabel(generate, containing: "5"),
                       "could not select up to the 5-chapter cap, label: \(generate.label)")
-        let overCap = app.buttons["chapters.row.11"]
+        let overCap = chapterRow(app, index: 11)
         if overCap.exists { overCap.tap() }
         XCTAssertTrue(waitForLabel(generate, containing: "5"),
                       "selection exceeded the 5-chapter cap, label: \(generate.label)")
@@ -178,7 +199,9 @@ final class AudiobookAlbumTests: E2ETestCase {
         let checklist = app.descendants(matching: .any)
             .matching(identifier: "chapters.checklist").firstMatch
         XCTAssertTrue(checklist.waitForExistence(timeout: 10), "chapter checklist did not open from the album toolbar")
-        XCTAssertTrue(app.buttons["chapters.row.6"].waitForExistence(timeout: 10), "pending chapter row missing")
+        expandChapterChecklist(checklist)
+        XCTAssertTrue(chapterRow(app, index: 6, timeout: 10).waitForExistence(timeout: 1),
+                      "pending chapter row missing")
         app.buttons["Cancel"].firstMatch.tap()
     }
 
@@ -248,26 +271,16 @@ final class AudiobookAlbumTests: E2ETestCase {
         let app = launch(userID: "test2")
         app.buttons["library.market"].firstMatch.tap()
 
-        let publicCard = findMarketStation(app, id: "test-market-public")
-        XCTAssertTrue(publicCard.waitForExistence(timeout: 20), "published market podcast not visible")
+        let albumCard = app.descendants(matching: .any)
+            .matching(identifier: "market.album.test-market-album").firstMatch
+        XCTAssertTrue(albumCard.waitForExistence(timeout: 20), "published market album not visible")
+        XCTAssertFalse(app.descendants(matching: .any)
+            .matching(identifier: "market.station.test-market-public").firstMatch.exists,
+                       "published album episode should be grouped under its album in market")
         XCTAssertFalse(app.descendants(matching: .any)
             .matching(identifier: "market.station.test-market-private").firstMatch.exists,
                        "private album podcast should not be visible in market")
-        publicCard.tap()
-        XCTAssertTrue(playerOpened(app), "public market podcast did not open")
-
-        var opened = false
-        for _ in 0..<4 {
-            app.buttons["player.more"].tap()
-            let viewAlbum = app.buttons["View Album"].firstMatch
-            if viewAlbum.waitForExistence(timeout: 4) {
-                viewAlbum.tap()
-                opened = true
-                break
-            }
-            dismissMenu(app)
-        }
-        XCTAssertTrue(opened, "View Album action never appeared for the public album podcast")
+        albumCard.tap()
 
         let albumView = app.descendants(matching: .any)
             .matching(identifier: "album.view").firstMatch
@@ -275,6 +288,9 @@ final class AudiobookAlbumTests: E2ETestCase {
         XCTAssertTrue(app.descendants(matching: .any)
             .matching(identifier: "album.episode.test-market-public").firstMatch.waitForExistence(timeout: 8),
                       "public album episode missing")
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(identifier: "album.episode.cover.test-market-public").firstMatch.waitForExistence(timeout: 3),
+                      "public album episode cover missing")
         XCTAssertFalse(app.descendants(matching: .any)
             .matching(identifier: "album.episode.test-market-private").firstMatch.waitForExistence(timeout: 3),
                        "private album episode leaked into public album")

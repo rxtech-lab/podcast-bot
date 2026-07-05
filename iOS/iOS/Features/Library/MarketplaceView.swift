@@ -1,3 +1,4 @@
+import Kingfisher
 import SwiftUI
 
 struct MarketplaceView: View {
@@ -10,7 +11,7 @@ struct MarketplaceView: View {
     @State private var likedStations: [Discussion] = []
     @State private var searchResults: [Discussion] = []
     @State private var marketProfile: MarketProfile?
-    @State private var path: [Discussion] = []
+    @State private var path: [MarketDestination] = []
     @State private var presentedCreator: CreatorProfile?
     @State private var selectedProfileTab: ProfileTab = .stations
     @State private var searchText = ""
@@ -112,10 +113,15 @@ struct MarketplaceView: View {
                     }
                 }
                 .background(Theme.background.ignoresSafeArea())
-                .navigationDestination(for: Discussion.self) { discussion in
-                    PodcastPlayerView(discussion: discussion,
-                                      onCreatedFromPlan: onCreateFromPlan,
-                                      onCreatedFollowUp: onCreateFromPlan)
+                .navigationDestination(for: MarketDestination.self) { destination in
+                    switch destination {
+                    case .discussion(let discussion):
+                        PodcastPlayerView(discussion: discussion,
+                                          onCreatedFromPlan: onCreateFromPlan,
+                                          onCreatedFollowUp: onCreateFromPlan)
+                    case .album(let id):
+                        AlbumView(albumID: id, mode: .publicMarket)
+                    }
                 }
         }
     }
@@ -133,7 +139,9 @@ struct MarketplaceView: View {
         }
     }
 
+    @ViewBuilder
     private func marketContent(tab: MarketTab, stations: [Discussion], emptyTitle: String, emptyMessage: String) -> some View {
+        let items = marketDisplayItems(from: stations)
         Group {
             if isLoading && stations.isEmpty {
                 ProgressView()
@@ -147,11 +155,11 @@ struct MarketplaceView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        if tab == .market, let featured = stations.first {
-                            MarketFeaturedStation(
-                                discussion: featured,
-                                onOpen: { path.append(featured) },
-                                onToggleLike: { toggleLike(featured) }
+                        if tab == .market, let featured = items.first {
+                            MarketFeaturedItem(
+                                item: featured,
+                                onOpen: openMarketItem,
+                                onToggleLike: toggleLike
                             )
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
@@ -159,7 +167,7 @@ struct MarketplaceView: View {
 
                         if tab == .market {
                             marketShelf(title: "On Air",
-                                        stations: stations.filter { $0.status == .generating })
+                                        items: marketDisplayItems(from: stations.filter { $0.status == .generating }))
                         }
 
                         VStack(alignment: .leading, spacing: 12) {
@@ -167,14 +175,14 @@ struct MarketplaceView: View {
                                 .font(.headline)
                                 .padding(.horizontal, 16)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 18) {
-                                ForEach(stations) { station in
-                                    MarketStationCard(
-                                        discussion: station,
-                                        onOpen: { path.append(station) },
-                                        onToggleLike: { toggleLike(station) }
+                                ForEach(items) { item in
+                                    MarketItemCard(
+                                        item: item,
+                                        onOpen: openMarketItem,
+                                        onToggleLike: toggleLike
                                     )
                                     .onAppear {
-                                        if station.id == stations.last?.id {
+                                        if item.id == items.last?.id {
                                             Task { await loadMore(for: tab) }
                                         }
                                     }
@@ -259,12 +267,13 @@ struct MarketplaceView: View {
                                    description: Text("Public \(AppStringLiteral.stationsNameRaw) you created appear here."))
                 .padding(.vertical, 28)
         } else {
+            let items = marketDisplayItems(from: stations)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 18) {
-                ForEach(stations) { station in
-                    MarketStationCard(
-                        discussion: station,
-                        onOpen: { path.append(station) },
-                        onToggleLike: { toggleLike(station) }
+                ForEach(items) { item in
+                    MarketItemCard(
+                        item: item,
+                        onOpen: openMarketItem,
+                        onToggleLike: toggleLike
                     )
                 }
             }
@@ -292,20 +301,20 @@ struct MarketplaceView: View {
         }
     }
 
-    private func marketShelf(title: String, stations: [Discussion]) -> some View {
+    private func marketShelf(title: String, items: [MarketDisplayItem]) -> some View {
         Group {
-            if !stations.isEmpty {
+            if !items.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(title)
                         .font(.headline)
                         .padding(.horizontal, 16)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 14) {
-                            ForEach(stations) { station in
-                                MarketStationShelfItem(
-                                    discussion: station,
-                                    onOpen: { path.append(station) },
-                                    onToggleLike: { toggleLike(station) }
+                            ForEach(items) { item in
+                                MarketShelfItem(
+                                    item: item,
+                                    onOpen: openMarketItem,
+                                    onToggleLike: toggleLike
                                 )
                             }
                         }
@@ -314,6 +323,10 @@ struct MarketplaceView: View {
                 }
             }
         }
+    }
+
+    private func openMarketItem(_ item: MarketDisplayItem) {
+        path.append(item.destination)
     }
 
     @MainActor
@@ -488,34 +501,96 @@ private enum ProfileTab {
     case followed
 }
 
-private struct MarketFeaturedStation: View {
-    let discussion: Discussion
-    let onOpen: () -> Void
-    let onToggleLike: () -> Void
+private enum MarketDestination: Hashable {
+    case discussion(Discussion)
+    case album(id: String)
+}
+
+private enum MarketDisplayItem: Identifiable, Hashable {
+    case discussion(Discussion)
+    case album(summary: AlbumSummaryDTO, representative: Discussion)
+
+    var id: String {
+        switch self {
+        case .discussion(let discussion):
+            return "discussion:\(discussion.id)"
+        case .album(let summary, _):
+            return "album:\(summary.id)"
+        }
+    }
+
+    var destination: MarketDestination {
+        switch self {
+        case .discussion(let discussion):
+            return .discussion(discussion)
+        case .album(let summary, _):
+            return .album(id: summary.id)
+        }
+    }
+}
+
+private func marketDisplayItems(from stations: [Discussion]) -> [MarketDisplayItem] {
+    var seenAlbums = Set<String>()
+    var items: [MarketDisplayItem] = []
+    for station in stations {
+        if let summary = station.album, !summary.id.isEmpty {
+            guard seenAlbums.insert(summary.id).inserted else { continue }
+            items.append(.album(summary: summary, representative: station))
+        } else {
+            items.append(.discussion(station))
+        }
+    }
+    return items
+}
+
+private struct MarketFeaturedItem: View {
+    let item: MarketDisplayItem
+    let onOpen: (MarketDisplayItem) -> Void
+    let onToggleLike: (Discussion) -> Void
 
     var body: some View {
-        Button(action: onOpen) {
+        Button { onOpen(item) } label: {
             HStack(spacing: 16) {
-                StationCoverArt(cover: discussion.cover, title: discussion.displayTitle)
-                    .frame(width: 118, height: 118)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(discussion.displayTitle)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(2)
-                    Text(discussion.topic)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryText)
-                        .lineLimit(2)
-                    MarketStatusLabel(discussion: discussion)
-                    HStack {
-                        Label("\(discussion.likeCount ?? 0)", systemImage: "heart")
-                            .font(.caption.weight(.semibold))
+                switch item {
+                case .discussion(let discussion):
+                    StationCoverArt(cover: discussion.cover, title: discussion.displayTitle)
+                        .frame(width: 118, height: 118)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(discussion.displayTitle)
+                            .font(.title3.weight(.semibold))
+                            .lineLimit(2)
+                        Text(discussion.topic)
+                            .font(.subheadline)
                             .foregroundStyle(Theme.secondaryText)
-                        Spacer()
-                        Button(action: onToggleLike) {
-                            Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
+                            .lineLimit(2)
+                        MarketStatusLabel(discussion: discussion)
+                        HStack {
+                            Label("\(discussion.likeCount ?? 0)", systemImage: "heart")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.secondaryText)
+                            Spacer()
+                            Button { onToggleLike(discussion) } label: {
+                                Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
+                            }
+                            .buttonStyle(.borderless)
                         }
-                        .buttonStyle(.borderless)
+                    }
+                case .album(let summary, _):
+                    StationCoverArt(cover: summary.cover, title: summary.title)
+                        .frame(width: 118, height: 118)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(summary.title)
+                            .font(.title3.weight(.semibold))
+                            .lineLimit(2)
+                        Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.secondaryText)
+                        Spacer(minLength: 0)
+                        HStack {
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(Theme.secondaryText)
+                        }
                     }
                 }
             }
@@ -523,67 +598,129 @@ private struct MarketFeaturedStation: View {
             .glassCard()
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("market.station.\(discussion.id)")
+        .accessibilityIdentifier(item.accessibilityIdentifier)
     }
 }
 
-private struct MarketStationCard: View {
-    let discussion: Discussion
-    let onOpen: () -> Void
-    let onToggleLike: () -> Void
+private struct MarketItemCard: View {
+    let item: MarketDisplayItem
+    let onOpen: (MarketDisplayItem) -> Void
+    let onToggleLike: (Discussion) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: onOpen) {
-                StationCoverArt(cover: discussion.cover, title: discussion.displayTitle)
-                    .aspectRatio(1, contentMode: .fit)
+        switch item {
+        case .discussion(let discussion):
+            VStack(alignment: .leading, spacing: 8) {
+                Button { onOpen(item) } label: {
+                    StationCoverArt(cover: discussion.cover, title: discussion.displayTitle)
+                        .aspectRatio(1, contentMode: .fit)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(item.accessibilityIdentifier)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(discussion.displayTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                        MarketStatusLabel(discussion: discussion)
+                    }
+                    Spacer(minLength: 8)
+                    Button { onToggleLike(discussion) } label: {
+                        Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("market.station.\(discussion.id)")
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+        case .album(let summary, _):
+            VStack(alignment: .leading, spacing: 8) {
+                Button { onOpen(item) } label: {
+                    StationCoverArt(cover: summary.cover, title: summary.title)
+                        .aspectRatio(1, contentMode: .fit)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(item.accessibilityIdentifier)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(summary.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                        Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "rectangle.stack")
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+        }
+    }
+}
+
+private struct MarketShelfItem: View {
+    let item: MarketDisplayItem
+    let onOpen: (MarketDisplayItem) -> Void
+    let onToggleLike: (Discussion) -> Void
+
+    var body: some View {
+        switch item {
+        case .discussion(let discussion):
+            VStack(alignment: .leading, spacing: 8) {
+                Button { onOpen(item) } label: {
+                    StationCoverArt(cover: discussion.cover, title: discussion.displayTitle)
+                        .frame(width: 136, height: 136)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(item.accessibilityIdentifier)
+                HStack {
                     Text(discussion.displayTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .lineLimit(2)
-                    MarketStatusLabel(discussion: discussion)
+                    Spacer()
+                    Button { onToggleLike(discussion) } label: {
+                        Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
                 }
-                Spacer(minLength: 8)
-                Button(action: onToggleLike) {
-                    Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
+                .frame(width: 136)
+            }
+        case .album(let summary, _):
+            VStack(alignment: .leading, spacing: 8) {
+                Button { onOpen(item) } label: {
+                    StationCoverArt(cover: summary.cover, title: summary.title)
+                        .frame(width: 136, height: 136)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(item.accessibilityIdentifier)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(summary.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(2)
+                    Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .frame(width: 136, alignment: .leading)
             }
         }
     }
 }
 
-private struct MarketStationShelfItem: View {
-    let discussion: Discussion
-    let onOpen: () -> Void
-    let onToggleLike: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: onOpen) {
-                StationCoverArt(cover: discussion.cover, title: discussion.displayTitle)
-                    .frame(width: 136, height: 136)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("market.station.\(discussion.id)")
-            HStack {
-                Text(discussion.displayTitle)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(2)
-                Spacer()
-                Button(action: onToggleLike) {
-                    Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-            }
-            .frame(width: 136)
+private extension MarketDisplayItem {
+    var accessibilityIdentifier: String {
+        switch self {
+        case .discussion(let discussion):
+            return "market.station.\(discussion.id)"
+        case .album(let summary, _):
+            return "market.album.\(summary.id)"
         }
     }
+}
+
+private func albumEpisodeCount(_ summary: AlbumSummaryDTO) -> String {
+    let count = summary.episodeCount ?? 0
+    return "\(count) episode\(count == 1 ? "" : "s")"
 }
 
 private struct MarketStatusLabel: View {
@@ -667,16 +804,16 @@ private struct CreatorAvatar: View {
                 .fill(Theme.accent.opacity(0.18))
             if let avatar = profile.avatarURL,
                let url = URL(string: avatar) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
+                KFImage.url(url)
+                    .placeholder {
                         Image(systemName: "person.fill")
                             .font(.system(size: size * 0.42, weight: .semibold))
                             .foregroundStyle(Theme.accent)
                     }
-                }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .resizable()
+                    .scaledToFill()
             } else {
                 Image(systemName: "person.fill")
                     .font(.system(size: size * 0.42, weight: .semibold))
@@ -697,7 +834,7 @@ struct CreatorProfileView: View {
 
     @State private var profile: CreatorProfile?
     @State private var stations: [Discussion] = []
-    @State private var path: [Discussion] = []
+    @State private var path: [MarketDestination] = []
     @State private var isLoading = false
     @State private var isTogglingFollow = false
     @State private var errorMessage: String?
@@ -718,10 +855,15 @@ struct CreatorProfileView: View {
                         .accessibilityLabel("Close")
                 }
             }
-            .navigationDestination(for: Discussion.self) { discussion in
-                PodcastPlayerView(discussion: discussion,
-                                  onCreatedFromPlan: onCreateFromPlan,
-                                  onCreatedFollowUp: onCreateFromPlan)
+            .navigationDestination(for: MarketDestination.self) { destination in
+                switch destination {
+                case .discussion(let discussion):
+                    PodcastPlayerView(discussion: discussion,
+                                      onCreatedFromPlan: onCreateFromPlan,
+                                      onCreatedFollowUp: onCreateFromPlan)
+                case .album(let id):
+                    AlbumView(albumID: id, mode: .publicMarket)
+                }
             }
         }
         .task { await load() }
@@ -772,16 +914,17 @@ struct CreatorProfileView: View {
                                    description: Text("Public \(AppStringLiteral.stationsNameRaw) from this creator appear here."))
                 .padding(.vertical, 28)
         } else {
+            let items = marketDisplayItems(from: stations)
             VStack(alignment: .leading, spacing: 12) {
                 Text("Public \(AppStringLiteral.stationsNameRaw)")
                     .font(.headline)
                     .padding(.horizontal, 16)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 18) {
-                    ForEach(stations) { station in
-                        MarketStationCard(
-                            discussion: station,
-                            onOpen: { path.append(station) },
-                            onToggleLike: { toggleLike(station) }
+                    ForEach(items) { item in
+                        MarketItemCard(
+                            item: item,
+                            onOpen: { path.append($0.destination) },
+                            onToggleLike: toggleLike
                         )
                     }
                 }
@@ -880,16 +1023,14 @@ struct StationCoverArt: View {
     var body: some View {
         ZStack {
             if let url = cover?.renderableImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
+                KFImage.url(url)
+                    .placeholder {
                         gradient
                     }
-                }
+                    .cancelOnDisappear(false)
+                    .retry(maxCount: 3, interval: .seconds(1))
+                    .resizable()
+                    .scaledToFill()
             } else {
                 gradient
             }

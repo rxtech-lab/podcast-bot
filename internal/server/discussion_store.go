@@ -689,6 +689,28 @@ func (s *DiscussionStore) CreateFromVisiblePlan(ctx context.Context, owner, sour
 	})
 }
 
+// Rename updates an owned discussion's display title without rewriting the
+// embedded script_json plan.
+func (s *DiscussionStore) Rename(ctx context.Context, owner, id, title string) (*Discussion, error) {
+	if s == nil {
+		return nil, errors.New("discussion store is not configured")
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, errors.New("discussion title is required")
+	}
+	res, err := s.exec(ctx, `UPDATE native_discussions SET title = ?, updated_at = ?
+		WHERE owner_user_id = ? AND id = ?`,
+		title, time.Now().UnixMilli(), owner, strings.TrimSpace(id))
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
 // CreatePlaceholder inserts an empty discussion in the planning state so the
 // client gets an id immediately and can stream the plan into it. The plan body
 // (script/sources/markdown) is filled in later via UpdatePlan once the planner

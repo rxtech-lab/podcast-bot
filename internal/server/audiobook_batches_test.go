@@ -76,6 +76,17 @@ func TestDeriveAudioBookBatchScriptFullSelectionKeepsTitle(t *testing.T) {
 	}
 }
 
+func TestDeriveAudioBookBatchScriptSingleChapterUsesChapterTitle(t *testing.T) {
+	root := testAudioBookPlan(6)
+	batch, err := deriveAudioBookBatchScript(root, []int{1}, "", false)
+	if err != nil {
+		t.Fatalf("derive batch: %v", err)
+	}
+	if batch.Title != "Origins" {
+		t.Fatalf("single-chapter batch title = %q, want Origins", batch.Title)
+	}
+}
+
 func TestDeriveAudioBookBatchScriptMinimumMinutes(t *testing.T) {
 	root := testAudioBookPlan(6)
 	batch, err := deriveAudioBookBatchScript(root, []int{1}, "", false)

@@ -272,11 +272,21 @@ func audioBookLengthContract(p SpeakPrompt) string {
 	if targetCJK < minCJK+400 {
 		targetCJK = minCJK + 400
 	}
+	continuation := strings.HasPrefix(p.Instructions, "narrate continuation")
+	if continuation {
+		return fmt.Sprintf(`Length contract:
+  * The audiobook as a whole targets at least %d minute(s) of spoken audio, but that target is shared across all generation loops — it does NOT apply to this continuation loop alone. Never pad this loop to reach it.
+  * Do not collapse the remaining chapters into a short summary; give each remaining chapter enough developed narration to stand on its own.
+  * The duration target NEVER justifies filler: no sign-offs, credits, thank-yous, "the end" lines, or any spoken text beyond the planned chapters.
+  * Once the final planned chapter is fully narrated, call end_audio_book immediately — even if the duration target has not been reached.`, minMinutes)
+	}
 	return fmt.Sprintf(`Length contract:
-  * Target duration: at least %d minute(s) of spoken audio. Do not end early.
+  * Target duration: at least %d minute(s) of spoken audio. Do not end early while planned chapters remain un-narrated.
   * For Chinese narration, write at least about %d CJK characters, with a target around %d CJK characters before markers are stripped. For English narration, use the same density goal in spoken detail rather than a short synopsis.
   * Do not collapse chapters into a short summary; give each chapter enough developed narration to stand on its own.
-  * If you approach the ending before meeting the target, slow down by deepening the existing beats with concrete scene detail, silence, reaction, and dialogue that remains consistent with the outline.`, minMinutes, minCJK, targetCJK)
+  * Reach the target by deepening the planned chapters as you narrate them — concrete scene detail, silence, reaction, and dialogue consistent with the outline — never by adding material after them.
+  * The duration target NEVER justifies filler: no sign-offs, credits, thank-yous, "the end" lines, or repeated closing remarks. One brief closing sentence at most.
+  * Once the final planned chapter is fully narrated, call end_audio_book immediately — even if the duration target has not been reached.`, minMinutes, minCJK, targetCJK)
 }
 
 // audioBookSceneBlock builds the illustration-marker instructions for the

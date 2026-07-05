@@ -46,37 +46,21 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	imgs := orch.AudioBookImages()
 	sort.Slice(imgs, func(i, j int) bool { return imgs[i].Beat < imgs[j].Beat })
 	offsets := orch.AudioBookImageOffsets()
-	paths := make([]string, 0, len(imgs))
-	anims := make([]string, 0, len(imgs))
-	starts := make([]float64, 0, len(imgs))
-	haveAllOffsets := true
-	for _, im := range imgs {
-		if im.Path == "" {
-			continue
-		}
-		paths = append(paths, im.Path)
-		anims = append(anims, im.Animation)
-		off, ok := offsets[im.Beat]
-		if !ok {
-			haveAllOffsets = false
-		}
-		starts = append(starts, off)
-	}
+	paths, anims, starts, beats, skipped := snapshotAudioBookVideoImages(imgs, offsets)
 	if len(paths) == 0 {
 		// No illustrations → no slideshow to render. The audio + text doc still
 		// stand on their own.
 		logger.Info("audiobook video skipped", "reason", "no illustrations")
 		return
 	}
-	if !haveAllOffsets {
-		// Partial timing means some markers never fired; the renderer's
-		// even-split fallback beats a timeline with holes.
-		starts = nil
+	if skipped > 0 {
+		logger.Info("audiobook video: dropping beats whose scene marker never fired",
+			"kept", len(paths), "skipped", skipped)
 	}
 	opts := audioBookVideoOptions(topic, orch.Transcript.Snapshot(), orch.AudioBookAvatars())
 	opts.Animations = anims
 	opts.ImageOffsets = starts
-	writeAudioBookVideoTimings(logger, jobOutDir, anims, starts)
+	writeAudioBookVideoTimings(logger, jobOutDir, anims, starts, beats)
 
 	res := video.Resolution(topic.Resolution)
 	if sub.Resolution != "" {
@@ -162,15 +146,53 @@ func scheduleAudioBookVideo(deps Deps, jobID string, sub server.JobSubmission,
 	})
 }
 
+// snapshotAudioBookVideoImages selects which illustrations go into the video
+// and with what timing. imgs must be sorted by Beat; offsets is the per-beat
+// audio position captured from the live run's scene markers.
+//
+// When any offsets were recorded, only beats whose marker actually fired are
+// kept — a chapter-limited narration generates illustrations for the whole
+// outline, but images past the narrated range have no place on this audio's
+// timeline. (The previous all-or-nothing check discarded EVERY offset when
+// one was missing, so the renderer even-split all images across the audio
+// and the slideshow ran ahead of the narration.) When no offsets exist at
+// all (legacy runs, no markers fired), every image is kept and starts is nil
+// so the renderer falls back to its even split.
+func snapshotAudioBookVideoImages(imgs []contentcreator.AudioBookImage, offsets map[int]float64,
+) (paths, anims []string, starts []float64, beats []int, skipped int) {
+	for _, im := range imgs {
+		if im.Path == "" {
+			continue
+		}
+		off, ok := offsets[im.Beat]
+		if !ok && len(offsets) > 0 {
+			skipped++
+			continue
+		}
+		paths = append(paths, im.Path)
+		anims = append(anims, im.Animation)
+		starts = append(starts, off)
+		beats = append(beats, im.Beat)
+	}
+	if len(offsets) == 0 {
+		starts = nil
+	}
+	return paths, anims, starts, beats, skipped
+}
+
 // writeAudioBookVideoTimings persists the per-image animation + audio-offset
 // snapshot next to the generated scene PNGs so the manual re-render endpoint
 // can rebuild the same motion-timed video after the orchestrator is gone.
-// offsets may be nil (unknown timing → even split on re-render).
-func writeAudioBookVideoTimings(logger *slog.Logger, jobOutDir string, anims []string, offsets []float64) {
+// beats identifies which narration-vN.png each entry describes — the
+// re-render endpoint globs every scene PNG, so without it a filtered
+// snapshot couldn't be matched back to files. offsets may be nil (unknown
+// timing → even split on re-render).
+func writeAudioBookVideoTimings(logger *slog.Logger, jobOutDir string, anims []string, offsets []float64, beats []int) {
 	payload := struct {
 		Animations   []string  `json:"animations"`
 		ImageOffsets []float64 `json:"image_offsets,omitempty"`
-	}{Animations: anims, ImageOffsets: offsets}
+		Beats        []int     `json:"beats,omitempty"`
+	}{Animations: anims, ImageOffsets: offsets, Beats: beats}
 	body, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		logger.Warn("audiobook video timings marshal failed", "err", err)

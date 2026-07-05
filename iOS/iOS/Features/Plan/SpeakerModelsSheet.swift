@@ -11,6 +11,7 @@ struct SpeakerModelsSheet: View {
 
     @Binding var discussion: Discussion
     var allowsEditing = true
+    var visibleSpeakerNames: Set<String>?
 
     @State private var models: [ModelInfoDTO] = []
     @State private var isLoadingModels = true
@@ -50,6 +51,9 @@ struct SpeakerModelsSheet: View {
 
     private var speakers: [Speaker] {
         var out: [Speaker] = []
+        let visibleNames = visibleSpeakerNames.map { names in
+            Set(names.map(Self.normalizedSpeakerName).filter { !$0.isEmpty })
+        }
         func appendUnique(name: String, role: String, isHost: Bool, model: String?, voice: String?, seen: inout Set<String>) {
             let key = Self.normalizedSpeakerName(name)
             guard !key.isEmpty, !seen.contains(key) else { return }
@@ -64,6 +68,8 @@ struct SpeakerModelsSheet: View {
                              model: host.model, voice: host.voice, seen: &seenNames)
             }
             for speaker in discussion.script?.audioBookSpeakers ?? [] {
+                let key = Self.normalizedSpeakerName(speaker.name)
+                if let visibleNames, !visibleNames.contains(key) { continue }
                 let role = (speaker.description ?? speaker.gender ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 appendUnique(name: speaker.name, role: role, isHost: false,
@@ -305,7 +311,7 @@ struct SpeakerModelsSheet: View {
         return "These model and voice assignments are saved with this plan."
     }
 
-    private static func normalizedSpeakerName(_ name: String) -> String {
+    nonisolated private static func normalizedSpeakerName(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 

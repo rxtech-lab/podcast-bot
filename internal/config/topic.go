@@ -25,6 +25,9 @@ type AgentSpec struct {
 	// e.g. "en-US-AvaMultilingualNeural"). Blank means the voice picker
 	// auto-assigns one at generation time.
 	Voice string `yaml:"voice,omitempty" json:"voice,omitempty"`
+	// Gender is an optional voice-casting hint ("male"/"female") for the
+	// automatic voice picker; blank falls back to inferring from Name.
+	Gender string `yaml:"gender,omitempty" json:"gender,omitempty"`
 }
 
 // TTS provider identifiers used in topic.md `tts_provider:` field.

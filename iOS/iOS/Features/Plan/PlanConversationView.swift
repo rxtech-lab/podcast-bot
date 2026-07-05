@@ -104,7 +104,8 @@ struct PlanConversationView: View {
         }
         .sheet(isPresented: $showingChapterChecklist) {
             if let script = latestAudioBookScript {
-                ChapterChecklistSheet(mode: .plan(script)) { indices in
+                ChapterChecklistSheet(mode: .plan(script),
+                                      editableDiscussion: speakerModelsDiscussionBinding) { indices in
                     showingChapterChecklist = false
                     generate(chapters: indices)
                 }
@@ -601,6 +602,10 @@ struct PlanConversationView: View {
     /// 5) in a checklist; everything else confirms via the plain dialog.
     private func requestGenerate() {
         if let script = latestAudioBookScript, (script.audioBookChapters?.count ?? 0) > 1 {
+            if discussion.script == nil {
+                discussion.script = script
+                discussion.title = script.title
+            }
             showingChapterChecklist = true
         } else {
             showingGenerateConfirm = true

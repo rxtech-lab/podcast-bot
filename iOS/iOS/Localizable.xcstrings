@@ -1891,6 +1891,9 @@
     "Couldn't load chapters" : {
 
     },
+    "Couldn't load speakers" : {
+
+    },
     "Couldn't open link" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5887,6 +5890,9 @@
         }
       }
     },
+    "Podcast name" : {
+
+    },
     "Podcasts" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6790,6 +6796,9 @@
     "Rename Album" : {
 
     },
+    "Rename Podcast" : {
+
+    },
     "Request failed (%lld): %@" : {
       "comment" : "Generic HTTP error; code is the status code, msg is the server message",
       "localizations" : {
@@ -6955,6 +6964,9 @@
           }
         }
       }
+    },
+    "Sample Image (E2E)" : {
+
     },
     "Save" : {
       "localizations" : {

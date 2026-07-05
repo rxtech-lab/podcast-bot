@@ -250,6 +250,7 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "prompt is required", http.StatusBadRequest)
 			return
 		}
+		req.Attachments = s.sanitizedAttachments(user.ID, req.Attachments)
 		userText := planner.ConversationMessageText(prompt, req.Attachments, req.Language)
 		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
 			Role:        "user",
@@ -412,7 +413,7 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 		_ = sse.send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	history := planningMessagesForLLM(turns)
+	history := planningMessagesForLLM(turns, s.uploadURLRefresher(workCtx))
 	s.logger().Info("planning turn started",
 		"discussion", d.ID,
 		"conversation", conv.ID,
@@ -521,7 +522,7 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 		_ = sink.send("error", map[string]string{"message": err.Error()})
 		return
 	}
-	history := planningMessagesForLLM(turns)
+	history := planningMessagesForLLM(turns, s.uploadURLRefresher(workCtx))
 	s.logger().Info("stored planning turn started",
 		"discussion", d.ID,
 		"conversation", conv.ID,

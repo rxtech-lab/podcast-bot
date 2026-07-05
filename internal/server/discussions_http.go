@@ -90,6 +90,11 @@ type discussionImproveRequest struct {
 	Attachments []planner.Attachment `json:"attachments,omitempty"`
 }
 
+// discussionRenameRequest is the body of PATCH /api/discussions/{id}.
+type discussionRenameRequest struct {
+	Title string `json:"title"`
+}
+
 // discussionAddSourcesRequest carries links the user added in the sources sheet
 // so the planner can re-research them and update the plan.
 type discussionAddSourcesRequest struct {
@@ -207,6 +212,32 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request) {
 	s.logStationTiming("discussions.get", len(d.Lines), timer)
 }
 
+// handleDiscussionRename serves PATCH /api/discussions/{id}: renames an owned
+// podcast without changing its embedded generated plan.
+func (s *Server) handleDiscussionRename(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	var req discussionRenameRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		http.Error(w, "discussion title is required", http.StatusBadRequest)
+		return
+	}
+	d, err := s.d.Discussions.Rename(r.Context(), user.ID, r.PathValue("id"), req.Title)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	timer := newStationTimer()
+	s.prepareDiscussionDetail(r, d, true, timer)
+	writeJSON(w, d)
+}
+
 // handleDiscussionCreate inserts an empty placeholder discussion (status
 // "planning") and returns it immediately so the client can navigate to the plan
 // page and stream the plan into it via /api/discussions/{id}/plan/stream. This
@@ -291,6 +322,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		s.startBackgroundCoverGeneration(user.ID, d.ID, "", topic)
 	}
 	if s.d.Planning != nil {
+		req.Form.Attachments = s.sanitizedAttachments(user.ID, req.Form.Attachments)
 		plan := planner.PlanRequest{
 			Type:        contentType,
 			Topic:       topic,
