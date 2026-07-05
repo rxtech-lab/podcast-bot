@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/content_creator"
 )
 
@@ -55,6 +56,7 @@ func (s *Server) handleDiscussionUIActions(w http.ResponseWriter, r *http.Reques
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
 	s.applyDiscussionSummaryMeta(r.Context(), d)
+	s.applyDiscussionMindmapMeta(r.Context(), d)
 	s.applyDiscussionShareURL(d)
 
 	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
@@ -103,6 +105,19 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 		items = append(items, actionItem("generate-summary", phrase(lang, "Generate summary", "生成总结", "產生摘要"), phrase(lang, "Generating summary", "正在生成总结", "正在產生摘要"), "sparkles", "", true, "request", discussionActionLink(d.ID, "action", "summary-generate")))
 	} else {
 		items = append(items, actionItem("summary-unavailable", phrase(lang, "Summary", "总结", "摘要"), "", "doc.richtext", "", false, "none", discussionActionLink(d.ID, "summary", "unavailable")))
+	}
+	// The mindmap exists only for discussion-type podcasts (other types have
+	// no back-and-forth to map). No terminal "unavailable" item: absence of
+	// meta means the type doesn't support it or the podcast isn't ready yet.
+	if discussionIsDiscussion(d) {
+		switch {
+		case d.Mindmap != nil && d.Mindmap.Available:
+			items = append(items, actionItem("open-mindmap", phrase(lang, "Mindmap", "思维导图", "心智圖"), "", "point.3.connected.trianglepath.dotted", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "mindmap")))
+		case d.Mindmap != nil && d.Mindmap.Pending:
+			items = append(items, actionItem("mindmap-pending", phrase(lang, "Generating mindmap", "正在生成思维导图", "正在產生心智圖"), "", "hourglass", "", false, "none", discussionActionLink(d.ID, "mindmap", "pending")))
+		case d.Mindmap != nil && d.Mindmap.Generation:
+			items = append(items, actionItem("generate-mindmap", phrase(lang, "Generate mindmap", "生成思维导图", "產生心智圖"), phrase(lang, "Generating mindmap", "正在生成思维导图", "正在產生心智圖"), "sparkles", "", true, "request", discussionActionLink(d.ID, "action", "mindmap-generate")))
+		}
 	}
 	return items
 }
@@ -249,6 +264,12 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 	default:
 		visibility = "all"
 	}
+	contentType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+	switch contentType {
+	case config.ContentTypeDiscussion, config.ContentTypeAudioBook:
+	default:
+		contentType = "all"
+	}
 	filterItems := []discussionUIActionItem{
 		actionItem("filter-all", phrase(lang, "All", "全部", "全部"), "", filterSystemImage(visibility, "all", "tray.full"), "",
 			true, "select", homeActionLink("filter", "all")),
@@ -256,6 +277,13 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 			true, "select", homeActionLink("filter", "public")),
 		actionItem("filter-private", phrase(lang, "Private", "私密", "私密"), "", filterSystemImage(visibility, "private", "lock.fill"), "",
 			true, "select", homeActionLink("filter", "private")),
+		dividerItem("filter-type-divider"),
+		actionItem("type-all", phrase(lang, "All Types", "全部类型", "全部類型"), "", filterSystemImage(contentType, "all", "square.grid.2x2"), "",
+			true, "select", homeActionLink("type", "all")),
+		actionItem("type-discussion", phrase(lang, "Discussion", "讨论", "討論"), "", filterSystemImage(contentType, config.ContentTypeDiscussion, "person.2.wave.2"), "",
+			true, "select", homeActionLink("type", config.ContentTypeDiscussion)),
+		actionItem("type-audio-book", phrase(lang, "Audio Book", "有声书", "有聲書"), "", filterSystemImage(contentType, config.ContentTypeAudioBook, "book.closed"), "",
+			true, "select", homeActionLink("type", config.ContentTypeAudioBook)),
 	}
 	accountItems := make([]discussionUIActionItem, 0, 5)
 	if queryBool(r, "supports_points") {
@@ -311,6 +339,10 @@ func actionItem(id, title, loadingTitle, systemImage, role string, enabled bool,
 			Link: link,
 		},
 	}
+}
+
+func dividerItem(id string) discussionUIActionItem {
+	return actionItem(id, "", "", "", "", false, "divider", "")
 }
 
 func (item discussionUIActionItem) withPlacement(placement string) discussionUIActionItem {

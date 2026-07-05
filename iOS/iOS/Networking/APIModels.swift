@@ -590,6 +590,8 @@ struct DiscussionUIActionItem: Codable, Hashable, Sendable, Identifiable {
         action = try container.decode(DiscussionUIAction.self, forKey: .action)
         children = try container.decodeIfPresent([DiscussionUIActionItem].self, forKey: .children) ?? []
     }
+
+    var isDivider: Bool { action.type == "divider" }
 }
 
 struct DiscussionUIAction: Codable, Hashable, Sendable {

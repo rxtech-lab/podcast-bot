@@ -50,9 +50,27 @@ class E2ETestCase: XCTestCase {
     }
 
     func openLibraryRow(_ app: XCUIApplication, id: String, timeout: TimeInterval = 20) {
-        let row = app.buttons["discussion.row.\(id)"]
-        XCTAssertTrue(row.waitForExistence(timeout: timeout), "library row \(id) never appeared")
+        let row = findLibraryRow(app, id: id, timeout: timeout)
+        XCTAssertTrue(row.exists, "library row \(id) never appeared")
         row.tap()
+    }
+
+    func findLibraryRow(_ app: XCUIApplication,
+                        id: String,
+                        timeout: TimeInterval = 20,
+                        maxScrolls: Int = 8) -> XCUIElement {
+        let row = app.buttons["discussion.row.\(id)"]
+        if row.waitForExistence(timeout: timeout) {
+            return row
+        }
+
+        for _ in 0..<maxScrolls {
+            app.swipeUp()
+            if row.waitForExistence(timeout: 2) {
+                break
+            }
+        }
+        return row
     }
 
     // MARK: - Backend helpers

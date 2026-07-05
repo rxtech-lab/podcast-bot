@@ -441,17 +441,18 @@ func TestDiscussionStoreListAndSearchByVisibility(t *testing.T) {
 	defer store.Close()
 
 	owner := "oauth:user-1"
-	mk := func(topic, title string) *Discussion {
+	mk := func(topic, title, contentType string) *Discussion {
 		d, err := store.Create(ctx, owner, topic, planResponse{
-			Script: &config.DebateTopic{Title: title, Type: config.ContentTypeDiscussion, Language: "en-US"},
+			Script: &config.DebateTopic{Title: title, Type: contentType, Language: "en-US"},
 		})
 		if err != nil {
 			t.Fatalf("Create %s: %v", title, err)
 		}
 		return d
 	}
-	private := mk("station visibility", "Private Station")
-	public := mk("station visibility", "Public Station")
+	private := mk("station visibility", "Private Station", config.ContentTypeDiscussion)
+	public := mk("station visibility", "Public Station", config.ContentTypeDiscussion)
+	audioBook := mk("station visibility", "Audio Book Station", config.ContentTypeAudioBook)
 	if _, err := store.SetVisibility(ctx, owner, public.ID, DiscussionPublic, DiscussionCover{
 		Type:          "gradient",
 		GradientStart: "#111111",
@@ -459,13 +460,20 @@ func TestDiscussionStoreListAndSearchByVisibility(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetVisibility public: %v", err)
 	}
+	if _, err := store.SetVisibility(ctx, owner, audioBook.ID, DiscussionPublic, DiscussionCover{
+		Type:          "gradient",
+		GradientStart: "#111111",
+		GradientEnd:   "#777777",
+	}); err != nil {
+		t.Fatalf("SetVisibility audio book public: %v", err)
+	}
 
 	publicRows, err := store.ListByVisibility(ctx, owner, DiscussionPublic, 20, 0)
 	if err != nil {
 		t.Fatalf("ListByVisibility public: %v", err)
 	}
-	if len(publicRows) != 1 || publicRows[0].ID != public.ID {
-		t.Fatalf("public rows = %+v, want only %s", publicRows, public.ID)
+	if len(publicRows) != 2 {
+		t.Fatalf("public rows = %+v, want two public rows", publicRows)
 	}
 
 	privateRows, err := store.SearchByVisibility(ctx, owner, "station", DiscussionPrivate, 20, 0)
@@ -474,6 +482,22 @@ func TestDiscussionStoreListAndSearchByVisibility(t *testing.T) {
 	}
 	if len(privateRows) != 1 || privateRows[0].ID != private.ID {
 		t.Fatalf("private search rows = %+v, want only %s", privateRows, private.ID)
+	}
+
+	audioBookRows, err := store.ListByFilters(ctx, owner, DiscussionPublic, config.ContentTypeAudioBook, 20, 0)
+	if err != nil {
+		t.Fatalf("ListByFilters public audio-book: %v", err)
+	}
+	if len(audioBookRows) != 1 || audioBookRows[0].ID != audioBook.ID {
+		t.Fatalf("public audio-book rows = %+v, want only %s", audioBookRows, audioBook.ID)
+	}
+
+	discussionRows, err := store.SearchByFilters(ctx, owner, "station", DiscussionPublic, config.ContentTypeDiscussion, 20, 0)
+	if err != nil {
+		t.Fatalf("SearchByFilters public discussion: %v", err)
+	}
+	if len(discussionRows) != 1 || discussionRows[0].ID != public.ID {
+		t.Fatalf("public discussion search rows = %+v, want only %s", discussionRows, public.ID)
 	}
 }
 

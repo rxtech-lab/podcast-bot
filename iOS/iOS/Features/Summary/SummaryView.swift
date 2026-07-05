@@ -21,6 +21,9 @@ struct SummaryView: View {
     let discussionID: String
     /// Used only to name the exported PDF / Markdown file; defaults to "Summary".
     var title: String = "Summary"
+    /// Whether the mindmap opened from the embedded summary link is editable
+    /// (i.e. the viewer owns the discussion).
+    var mindmapEditable: Bool = false
     let api: APIClient
 
     @Environment(\.dismiss) private var dismiss
@@ -38,6 +41,7 @@ struct SummaryView: View {
     @State private var isPreparingSlidesPDF = false
     @State private var exportError: String?
     @State private var showingNotionExport = false
+    @State private var showingMindmap = false
     @State private var actionItems: [DiscussionUIActionItem] = []
 
     private var isSummaryDocumentSelected: Bool { docType == "summary" }
@@ -113,6 +117,12 @@ struct SummaryView: View {
                 .sheet(isPresented: $showingNotionExport) {
                     NotionExportSheet(api: api, discussionID: discussionID, docType: docType)
                 }
+                .sheet(isPresented: $showingMindmap) {
+                    MindmapView(discussionID: discussionID,
+                                title: title,
+                                isEditable: mindmapEditable,
+                                api: api)
+                }
                 .alert("Couldn’t export", isPresented: Binding(
                     get: { exportError != nil },
                     set: { if !$0 { exportError = nil } }
@@ -155,6 +165,23 @@ struct SummaryView: View {
                 }
                 .padding()
         }
+        // The server embeds a debatepod:// mindmap deep link in the summary
+        // body; intercept it to present the mindmap sheet in-app instead of
+        // bouncing the custom scheme through the system.
+        .environment(\.openURL, OpenURLAction { url in
+            handleSummaryMarkdownLink(url)
+        })
+    }
+
+    private func handleSummaryMarkdownLink(_ url: URL) -> OpenURLAction.Result {
+        guard url.scheme == "debatepod", url.host == "discussion" else { return .systemAction }
+        let components = url.pathComponents.filter { $0 != "/" }
+        guard components.first == discussionID else { return .systemAction }
+        if Array(components.dropFirst()) == ["sheet", "mindmap"] {
+            showingMindmap = true
+            return .handled
+        }
+        return .systemAction
     }
 
     private var pptPreviewContent: some View {

@@ -46,6 +46,12 @@ struct WhatsNewFeature: Identifiable, Equatable {
             icon: "square.and.arrow.up.on.square"
         ),
         WhatsNewFeature(
+            id: "mindmap-summary-export",
+            title: "Mindmap support",
+            subtitle: "Summaries can include mindmaps, and individual mindmaps can be exported on their own.",
+            icon: "point.3.connected.trianglepath.dotted"
+        ),
+        WhatsNewFeature(
             id: "template-research-planning",
             title: "Plan with templates",
             subtitle: "Choose templates for new \(AppStringLiteral.stationNameRaw)s, including a research template for academic-style topics.",

@@ -154,7 +154,7 @@ func TestDiscussionUIActionsShowVideoRenderingWhileAudioBookVideoRuns(t *testing
 
 func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
 	srv, _ := newUIActionsTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/home/ui-actions?supports_points=true&visibility=public", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/home/ui-actions?supports_points=true&visibility=public&type=audio-book", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -179,6 +179,14 @@ func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
 	publicFilter := findAction(t, filter.Children, "filter-public")
 	if publicFilter.SystemImage != "checkmark" {
 		t.Fatalf("public filter image = %q, want checkmark", publicFilter.SystemImage)
+	}
+	divider := findAction(t, filter.Children, "filter-type-divider")
+	if divider.Action.Type != "divider" {
+		t.Fatalf("divider action type = %q, want divider", divider.Action.Type)
+	}
+	audioBookFilter := findAction(t, filter.Children, "type-audio-book")
+	if audioBookFilter.SystemImage != "checkmark" {
+		t.Fatalf("audio book filter image = %q, want checkmark", audioBookFilter.SystemImage)
 	}
 }
 

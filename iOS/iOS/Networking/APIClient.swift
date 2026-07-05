@@ -89,7 +89,8 @@ final class APIClient: Sendable {
     func discussions(limit: Int = 20,
                      offset: Int = 0,
                      query: String? = nil,
-                     visibility: DiscussionVisibility? = nil) async throws -> [Discussion] {
+                     visibility: DiscussionVisibility? = nil,
+                     type: String? = nil) async throws -> [Discussion] {
         var queryItems = [
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset)),
@@ -100,6 +101,9 @@ final class APIClient: Sendable {
         }
         if let visibility {
             queryItems.append(URLQueryItem(name: "visibility", value: visibility.rawValue))
+        }
+        if let type, !type.isEmpty {
+            queryItems.append(URLQueryItem(name: "type", value: type))
         }
         return try await get("/api/discussions", query: queryItems)
     }
@@ -170,6 +174,25 @@ final class APIClient: Sendable {
         try await send("POST", "/api/discussions/\(id)/video/generate", body: EmptyRequest())
     }
 
+    /// Fetches the generated mindmap node tree for a discussion podcast. The
+    /// detail payload only carries a content-free `mindmap` descriptor; this is
+    /// the separate endpoint the mindmap view calls on mount. Throws (404) when
+    /// no mindmap exists yet.
+    func mindmap(id: String) async throws -> MindmapDocument {
+        try await get("/api/discussions/\(id)/mindmap")
+    }
+
+    /// Starts or retries mindmap generation for an owned, finished discussion
+    /// and returns the refreshed discussion so the menu can show the pending state.
+    func generateMindmap(id: String) async throws -> Discussion {
+        try await send("POST", "/api/discussions/\(id)/mindmap/generate", body: EmptyRequest())
+    }
+
+    /// Persists the owner's edited mindmap tree (whole-tree replace).
+    func saveMindmap(id: String, spec: MindmapSpec) async throws -> MindmapDocument {
+        try await send("PUT", "/api/discussions/\(id)/mindmap", body: MindmapSaveRequest(mindmap: spec))
+    }
+
     func discussionUIActions(id: String,
                              surface: String,
                              docType: String? = nil,
@@ -205,13 +228,17 @@ final class APIClient: Sendable {
     }
 
     func homeUIActions(supportsPoints: Bool = false,
-                       visibility: String? = nil) async throws -> DiscussionUIActionsResponse {
+                       visibility: String? = nil,
+                       type: String? = nil) async throws -> DiscussionUIActionsResponse {
         var query: [URLQueryItem] = []
         if supportsPoints {
             query.append(URLQueryItem(name: "supports_points", value: "true"))
         }
         if let visibility, !visibility.isEmpty {
             query.append(URLQueryItem(name: "visibility", value: visibility))
+        }
+        if let type, !type.isEmpty {
+            query.append(URLQueryItem(name: "type", value: type))
         }
         return try await get("/api/home/ui-actions", query: query)
     }

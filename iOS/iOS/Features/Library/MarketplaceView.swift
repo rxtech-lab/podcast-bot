@@ -118,9 +118,12 @@ struct MarketplaceView: View {
                     case .discussion(let discussion):
                         PodcastPlayerView(discussion: discussion,
                                           onCreatedFromPlan: onCreateFromPlan,
-                                          onCreatedFollowUp: onCreateFromPlan)
+                                          onCreatedFollowUp: onCreateFromPlan,
+                                          hidesTabBar: true)
                     case .album(let id):
-                        AlbumView(albumID: id, mode: .publicMarket)
+                        AlbumView(albumID: id, mode: .publicMarket) { episode in
+                            path.append(.discussion(episode))
+                        }
                     }
                 }
         }
@@ -618,12 +621,17 @@ private struct MarketItemCard: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(item.accessibilityIdentifier)
                 HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(discussion.displayTitle)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(2)
-                        MarketStatusLabel(discussion: discussion)
+                    Button { onOpen(item) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(discussion.displayTitle)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            MarketStatusLabel(discussion: discussion)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(item.detailsAccessibilityIdentifier)
                     Spacer(minLength: 8)
                     Button { onToggleLike(discussion) } label: {
                         Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
@@ -639,19 +647,23 @@ private struct MarketItemCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(item.accessibilityIdentifier)
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(summary.title)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(2)
-                        Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.secondaryText)
+                Button { onOpen(item) } label: {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(summary.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "rectangle.stack")
+                            .foregroundStyle(Theme.accent)
                     }
-                    Spacer(minLength: 8)
-                    Image(systemName: "rectangle.stack")
-                        .foregroundStyle(Theme.accent)
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(item.detailsAccessibilityIdentifier)
             }
         }
     }
@@ -673,9 +685,14 @@ private struct MarketShelfItem: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(item.accessibilityIdentifier)
                 HStack {
-                    Text(discussion.displayTitle)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(2)
+                    Button { onOpen(item) } label: {
+                        Text(discussion.displayTitle)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(item.detailsAccessibilityIdentifier)
                     Spacer()
                     Button { onToggleLike(discussion) } label: {
                         Image(systemName: discussion.isLiked == true ? "heart.fill" : "heart")
@@ -693,15 +710,19 @@ private struct MarketShelfItem: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(item.accessibilityIdentifier)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(summary.title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(2)
-                    Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Theme.secondaryText)
+                Button { onOpen(item) } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(summary.title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                        Label(albumEpisodeCount(summary), systemImage: "rectangle.stack")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    .frame(width: 136, alignment: .leading)
                 }
-                .frame(width: 136, alignment: .leading)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(item.detailsAccessibilityIdentifier)
             }
         }
     }
@@ -715,6 +736,10 @@ private extension MarketDisplayItem {
         case .album(let summary, _):
             return "market.album.\(summary.id)"
         }
+    }
+
+    var detailsAccessibilityIdentifier: String {
+        "\(accessibilityIdentifier).details"
     }
 }
 
@@ -860,9 +885,12 @@ struct CreatorProfileView: View {
                 case .discussion(let discussion):
                     PodcastPlayerView(discussion: discussion,
                                       onCreatedFromPlan: onCreateFromPlan,
-                                      onCreatedFollowUp: onCreateFromPlan)
+                                      onCreatedFollowUp: onCreateFromPlan,
+                                      hidesTabBar: true)
                 case .album(let id):
-                    AlbumView(albumID: id, mode: .publicMarket)
+                    AlbumView(albumID: id, mode: .publicMarket) { episode in
+                        path.append(.discussion(episode))
+                    }
                 }
             }
         }

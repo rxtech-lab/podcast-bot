@@ -26,6 +26,8 @@ struct PodcastPlayerView: View {
     /// Non-nil when this discussion was opened via a private share link; passed
     /// to the player model so a non-owner participant's comments are authorized.
     var shareToken: String? = nil
+    /// Marketplace detail pages keep the player toolbar, but hide the root tab bar.
+    var hidesTabBar: Bool = false
     var onSignOut: (() -> Void)?
 
     @State private var model: PlayerModel?
@@ -33,6 +35,7 @@ struct PodcastPlayerView: View {
     @State private var showingPlan = false
     @State private var showingSummary = false
     @State private var showingText = false
+    @State private var showingMindmap = false
     @State private var audioBookVideoURL: IdentifiableURL?
     @State private var showingFullPlayer = false
     @State private var showingImporter = false
@@ -57,6 +60,8 @@ struct PodcastPlayerView: View {
     @State private var createFromPlanError: String?
     @State private var isGeneratingSummary = false
     @State private var summaryGenerateError: String?
+    @State private var isGeneratingMindmap = false
+    @State private var mindmapGenerateError: String?
     @State private var isGeneratingVideo = false
     @State private var isVideoGenerationPending = false
     @State private var videoGenerateError: String?
@@ -92,8 +97,10 @@ struct PodcastPlayerView: View {
         .navigationTitle(discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : discussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { podcastToolbar }
+        .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
         .modifier(CreateFromPlanErrorAlert(error: $createFromPlanError))
         .modifier(SummaryGenerateErrorAlert(error: $summaryGenerateError))
+        .modifier(MindmapGenerateErrorAlert(error: $mindmapGenerateError))
         .modifier(VideoGenerateErrorAlert(error: $videoGenerateError))
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: currentDiscussion)
@@ -103,6 +110,9 @@ struct PodcastPlayerView: View {
         }
         .sheet(isPresented: $showingText) {
             textSheet
+        }
+        .sheet(isPresented: $showingMindmap) {
+            mindmapSheet
         }
         .fullScreenCover(item: $audioBookVideoURL) { item in
             AudioBookVideoView(url: item.url)
@@ -264,6 +274,10 @@ struct PodcastPlayerView: View {
             d.summary?.available == true ? "summary-ready" : "summary-not-ready",
             d.summary?.pending == true ? "summary-pending" : "summary-not-pending",
             d.summary?.generation == true ? "summary-generation" : "summary-no-generation",
+            d.mindmap?.status?.rawValue ?? "",
+            d.mindmap?.available == true ? "mindmap-ready" : "mindmap-not-ready",
+            d.mindmap?.pending == true ? "mindmap-pending" : "mindmap-not-pending",
+            d.mindmap?.generation == true ? "mindmap-generation" : "mindmap-no-generation",
             d.jobID ?? "",
             d.downloadURLString ?? "",
             d.albumID ?? "",
@@ -280,6 +294,7 @@ struct PodcastPlayerView: View {
     private var summarySheet: some View {
         SummaryView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
+                    mindmapEditable: currentDiscussion.isOwner == true,
                     api: APIClient(tokens: auth))
     }
 
@@ -290,6 +305,15 @@ struct PodcastPlayerView: View {
         TextContentView(discussionID: currentDiscussion.id,
                         title: currentDiscussion.displayTitle,
                         api: APIClient(tokens: auth))
+    }
+
+    /// The discussion mindmap editor. Kept out of `body` for the same
+    /// type-checker reason as `summarySheet`.
+    private var mindmapSheet: some View {
+        MindmapView(discussionID: currentDiscussion.id,
+                    title: currentDiscussion.displayTitle,
+                    isEditable: currentDiscussion.isOwner == true,
+                    api: APIClient(tokens: auth))
     }
 
     private func loadUIActions() async {
@@ -345,8 +369,12 @@ struct PodcastPlayerView: View {
             showingSummary = true
         case ["sheet", "text"]:
             showingText = true
+        case ["sheet", "mindmap"]:
+            showingMindmap = true
         case ["action", "summary-generate"]:
             generateSummary()
+        case ["action", "mindmap-generate"]:
+            generateMindmap()
         case ["action", "video-generate"]:
             generateVideo()
         default:
@@ -414,6 +442,8 @@ struct PodcastPlayerView: View {
         switch item.id {
         case "generate-summary":
             return isGeneratingSummary
+        case "generate-mindmap":
+            return isGeneratingMindmap
         case "generate-video":
             return isGeneratingVideo || isVideoGenerationPending
         default:
@@ -969,6 +999,27 @@ struct PodcastPlayerView: View {
         }
     }
 
+    private func generateMindmap() {
+        guard !isGeneratingMindmap else { return }
+        isGeneratingMindmap = true
+        Task { @MainActor in
+            defer { isGeneratingMindmap = false }
+            do {
+                let updated = try await APIClient(tokens: auth).generateMindmap(id: currentDiscussion.id)
+                if let model {
+                    model.discussion = PlayerModel.mergingLocalDiscussionState(
+                        current: model.discussion,
+                        fresh: updated
+                    )
+                    model.listenForJobUpdatesIfNeeded()
+                }
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                mindmapGenerateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
     private func generateVideo() {
         guard !isGeneratingVideo && !isVideoGenerationPending else { return }
         isGeneratingVideo = true
@@ -1070,6 +1121,26 @@ private struct SummaryGenerateErrorAlert: ViewModifier {
     }
 }
 
+private struct MindmapGenerateErrorAlert: ViewModifier {
+    @Binding var error: String?
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { error != nil },
+            set: { if !$0 { error = nil } }
+        )
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Could not generate mindmap", isPresented: isPresented) {
+                Button("OK", role: .cancel) { error = nil }
+            } message: {
+                Text(error ?? "")
+            }
+    }
+}
+
 private struct VideoGenerateErrorAlert: ViewModifier {
     @Binding var error: String?
 
@@ -1134,20 +1205,24 @@ struct DiscussionActionsMenu: View {
 
     @ViewBuilder
     private func leafActionRow(_ item: DiscussionUIActionItem) -> some View {
-        let busy = isBusy(item)
-        let disabled = !item.enabled || busy
-        if item.action.type == "share-link", let url = URL(string: item.action.link) {
-            ShareLink(item: url) {
-                rowLabel(item, busy: busy)
-            }
-            .disabled(disabled)
+        if item.isDivider {
+            Divider()
         } else {
-            Button(role: buttonRole(for: item)) {
-                perform(item)
-            } label: {
-                rowLabel(item, busy: busy)
+            let busy = isBusy(item)
+            let disabled = !item.enabled || busy
+            if item.action.type == "share-link", let url = URL(string: item.action.link) {
+                ShareLink(item: url) {
+                    rowLabel(item, busy: busy)
+                }
+                .disabled(disabled)
+            } else {
+                Button(role: buttonRole(for: item)) {
+                    perform(item)
+                } label: {
+                    rowLabel(item, busy: busy)
+                }
+                .disabled(disabled)
             }
-            .disabled(disabled)
         }
     }
 

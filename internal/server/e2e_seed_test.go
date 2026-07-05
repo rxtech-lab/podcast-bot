@@ -80,3 +80,27 @@ func TestSeedE2EAudioBookFixtures(t *testing.T) {
 		}
 	}
 }
+
+func TestSeedE2EPlanningShortfallFixture(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	points, err := NewPointsStore(store)
+	if err != nil {
+		t.Fatalf("NewPointsStore: %v", err)
+	}
+	if err := store.SeedE2E(ctx, points); err != nil {
+		t.Fatalf("SeedE2E: %v", err)
+	}
+
+	shortfall, err := store.Get(ctx, "test", "test-plan-shortfall")
+	if err != nil || shortfall == nil {
+		t.Fatalf("load shortfall plan fixture: %v", err)
+	}
+	if shortfall.ID == "test-plan" || shortfall.Status != DiscussionPlanning {
+		t.Fatalf("shortfall fixture = id %q status %q, want dedicated planning discussion", shortfall.ID, shortfall.Status)
+	}
+}

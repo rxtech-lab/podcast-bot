@@ -517,6 +517,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	// in the background so finalisation (stitch/upload) isn't blocked; the client
 	// is notified via summary_ready when it lands.
 	startSummaryGeneration(deps, jobID, topic, orch.Transcript.Snapshot())
+	startMindmapGeneration(deps, jobID, topic, orch.Transcript.Snapshot())
 	status(fmt.Sprintf("orchestrator done (%s)",
 		time.Since(tRun).Round(time.Second)))
 

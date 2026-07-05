@@ -196,7 +196,12 @@ type Discussion struct {
 	// The Markdown body is never included here — it is fetched separately from the
 	// summary content endpoint when the summary view mounts. Populated lazily on
 	// the detail path only.
-	Summary             *SummaryMeta `json:"summary,omitempty"`
+	Summary *SummaryMeta `json:"summary,omitempty"`
+	// Mindmap is the content-free descriptor of the discussion's generated
+	// mindmap document. Only present for discussion-type podcasts; the JSON
+	// tree body is fetched separately from the mindmap endpoint. Populated
+	// lazily on the detail path only.
+	Mindmap             *SummaryMeta `json:"mindmap,omitempty"`
 	summaryMetaLoaded   bool
 	joinedJob           *Job
 	AllowSendingMessage bool      `json:"allowSendingMessage"`
@@ -794,15 +799,21 @@ func (s *DiscussionStore) ListByReference(ctx context.Context, owner, referenceI
 // limit/offset paginate the result; a non-positive limit falls back to the
 // default page size and offsets below zero are clamped to zero.
 func (s *DiscussionStore) List(ctx context.Context, owner string, limit, offset int) ([]Discussion, error) {
-	return s.list(ctx, owner, "", limit, offset)
+	return s.list(ctx, owner, "", "", limit, offset)
 }
 
 // ListByVisibility returns an owner's public or private discussions, newest first.
 func (s *DiscussionStore) ListByVisibility(ctx context.Context, owner string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
-	return s.list(ctx, owner, visibility, limit, offset)
+	return s.list(ctx, owner, visibility, "", limit, offset)
 }
 
-func (s *DiscussionStore) list(ctx context.Context, owner string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
+// ListByFilters returns an owner's discussions filtered by visibility and/or
+// content type. Empty filters are ignored.
+func (s *DiscussionStore) ListByFilters(ctx context.Context, owner string, visibility DiscussionVisibility, contentType string, limit, offset int) ([]Discussion, error) {
+	return s.list(ctx, owner, visibility, contentType, limit, offset)
+}
+
+func (s *DiscussionStore) list(ctx context.Context, owner string, visibility DiscussionVisibility, contentType string, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -818,9 +829,13 @@ func (s *DiscussionStore) list(ctx context.Context, owner string, visibility Dis
 		where += " AND d.visibility = ?"
 		args = append(args, string(visibility))
 	}
+	if contentType != "" {
+		where += " AND " + s.scriptTypePredicate("d")
+		args = append(args, contentType)
+	}
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
-			, `+discussionSummaryListSelectColumns+`
+				, `+discussionSummaryListSelectColumns+`
 			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+` WHERE `+where+`
 			ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
@@ -844,12 +859,18 @@ func (s *DiscussionStore) list(ctx context.Context, owner string, visibility Dis
 // List's column set, scanning, and limit/offset clamping; an empty query is the
 // caller's responsibility (handlers fall back to List in that case).
 func (s *DiscussionStore) Search(ctx context.Context, owner, query string, limit, offset int) ([]Discussion, error) {
-	return s.search(ctx, owner, query, "", limit, offset)
+	return s.search(ctx, owner, query, "", "", limit, offset)
 }
 
 // SearchByVisibility returns matching owner discussions filtered to public or private visibility.
 func (s *DiscussionStore) SearchByVisibility(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
-	return s.search(ctx, owner, query, visibility, limit, offset)
+	return s.search(ctx, owner, query, visibility, "", limit, offset)
+}
+
+// SearchByFilters returns matching owner discussions filtered by visibility
+// and/or content type. Empty filters are ignored.
+func (s *DiscussionStore) SearchByFilters(ctx context.Context, owner, query string, visibility DiscussionVisibility, contentType string, limit, offset int) ([]Discussion, error) {
+	return s.search(ctx, owner, query, visibility, contentType, limit, offset)
 }
 
 // ListParentPodcasts returns owned podcasts that are finished and can be used as
@@ -894,7 +915,7 @@ func (s *DiscussionStore) ListParentPodcasts(ctx context.Context, owner, query s
 	return out, rows.Err()
 }
 
-func (s *DiscussionStore) search(ctx context.Context, owner, query string, visibility DiscussionVisibility, limit, offset int) ([]Discussion, error) {
+func (s *DiscussionStore) search(ctx context.Context, owner, query string, visibility DiscussionVisibility, contentType string, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize
 	}
@@ -910,6 +931,10 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 	if visibility != "" {
 		where += " AND d.visibility = ?"
 		args = append(args, string(visibility))
+	}
+	if contentType != "" {
+		where += " AND " + s.scriptTypePredicate("d")
+		args = append(args, contentType)
 	}
 	args = append(args, pattern, pattern, pattern, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
@@ -934,6 +959,17 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (s *DiscussionStore) scriptTypePredicate(alias string) string {
+	if alias == "" {
+		alias = "native_discussions"
+	}
+	column := alias + ".script_json"
+	if s != nil && s.db != nil && s.db.kind == databasePostgres {
+		return "(NULLIF(" + column + ", '')::jsonb ->> 'type') = ?"
+	}
+	return "json_valid(" + column + ") AND json_extract(" + column + ", '$.type') = ?"
 }
 
 func (s *DiscussionStore) ListPublic(ctx context.Context, viewer, query string, limit, offset int) ([]Discussion, error) {

@@ -22,6 +22,7 @@ struct AlbumView: View {
     let albumID: String
     var ownsNavigation: Bool = false
     var mode: AlbumViewMode = .owner
+    var onOpenEpisode: ((Discussion) -> Void)?
 
     @State private var detail: AlbumDetailResponse?
     @State private var actionItems: [DiscussionUIActionItem] = []
@@ -39,7 +40,7 @@ struct AlbumView: View {
     @State private var renamingEpisodeTitle = ""
 
     var body: some View {
-        if ownsNavigation || mode == .publicMarket {
+        if ownsNavigation {
             core.navigationDestination(for: LibraryDestination.self) { destination in
                 albumDestination(destination)
             }
@@ -327,30 +328,42 @@ struct AlbumView: View {
     @ViewBuilder
     private func episodeRow(_ episode: Discussion, number: Int) -> some View {
         if canManageAlbum {
-            NavigationLink(value: LibraryDestination.discussion(episode)) {
+            episodeOpenControl(episode, number: number)
+                .accessibilityIdentifier("album.episode.\(episode.id)")
+                .listRowBackground(Color.clear)
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        removeEpisode(episode)
+                    } label: {
+                        Label("Remove from Album", systemImage: "rectangle.stack.badge.minus")
+                    }
+                    Button {
+                        beginRenameEpisode(episode)
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .tint(Theme.accent)
+                }
+        } else {
+            episodeOpenControl(episode, number: number)
+                .accessibilityIdentifier("album.episode.\(episode.id)")
+                .listRowBackground(Color.clear)
+        }
+    }
+
+    @ViewBuilder
+    private func episodeOpenControl(_ episode: Discussion, number: Int) -> some View {
+        if let onOpenEpisode {
+            Button {
+                onOpenEpisode(episode)
+            } label: {
                 AlbumEpisodeRow(episode: episode, number: number)
             }
-            .accessibilityIdentifier("album.episode.\(episode.id)")
-            .listRowBackground(Color.clear)
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) {
-                    removeEpisode(episode)
-                } label: {
-                    Label("Remove from Album", systemImage: "rectangle.stack.badge.minus")
-                }
-                Button {
-                    beginRenameEpisode(episode)
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-                .tint(Theme.accent)
-            }
+            .buttonStyle(.plain)
         } else {
             NavigationLink(value: LibraryDestination.discussion(episode)) {
                 AlbumEpisodeRow(episode: episode, number: number)
             }
-            .accessibilityIdentifier("album.episode.\(episode.id)")
-            .listRowBackground(Color.clear)
         }
     }
 
@@ -366,23 +379,9 @@ struct AlbumView: View {
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondaryText)
             }
-            if let first = firstPlayableEpisode(detail) {
-                NavigationLink(value: LibraryDestination.discussion(first)) {
-                    Label("Play", systemImage: "play.fill")
-                        .font(.body.weight(.semibold))
-                        .padding(.horizontal, 36)
-                        .padding(.vertical, 4)
-                }
-                .buttonStyle(.glassProminent)
-                .tint(Theme.accent)
-            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-    }
-
-    private func firstPlayableEpisode(_ detail: AlbumDetailResponse) -> Discussion? {
-        detail.episodes.first { $0.status == .ready }
     }
 
     /// Local destination resolution for the album's own stack (sheet mode).
@@ -392,7 +391,7 @@ struct AlbumView: View {
         case .discussion(let episode):
             episodeDestination(episode)
         case .album(let id):
-            AlbumView(albumID: id, mode: mode)
+            AlbumView(albumID: id, mode: mode, onOpenEpisode: onOpenEpisode)
         }
     }
 
@@ -408,7 +407,7 @@ struct AlbumView: View {
             // return; navigation stays within the album context.
             PodcastPlayerView(discussion: episode, onCreatedFollowUp: { _ in
                 Task { await load() }
-            })
+            }, hidesTabBar: mode == .publicMarket)
         }
     }
 

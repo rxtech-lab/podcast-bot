@@ -1407,7 +1407,7 @@ final class PlayerModel {
 
     private func applySummaryEvent(_ data: JobEventData) {
         guard let raw = data.status, let status = SummaryStatus(rawValue: raw) else { return }
-        discussion.summary = SummaryMeta(
+        let meta = SummaryMeta(
             docType: data.doc_type,
             status: status,
             available: status == .ready,
@@ -1415,6 +1415,18 @@ final class PlayerModel {
             generation: false,
             generatedAt: nil
         )
+        // The summary_ready event is shared by every generated document type;
+        // route it by doc_type so a mindmap event never clobbers the summary
+        // descriptor (and vice versa). Other doc types (e.g. "text") only ride
+        // the refreshPodcastFromServer() that follows.
+        switch data.doc_type {
+        case "mindmap":
+            discussion.mindmap = meta
+        case "summary", nil:
+            discussion.summary = meta
+        default:
+            break
+        }
     }
 
     private func mergeUserMessageEvent(speaker: String,
