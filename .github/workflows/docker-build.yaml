@@ -15,6 +15,17 @@ on:
       image_tag:
         description: "Image tag for workflow_dispatch deploys (defaults to manual-<sha>)"
         required: false
+  workflow_call:
+    inputs:
+      deploy:
+        description: "Push the image and deploy it to Kubernetes"
+        required: false
+        type: boolean
+        default: false
+      image_tag:
+        description: "Image tag for workflow_call deploys (defaults to manual-<sha>)"
+        required: false
+        type: string
 
 # The k8s cluster runs on linux/amd64, so we always build for that platform
 # (see the Makefile docker-* targets). Release deploys go to GitHub Container Registry.
@@ -52,9 +63,9 @@ jobs:
         run: |
           if [[ "$EVENT_NAME" == "release" ]]; then
             tag="$REF_NAME"
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_IMAGE_TAG" ]]; then
+          elif [[ ("$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "workflow_call") && -n "$INPUT_IMAGE_TAG" ]]; then
             tag="$INPUT_IMAGE_TAG"
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "workflow_call" ]]; then
             tag="manual-${GITHUB_SHA::7}"
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             tag="pr-$PR_NUMBER"
@@ -64,7 +75,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
+        if: github.event_name == 'release' || inputs.deploy == true
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -86,7 +97,7 @@ jobs:
         with:
           context: .
           platforms: ${{ env.PLATFORM }}
-          push: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.deploy) }}
+          push: ${{ github.event_name == 'release' || inputs.deploy == true }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -96,7 +107,7 @@ jobs:
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
     needs: build-image
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
+    if: github.event_name == 'release' || inputs.deploy == true
     permissions:
       contents: read
       packages: read

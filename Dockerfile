@@ -39,21 +39,50 @@ RUN npm ci --omit=dev
 COPY tools/ppt-renderer/render.mjs ./
 
 ############################
-# Stage 4 — runtime image  #
+# Stage 4 — CJK font       #
+############################
+# The video renderer picks its font via loadFontSources (internal/video/
+# render.go): $DEBATE_BOT_FONT → known system CJK fonts → embedded Latin-only
+# Go fonts. The slim runtime image ships no CJK font, so without this stage
+# Chinese text silently degrades to missing glyphs in generated video.
+# Reuse the checksum-pinned NotoSansSC the style golden tests render with, so
+# production output matches the goldens.
+FROM debian:bookworm-slim AS cjk-font
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY scripts/fetch-style-font.sh scripts/fetch-style-font.sh
+RUN bash scripts/fetch-style-font.sh
+# -> /src/internal/video/testdata/fonts/NotoSansSC-Regular.otf
+
+############################
+# Stage 5 — runtime image  #
 ############################
 # ffmpeg + ffplay are required on PATH (audio.VerifyTools); the Debian ffmpeg
-# package provides both.
+# package provides both. fonts-noto-cjk covers Chinese/Japanese/Korean text in
+# LibreOffice slide rendering (fonts-dejavu alone has no CJK glyphs).
 FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg ca-certificates libreoffice-impress fonts-dejavu \
+        ffmpeg ca-certificates libreoffice-impress fonts-dejavu fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=backend /out/debate-bot /usr/local/bin/debate-bot
 COPY --from=ppt-renderer /src/tools/ppt-renderer ./tools/ppt-renderer
+# --chmod: the fetch script leaves the font 0600 (mktemp default); world-
+# readable so the renderer still finds it when the container runs as non-root.
+COPY --from=cjk-font --chmod=644 /src/internal/video/testdata/fonts/NotoSansSC-Regular.otf \
+    /usr/share/fonts/opentype/noto-sans-sc/NotoSansSC-Regular.otf
+RUN fc-cache -f
 
 EXPOSE 3000
 ENV OUT_DIR=/app/out
 ENV PPTX_RENDERER_SCRIPT=/app/tools/ppt-renderer/render.mjs
+# Pin the Go video renderer to the exact font the style goldens were rendered
+# with, so production frames match the committed goldens pixel-for-pixel. The
+# fonts-noto-cjk NotoSansCJK-Regular.ttc above doubles as the fallback (it's
+# the first Linux candidate in loadFontSources) if this pin ever breaks.
+ENV DEBATE_BOT_FONT=/usr/share/fonts/opentype/noto-sans-sc/NotoSansSC-Regular.otf
 
 # Default: stream mode. Override the args to switch to video mode, e.g.
 #   docker run ... debate-bot server --mode video --addr :3000

@@ -39,3 +39,4 @@ channels
 k8s/secrets.yaml
 *.xcuserstate
 !**/icon.icon/**/*.png
+render-smoke

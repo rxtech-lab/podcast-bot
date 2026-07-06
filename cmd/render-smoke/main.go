@@ -13,7 +13,9 @@
 //	  out/puzzle-render-smoke/.
 //	--mode audiobook: emits an mp4 for the audiobook conversational
 //	  post-pass renderer: left/right characters, content centered, generated
-//	  backgrounds behind it. Output goes to out/audiobook-render-smoke/.
+//	  backgrounds behind it. Title and lines mix Chinese and English so a
+//	  missing CJK font shows up as tofu in the output. Output goes to
+//	  out/audiobook-render-smoke/.
 //	--mode puzzle-fade: emits an mp4 that demonstrates the cinematic name-
 //	  plate fade-in / hold / fade-out so we can eyeball the smoothstep
 //	  curve without having to wait the full 22 s hold in real time. Output
@@ -657,16 +659,20 @@ func runAudioBook(out string) error {
 	}
 
 	videoPath := filepath.Join(out, "video.mp4")
+	// The title and two of the lines are deliberately Chinese: production runs
+	// render CJK content, and a runtime image without a usable CJK font
+	// silently falls back to Latin-only embedded fonts (missing glyphs). Any
+	// tofu boxes in the output mean the font setup regressed.
 	opts := video.AudioBookVideoOptions{
 		Style:    "conversational",
-		Title:    "The Future of Human Creativity",
+		Title:    "人類創造力的未來 · The Future of Human Creativity",
 		Host:     "Mina",
 		Speakers: []string{"Mina", "Jordan"},
 		Avatars:  avatars,
 		Lines: []video.AudioBookVideoLine{
 			{Speaker: "Mina", Text: "When a book becomes a conversation, the narrator should still anchor the scene, but the guest needs a visible place in the frame."},
-			{Speaker: "Jordan", Text: "Right. Put the characters on the left and right, keep the content in the middle, and let the generated art stay as the background."},
-			{Speaker: "Mina", Text: "That way a conversational audiobook feels like a staged exchange instead of a static slideshow."},
+			{Speaker: "Jordan", Text: "沒錯。把角色放在畫面左右兩側，內容置中，讓生成的場景圖留在背景，整體才有舞台感。"},
+			{Speaker: "Mina", Text: "這樣一來，對話式有聲書看起來就像一場真正的交流，而不是靜態的幻燈片。Mixed CJK + Latin must both render."},
 		},
 	}
 	if err := video.RenderAudioBookVideoWithOptions(videoPath, audioPath, "", imagePaths, video.Resolution1080p, opts); err != nil {

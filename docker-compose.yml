@@ -1,0 +1,20 @@
+services:
+  rabbitmq:
+    # Same image family as the cluster broker (linda namespace) so local
+    # behavior — RabbitMQ 4 quorum queues, per-queue x-consumer-timeout —
+    # matches production.
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # management UI (guest/guest)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  rabbitmq_data:
