@@ -81,7 +81,9 @@ kubectl -n debate-bot describe certificate debate-bot-tls
   applied separately with `kubectl apply -f k8s/secrets.yaml`.
 - **Image** — the base manifest uses `ghcr.io/rxtech-lab/podcast-bot:sha-590cd5b`.
   Release deploys replace it with the release tag via `kubectl set image`.
-- **Mode** — runs `--mode video` (browser uploads `script.md`, downloads `.mp4`). For
+- **Mode** — runs `--mode dashboard`, which keeps the job/discussion API enabled,
+  mounts the schema-driven `/admin` API for the deployed Next.js admin, and
+  returns a small JSON response at `/` instead of the embedded video SPA. For
   TV-channel **stream** mode, drop the `args:` override and mount a topics dir + a
   `channels.json` configmap instead.
 - **Replicas** — defaults to 3. Needs `DATABASE_URL` (or legacy
