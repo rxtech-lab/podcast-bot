@@ -1189,6 +1189,7 @@ func (s *Server) handleDiscussionSummaryGenerate(w http.ResponseWriter, r *http.
 		Points:      s.d.Points,
 		APNS:        s.apns,
 		Log:         s.logger(),
+		MQ:          s.d.MQ,
 	}, input); err != nil {
 		if errors.Is(err, ErrSummaryNoTranscript) {
 			http.Error(w, err.Error(), http.StatusConflict)

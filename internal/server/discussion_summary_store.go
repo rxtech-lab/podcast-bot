@@ -82,6 +82,22 @@ func (s *DiscussionStore) OwnerOf(ctx context.Context, discussionID string) (str
 	return owner, err
 }
 
+// DiscussionWithTranscript loads a discussion (unscoped — background workers
+// have no requesting user) together with its persisted transcript lines: the
+// input rebuild for queued summary/mindmap generation.
+func (s *DiscussionStore) DiscussionWithTranscript(ctx context.Context, id string) (*Discussion, error) {
+	d, err := s.GetForNotification(ctx, id)
+	if err != nil || d == nil {
+		return d, err
+	}
+	lines, err := s.lines(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	d.Lines = lines
+	return d, nil
+}
+
 // SummaryMetaFor returns the content-free summary descriptor for a discussion, or
 // nil when no summary row exists yet (so the detail payload omits `summary`).
 func (s *DiscussionStore) SummaryMetaFor(ctx context.Context, discussionID, docType string) (*SummaryMeta, error) {
@@ -176,9 +192,39 @@ func (s *DiscussionStore) BeginSummary(ctx context.Context, discussionID, docTyp
 		VALUES (?, ?, ?, '', ?, '', 0, ?, ?)
 		ON CONFLICT(discussion_id, doc_type) DO UPDATE SET
 			status = excluded.status, markdown = '', model = excluded.model,
-			error = '', updated_at = excluded.updated_at`,
+			error = '', attempts = 0, claimed_at = 0, updated_at = excluded.updated_at`,
 		discussionID, docType, string(SummaryGenerating), model, now, now)
 	return err
+}
+
+// ClaimSummaryRun atomically claims one queue-delivered generation attempt
+// of a summary-family document (summary, mindmap, exports). The document
+// stays `generating` across attempts, so the claim distinguishes a fresh
+// attempt (attempts below the delivered attempt) from a crash takeover
+// (same attempt, claim older than staleAfter). False means another consumer
+// already handled this delivery — or the document reached a terminal state
+// — so the caller acks and skips.
+func (s *DiscussionStore) ClaimSummaryRun(ctx context.Context, discussionID, docType string, attempt int, staleAfter time.Duration) (bool, error) {
+	if s == nil {
+		return false, errors.New("discussion store is not configured")
+	}
+	docType = normalizeDocType(docType)
+	now := time.Now().UnixMilli()
+	res, err := s.db.ExecContext(ctx, `UPDATE native_discussion_summaries
+		SET attempts = ?, claimed_at = ?, updated_at = ?
+		WHERE discussion_id = ? AND doc_type = ? AND status = ?
+		  AND (attempts < ? OR (attempts = ? AND claimed_at < ?))`,
+		attempt, now, now,
+		discussionID, docType, string(SummaryGenerating),
+		attempt, attempt, now-staleAfter.Milliseconds())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // SaveSummary stores the finished Markdown and marks the document ready, stamping

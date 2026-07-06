@@ -40,6 +40,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/storage"
 )
 
@@ -153,6 +154,15 @@ type Deps struct {
 
 	// APNS sends native push notifications. nil disables push sending.
 	APNS *APNSClient
+
+	// MQPing reports RabbitMQ connectivity for /healthz. nil skips the
+	// check (in-process queue fallback or non-video modes).
+	MQPing func(context.Context) error
+
+	// MQ publishes generation tasks (video render, summary, mindmap,
+	// ppt/pdf export, planning turns) onto the durable job queue. nil in
+	// modes that don't run generation.
+	MQ mq.Client
 }
 
 // Server is the HTTP front-end.
@@ -295,6 +305,13 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pdf", s.handleDiscussionSummaryPDF)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pptx", s.handleDiscussionSummaryPPTX)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/ppt/pdf", s.handleDiscussionSummaryPPTPDF)
+		// Async exports: POST enqueues a queued render (with retry) that
+		// stages the artifact in object storage; the GET routes above then
+		// serve it straight from the cache. The GETs keep their synchronous
+		// render as a fallback for older clients and S3-less dev setups.
+		s.mux.HandleFunc("POST /api/discussions/{id}/summary/pdf/export", s.handleDiscussionSummaryExport(summaryExportKindPDF))
+		s.mux.HandleFunc("POST /api/discussions/{id}/summary/pptx/export", s.handleDiscussionSummaryExport(summaryExportKindPPTX))
+		s.mux.HandleFunc("POST /api/discussions/{id}/summary/ppt/pdf/export", s.handleDiscussionSummaryExport(summaryExportKindPPTPDF))
 		s.mux.HandleFunc("POST /api/discussions/{id}/summary/generate", s.handleDiscussionSummaryGenerate)
 		s.mux.HandleFunc("GET /api/discussions/{id}/mindmap", s.handleDiscussionMindmap)
 		s.mux.HandleFunc("PUT /api/discussions/{id}/mindmap", s.handleDiscussionMindmapSave)
@@ -474,6 +491,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.d.Progress != nil {
 		check("redis", s.d.Progress.Ping)
+	}
+	if s.d.MQPing != nil {
+		check("rabbitmq", s.d.MQPing)
 	}
 
 	status := "ok"

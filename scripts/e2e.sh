@@ -26,6 +26,28 @@ RESULT_BUNDLE="${E2E_RESULT_BUNDLE:-${DATA_ROOT}.xcresult}"
 log()  { printf '\033[1;34m[e2e]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[e2e] %s\033[0m\n' "$*" >&2; exit 1; }
 
+# --- Ensure RabbitMQ (real broker for the generation-job queue) --------------
+# The E2E backend consumes generation jobs from a real RabbitMQ. Start one via
+# Homebrew when nothing is listening on 5672 (idempotent on CI runners that
+# keep the service around). Queue names carry a per-run prefix so successive
+# runs sharing one broker never see each other's messages; prefixed queues
+# auto-expire when idle.
+if ! nc -z 127.0.0.1 5672 2>/dev/null; then
+  command -v brew >/dev/null 2>&1 || fail "rabbitmq is not running and homebrew is unavailable to install it"
+  log "starting rabbitmq via homebrew…"
+  brew list rabbitmq >/dev/null 2>&1 || brew install rabbitmq
+  brew services start rabbitmq
+fi
+log "waiting for rabbitmq on 127.0.0.1:5672…"
+for _ in $(seq 1 60); do
+  nc -z 127.0.0.1 5672 2>/dev/null && rabbit_ok=1 && break
+  sleep 1
+done
+[ "${rabbit_ok:-}" = 1 ] || fail "rabbitmq did not become ready on port 5672"
+export E2E_RABBITMQ_URL="${E2E_RABBITMQ_URL:-amqp://guest:guest@127.0.0.1:5672/}"
+export MQ_QUEUE_PREFIX="e2e-$(date +%s)-$$-"
+log "rabbitmq ready · queue prefix ${MQ_QUEUE_PREFIX}"
+
 # --- Build the backend ------------------------------------------------------
 log "building backend…"
 BIN="$(mktemp -t debate-bot-e2e)"

@@ -96,6 +96,15 @@ type Job struct {
 	// object storage; empty when served from disk.
 	DownloadURL string `json:"download_url,omitempty"`
 
+	// Attempts counts claimed queue-delivery attempts of the generation run
+	// (1-based once claimed); VideoAttempts does the same for the audiobook
+	// video-render task, which reuses this job row. ClaimedAt records when
+	// the current attempt was claimed, so a consumer that died mid-run can
+	// be superseded (stale takeover) when the broker redelivers.
+	Attempts      int       `json:"-"`
+	VideoAttempts int       `json:"-"`
+	ClaimedAt     time.Time `json:"-"`
+
 	ElapsedMS        int64   `json:"elapsed_ms,omitempty"`
 	RemainingMS      int64   `json:"remaining_ms,omitempty"`
 	Phase            string  `json:"phase,omitempty"`
@@ -198,6 +207,9 @@ type videoJobRecord struct {
 	LLMCostKnown       bool
 	TTSCostUSD         float64
 	MusicCostUSD       float64
+	Attempts           int
+	VideoAttempts      int
+	ClaimedAt          time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
@@ -439,6 +451,76 @@ func (r *JobRegistry) Update(id string, fn func(j *Job)) {
 	}
 }
 
+// ClaimRun atomically claims one queue-delivered generation attempt. It
+// succeeds for the first delivery of a new attempt (job pending, attempts
+// below the delivered attempt) and for a crash takeover (job stuck running
+// on the same attempt with a claim older than staleAfter — the consumer
+// died and the broker redelivered). It stamps this pod as OwnerPod so the
+// cross-pod proxy, WebSocket viewer injection, and live HLS all route to
+// the pod actually running the job. A false return means another consumer
+// already handled this delivery: ack and skip.
+func (r *JobRegistry) ClaimRun(id string, attempt int, staleAfter time.Duration) bool {
+	now := time.Now()
+	var affected int64
+	op := func() error {
+		res := r.db.Model(&videoJobRecord{}).
+			Where("id = ? AND ((status = ? AND attempts < ?) OR (status = ? AND attempts <= ? AND claimed_at < ?))",
+				id, string(JobPending), attempt, string(JobRunning), attempt, now.Add(-staleAfter)).
+			Updates(map[string]any{
+				"status":     string(JobRunning),
+				"attempts":   attempt,
+				"owner_pod":  r.podName,
+				"claimed_at": now,
+				"updated_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		affected = res.RowsAffected
+		return nil
+	}
+	if err := op(); err != nil {
+		if err = r.retryRecoverable(err, op); err != nil {
+			return false
+		}
+	}
+	return affected == 1
+}
+
+// ClaimVideoRender atomically claims one queue-delivered attempt of the
+// audiobook video post-pass, which reuses the finished podcast's job row:
+// the lifecycle lives in Phase (video-queued → video-rendering →
+// video-uploading → video-ready/video-failed) and the attempt counter in
+// VideoAttempts. Publish sites reset VideoAttempts to 0 with Phase
+// video-queued; stale-takeover mirrors ClaimRun.
+func (r *JobRegistry) ClaimVideoRender(id string, attempt int, staleAfter time.Duration) bool {
+	now := time.Now()
+	var affected int64
+	op := func() error {
+		res := r.db.Model(&videoJobRecord{}).
+			Where("id = ? AND ((phase = ? AND video_attempts < ?) OR (phase IN ? AND video_attempts <= ? AND claimed_at < ?))",
+				id, "video-queued", attempt, []string{"video-rendering", "video-uploading"}, attempt, now.Add(-staleAfter)).
+			Updates(map[string]any{
+				"phase":          "video-rendering",
+				"phase_label":    "Rendering video",
+				"video_attempts": attempt,
+				"claimed_at":     now,
+				"updated_at":     now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		affected = res.RowsAffected
+		return nil
+	}
+	if err := op(); err != nil {
+		if err = r.retryRecoverable(err, op); err != nil {
+			return false
+		}
+	}
+	return affected == 1
+}
+
 // UpdateUsage writes only provider-usage columns. It shares Update's row-update
 // mutex so a stale whole-row progress save cannot erase freshly persisted usage.
 func (r *JobRegistry) UpdateUsage(id string, prompt, completion, total int64, llmCost float64, costKnown bool, ttsCost, musicCost float64) {
@@ -564,6 +646,9 @@ func jobFromRecord(rec videoJobRecord) Job {
 		LLMCostKnown:       rec.LLMCostKnown,
 		TTSCostUSD:         rec.TTSCostUSD,
 		MusicCostUSD:       rec.MusicCostUSD,
+		Attempts:           rec.Attempts,
+		VideoAttempts:      rec.VideoAttempts,
+		ClaimedAt:          rec.ClaimedAt,
 	}
 }
 
@@ -600,6 +685,9 @@ func recordFromJob(j Job) videoJobRecord {
 		LLMCostKnown:       j.LLMCostKnown,
 		TTSCostUSD:         j.TTSCostUSD,
 		MusicCostUSD:       j.MusicCostUSD,
+		Attempts:           j.Attempts,
+		VideoAttempts:      j.VideoAttempts,
+		ClaimedAt:          j.ClaimedAt,
 		CreatedAt:          j.CreatedAt,
 		UpdatedAt:          j.UpdatedAt,
 	}
