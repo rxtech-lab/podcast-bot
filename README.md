@@ -217,10 +217,13 @@ Open the web UI and upload a `script.md`; the server renders an MP4 you can down
 Generation jobs (podcast renders, summaries, mindmaps, PPT/PDF exports,
 audiobook videos, planning turns) run through a RabbitMQ work queue with up
 to 3 attempts and exponential backoff. Set `RABBITMQ_URL` to enable the
-durable broker-backed queue (`make rabbitmq-dev` starts one via Homebrew);
-without it the server falls back to an in-process queue with the same retry
-semantics but no durability across restarts. `MQ_QUEUE_PREFIX` optionally
-prefixes queue names for isolation (used by the E2E harness).
+durable broker-backed queue — locally, `docker compose up -d` starts one
+(see `docker-compose.yml`; `.env` already points at it), or use
+`make rabbitmq-dev` for a Homebrew broker on machines without Docker.
+Without `RABBITMQ_URL` the server falls back to an in-process queue with
+the same retry semantics but no durability across restarts.
+`MQ_QUEUE_PREFIX` optionally prefixes queue names for isolation (used by
+the E2E harness).
 
 Video/dashboard-mode flags:
 

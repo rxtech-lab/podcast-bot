@@ -1,9 +1,19 @@
 name: Create Release
 on:
   workflow_dispatch:
+    inputs:
+      release_target:
+        description: "What to release"
+        required: true
+        type: choice
+        default: release-all
+        options:
+          - release-all
+          - release-server-only
 
 jobs:
   create-release:
+    if: inputs.release_target == 'release-all'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -23,3 +33,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
           branch: main
+
+  release-server-only:
+    if: inputs.release_target == 'release-server-only'
+    uses: ./.github/workflows/docker-build.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      deploy: true
+    secrets: inherit

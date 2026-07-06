@@ -207,8 +207,11 @@ func styleCases() []styleCase {
 		}},
 
 		// ---- audiobook conversation (left/right speaker avatars + center panel) ----
+		// Title and body mix Chinese and English on purpose: audiobook content
+		// is frequently CJK, and this is the guard that catches a renderer or
+		// font regression that drops CJK glyphs (Latin-only fallback).
 		{kind: "audiobook", name: "01-conversation", setup: func(r *Renderer) {
-			r.SetTopic("The Future of Human Creativity")
+			r.SetTopic("人類創造力的未來 · The Future of Human Creativity")
 			settle(r)
 		}, render: func(t *testing.T, r *Renderer) *image.RGBA {
 			avatars := map[string]*image.RGBA{
@@ -221,7 +224,7 @@ func styleCases() []styleCase {
 				avatars,
 				audioBookConversationSegment{
 					Speaker: "Mina",
-					Text:    "When a book becomes a conversation, the narrator should still anchor the scene, but the guest needs a visible place in the frame.",
+					Text:    "當一本書變成一場對話，敘事者仍要穩住場景，but the guest needs a visible place in the frame.",
 					Seconds: 3,
 				},
 			)
