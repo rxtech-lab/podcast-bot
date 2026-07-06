@@ -5479,6 +5479,28 @@
         }
       }
     },
+    "Mindmap support" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思维导图支持"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖支援"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖支援"
+          }
+        }
+      }
+    },
     "Minimize" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5519,28 +5541,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "模型"
-          }
-        }
-      }
-    },
-    "Mindmap support" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "思维导图支持"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "心智圖支援"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "心智圖支援"
           }
         }
       }
@@ -8580,6 +8580,23 @@
         }
       }
     },
+    "Scheduled from %@ to %@." : {
+      "comment" : "Appended to an upcoming maintenance message; start and end are formatted date/times",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Scheduled from %1$@ to %2$@."
+          }
+        }
+      }
+    },
+    "Scheduled maintenance" : {
+      "comment" : "Default title of the maintenance alert when the operator set no title"
+    },
+    "Scheduled to begin %@." : {
+      "comment" : "Appended to an upcoming maintenance message with no end time; 'start' is a formatted date/time"
+    },
     "Search %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9046,6 +9063,9 @@
           }
         }
       }
+    },
+    "Service should be back by %@." : {
+      "comment" : "Appended to an active maintenance message; 'when' is a formatted date/time"
     },
     "Settings" : {
       "localizations" : {
@@ -9649,6 +9669,28 @@
         }
       }
     },
+    "Summaries can include mindmaps, and individual mindmaps can be exported on their own." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要现在可以包含思维导图，也可以单独导出思维导图。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要而家可以包含心智圖，亦可以單獨匯出心智圖。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要現在可以包含心智圖，也可以單獨匯出心智圖。"
+          }
+        }
+      }
+    },
     "Summary" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9712,28 +9754,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "摘要已匯出到 Notion。"
-          }
-        }
-      }
-    },
-    "Summaries can include mindmaps, and individual mindmaps can be exported on their own." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "摘要现在可以包含思维导图，也可以单独导出思维导图。"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "摘要而家可以包含心智圖，亦可以單獨匯出心智圖。"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "摘要現在可以包含心智圖，也可以單獨匯出心智圖。"
           }
         }
       }
@@ -9895,6 +9915,9 @@
           }
         }
       }
+    },
+    "The app is temporarily unavailable for scheduled maintenance. Please try again later." : {
+      "comment" : "Fallback maintenance message when the server sent no message text"
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {

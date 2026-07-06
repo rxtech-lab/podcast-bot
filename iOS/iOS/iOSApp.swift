@@ -22,6 +22,7 @@ struct iOSApp: App {
     @State private var deepLinks = DeepLinkRouter()
     @State private var push = PushNotificationManager()
     @State private var playerSessions = PlayerSessionStore()
+    @State private var maintenance = MaintenanceMonitor()
 
     init() {
         UIScrollView.appearance().keyboardDismissMode = .interactive
@@ -65,6 +66,7 @@ struct iOSApp: App {
                 .environment(deepLinks)
                 .environment(push)
                 .environment(playerSessions)
+                .environment(maintenance)
                 .tint(Theme.accent)
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {

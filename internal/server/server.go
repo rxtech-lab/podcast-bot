@@ -78,8 +78,16 @@ type Deps struct {
 	// Points backs the points economy (per-user balance, ledger, charges). nil
 	// disables points gating/charging/hiding entirely — the server behaves as
 	// before. Wired from the same database as Discussions.
-	Points   *PointsStore
-	Progress *DiscussionProgressStore
+	Points *PointsStore
+	// AppConfig holds admin-editable app-level configuration (e.g. the default
+	// generation model) that overrides the env defaults. nil falls back to env
+	// entirely. Wired from the same database as Discussions.
+	AppConfig *AppConfigStore
+	// Maintenance backs scheduled-maintenance windows: the admin CRUD resource
+	// and the precheck/config gating that pauses the app during a window. nil
+	// disables maintenance gating. Wired from the JobRegistry's database.
+	Maintenance *MaintenanceStore
+	Progress    *DiscussionProgressStore
 	// Planning backs the conversational planning phase (agent loop with tools,
 	// persisted conversation, per-conversation billing). nil disables the
 	// /api/discussions/{id}/planning* routes. Wired from the same database as
@@ -130,6 +138,12 @@ type Deps struct {
 	// endpoint. This lets native clients (the iOS app) authenticate directly
 	// with their RxAuthSwift access token, no service token required.
 	AuthIssuer string
+
+	// AdminAllowedClientIDs restricts which OAuth client_ids may call the
+	// /admin API (rxlab-auth access tokens carry no `aud`). Passed to the admin
+	// OIDC authenticator. Empty accepts any client presenting a valid
+	// admin-role token. The admin API is only mounted when AuthIssuer is set.
+	AdminAllowedClientIDs []string
 
 	// Uploader, when enabled, serves finished videos from S3 (presigned
 	// redirect) instead of local disk. nil / disabled keeps disk serving.
@@ -230,6 +244,26 @@ func New(d Deps) *Server {
 	} else {
 		s.logger().Info("APNs disabled")
 	}
+	// Admin-backed stores. AppConfig (default-model override) shares the
+	// discussion database; Maintenance (window gating) shares the job database.
+	// Built here so the resolver, precheck/config gating, and the admin API can
+	// all reach them. Gating is active wherever the backing store exists (video
+	// + dashboard modes), not only where the admin API is mounted.
+	if s.d.AppConfig == nil && d.Discussions != nil {
+		if ac, err := NewAppConfigStore(d.Discussions); err != nil {
+			s.logger().Warn("app config store disabled", "err", err)
+		} else {
+			s.d.AppConfig = ac
+		}
+	}
+	if s.d.Maintenance == nil && d.Jobs != nil && d.Jobs.db != nil {
+		if ms, err := NewMaintenanceStore(d.Jobs.db); err != nil {
+			s.logger().Warn("maintenance store disabled", "err", err)
+		} else {
+			s.d.Maintenance = ms
+		}
+	}
+
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -388,11 +422,27 @@ func New(d Deps) *Server {
 	// auth middleware allowlist; the handler verifies the secret itself.
 	s.mux.HandleFunc("POST /api/revenuecat/webhook", s.handleRevenueCatWebhook)
 
+	// The schema-driven admin API (dashboard mode only). It is mounted on the
+	// mux under /admin/ — outside the /api/ auth allowlist — and enforces its
+	// own OIDC bearer + admin-role authorization. Requires the rxlab OAuth
+	// issuer; disabled (with a warning) when discovery fails.
+	if d.Mode == ModeDashboard && d.AuthIssuer != "" {
+		if adminHandler, err := s.newAdminHandler(context.Background()); err != nil {
+			s.logger().Warn("admin API disabled", "err", err)
+		} else {
+			s.mux.Handle(adminBasePath+"/", adminHandler)
+			s.logger().Info("admin API enabled", "base_path", adminBasePath)
+		}
+	}
+
 	// The embedded TV SPA is served in stream + video modes. In dashboard
 	// mode the Next.js app is the frontend, so "/" returns a tiny health
 	// response instead of the bundled UI.
 	if d.Mode == ModeDashboard {
-		s.mux.HandleFunc("GET /", s.handleDashboardRoot)
+		// Method-less "/" (not "GET /") so the more specific "/admin/" subtree
+		// pattern is unambiguously preferred by ServeMux; a method-qualified
+		// catch-all would conflict with the all-methods /admin/ registration.
+		s.mux.HandleFunc("/", s.handleDashboardRoot)
 	} else {
 		s.mux.Handle("/", staticHandler())
 	}
@@ -408,6 +458,10 @@ func New(d Deps) *Server {
 	} else {
 		s.logAuthStartup(false)
 	}
+	// Maintenance gating wraps OUTSIDE auth so an active window returns 503 with
+	// the message to every client (even unauthenticated ones) before auth runs,
+	// while the admin API + config/precheck stay reachable (see the allowlist).
+	handler = s.withMaintenance(handler)
 	// Cross-pod routing wraps the local (auth+mux) handler: a request for an
 	// in-flight job that this pod does not own is reverse-proxied to the owner
 	// (which re-runs auth on the forwarded credentials); everything else falls
@@ -445,8 +499,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = "stream"
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	payload := map[string]any{
 		"mode":          mode,
 		"auth_required": s.authEnabled(),
 		// authed lets the SPA skip the login screen when a valid cookie is
@@ -455,7 +508,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// force_audio mirrors the engine's --audio flag so the frontend can
 		// hide video-only options and present an audio feed.
 		"force_audio": s.d.ForceAudio,
-	})
+	}
+	// maintenance is present while a window is active or upcoming, so clients can
+	// show a banner (or warn ahead) even though /api/config stays reachable.
+	if m := s.relevantMaintenance(r); m != nil {
+		payload["maintenance"] = m
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 type healthCheckResult struct {

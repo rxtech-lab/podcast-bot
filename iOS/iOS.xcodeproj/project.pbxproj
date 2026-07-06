@@ -173,6 +173,7 @@
 				Networking/APIModels.swift,
 				Networking/DeepLinkRouter.swift,
 				Networking/JobSocket.swift,
+				Networking/MaintenanceMonitor.swift,
 				Networking/ShareModels.swift,
 				Persistence/DataModels.swift,
 				Persistence/Mapping.swift,

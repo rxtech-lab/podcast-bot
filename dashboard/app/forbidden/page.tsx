@@ -1,30 +1,31 @@
-import { redirect } from "next/navigation";
-import { auth, signIn } from "@/lib/auth";
+import { auth, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-export default async function LoginPage() {
+export default async function ForbiddenPage() {
   const session = await auth();
-  if (session?.user?.id) redirect("/admin");
 
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-xl">Debate Bot Admin</CardTitle>
+          <CardTitle className="text-xl">Access denied</CardTitle>
           <CardDescription>
-            Sign in with your RxLab account to manage the app.
+            {session?.user?.email ? `${session.user.email} is ` : "You are "}
+            not authorized to use the admin console. Ask an administrator to
+            grant your account the <span className="font-medium">admin</span>{" "}
+            role.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form
             action={async () => {
               "use server";
-              await signIn("rxlab", { redirectTo: "/admin" });
+              await signOut({ redirectTo: "/login" });
             }}
           >
-            <Button className="w-full" type="submit">
-              Sign in with RxLab
+            <Button className="w-full" variant="outline" type="submit">
+              Sign out
             </Button>
           </form>
         </CardContent>

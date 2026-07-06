@@ -21,6 +21,7 @@ const (
 	pointsReasonSummary              = "summary"
 	pointsReasonSignup               = "signup_grant"
 	pointsReasonPurchase             = "purchase" // suffixed with the event type, e.g. "purchase:RENEWAL"
+	pointsReasonAdminTopup           = "admin_topup"
 )
 
 // PointsUsageDetail is the per-event usage snapshot stored alongside a debit so
@@ -124,6 +125,53 @@ func (s *PointsStore) ensureSchema(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// UserBalance is one row of the admin user-management list: a user id, their
+// optional creator display name, and their current points balance.
+type UserBalance struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Balance     int64  `json:"balance"`
+}
+
+// ListBalances returns a cursor-paginated page of user balances ordered by user
+// id. Pass the last user id of the previous page as after (empty for the first
+// page). It left-joins creator_profiles for a friendly display name. The
+// returned nextCursor is empty when the page is the last one.
+func (s *PointsStore) ListBalances(ctx context.Context, after string, limit int) (rows []UserBalance, nextCursor string, err error) {
+	if s == nil {
+		return nil, "", errors.New("points store is not configured")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	// Fetch one extra row to detect whether another page follows.
+	result, err := s.db.QueryContext(ctx, `SELECT b.user_id, COALESCE(p.display_name, ''), b.balance
+		FROM user_points_balance b
+		LEFT JOIN creator_profiles p ON p.user_id = b.user_id
+		WHERE (? = '' OR b.user_id > ?)
+		ORDER BY b.user_id ASC
+		LIMIT ?`, after, after, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer result.Close()
+	for result.Next() {
+		var r UserBalance
+		if err := result.Scan(&r.UserID, &r.DisplayName, &r.Balance); err != nil {
+			return nil, "", err
+		}
+		rows = append(rows, r)
+	}
+	if err := result.Err(); err != nil {
+		return nil, "", err
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+		nextCursor = rows[len(rows)-1].UserID
+	}
+	return rows, nextCursor, nil
 }
 
 // Balance returns the user's current points balance (0 when no row exists).

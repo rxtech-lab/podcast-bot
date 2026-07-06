@@ -21,6 +21,9 @@ enum APIError: Error, LocalizedError {
     /// HTTP 409 on join: the discussion already has the maximum number of
     /// participants, so this user can't join.
     case participantCapReached
+    /// HTTP 503 with a maintenance body: the app is paused for a scheduled
+    /// maintenance window. Carries the operator's message so the UI can show it.
+    case maintenance(MaintenanceInfo)
     case decoding(String)
 
     var errorDescription: String? {
@@ -38,6 +41,8 @@ enum APIError: Error, LocalizedError {
         case .participantCapReached:
             return String(localized: "This discussion is full. Ask the host to remove someone or try again later.",
                           comment: "Error shown when a discussion has reached its participant limit")
+        case let .maintenance(info):
+            return info.displayMessage
         case let .decoding(msg):
             return String(localized: "Couldn't read the server response: \(msg)",
                           comment: "Error shown when the server response could not be decoded")
@@ -50,6 +55,12 @@ enum APIError: Error, LocalizedError {
 func mapHTTPError(_ status: Int, _ data: Data) -> APIError {
     if status == 402, let shortfall = try? JSONDecoder().decode(InsufficientPointsResponse.self, from: data) {
         return .insufficientPoints(required: shortfall.requiredPoints, balance: shortfall.balance)
+    }
+    if status == 503, let body = try? JSONDecoder().decode(MaintenanceResponse.self, from: data) {
+        // Broadcast so the root view presents a blocking alert no matter which
+        // call site hit the paused API, then return the typed error too.
+        MaintenanceMonitor.report(body.maintenance)
+        return .maintenance(body.maintenance)
     }
     return .http(status, String(decoding: data, as: UTF8.self))
 }
@@ -875,7 +886,14 @@ final class APIClient: Sendable {
     /// Server-owned client bootstrap metadata. The new discussion form schema,
     /// localized labels, and supported native actions are negotiated here.
     func precheck() async throws -> PrecheckResponseDTO {
-        try await get("/api/precheck")
+        let response: PrecheckResponseDTO = try await get("/api/precheck")
+        // /api/precheck is reachable during maintenance and carries the active
+        // window, so the bootstrap call surfaces the message proactively — before
+        // any blocked (503) request forces it.
+        if let info = response.maintenance {
+            MaintenanceMonitor.report(info)
+        }
+        return response
     }
 
     // MARK: - Push

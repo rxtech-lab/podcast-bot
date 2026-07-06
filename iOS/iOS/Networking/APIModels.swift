@@ -96,10 +96,15 @@ struct PrecheckResponseDTO: Codable, Sendable {
     var newDiscussion: PrecheckNewDiscussionDTO
     /// Optional so older servers without album support still decode.
     var newAlbum: PrecheckNewAlbumDTO?
+    /// Present only while a scheduled maintenance window is active. /api/precheck
+    /// stays reachable during maintenance, so the bootstrap call carries the
+    /// window here and the client can show the message proactively at launch.
+    var maintenance: MaintenanceInfo?
 
     enum CodingKeys: String, CodingKey {
         case newDiscussion = "new_discussion"
         case newAlbum = "new_album"
+        case maintenance
     }
 }
 
@@ -979,6 +984,105 @@ struct InsufficientPointsResponse: Decodable, Sendable {
         case requiredPoints = "required_points"
         case balance
     }
+}
+
+/// Describes an active scheduled-maintenance window. The engine returns this in
+/// the 503 body while the app is paused (`{ "maintenance": { ... } }`) and inline
+/// in GET /api/config and GET /api/precheck. Surfaced to the user as a blocking
+/// alert so they see the operator's message instead of the raw 503 JSON.
+struct MaintenanceInfo: Codable, Equatable, Sendable {
+    /// Identifies the window so the client can show a scheduled heads-up only once.
+    var id: Int
+    var title: String?
+    var message: String
+    var startAt: Date?
+    var endAt: Date?
+    /// True when the app is currently paused by this window; false for an upcoming
+    /// scheduled window. Active windows always alert; scheduled ones alert once.
+    var active: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case message
+        case startAt = "start_at"
+        case endAt = "end_at"
+        case active
+    }
+
+    init(id: Int, title: String?, message: String, startAt: Date?, endAt: Date?, active: Bool) {
+        self.id = id
+        self.title = title
+        self.message = message
+        self.startAt = startAt
+        self.endAt = endAt
+        self.active = active
+    }
+
+    // Custom decoder so the shared `JSONDecoder()` in mapHTTPError (which has no
+    // date strategy configured) still parses the RFC3339 timestamps the engine
+    // sends (e.g. "2026-07-07T04:35:00+08:00").
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(Int.self, forKey: .id) ?? 0
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        message = try container.decode(String.self, forKey: .message)
+        startAt = try container.decodeIfPresent(String.self, forKey: .startAt).flatMap(Self.parseDate)
+        endAt = try container.decodeIfPresent(String.self, forKey: .endAt).flatMap(Self.parseDate)
+        active = try container.decodeIfPresent(Bool.self, forKey: .active) ?? false
+    }
+
+    private static func parseDate(_ raw: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
+    }
+
+    /// The alert title, falling back to a generic heading when the operator left
+    /// the title blank.
+    var displayTitle: String {
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty
+            ? String(localized: "Scheduled maintenance",
+                     comment: "Default title of the maintenance alert when the operator set no title")
+            : trimmed
+    }
+
+    /// The operator's message plus a time hint: when service is expected back
+    /// (active window) or when the pause is scheduled to begin (upcoming window).
+    var displayMessage: String {
+        var parts: [String] = []
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { parts.append(trimmed) }
+        if active {
+            if let endAt {
+                let when = endAt.formatted(date: .abbreviated, time: .shortened)
+                parts.append(String(localized: "Service should be back by \(when).",
+                                    comment: "Appended to an active maintenance message; 'when' is a formatted date/time"))
+            }
+        } else if let startAt {
+            let start = startAt.formatted(date: .abbreviated, time: .shortened)
+            if let endAt {
+                let end = endAt.formatted(date: .abbreviated, time: .shortened)
+                parts.append(String(localized: "Scheduled from \(start) to \(end).",
+                                    comment: "Appended to an upcoming maintenance message; start and end are formatted date/times"))
+            } else {
+                parts.append(String(localized: "Scheduled to begin \(start).",
+                                    comment: "Appended to an upcoming maintenance message with no end time; 'start' is a formatted date/time"))
+            }
+        }
+        return parts.isEmpty
+            ? String(localized: "The app is temporarily unavailable for scheduled maintenance. Please try again later.",
+                     comment: "Fallback maintenance message when the server sent no message text")
+            : parts.joined(separator: "\n\n")
+    }
+}
+
+/// Wrapper for the 503 maintenance body: `{ "maintenance": { ... } }`.
+struct MaintenanceResponse: Decodable, Sendable {
+    var maintenance: MaintenanceInfo
 }
 
 /// Shared numeric formatting for points labels.

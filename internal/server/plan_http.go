@@ -21,7 +21,7 @@ type planResponse struct {
 
 // handlePlan drafts a fresh discussion script from a topic.
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -48,7 +48,7 @@ type planImproveRequest struct {
 
 // handlePlanImprove revises an existing script per a free-text instruction.
 func (s *Server) handlePlanImprove(w http.ResponseWriter, r *http.Request) {
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return

@@ -9,6 +9,7 @@ declare module "next-auth" {
       name?: string | null;
       email?: string | null;
       image?: string | null;
+      roles?: string[];
     };
   }
 }
@@ -56,6 +57,8 @@ const nextAuth = NextAuth({
   callbacks: {
     async jwt({ token, account, profile }) {
       // Initial login — keep the real OIDC sub (not NextAuth's internal id).
+      // The rxlab-auth id token carries the per-client `roles` claim used to
+      // gate the admin console.
       if (account) {
         return {
           ...token,
@@ -63,6 +66,7 @@ const nextAuth = NextAuth({
           refreshToken: account.refresh_token,
           exp: account.expires_at,
           userId: profile?.sub,
+          roles: Array.isArray(profile?.roles) ? (profile.roles as string[]) : [],
         };
       }
       // Still valid (refresh 1 minute early).
@@ -89,6 +93,7 @@ const nextAuth = NextAuth({
       if (token.userId) session.user.id = token.userId as string;
       if (token.name) session.user.name = token.name as string;
       if (token.email) session.user.email = token.email as string;
+      session.user.roles = (token.roles as string[] | undefined) ?? [];
       session.accessToken = token.accessToken as string | undefined;
       session.error = token.error as string | undefined;
       return session;

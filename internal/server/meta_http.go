@@ -52,9 +52,10 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 // in Redis for 24h; a fetch failure degrades to an empty roster (the picker
 // keeps whatever model the speaker already has) rather than erroring.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	defaults := config.DefaultsForEnv(s.d.Env)
+	defaults := s.resolvedModelDefaults(r.Context())
 
 	if cached, ok := s.d.ModelCatalog.Get(r.Context()); ok {
+		cached = config.ModelsFromIDs(modelIDs(cached), defaults)
 		writeJSON(w, modelsResponse{Defaults: defaults, Models: cached})
 		return
 	}
