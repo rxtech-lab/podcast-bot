@@ -637,6 +637,59 @@ final class iOSTests: XCTestCase {
         XCTAssertNil(PlayerModel.nowPlayingArtworkSourceKey(for: keyOnlyCover))
     }
 
+    @MainActor
+    func testPlayerSessionStoreReusesFullScreenSessionAcrossRebuild() async throws {
+        let discussion = try decodeDiscussion(status: "ready", pointsCharged: 0)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"))
+        var createdModels = 0
+        let store = PlayerSessionStore(
+            releaseGracePeriod: .milliseconds(5),
+            startsModels: false
+        ) { discussion, api, username, userID, shareToken in
+            createdModels += 1
+            return PlayerModel(discussion: discussion,
+                               api: api,
+                               username: username,
+                               userID: userID,
+                               shareToken: shareToken)
+        }
+
+        let first = store.acquire(discussion: discussion,
+                                  api: api,
+                                  username: "Qiwei",
+                                  userID: "user-1")
+        first.isFullPlayerPresented = true
+        store.release(first)
+        let second = store.acquire(discussion: discussion,
+                                   api: api,
+                                   username: "Qiwei",
+                                   userID: "user-1")
+
+        XCTAssertTrue(first === second)
+        XCTAssertTrue(second.isFullPlayerPresented)
+        XCTAssertEqual(createdModels, 1)
+        XCTAssertEqual(store.activeSessionCount, 1)
+    }
+
+    @MainActor
+    func testPlayerSessionStoreReleasesInactiveSessionAfterGracePeriod() async throws {
+        let discussion = try decodeDiscussion(status: "ready", pointsCharged: 0)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"))
+        let store = PlayerSessionStore(releaseGracePeriod: .milliseconds(5),
+                                       startsModels: false)
+        let session = store.acquire(discussion: discussion,
+                                    api: api,
+                                    username: "Qiwei",
+                                    userID: "user-1")
+
+        store.release(session)
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(store.activeSessionCount, 0)
+    }
+
     func testPersistedSenderMetadataMarksReloadedJobTranscriptUserLineAsMine() {
         var reloadedLine = LiveLine(speaker: "Qiwei",
                                     role: "user",

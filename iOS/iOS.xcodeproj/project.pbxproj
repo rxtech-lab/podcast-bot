@@ -162,6 +162,7 @@
 				Features/Player/CoverPalette.swift,
 				Features/Player/FullScreenPlayerView.swift,
 				Features/Player/PlayerModel.swift,
+				Features/Player/PlayerSessionStore.swift,
 				Features/Player/PodcastPlayerView.swift,
 				Features/Player/VoiceMessageRecorder.swift,
 				Features/Player/VoiceRecorderSheet.swift,
