@@ -15,6 +15,7 @@ struct RootView: View {
     @Environment(LaunchFlowStore.self) private var launchFlow
     @Environment(DeepLinkRouter.self) private var deepLinks
     @Environment(PushNotificationManager.self) private var push
+    @Environment(MaintenanceMonitor.self) private var maintenance
 
     @State private var launchPlan: LaunchPlanPresentation?
     @State private var didRunLaunchFlow = false
@@ -50,6 +51,11 @@ struct RootView: View {
                         }
                     }
                     .task { await startLaunchFlow() }
+                    // Surface an active or upcoming maintenance window at launch.
+                    // The library loads via endpoints that don't carry maintenance
+                    // info (and stay 200 for a scheduled window), so we ping the
+                    // allowlisted precheck, which reports any window to the monitor.
+                    .task(id: auth.currentUser?.id) { await checkMaintenance() }
                     .task { await push.requestAuthorizationIfNeeded() }
                     .task(id: pushSyncKey) {
                         await push.syncRegisteredToken(api: APIClient(tokens: auth),
@@ -87,6 +93,16 @@ struct RootView: View {
                     }
             }
         }
+        // App-wide: a 503 maintenance response on any request (in any auth state)
+        // surfaces here as a blocking alert instead of raw JSON in a load-error view.
+        .alert(maintenance.current?.displayTitle ?? "", isPresented: Binding(
+            get: { maintenance.current != nil },
+            set: { if !$0 { maintenance.dismiss() } }
+        )) {
+            Button("OK", role: .cancel) { maintenance.dismiss() }
+        } message: {
+            Text(maintenance.current?.displayMessage ?? "")
+        }
     }
 
     /// Changes when a new deep link is captured, retriggering resolution.
@@ -105,6 +121,14 @@ struct RootView: View {
     private func resolveDeepLink() async {
         guard deepLinks.pending != nil else { return }
         await deepLinks.resolvePending(api: APIClient(tokens: auth))
+    }
+
+    /// Fetches the server bootstrap once at launch purely to detect a maintenance
+    /// window: precheck() reports any active/upcoming window to MaintenanceMonitor,
+    /// which then presents the alert. Errors are ignored — a normal failure to
+    /// load doesn't warrant an alert here.
+    private func checkMaintenance() async {
+        _ = try? await APIClient(tokens: auth).precheck()
     }
 
     /// Computes the launch flow once per process, after subscription status is

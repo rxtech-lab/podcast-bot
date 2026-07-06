@@ -596,7 +596,7 @@ func (s *Server) handleDiscussionCreateFromPlan(w http.ResponseWriter, r *http.R
 
 func (s *Server) handleDiscussionPlan(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -657,7 +657,7 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "instruction is required", http.StatusBadRequest)
 		return
 	}
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -701,7 +701,7 @@ func (s *Server) handleDiscussionImprove(w http.ResponseWriter, r *http.Request)
 // sends the persisted discussion in a final "done" event.
 func (s *Server) handleDiscussionPlanStream(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -759,7 +759,7 @@ func (s *Server) handleDiscussionPlanStreamForID(w http.ResponseWriter, r *http.
 		http.NotFound(w, r)
 		return
 	}
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -874,7 +874,7 @@ func (s *Server) handleDiscussionImproveStream(w http.ResponseWriter, r *http.Re
 		http.Error(w, "instruction is required", http.StatusBadRequest)
 		return
 	}
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -961,7 +961,7 @@ func (s *Server) handleDiscussionAddSources(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "at least one url is required", http.StatusBadRequest)
 		return
 	}
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -1011,7 +1011,7 @@ func (s *Server) handleDiscussionAddSourcesStream(w http.ResponseWriter, r *http
 		http.Error(w, "at least one url is required", http.StatusBadRequest)
 		return
 	}
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -1595,7 +1595,7 @@ func (s *Server) handleDiscussionSearchSources(w http.ResponseWriter, r *http.Re
 		http.Error(w, "query is required", http.StatusBadRequest)
 		return
 	}
-	p, err := planner.New(s.d.Env)
+	p, err := planner.New(s.plannerEnv())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return

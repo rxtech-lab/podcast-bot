@@ -11,6 +11,10 @@ import (
 type precheckResponse struct {
 	NewDiscussion precheckNewDiscussion `json:"new_discussion"`
 	NewAlbum      precheckNewAlbum      `json:"new_album"`
+	// Maintenance is present while a maintenance window is active (Active=true)
+	// or upcoming (Active=false), so the client can pause with a message or warn
+	// users ahead of a scheduled pause.
+	Maintenance *maintenanceInfo `json:"maintenance,omitempty"`
 }
 
 type precheckNewDiscussion struct {
@@ -56,6 +60,7 @@ func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 		NewAlbum: precheckNewAlbum{
 			Form: newAlbumPrecheckForm(lang),
 		},
+		Maintenance: s.relevantMaintenance(r),
 	})
 }
 

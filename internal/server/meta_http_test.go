@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/eventbus"
@@ -134,6 +135,47 @@ func TestHandleTemplates(t *testing.T) {
 	}
 	if out.Templates[0].Schema == nil {
 		t.Fatal("template schema is nil")
+	}
+}
+
+// A scheduled (not-yet-active) window is surfaced in /api/precheck with
+// active=false so clients can warn users ahead of the pause without being
+// blocked (precheck is allowlisted and returns 200).
+func TestHandlePrecheckSurfacesUpcomingMaintenance(t *testing.T) {
+	ms := newTestMaintenanceStore(t)
+	ms.db.Create(&Maintenance{
+		Title:   "Planned",
+		Message: "planned pause",
+		Status:  MaintenanceStatusScheduled,
+		StartAt: time.Now().Add(time.Hour),
+	})
+	srv := New(Deps{
+		Bus:         eventbus.New(nil),
+		Sessions:    NewSessionRegistry(),
+		Log:         slog.Default(),
+		Maintenance: ms,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/precheck", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out precheckResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Maintenance == nil {
+		t.Fatal("expected upcoming maintenance in precheck response")
+	}
+	if out.Maintenance.Active {
+		t.Error("scheduled window should be reported active=false")
+	}
+	if out.Maintenance.ID == 0 {
+		t.Error("expected a non-zero maintenance id")
+	}
+	if out.Maintenance.Message != "planned pause" {
+		t.Errorf("message = %q, want %q", out.Maintenance.Message, "planned pause")
 	}
 }
 

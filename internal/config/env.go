@@ -179,6 +179,13 @@ type Env struct {
 	// directly with the access token from RxAuthSwift. Empty disables it.
 	AuthIssuer string
 
+	// AdminAllowedClientIDs (ADMIN_ALLOWED_CLIENT_IDS, comma-separated) restricts
+	// which OAuth client_ids may call the /admin API. rxlab-auth access tokens
+	// carry no `aud` claim, so this is how the admin resource server ensures only
+	// tokens minted for the dashboard client are accepted. Empty accepts any
+	// client that presents a valid admin-role token.
+	AdminAllowedClientIDs []string
+
 	// WebsiteBaseURL (WEBSITE_BASE_URL, e.g. https://podcast.rxlab.app) is the
 	// fallback public base for every shareable link (/p/, /s/, /d/) when
 	// FrontendPublicURL is unset. Empty falls back to https://podcast.rxlab.app.
@@ -363,6 +370,7 @@ func LoadEnv() (*Env, error) {
 		DashboardOrigins:        splitCSV(os.Getenv("DASHBOARD_ORIGINS")),
 		DashboardServiceToken:   strings.TrimSpace(os.Getenv("DASHBOARD_SERVICE_TOKEN")),
 		AuthIssuer:              strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_ISSUER")), "/"),
+		AdminAllowedClientIDs:   splitCSV(os.Getenv("ADMIN_ALLOWED_CLIENT_IDS")),
 		WebsiteBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("WEBSITE_BASE_URL")), "/"),
 		FrontendPublicURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("FRONTEND_PUBLIC_URL")), "/"),
 		APNSKeyID:               strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
