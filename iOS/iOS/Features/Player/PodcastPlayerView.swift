@@ -19,6 +19,7 @@ private let textContentLog = Logger(subsystem: "com.debatebot.ios", category: "T
 struct PodcastPlayerView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
+    @Environment(PlayerSessionStore.self) private var playerSessions
     @Environment(\.scenePhase) private var scenePhase
     let discussion: Discussion
     var onCreatedFromPlan: ((Discussion) -> Void)?
@@ -30,14 +31,13 @@ struct PodcastPlayerView: View {
     var hidesTabBar: Bool = false
     var onSignOut: (() -> Void)?
 
-    @State private var model: PlayerModel?
+    @State private var playerSession: PlayerSession?
     @State private var message = ""
     @State private var showingPlan = false
     @State private var showingSummary = false
     @State private var showingText = false
     @State private var showingMindmap = false
     @State private var audioBookVideoURL: IdentifiableURL?
-    @State private var showingFullPlayer = false
     @State private var showingImporter = false
     @State private var showingPhotos = false
     @State private var showingPointsHistory = false
@@ -159,10 +159,10 @@ struct PodcastPlayerView: View {
         .sheet(item: downloadedPodcastFileBinding) { file in
             fileShareSheet(file)
         }
-        .fullScreenCover(isPresented: $showingFullPlayer) {
+        .fullScreenCover(isPresented: fullPlayerPresentedBinding) {
             fullPlayerCover
         }
-        .task {
+        .task(id: playerSessionTaskKey) {
             await loadPlayerIfNeeded()
         }
         .task(id: uiActionsRefreshKey) {
@@ -243,6 +243,10 @@ struct PodcastPlayerView: View {
         model?.discussion.creator ?? discussion.creator
     }
 
+    private var model: PlayerModel? {
+        playerSession?.model
+    }
+
     private var currentDiscussion: Discussion {
         model?.discussion ?? discussion
     }
@@ -286,6 +290,10 @@ struct PodcastPlayerView: View {
             onCreatedFromPlan == nil ? "no-create-from-plan" : "create-from-plan",
             onSignOut == nil ? "no-sign-out" : "sign-out"
         ].joined(separator: "|")
+    }
+
+    private var playerSessionTaskKey: String {
+        "\(discussion.id)|\(shareToken ?? "")"
     }
 
     /// Extracted so the construction of `SummaryView` (and its `APIClient`) stays
@@ -557,9 +565,16 @@ struct PodcastPlayerView: View {
 
     @ViewBuilder
     private var fullPlayerCover: some View {
-        if let model {
-            FullScreenPlayerView(model: model)
+        if let playerSession {
+            FullScreenPlayerView(model: playerSession.model)
         }
+    }
+
+    private var fullPlayerPresentedBinding: Binding<Bool> {
+        Binding(
+            get: { playerSession?.isFullPlayerPresented == true },
+            set: { playerSession?.isFullPlayerPresented = $0 }
+        )
     }
 
     private func discussionBinding(for model: PlayerModel) -> Binding<Discussion> {
@@ -629,23 +644,23 @@ struct PodcastPlayerView: View {
     }
 
     private func loadPlayerIfNeeded() async {
-        if model == nil {
-            let player = PlayerModel(discussion: discussion,
-                                     api: APIClient(tokens: auth),
-                                     username: auth.currentUser?.name ?? "You",
-                                     userID: auth.currentUser?.id ?? "",
-                                     shareToken: shareToken)
-            player.start()
-            model = player
+        let session = playerSessions.acquire(
+            discussion: discussion,
+            api: APIClient(tokens: auth),
+            username: auth.currentUser?.name ?? "You",
+            userID: auth.currentUser?.id ?? "",
+            shareToken: shareToken
+        )
+        if let playerSession, playerSession !== session {
+            playerSessions.release(playerSession)
         }
+        playerSession = session
         await purchases.refreshBalance()
     }
 
     private func stopPlayerIfNeeded() {
-        // Presenting the full-screen cover disappears this view; don't tear down
-        // the shared model in that case — only on real navigation exit.
-        guard !showingFullPlayer else { return }
-        model?.stop()
+        guard let playerSession else { return }
+        playerSessions.release(playerSession)
     }
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
@@ -795,7 +810,7 @@ struct PodcastPlayerView: View {
     @ViewBuilder
     private func footer(_ model: PlayerModel) -> some View {
         VStack(spacing: 10) {
-            MusicPlayerBar(model: model) { showingFullPlayer = true }
+            MusicPlayerBar(model: model) { playerSession?.isFullPlayerPresented = true }
             inputBar(model)
         }
         .padding(16)

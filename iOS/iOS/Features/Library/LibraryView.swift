@@ -124,7 +124,7 @@ struct LibraryView: View {
             .onChange(of: hSize) { _, newValue in
                 syncNavigation(toRegular: newValue == .regular)
             }
-            .task { await load() }
+            .task { await loadInitialPageIfNeeded() }
             .task { await loadHomeToolbar() }
             .task { await purchases.refreshBalance() }
             .onChange(of: purchases.isConfigured) { _, _ in
@@ -635,6 +635,11 @@ struct LibraryView: View {
         } catch {
             reportLoadError(error, inlineWhenEmpty: true)
         }
+    }
+
+    private func loadInitialPageIfNeeded() async {
+        guard !hasLoadedInitialPage, !isLoading else { return }
+        await load()
     }
 
     private func loadMore() async {
