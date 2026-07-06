@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/planner"
 )
 
@@ -472,7 +474,32 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 	)
 }
 
+// PlanningTurnPayload is the wire payload of a queued planning turn. Every
+// SSE frame flows through the Redis planning stream store, so the consuming
+// pod and the HTTP pod tailing the stream may differ. The reservation is
+// carried so a terminal failure can refund it; the Redis Active record
+// (keyed by RunID) is the distributed claim.
+type PlanningTurnPayload struct {
+	RunID           string `json:"run_id"`
+	ConversationID  string `json:"conversation_id"`
+	DiscussionID    string `json:"discussion_id"`
+	UserID          string `json:"user_id"`
+	Language        string `json:"language,omitempty"`
+	Reserved        int64  `json:"reserved"`
+	ReserveLedgerID int64  `json:"reserve_ledger_id"`
+}
+
 func (s *Server) startStoredPlanningRun(w http.ResponseWriter, r *http.Request, userID string, d *Discussion, conv *PlanningConversation, p *planner.Planner, languageOverride string) (*PlanningActiveStream, bool) {
+	// A run published for this conversation may already be pending/running
+	// (the in-process claim frees as soon as the task is enqueued); resume
+	// its stream rather than double-starting.
+	if existing, ok := s.d.PlanningStreams.Active(r.Context(), conv.ID); ok && existing != nil {
+		return existing, true
+	}
+	if s.d.MQ == nil {
+		http.Error(w, "planning queue is not configured", http.StatusServiceUnavailable)
+		return nil, false
+	}
 	reserved, reserveLedgerID, ok := s.reservePlanning(w, r, userID, d.ID)
 	if !ok {
 		return nil, false
@@ -489,23 +516,80 @@ func (s *Server) startStoredPlanningRun(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "planning stream recovery is unavailable", http.StatusServiceUnavailable)
 		return nil, false
 	}
-	go s.runStoredPlanningTurn(active, userID, d, conv, p, languageOverride, reserved, reserveLedgerID)
+	payload := PlanningTurnPayload{
+		RunID:           active.RunID,
+		ConversationID:  conv.ID,
+		DiscussionID:    d.ID,
+		UserID:          userID,
+		Language:        languageOverride,
+		Reserved:        reserved,
+		ReserveLedgerID: reserveLedgerID,
+	}
+	// Release the in-process claim BEFORE publishing: with the in-process
+	// queue fallback the consumer may pick the task up synchronously-fast
+	// and needs to take the claim itself.
+	s.releasePlanningRun(conv.ID)
+	task, err := mq.NewTask(mq.TaskPlanningTurn, active.RunID, payload)
+	if err == nil {
+		err = s.d.MQ.Publish(r.Context(), mq.QueuePlanning, task)
+	}
+	if err != nil {
+		s.d.PlanningStreams.ClearActive(context.Background(), conv.ID, active.RunID)
+		s.refundPlanning(context.Background(), userID, d.ID, reserved, reserveLedgerID)
+		s.logger().Error("planning turn enqueue failed", "discussion", d.ID, "conversation", conv.ID, "err", err)
+		http.Error(w, "planning turn could not be enqueued", http.StatusServiceUnavailable)
+		return nil, false
+	}
 	return &active, true
 }
 
-func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID string, d *Discussion, conv *PlanningConversation, p *planner.Planner, languageOverride string, reserved, reserveLedgerID int64) {
+// RunPlanningTurnTask executes one queued planning-turn attempt. The Redis
+// Active record is the distributed claim: a mismatched or expired record
+// means this run was superseded or abandoned — the reservation is refunded
+// and the delivery acked. A non-nil return is the attempt's failure; the
+// dispatch layer schedules the retry (the Active record and reservation
+// stay live across the backoff) or runs FailPlanningTurnTask.
+func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload) error {
 	started := time.Now()
-	workCtx, cancel := context.WithTimeout(context.Background(), discussionStreamRecoveryTimeout)
+	active, ok := s.d.PlanningStreams.Active(ctx, pl.ConversationID)
+	if !ok || active == nil || active.RunID != pl.RunID {
+		s.logger().Info("planning turn superseded or expired; refunding",
+			"conversation", pl.ConversationID, "run", pl.RunID)
+		s.refundPlanning(context.Background(), pl.UserID, pl.DiscussionID, pl.Reserved, pl.ReserveLedgerID)
+		return nil
+	}
+	if !s.claimPlanningRun(pl.ConversationID) {
+		s.logger().Info("planning turn already running in this process; skipping",
+			"conversation", pl.ConversationID, "run", pl.RunID)
+		return nil
+	}
+	defer s.releasePlanningRun(pl.ConversationID)
+
+	workCtx, cancel := context.WithTimeout(ctx, discussionStreamRecoveryTimeout)
 	defer cancel()
-	defer s.releasePlanningRun(conv.ID)
-	defer s.d.PlanningStreams.ClearActive(context.Background(), conv.ID, active.RunID)
+
+	d, err := s.d.Discussions.Get(workCtx, pl.UserID, pl.DiscussionID)
+	if err != nil {
+		return fmt.Errorf("load discussion: %w", err)
+	}
+	conv, err := s.d.Planning.ConversationByDiscussion(workCtx, pl.UserID, pl.DiscussionID)
+	if err != nil {
+		return fmt.Errorf("load conversation: %w", err)
+	}
+	if d == nil || conv == nil || conv.ID != pl.ConversationID {
+		return mq.Permanent(fmt.Errorf("planning conversation %s not found", pl.ConversationID))
+	}
+	p, err := planner.New(s.d.Env)
+	if err != nil {
+		return fmt.Errorf("planner init: %w", err)
+	}
 
 	meter := &usageAccumulator{}
 	p.WithUsageRecorder(meter.record)
 	sink := planningStreamSink{
 		ctx:            workCtx,
 		store:          s.d.PlanningStreams,
-		runID:          active.RunID,
+		runID:          pl.RunID,
 		conversationID: conv.ID,
 	}
 	_ = sink.send("progress", planner.ProgressEvent{Phase: "thinking", Text: "Thinking…"})
@@ -517,23 +601,20 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 
 	turns, err := s.d.Planning.Turns(workCtx, conv.ID)
 	if err != nil {
-		s.refundPlanning(workCtx, userID, d.ID, reserved, reserveLedgerID)
-		s.clearDiscussionProgress(workCtx, d.ID)
-		_ = sink.send("error", map[string]string{"message": err.Error()})
-		return
+		return fmt.Errorf("load turns: %w", err)
 	}
 	history := planningMessagesForLLM(turns, s.uploadURLRefresher(workCtx))
 	s.logger().Info("stored planning turn started",
 		"discussion", d.ID,
 		"conversation", conv.ID,
-		"run", active.RunID,
+		"run", pl.RunID,
 		"turns", len(turns),
 		"history", len(history),
 		"last_role", planningLastTurnRole(turns),
 	)
 	opts := planner.ConversationOptions{
 		Type:             planningContentType(d, turns),
-		Language:         planningLanguage(d, languageOverride),
+		Language:         planningLanguage(d, pl.Language),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
 		Template:         planningTemplate(d, planningContentType(d, turns)),
@@ -542,17 +623,16 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 		ExistingPlan:     d.Script,
 		ExistingMarkdown: d.Markdown,
 	}
-	emit := func(ev planner.ConvEvent) { s.handlePlanningConvEvent(workCtx, sink, userID, d.ID, conv.ID, ev) }
+	emit := func(ev planner.ConvEvent) { s.handlePlanningConvEvent(workCtx, sink, pl.UserID, d.ID, conv.ID, ev) }
 	paused, runErr := p.RunConversationTurn(workCtx, history, opts, emit)
 
 	if runErr != nil {
-		s.refundPlanning(workCtx, userID, d.ID, reserved, reserveLedgerID)
-		_ = s.d.Planning.SetStatus(workCtx, conv.ID, PlanningConversationFailed)
-		s.clearDiscussionProgress(workCtx, d.ID)
-		_ = sink.send("error", map[string]string{"message": runErr.Error()})
-		return
+		// Turn persistence is append-only, so a retry continues from the
+		// persisted prefix. Keep the Active record and the reservation
+		// alive; the dispatch layer either retries or fails terminally.
+		return runErr
 	}
-	s.settlePlanningConversation(workCtx, userID, d.ID, conv, reserved, reserveLedgerID, meter)
+	s.settlePlanningConversation(workCtx, pl.UserID, d.ID, conv, pl.Reserved, pl.ReserveLedgerID, meter)
 	if paused {
 		_ = s.d.Planning.SetStatus(workCtx, conv.ID, PlanningConversationAwaitingAnswer)
 	} else {
@@ -560,14 +640,14 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 	}
 	s.clearDiscussionProgress(workCtx, d.ID)
 
-	updated, _ := s.d.Discussions.Get(workCtx, userID, d.ID)
+	updated, _ := s.d.Discussions.Get(workCtx, pl.UserID, d.ID)
 	if updated != nil {
 		if total, err := s.pointsCharged(workCtx, d.ID); err == nil {
 			updated.PointsCharged = total
 		}
 		s.sanitizeDiscussionUsage(updated)
 	}
-	convFresh, _ := s.d.Planning.ConversationByDiscussion(workCtx, userID, d.ID)
+	convFresh, _ := s.d.Planning.ConversationByDiscussion(workCtx, pl.UserID, d.ID)
 	finalTurns, _ := s.d.Planning.Turns(workCtx, conv.ID)
 	_ = sink.send("done", planningDonePayload{
 		Discussion: updated,
@@ -577,14 +657,54 @@ func (s *Server) runStoredPlanningTurn(active PlanningActiveStream, userID strin
 			NeedsRun:     planningConversationShouldAutoRun(convFresh, finalTurns),
 		},
 	})
+	s.d.PlanningStreams.ClearActive(context.Background(), conv.ID, pl.RunID)
 	s.logger().Info("stored planning turn finished",
 		"discussion", d.ID,
 		"conversation", conv.ID,
-		"run", active.RunID,
+		"run", pl.RunID,
 		"paused", paused,
 		"turns", len(finalTurns),
 		"elapsed_ms", time.Since(started).Milliseconds(),
 	)
+	return nil
+}
+
+// PlanningTurnRetrying surfaces a pending retry on the live stream so the
+// user watching the SSE tail sees progress rather than silence through the
+// backoff window. The Active record's TTL comfortably covers the backoff.
+func (s *Server) PlanningTurnRetrying(pl PlanningTurnPayload, attempt int, delay time.Duration) {
+	sink := planningStreamSink{
+		ctx:            context.Background(),
+		store:          s.d.PlanningStreams,
+		runID:          pl.RunID,
+		conversationID: pl.ConversationID,
+	}
+	_ = sink.send("progress", planner.ProgressEvent{
+		Phase: "retrying",
+		Text:  fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+	})
+}
+
+// FailPlanningTurnTask is the terminal failure path of a queued planning
+// turn: refund the reservation, mark the conversation failed, emit the
+// error frame, and release the Active record.
+func (s *Server) FailPlanningTurnTask(pl PlanningTurnPayload, cause error) {
+	ctx := context.Background()
+	msg := "planning turn failed"
+	if cause != nil {
+		msg = cause.Error()
+	}
+	s.refundPlanning(ctx, pl.UserID, pl.DiscussionID, pl.Reserved, pl.ReserveLedgerID)
+	_ = s.d.Planning.SetStatus(ctx, pl.ConversationID, PlanningConversationFailed)
+	s.clearDiscussionProgress(ctx, pl.DiscussionID)
+	sink := planningStreamSink{
+		ctx:            ctx,
+		store:          s.d.PlanningStreams,
+		runID:          pl.RunID,
+		conversationID: pl.ConversationID,
+	}
+	_ = sink.send("error", map[string]string{"message": msg})
+	s.d.PlanningStreams.ClearActive(ctx, pl.ConversationID, pl.RunID)
 }
 
 func (s *Server) streamPlanningActiveRun(w http.ResponseWriter, r *http.Request, runID string) {

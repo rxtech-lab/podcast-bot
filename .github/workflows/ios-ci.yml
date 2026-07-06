@@ -80,6 +80,24 @@ jobs:
           fi
           ffmpeg -version | head -n 1
 
+      # The E2E backend consumes generation jobs from a real RabbitMQ broker.
+      # brew services is idempotent on the persistent self-hosted runner;
+      # scripts/e2e.sh re-checks and isolates each run behind a unique
+      # queue-name prefix (prefixed queues auto-expire when idle).
+      - name: Start RabbitMQ
+        run: |
+          if ! command -v rabbitmq-server >/dev/null 2>&1; then
+            echo "Installing rabbitmq via Homebrew..."
+            brew install rabbitmq
+          fi
+          brew services start rabbitmq
+          for i in $(seq 1 60); do
+            nc -z 127.0.0.1 5672 2>/dev/null && break
+            sleep 1
+          done
+          nc -z 127.0.0.1 5672 || { echo "rabbitmq did not become ready" >&2; exit 1; }
+          echo "rabbitmq ready on 127.0.0.1:5672"
+
       - name: Prepare Simulators
         run: |
           echo "Shutting down all simulators..."

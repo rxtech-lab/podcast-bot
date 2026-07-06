@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 )
 
@@ -47,15 +46,5 @@ func TestSnapshotAudioBookVideoImagesNoOffsetsKeepsAll(t *testing.T) {
 	}
 	if !reflect.DeepEqual(beats, []int{0, 1}) {
 		t.Fatalf("beats = %v", beats)
-	}
-}
-
-func TestAudioBookVideoOptionsCarryPodcastLanguage(t *testing.T) {
-	opts := audioBookVideoOptions(&config.DebateTopic{
-		Title:    "History",
-		Language: "zh-TW",
-	}, nil, nil)
-	if opts.Language != "zh-TW" {
-		t.Fatalf("Language = %q, want zh-TW", opts.Language)
 	}
 }

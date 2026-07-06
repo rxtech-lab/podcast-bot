@@ -16,12 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	goqueue "github.com/michaelginalick/go-queue"
 	"github.com/sirily11/debate-bot/internal/audio"
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/e2e"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/jobworker"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/storage"
 	"github.com/sirily11/debate-bot/internal/util"
@@ -289,6 +290,7 @@ type runtime struct {
 	sessions    *server.SessionRegistry
 	jobs        *server.JobRegistry
 	discussions *server.DiscussionStore
+	mqc         mq.Client
 	channels    []*channelRuntime
 	channelByID map[string]*channelRuntime
 	addr        string
@@ -870,17 +872,36 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		}
 		fmt.Fprintln(os.Stdout, "E2E mode · database seeded")
 	}
-	queue, err := goqueue.NewQueue(maxConcurrency)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "job queue:", err)
-		cancel()
-		return nil, 1
+	// Durable generation-job queue. With RABBITMQ_URL the broker gives the
+	// backlog durability across restarts plus retry with backoff; without it
+	// the in-process fallback keeps the same dispatch/retry semantics for
+	// zero-infra local runs.
+	var mqClient mq.Client
+	var mqPing func(context.Context) error
+	if env.RabbitMQURL != "" {
+		amqpClient, err := mq.NewAMQP(env.RabbitMQURL, mq.AMQPOptions{
+			QueuePrefix: env.MQQueuePrefix,
+			Logf: func(format string, args ...any) {
+				log.Info(fmt.Sprintf(format, args...))
+			},
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "rabbitmq:", err)
+			cancel()
+			return nil, 1
+		}
+		mqClient = amqpClient
+		mqPing = amqpClient.Connected
+		fmt.Fprintln(os.Stdout, "RabbitMQ job queue enabled")
+	} else {
+		mqClient = mq.NewInline()
 	}
 
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
 		mode: mode,
 		env:  &jobEnv, mcpCfg: mcpCfg, bus: bus, jobs: jobs, discussions: discussions,
+		mqc:  mqClient,
 		addr: addr, stopSig: stopSig,
 		channelByID:   map[string]*channelRuntime{},
 		loadedDebates: map[string]loadedRef{},
@@ -960,12 +981,37 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 				Discussions: discussions,
 				Points:      points,
 				APNS:        apns,
-				Queue:       queue,
+				MQ:          mqClient,
 				Log:         log,
 				Uploader:    uploader,
 			}, jobID, req)
 		},
+		MQPing: mqPing,
+		MQ:     mqClient,
 	})
+
+	// Start consuming generation tasks. Consumers run in-process on every
+	// pod alongside the HTTP server.
+	worker := jobworker.New(ctx, jobworker.Deps{
+		Env:            &jobEnv,
+		MCPCfg:         mcpCfg,
+		Bus:            bus,
+		Jobs:           jobs,
+		Discussions:    discussions,
+		Points:         points,
+		Planning:       planning,
+		Srv:            rt.srv,
+		APNS:           apns,
+		Uploader:       uploader,
+		Log:            log,
+		MQ:             mqClient,
+		MaxConcurrency: maxConcurrency,
+	})
+	if err := worker.RegisterAll(); err != nil {
+		fmt.Fprintln(os.Stderr, "job consumers:", err)
+		cancel()
+		return nil, 1
+	}
 
 	return rt, 0
 }
@@ -980,6 +1026,12 @@ func channelIDs(cfg *config.ChannelsConfig) []string {
 
 func (r *runtime) shutdown() {
 	r.cancel()
+	// Stop consuming and wait briefly for in-flight generation handlers; an
+	// interrupted broker-backed job redelivers and is re-claimed after
+	// restart, so cutting the grace period short only costs a retry.
+	if r.mqc != nil {
+		_ = r.mqc.Close()
+	}
 	for _, c := range r.channels {
 		if c.enc != nil {
 			_ = c.enc.Close()

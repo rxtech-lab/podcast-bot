@@ -31,15 +31,37 @@ import (
 	"github.com/sirily11/debate-bot/internal/discussion"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/series"
 	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/storage"
 	"github.com/sirily11/debate-bot/internal/video"
 )
 
-// Queue is the small subset of goqueue.Queue that Submit needs.
-type Queue interface {
-	Add(context.Context, func(context.Context))
+// PodcastGeneratePayload is the wire payload of a queued generation run. It
+// carries content (the script markdown, an S3 key for the priors zip)
+// rather than local paths, because with a broker the consuming pod may not
+// be the pod that accepted the upload.
+type PodcastGeneratePayload struct {
+	JobID          string `json:"job_id"`
+	ScriptMarkdown string `json:"script_markdown"`
+	// PriorsZipS3Key locates the staged series priors zip in object storage;
+	// PriorsZipPath is the local-path fallback when S3 is not configured
+	// (single-pod / dev, where publisher and consumer share a disk).
+	PriorsZipS3Key    string   `json:"priors_zip_s3_key,omitempty"`
+	PriorsZipPath     string   `json:"priors_zip_path,omitempty"`
+	SoftSubs          bool     `json:"soft_subs,omitempty"`
+	BurnSubs          bool     `json:"burn_subs,omitempty"`
+	AudioOnly         bool     `json:"audio_only,omitempty"`
+	Resolution        string   `json:"resolution,omitempty"`
+	SubtitleLanguages []string `json:"subtitle_languages,omitempty"`
+	DiscussionID      string   `json:"discussion_id,omitempty"`
+}
+
+// priorsZipObjectName is where Submit stages the series priors zip so any
+// consuming pod can download it.
+func priorsZipObjectName(jobID string) string {
+	return path.Join("job-uploads", jobID, "priors.zip")
 }
 
 // recorderDrainTimeout bounds the wait for the audio.mp3 recorder to see the
@@ -127,9 +149,11 @@ type Deps struct {
 	// Points, when set, reconciles the generation reservation against actual
 	// usage at job completion so a finished podcast is charged immediately (not
 	// lazily on a later discussion fetch). nil disables points charging.
-	Points       *server.PointsStore
-	APNS         *server.APNSClient
-	Queue        Queue
+	Points *server.PointsStore
+	APNS   *server.APNSClient
+	// MQ is the durable generation-job queue Submit publishes to; consumers
+	// call RunFromTask.
+	MQ           mq.Client
 	Log          *slog.Logger
 	DiscussionID string
 	// Uploader, when enabled, pushes the finished mp4 to S3 after stitching.
@@ -152,7 +176,7 @@ type Deps struct {
 // unbounded parallel encoders.
 func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmission) error {
 	deps.DiscussionID = sub.DiscussionID
-	if deps.Queue == nil {
+	if deps.MQ == nil {
 		return errors.New("video job queue is not configured")
 	}
 	topic, err := config.LoadTopic(sub.ScriptPath)
@@ -231,24 +255,137 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 	deps.Jobs.AppendLog(jobID, "status",
 		fmt.Sprintf("job queued · type=%s · resolution=%s", topic.Type, topic.Resolution), nil)
 
-	deps.Queue.Add(ctx, func(runCtx context.Context) {
-		defer func() {
-			if v := recover(); v != nil {
-				fail(deps, jobID, deps.Log.With("job", jobID),
-					fmt.Errorf("video job panic: %v", v))
+	// The payload carries the script's content and durable references, never
+	// this pod's local paths: with a broker the run may be consumed by a
+	// different pod than the one that staged the upload.
+	scriptMarkdown, err := os.ReadFile(sub.ScriptPath)
+	if err != nil {
+		return fmt.Errorf("read script.md: %w", err)
+	}
+	payload := PodcastGeneratePayload{
+		JobID:             jobID,
+		ScriptMarkdown:    string(scriptMarkdown),
+		SoftSubs:          sub.SoftSubs,
+		BurnSubs:          sub.BurnSubs,
+		AudioOnly:         sub.AudioOnly,
+		Resolution:        sub.Resolution,
+		SubtitleLanguages: sub.SubtitleLanguages,
+		DiscussionID:      sub.DiscussionID,
+	}
+	if sub.PriorsZipPath != "" {
+		if deps.Uploader.Enabled() {
+			key := deps.Uploader.Key(priorsZipObjectName(jobID))
+			if err := deps.Uploader.Upload(ctx, sub.PriorsZipPath, key); err != nil {
+				return fmt.Errorf("stage priors zip to S3: %w", err)
 			}
-		}()
-		run(runCtx, deps, jobID, sub, topic)
-	})
+			payload.PriorsZipS3Key = key
+		} else {
+			payload.PriorsZipPath = sub.PriorsZipPath
+		}
+	}
+	task, err := mq.NewTask(mq.TaskPodcastGenerate, jobID, payload)
+	if err != nil {
+		return fmt.Errorf("encode generation task: %w", err)
+	}
+	if err := deps.MQ.Publish(ctx, mq.QueueGeneration, task); err != nil {
+		return fmt.Errorf("enqueue generation task: %w", err)
+	}
 	return nil
 }
 
-// run is the long-running half of the submission. It assumes
-// validation already passed; failures here update the registry to
-// JobError but don't propagate.
+// RunFromTask executes one queued generation attempt on the consuming pod:
+// it materialises the payload back into local inputs (script.md, priors
+// zip), re-derives the validated topic, and runs the render pipeline. The
+// returned error is the attempt's failure (the dispatch layer decides
+// retry vs terminal); nil means the job completed and was marked done.
+func RunFromTask(ctx context.Context, deps Deps, p PodcastGeneratePayload) error {
+	deps.DiscussionID = p.DiscussionID
+	jobID := p.JobID
+	jobOutDir := filepath.Join(deps.Env.OutDir, "jobs", jobID)
+	if err := os.MkdirAll(jobOutDir, 0o755); err != nil {
+		return fmt.Errorf("create job dir: %w", err)
+	}
+	scriptPath := filepath.Join(jobOutDir, "script.md")
+	if err := os.WriteFile(scriptPath, []byte(p.ScriptMarkdown), 0o644); err != nil {
+		return fmt.Errorf("stage script.md: %w", err)
+	}
+	topic, err := config.LoadTopic(scriptPath)
+	if err != nil {
+		// Submit already validated this script; a parse failure here is a
+		// content problem no retry will fix.
+		return mq.Permanent(fmt.Errorf("script.md: %w", err))
+	}
+	if p.Resolution != "" {
+		topic.Resolution = p.Resolution
+	}
+	sub := server.JobSubmission{
+		ScriptPath:        scriptPath,
+		SoftSubs:          p.SoftSubs,
+		BurnSubs:          p.BurnSubs,
+		Resolution:        p.Resolution,
+		SubtitleLanguages: p.SubtitleLanguages,
+		AudioOnly:         p.AudioOnly || topic.Type == config.ContentTypeAudioBook,
+		DiscussionID:      p.DiscussionID,
+	}
+	if p.PriorsZipS3Key != "" {
+		data, err := deps.Uploader.Download(ctx, p.PriorsZipS3Key)
+		if err != nil {
+			return fmt.Errorf("download priors zip: %w", err)
+		}
+		local := filepath.Join(jobOutDir, "priors.zip")
+		if err := os.WriteFile(local, data, 0o644); err != nil {
+			return fmt.Errorf("stage priors zip: %w", err)
+		}
+		sub.PriorsZipPath = local
+	} else if p.PriorsZipPath != "" {
+		sub.PriorsZipPath = p.PriorsZipPath
+	}
+	return run(ctx, deps, jobID, sub, topic)
+}
+
+// MarkRetryScheduled records a failed non-final attempt: the job returns to
+// pending (so the next attempt's claim succeeds) with a phase that tells
+// clients a retry is coming. Deliberately does NOT touch the linked
+// discussion — it only flips to failed on terminal failure.
+func MarkRetryScheduled(deps Deps, jobID string, attempt int, delay time.Duration, cause error) {
+	deps.Jobs.Update(jobID, func(j *server.Job) {
+		j.Status = server.JobPending
+		j.Phase = "retry-scheduled"
+		j.PhaseLabel = fmt.Sprintf("Retrying (attempt %d/%d)", attempt+1, mq.MaxAttempts)
+	})
+	deps.Jobs.AppendLog(jobID, "status",
+		fmt.Sprintf("attempt %d/%d failed: %v — retrying in %s", attempt, mq.MaxAttempts, cause, delay.Round(time.Second)), nil)
+}
+
+// FailTerminal marks the job errored after its final attempt and flips the
+// linked discussion to failed (today's single-attempt failure behavior).
+func FailTerminal(deps Deps, jobID string, err error) {
+	deps.DiscussionID = discussionIDForJob(deps, jobID)
+	fail(deps, jobID, deps.Log.With("job", jobID), err)
+}
+
+// discussionIDForJob resolves the linked discussion when deps.DiscussionID
+// isn't already set (the terminal handler builds Deps outside a run).
+func discussionIDForJob(deps Deps, jobID string) string {
+	if deps.DiscussionID != "" {
+		return deps.DiscussionID
+	}
+	if deps.Discussions == nil {
+		return ""
+	}
+	if d, err := deps.Discussions.GetByJobID(context.Background(), jobID); err == nil && d != nil {
+		return d.ID
+	}
+	return ""
+}
+
+// run is the long-running half of the submission. It assumes validation
+// already passed. A non-nil return is the attempt's failure; the caller
+// (jobworker dispatch) owns the retry-vs-terminal decision and the
+// registry/discussion failure writes.
 func run(ctx context.Context, deps Deps, jobID string,
 	sub server.JobSubmission, topic *config.DebateTopic,
-) {
+) error {
 	logger := deps.Log.With("job", jobID, "type", topic.Type, "title", topic.Title)
 	audioOnly := sub.AudioOnly
 	// E2E mode always renders audio-only so the video encoder/stitch path (and its
@@ -275,8 +412,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 
 	jobOutDir := filepath.Join(deps.Env.OutDir, "jobs", jobID)
 	if err := os.MkdirAll(jobOutDir, 0o755); err != nil {
-		fail(deps, jobID, logger, fmt.Errorf("create job dir: %w", err))
-		return
+		return fmt.Errorf("create job dir: %w", err)
 	}
 
 	// Series-only: stage the optional priors zip into the persistent
@@ -284,8 +420,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	if topic.Type == config.ContentTypeSeries && sub.PriorsZipPath != "" {
 		status("extracting priors zip…")
 		if err := unzipPriors(sub.PriorsZipPath, deps.Env.PersistentRoot); err != nil {
-			fail(deps, jobID, logger, fmt.Errorf("unzip priors: %w", err))
-			return
+			return fmt.Errorf("unzip priors: %w", err)
 		}
 		logger.Info("priors zip extracted",
 			"src", sub.PriorsZipPath, "dst", deps.Env.PersistentRoot)
@@ -300,8 +435,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 
 	live, err := audio.NewLiveStream(ctx, logger)
 	if err != nil {
-		fail(deps, jobID, logger, fmt.Errorf("livestream: %w", err))
-		return
+		return fmt.Errorf("livestream: %w", err)
 	}
 	// Closed explicitly after orch.Run drains, BEFORE the stitch pass.
 	// The encoder needs ffmpeg to finalise its HLS playlist (write
@@ -345,8 +479,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 				BurnInSeriesCaptions: sub.BurnSubs,
 			}, logger)
 		if err != nil {
-			fail(deps, jobID, logger, fmt.Errorf("encoder: %w", err))
-			return
+			return fmt.Errorf("encoder: %w", err)
 		}
 		defer func() {
 			if !encClosed {
@@ -380,13 +513,11 @@ func run(ctx context.Context, deps Deps, jobID string,
 	var hlsWait func()
 	if audioOnly {
 		if err := os.MkdirAll(audioDir, 0o755); err != nil {
-			fail(deps, jobID, logger, fmt.Errorf("create podcast audio dir: %w", err))
-			return
+			return fmt.Errorf("create podcast audio dir: %w", err)
 		}
 		recFile, ferr := os.Create(audioPath)
 		if ferr != nil {
-			fail(deps, jobID, logger, fmt.Errorf("create audio file: %w", ferr))
-			return
+			return fmt.Errorf("create audio file: %w", ferr)
 		}
 		chunks, _ := live.Subscribe(1024)
 		recDone = make(chan struct{})
@@ -415,8 +546,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 
 	orch, err := contentcreator.New(&jobEnv, topic, deps.MCPCfg, send, logger, live)
 	if err != nil {
-		fail(deps, jobID, logger, fmt.Errorf("orchestrator: %w", err))
-		return
+		return fmt.Errorf("orchestrator: %w", err)
 	}
 	defer orch.Shutdown()
 	orch.Tracker.SetUsageSnapshotCallback(func(usage llm.UsageSummary) {
@@ -507,8 +637,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	status("running orchestrator…")
 	tRun := time.Now()
 	if err := orch.Run(ctx); err != nil {
-		fail(deps, jobID, logger, fmt.Errorf("orch.Run: %w", err))
-		return
+		return fmt.Errorf("orch.Run: %w", err)
 	}
 	persistUsageSummary(ctx, deps, jobID, logger, orch)
 	chargeGenerationPoints(ctx, deps, logger, orch)
@@ -565,8 +694,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 
 		info, statErr := os.Stat(audioPath)
 		if statErr != nil || info.Size() == 0 {
-			fail(deps, jobID, logger, fmt.Errorf("audio output missing or empty: %v", statErr))
-			return
+			return fmt.Errorf("audio output missing or empty: %v", statErr)
 		}
 		status(fmt.Sprintf("audio ready · %.1f MB", float64(info.Size())/(1024*1024)))
 		subtitlesPath := stagePodcastSubtitles(jobOutDir, logger)
@@ -580,8 +708,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			key := deps.Uploader.Key(podcastAudioObjectName(jobID, "mp3"))
 			if err := deps.Uploader.Upload(ctx, audioPath, key); err != nil {
 				logger.Error("s3 upload failed", "err", err)
-				fail(deps, jobID, logger, fmt.Errorf("s3 audio upload: %w", err))
-				return
+				return fmt.Errorf("s3 audio upload: %w", err)
 			} else {
 				s3Key = key
 				audioPathForJob = ""
@@ -668,7 +795,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 		if topic.Type == config.ContentTypeAudioBook {
 			scheduleAudioBookVideo(deps, jobID, sub, topic, orch, audioPath, jobOutDir, recDone)
 		}
-		return
+		return nil
 	}
 
 	// Finalise the encoder before stitching so ffmpeg flushes the
@@ -742,8 +869,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			tracks, err := subtitleTracksForJob(ctx, client, jobOutDir,
 				topic.Language, orch.SubtitleCues(), sub.SubtitleLanguages)
 			if err != nil {
-				fail(deps, jobID, logger, fmt.Errorf("subtitle translation: %w", err))
-				return
+				return fmt.Errorf("subtitle translation: %w", err)
 			}
 			stitchOpts.SubtitleTracks = append(stitchOpts.SubtitleTracks, tracks...)
 			status(fmt.Sprintf("translated subtitle tracks ready (%d)", len(tracks)))
@@ -765,8 +891,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	status(stitchLabel + "…")
 	tStitch := time.Now()
 	if err := video.StitchMP4(enc.HLSDir(), mp4Path, stitchOpts); err != nil {
-		fail(deps, jobID, logger, fmt.Errorf("stitch mp4: %w", err))
-		return
+		return fmt.Errorf("stitch mp4: %w", err)
 	}
 	logger.Info("video stitched", "path", mp4Path,
 		"soft_subs", stitchOpts.SoftSubs,
@@ -845,6 +970,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 	persistDiscussionResult(ctx, deps, server.DiscussionReady, downloadURL)
 	server.PublishDiscussionResourceUpdated(deps.Bus, deps.Env, jobID, deps.DiscussionID, "Podcast ready", "podcast", "video", "status")
 	notifyPodcastReady(ctx, deps, logger)
+	return nil
 }
 
 func podcastAudioObjectName(jobID, ext string) string {

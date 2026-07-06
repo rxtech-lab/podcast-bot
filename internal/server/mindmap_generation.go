@@ -3,11 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/summarizer"
 )
 
@@ -51,11 +54,17 @@ func StartMindmapGeneration(ctx context.Context, deps SummaryGenerationDeps, inp
 		return nil, err
 	}
 	publishMindmapEvent(deps, input.JobID, input.DiscussionID, string(SummaryGenerating))
-	go runMindmapGeneration(deps, input, owner, model)
+	if err := publishSummaryTask(ctx, deps, mq.TaskMindmap, docType, input); err != nil {
+		return nil, err
+	}
 	return meta, nil
 }
 
-func runMindmapGeneration(deps SummaryGenerationDeps, input SummaryGenerationInput, owner, model string) {
+// RunMindmapGenerationTask executes one queued mindmap attempt. Same retry
+// contract as RunSummaryGenerationTask: points settle inside the attempt,
+// the document stays `generating` on failure, and the dispatch layer owns
+// retry vs terminal.
+func RunMindmapGenerationTask(deps SummaryGenerationDeps, input SummaryGenerationInput, owner string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), mindmapBackgroundTimeout)
 	defer cancel()
 	log := deps.Log
@@ -64,6 +73,7 @@ func runMindmapGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 	}
 	logger := log.With("job", input.JobID, "discussion_id", input.DiscussionID, "task", "mindmap")
 	docType := SummaryDocTypeMindmap
+	model := summarizer.NewMindmapGenerator(deps.Env).Model()
 
 	var reserved, reserveLedgerID int64
 	if deps.Points != nil {
@@ -72,10 +82,7 @@ func runMindmapGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 			logger.Warn("mindmap reserve failed", "err", rerr)
 		}
 		if !ok {
-			logger.Info("mindmap skipped: insufficient points")
-			_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "insufficient points for mindmap")
-			publishMindmapEvent(deps, input.JobID, input.DiscussionID, string(SummaryFailed))
-			return
+			return mq.Permanent(errors.New("insufficient points for mindmap"))
 		}
 		reserved, reserveLedgerID = r, ledgerID
 	}
@@ -95,10 +102,7 @@ func runMindmapGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		if deps.Points != nil {
 			_ = deps.Points.SettleSummary(ctx, owner, input.DiscussionID, reserveLedgerID, reserved, 0, PointsUsageDetail{})
 		}
-		logger.Warn("mindmap generation failed", "err", err)
-		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, err.Error())
-		publishMindmapEvent(deps, input.JobID, input.DiscussionID, string(SummaryFailed))
-		return
+		return err
 	}
 
 	sum := meter.snapshot()
@@ -120,10 +124,7 @@ func runMindmapGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		TotalTokens:      sum.TotalTokens,
 		LLMCostUSD:       sum.CostUSD,
 	}); err != nil {
-		logger.Warn("mindmap persist failed", "err", err)
-		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "failed to store mindmap")
-		publishMindmapEvent(deps, input.JobID, input.DiscussionID, string(SummaryFailed))
-		return
+		return fmt.Errorf("store mindmap: %w", err)
 	}
 
 	logger.Info("mindmap ready",
@@ -133,6 +134,7 @@ func runMindmapGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		"total_tokens", sum.TotalTokens,
 		"cost_usd", sum.CostUSD)
 	publishMindmapEvent(deps, input.JobID, input.DiscussionID, string(SummaryReadyState))
+	return nil
 }
 
 func publishMindmapEvent(deps SummaryGenerationDeps, jobID, discussionID, status string) {

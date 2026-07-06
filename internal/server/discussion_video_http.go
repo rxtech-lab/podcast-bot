@@ -1,18 +1,30 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
+	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	// The durable audiobook illustrations are webp; register the decoder so
+	// ensureAudioBookIllustrations can transcode them to the PNGs the render
+	// pipeline expects.
+	_ "golang.org/x/image/webp"
 
 	"github.com/sirily11/debate-bot/internal/config"
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/video"
 )
 
@@ -54,6 +66,48 @@ func (s *Server) handleDiscussionVideoGenerate(w http.ResponseWriter, r *http.Re
 	writeJSON(w, d)
 }
 
+// VideoRenderPayload is the wire payload of a queued audiobook video render.
+// It carries identifiers only — the consuming pod rebuilds every render
+// input from the database, local disk, and object storage.
+type VideoRenderPayload struct {
+	JobID        string `json:"job_id"`
+	DiscussionID string `json:"discussion_id"`
+}
+
+// AudioBookTimingsObjectName is the deterministic object key (pre-prefix)
+// under which the render pipeline stages the timings.json sidecar so a
+// consuming pod other than the one that generated the audio can reproduce
+// beat-accurate image motion.
+func AudioBookTimingsObjectName(jobID string) string {
+	return path.Join("audiobook-timings", jobID+".json")
+}
+
+// PublishAudioBookVideoRender resets the video attempt lifecycle on the job
+// row and enqueues the render task. Shared by the manual endpoint and the
+// automatic post-podcast pass (internal/videojob).
+func PublishAudioBookVideoRender(ctx context.Context, jobs *JobRegistry, mqc mq.Client, jobID, discussionID string) error {
+	if mqc == nil {
+		return fmt.Errorf("video generation queue is not configured")
+	}
+	jobs.Update(jobID, func(j *Job) {
+		j.Phase = "video-queued"
+		j.PhaseLabel = "Video queued"
+		j.VideoAttempts = 0
+	})
+	task, err := mq.NewTask(mq.TaskVideoRender, jobID, VideoRenderPayload{JobID: jobID, DiscussionID: discussionID})
+	if err != nil {
+		return fmt.Errorf("encode video render task: %w", err)
+	}
+	if err := mqc.Publish(ctx, mq.QueueGeneration, task); err != nil {
+		jobs.Update(jobID, func(j *Job) {
+			j.Phase = "video-failed"
+			j.PhaseLabel = "Video enqueue failed"
+		})
+		return fmt.Errorf("enqueue video render: %w", err)
+	}
+	return nil
+}
+
 func (s *Server) enqueueDiscussionAudioBookVideo(ctx context.Context, d *Discussion) error {
 	if s.d.Jobs == nil || s.d.UploadRoot == "" || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
 		return fmt.Errorf("video generation is not configured")
@@ -61,6 +115,40 @@ func (s *Server) enqueueDiscussionAudioBookVideo(ctx context.Context, d *Discuss
 	jobID := strings.TrimSpace(d.JobID)
 	if jobID == "" {
 		return fmt.Errorf("discussion has no source job")
+	}
+	return PublishAudioBookVideoRender(ctx, s.d.Jobs, s.d.MQ, jobID, d.ID)
+}
+
+// MarkVideoRenderRetryScheduled resets the phase so the next attempt's
+// claim succeeds and surfaces the pending retry to clients.
+func (s *Server) MarkVideoRenderRetryScheduled(jobID string, attempt int, delay time.Duration) {
+	s.d.Jobs.Update(jobID, func(j *Job) {
+		j.Phase = "video-queued"
+		j.PhaseLabel = fmt.Sprintf("Video retrying (attempt %d/%d)", attempt+1, mq.MaxAttempts)
+	})
+	s.d.Jobs.AppendLog(jobID, "status",
+		fmt.Sprintf("video render attempt %d/%d failed — retrying in %s", attempt, mq.MaxAttempts, delay.Round(time.Second)), nil)
+}
+
+// MarkVideoRenderFailed records the terminal failure of the video post-pass.
+func (s *Server) MarkVideoRenderFailed(jobID string, cause error) {
+	s.logger().Warn("audiobook video render failed terminally", "job", jobID, "err", cause)
+	s.d.Jobs.Update(jobID, func(j *Job) {
+		j.Phase = "video-failed"
+		j.PhaseLabel = "Video failed"
+	})
+	s.d.Jobs.AppendLog(jobID, "error", fmt.Sprintf("video render failed: %v", cause), nil)
+}
+
+// RunAudioBookVideoRenderTask executes one queued render attempt: rebuild
+// every input (audio, subtitles, timings, illustrations) from DB/disk/S3 —
+// the consuming pod may not be the pod that generated the podcast — then
+// render, upload, persist the video key, and notify. The returned error is
+// the attempt's failure; the dispatch layer owns retry vs terminal.
+func (s *Server) RunAudioBookVideoRenderTask(ctx context.Context, jobID, discussionID string) error {
+	log := s.logger().With("job", jobID, "discussion", discussionID)
+	if s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return mq.Permanent(fmt.Errorf("video generation is not configured"))
 	}
 	jobDir := s.jobArtifactDir(jobID)
 	if jobDir == "" {
@@ -73,14 +161,34 @@ func (s *Server) enqueueDiscussionAudioBookVideo(ctx context.Context, d *Discuss
 	if job == nil {
 		job = s.recoverJob(jobID)
 	}
+	d, err := s.d.Discussions.GetForNotification(ctx, discussionID)
+	if err != nil {
+		return fmt.Errorf("load discussion: %w", err)
+	}
+	if d == nil || d.Script == nil {
+		return mq.Permanent(fmt.Errorf("discussion %s not found or has no script", discussionID))
+	}
+	if lines, lerr := s.d.Discussions.LinesByJob(ctx, jobID); lerr == nil {
+		d.Lines = lines
+	}
+
 	audioPath, err := s.ensureAudioBookAudio(ctx, jobID, jobDir, job)
 	if err != nil {
 		return err
 	}
+	// The automatic pass publishes right after the audio recorder drains;
+	// guard against reading a file whose realtime-paced tail is still being
+	// flushed on this pod.
+	waitForStableAudioFile(ctx, audioPath)
 	vttPath := s.ensureAudioBookSubtitles(ctx, jobDir, job)
+	s.ensureAudioBookTimings(ctx, jobID, jobDir)
+	s.ensureAudioBookIllustrationsSidecar(ctx, jobDir, job)
+	if err := s.ensureAudioBookIllustrations(ctx, jobDir); err != nil {
+		log.Warn("audiobook illustrations materialization failed", "err", err)
+	}
 	imagePaths := audioBookIllustrationPaths(jobDir)
 	if len(imagePaths) == 0 {
-		return fmt.Errorf("no audiobook illustrations found for video")
+		return mq.Permanent(fmt.Errorf("no audiobook illustrations found for video"))
 	}
 	outPath := filepath.Join(jobDir, "video.mp4")
 	opts := discussionAudioBookVideoOptions(d.Script, d.Lines, audioBookAvatarPaths(jobDir))
@@ -104,34 +212,16 @@ func (s *Server) enqueueDiscussionAudioBookVideo(ctx context.Context, d *Discuss
 	}
 	imagePaths, opts.Animations, opts.ImageOffsets = applyAudioBookTimingBeats(imagePaths, anims, offsets, beats)
 	if len(imagePaths) == 0 {
-		return fmt.Errorf("no audiobook illustrations found for video")
+		return mq.Permanent(fmt.Errorf("no audiobook illustrations found for video"))
 	}
 	res := video.Resolution(d.Script.Resolution)
 	if res == "" {
 		res = video.Resolution1080p
 	}
 
-	s.d.Jobs.Update(jobID, func(j *Job) {
-		j.Phase = "video-queued"
-		j.PhaseLabel = "Video queued"
-	})
-	go s.renderDiscussionAudioBookVideo(context.Background(), jobID, d.ID, outPath, audioPath, vttPath, imagePaths, res, opts)
-	return nil
-}
-
-func (s *Server) renderDiscussionAudioBookVideo(ctx context.Context, jobID, discussionID, outPath, audioPath, vttPath string, imagePaths []string, res video.Resolution, opts video.AudioBookVideoOptions) {
-	log := s.logger().With("job", jobID, "discussion", discussionID)
-	s.d.Jobs.Update(jobID, func(j *Job) {
-		j.Phase = "video-rendering"
-		j.PhaseLabel = "Rendering video"
-	})
+	log.Info("audiobook video render starting", "images", len(imagePaths), "resolution", string(res))
 	if err := video.RenderAudioBookVideoWithOptions(outPath, audioPath, vttPath, imagePaths, res, opts); err != nil {
-		log.Warn("manual audiobook video render failed", "err", err)
-		s.d.Jobs.Update(jobID, func(j *Job) {
-			j.Phase = "video-failed"
-			j.PhaseLabel = "Video failed"
-		})
-		return
+		return fmt.Errorf("render audiobook video: %w", err)
 	}
 	key := s.d.Uploader.Key(jobID + "-video.mp4")
 	s.d.Jobs.Update(jobID, func(j *Job) {
@@ -141,23 +231,165 @@ func (s *Server) renderDiscussionAudioBookVideo(ctx context.Context, jobID, disc
 		j.PhaseLabel = "Uploading video"
 	})
 	if err := s.d.Uploader.Upload(ctx, outPath, key); err != nil {
-		log.Warn("manual audiobook video upload failed", "key", key, "err", err)
-		s.d.Jobs.Update(jobID, func(j *Job) {
-			j.Phase = "video-failed"
-			j.PhaseLabel = "Video upload failed"
-		})
-		return
+		return fmt.Errorf("upload audiobook video: %w", err)
 	}
 	if err := s.d.Discussions.SetVideoKey(ctx, discussionID, key); err != nil {
-		log.Warn("manual audiobook video key persist failed", "key", key, "err", err)
+		log.Warn("audiobook video key persist failed", "key", key, "err", err)
 	} else {
-		log.Info("manual audiobook video key persisted", "key", key)
+		log.Info("audiobook video key persisted", "key", key)
 	}
 	s.d.Jobs.Update(jobID, func(j *Job) {
 		j.Phase = "video-ready"
 		j.PhaseLabel = "Video ready"
 	})
 	s.publishDiscussionResourceUpdated(jobID, discussionID, "Video ready", "video")
+	s.notifyAudioBookVideoReady(ctx, d, log)
+	return nil
+}
+
+// waitForStableAudioFile blocks briefly until the audio file stops growing
+// (2s quiet, 30s cap) so the render never probes a still-draining recording.
+func waitForStableAudioFile(ctx context.Context, path string) {
+	const (
+		poll  = 500 * time.Millisecond
+		quiet = 2 * time.Second
+		max   = 30 * time.Second
+	)
+	deadline := time.Now().Add(max)
+	lastSize := int64(-1)
+	stableSince := time.Now()
+	for {
+		if info, err := os.Stat(path); err == nil {
+			if info.Size() != lastSize {
+				lastSize = info.Size()
+				stableSince = time.Now()
+			} else if time.Since(stableSince) >= quiet {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(poll):
+		}
+	}
+}
+
+// notifyAudioBookVideoReady pushes a "video ready" notification so the owner
+// can open the freshly rendered video from the context menu.
+func (s *Server) notifyAudioBookVideoReady(ctx context.Context, d *Discussion, log *slog.Logger) {
+	if s.apns == nil || d == nil {
+		return
+	}
+	title := strings.TrimSpace(d.Title)
+	body := "Your audiobook video is ready to watch."
+	if title != "" {
+		body = title
+	}
+	SendPushNotification(ctx, s.d.Discussions, s.apns, d.OwnerUserID, PushNotification{
+		Kind:         PushKindPodcastVideoReady,
+		DiscussionID: d.ID,
+		Title:        "Video ready",
+		Body:         body,
+		URL:          DiscussionDeepLink(FrontendBaseURL(s.d.Env), d.ID),
+	}, log)
+}
+
+// ensureAudioBookTimings downloads the timings.json sidecar the generating
+// pod staged in object storage when the local copy is absent (cross-pod
+// render). Best-effort — the render falls back to the illustrations
+// timeline, then to an even split.
+func (s *Server) ensureAudioBookTimings(ctx context.Context, jobID, jobDir string) {
+	local := filepath.Join(jobDir, "audiobook", "scenes", "timings.json")
+	if info, err := os.Stat(local); err == nil && info.Size() > 0 {
+		return
+	}
+	data, err := s.d.Uploader.Download(ctx, s.d.Uploader.Key(AudioBookTimingsObjectName(jobID)))
+	if err != nil || len(data) == 0 {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(local), 0o755)
+	_ = os.WriteFile(local, data, 0o644)
+}
+
+// ensureAudioBookIllustrationsSidecar downloads the illustrations timeline
+// sidecar when the local copy is absent (cross-pod render). Best-effort.
+func (s *Server) ensureAudioBookIllustrationsSidecar(ctx context.Context, jobDir string, job *Job) {
+	local := filepath.Join(jobDir, PodcastAudioDir, PodcastIllustrationsFilename)
+	if info, err := os.Stat(local); err == nil && info.Size() > 0 {
+		return
+	}
+	if job == nil || strings.TrimSpace(job.IllustrationsS3Key) == "" {
+		return
+	}
+	data, err := s.d.Uploader.Download(ctx, strings.TrimSpace(job.IllustrationsS3Key))
+	if err != nil || len(data) == 0 {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(local), 0o755)
+	_ = os.WriteFile(local, data, 0o644)
+}
+
+// ensureAudioBookIllustrations materialises the scene PNGs from the durable
+// per-cue image keys in the illustrations sidecar when the local glob is
+// empty — required when the rendering pod is not the pod that generated
+// them. Durable images are webp; they are decoded and re-encoded as the
+// narration-v<beat>.png files the render pipeline globs.
+func (s *Server) ensureAudioBookIllustrations(ctx context.Context, jobDir string) error {
+	if len(audioBookIllustrationPaths(jobDir)) > 0 {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(jobDir, PodcastAudioDir, PodcastIllustrationsFilename))
+	if err != nil {
+		return nil // no sidecar → nothing to materialise
+	}
+	var sidecar struct {
+		Illustrations []contentcreator.IllustrationCue `json:"illustrations"`
+	}
+	if json.Unmarshal(data, &sidecar) != nil || len(sidecar.Illustrations) == 0 {
+		return nil
+	}
+	scenesDir := filepath.Join(jobDir, "audiobook", "scenes")
+	if err := os.MkdirAll(scenesDir, 0o755); err != nil {
+		return fmt.Errorf("create scenes dir: %w", err)
+	}
+	var restored int
+	for _, cue := range sidecar.Illustrations {
+		key := strings.TrimSpace(cue.ImageKey)
+		if key == "" {
+			continue
+		}
+		beat, ok := audioBookImageKeyBeat(key)
+		if !ok {
+			continue
+		}
+		dst := filepath.Join(scenesDir, fmt.Sprintf("narration-v%d.png", beat))
+		if info, serr := os.Stat(dst); serr == nil && info.Size() > 0 {
+			restored++
+			continue
+		}
+		raw, derr := s.d.Uploader.Download(ctx, key)
+		if derr != nil {
+			return fmt.Errorf("download illustration %s: %w", key, derr)
+		}
+		img, _, ierr := image.Decode(bytes.NewReader(raw))
+		if ierr != nil {
+			return fmt.Errorf("decode illustration %s: %w", key, ierr)
+		}
+		var buf bytes.Buffer
+		if perr := png.Encode(&buf, img); perr != nil {
+			return fmt.Errorf("encode illustration %s: %w", key, perr)
+		}
+		if werr := os.WriteFile(dst, buf.Bytes(), 0o644); werr != nil {
+			return fmt.Errorf("write illustration %s: %w", dst, werr)
+		}
+		restored++
+	}
+	s.logger().Info("audiobook illustrations materialised from object storage", "count", restored)
+	return nil
 }
 
 func (s *Server) ensureAudioBookAudio(ctx context.Context, jobID, jobDir string, job *Job) (string, error) {

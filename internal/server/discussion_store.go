@@ -558,6 +558,20 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	// Queue-retry bookkeeping on summary documents: attempts counts claimed
+	// generation attempts (reset by BeginSummary); claimed_at (unix ms) lets a
+	// redelivered attempt take over after the consumer that held it died.
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"attempts", "attempts INTEGER NOT NULL DEFAULT 0"},
+		{"claimed_at", "claimed_at INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := s.ensureColumn(ctx, "native_discussion_summaries", col.name, col.def); err != nil {
+			return err
+		}
+	}
 	if err := s.migrateLineUniqueness(ctx); err != nil {
 		return err
 	}

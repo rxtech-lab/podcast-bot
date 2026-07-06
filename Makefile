@@ -13,7 +13,7 @@ BUILDER   := debate-bot-builder
 
 .PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke \
         style-test style-golden style-font buildx-setup docker-build docker-push \
-        e2e e2e-server
+        e2e e2e-server rabbitmq-dev
 
 all: build
 
@@ -44,6 +44,18 @@ dev:
 tidy:
 	go mod tidy
 	cd $(FRONTEND) && bun install
+
+# Start a local RabbitMQ (Homebrew) for the durable generation-job queue,
+# then run the server with e.g.:
+#   RABBITMQ_URL=amqp://guest:guest@127.0.0.1:5672/ make dev
+# Without RABBITMQ_URL the server falls back to an in-process queue with the
+# same retry semantics but no durability across restarts.
+rabbitmq-dev:
+	@command -v rabbitmq-server >/dev/null 2>&1 || brew install rabbitmq
+	@brew services start rabbitmq
+	@for i in $$(seq 1 60); do nc -z 127.0.0.1 5672 2>/dev/null && break; sleep 1; done
+	@nc -z 127.0.0.1 5672 || { echo "rabbitmq did not become ready" >&2; exit 1; }
+	@echo "rabbitmq ready on amqp://guest:guest@127.0.0.1:5672/"
 
 # Regenerate the embedded TV-studio plates via the Vercel AI Gateway image
 # endpoint. Reads OPENAI_API_KEY (vck_…) from .env. Run when you want a fresh

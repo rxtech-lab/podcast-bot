@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/eventbus"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/summarizer"
 )
 
@@ -29,6 +31,65 @@ type SummaryGenerationDeps struct {
 	Points      *PointsStore
 	APNS        *APNSClient
 	Log         *slog.Logger
+	// MQ carries the queued generation attempt (with retry); Start…
+	// functions publish to it instead of spawning goroutines.
+	MQ mq.Client
+}
+
+// SummaryTaskPayload is the wire payload of a queued summary or mindmap
+// generation. Identifiers only — the consumer rebuilds the transcript input
+// from the database (it is persisted before generation starts).
+type SummaryTaskPayload struct {
+	DiscussionID string `json:"discussion_id"`
+	JobID        string `json:"job_id,omitempty"`
+}
+
+// publishSummaryTask enqueues one summary-family generation task after
+// BeginSummary has marked the document generating. On a publish failure the
+// document is failed immediately so the client isn't left on a spinner that
+// no consumer will ever resolve.
+func publishSummaryTask(ctx context.Context, deps SummaryGenerationDeps, taskType mq.TaskType, docType string, input SummaryGenerationInput) error {
+	if deps.MQ == nil {
+		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "generation queue is not configured")
+		publishSummaryDocEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
+		return ErrSummaryNotConfigured
+	}
+	task, err := mq.NewTask(taskType, input.DiscussionID, SummaryTaskPayload{
+		DiscussionID: input.DiscussionID,
+		JobID:        input.JobID,
+	})
+	if err == nil {
+		err = deps.MQ.Publish(ctx, mq.QueueDocs, task)
+	}
+	if err != nil {
+		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "failed to enqueue generation")
+		publishSummaryDocEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
+		return err
+	}
+	return nil
+}
+
+// publishSummaryDocEvent routes to the doc type's event helper.
+func publishSummaryDocEvent(deps SummaryGenerationDeps, jobID, discussionID, docType, status string) {
+	if docType == SummaryDocTypeMindmap {
+		publishMindmapEvent(deps, jobID, discussionID, status)
+		return
+	}
+	publishSummaryEvent(deps, jobID, discussionID, docType, status)
+}
+
+// FailSummaryGenerationTask records the terminal failure of a queued
+// summary-family generation: the document flips to failed and clients are
+// notified. Non-terminal attempts deliberately leave the document
+// `generating` so the pending state survives the backoff window.
+func FailSummaryGenerationTask(deps SummaryGenerationDeps, discussionID, jobID, docType string, cause error) {
+	ctx := context.Background()
+	msg := "generation failed"
+	if cause != nil {
+		msg = cause.Error()
+	}
+	_ = deps.Discussions.FailSummary(ctx, discussionID, docType, msg)
+	publishSummaryDocEvent(deps, jobID, discussionID, docType, string(SummaryFailed))
 }
 
 type SummaryGenerationInput struct {
@@ -108,11 +169,18 @@ func StartSummaryGeneration(ctx context.Context, deps SummaryGenerationDeps, inp
 		return nil, err
 	}
 	publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryGenerating))
-	go runSummaryGeneration(deps, input, owner, model)
+	if err := publishSummaryTask(ctx, deps, mq.TaskSummary, docType, input); err != nil {
+		return nil, err
+	}
 	return meta, nil
 }
 
-func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInput, owner, model string) {
+// RunSummaryGenerationTask executes one queued summary attempt. Points are
+// reserved and settled entirely inside the attempt (a failed attempt already
+// refunds to zero), so retries need no cross-attempt bookkeeping. A non-nil
+// return is the attempt's failure: the document stays `generating` and the
+// dispatch layer decides retry vs terminal (FailSummaryGenerationTask).
+func RunSummaryGenerationTask(deps SummaryGenerationDeps, input SummaryGenerationInput, owner string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), summaryBackgroundTimeout)
 	defer cancel()
 	log := deps.Log
@@ -121,6 +189,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 	}
 	logger := log.With("job", input.JobID, "discussion_id", input.DiscussionID, "task", "summary")
 	docType := SummaryDocTypeSummary
+	model := summarizer.New(deps.Env).Model()
 
 	var reserved, reserveLedgerID int64
 	if deps.Points != nil {
@@ -129,10 +198,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 			logger.Warn("summary reserve failed", "err", rerr)
 		}
 		if !ok {
-			logger.Info("summary skipped: insufficient points")
-			_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "insufficient points for summary")
-			publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
-			return
+			return mq.Permanent(errors.New("insufficient points for summary"))
 		}
 		reserved, reserveLedgerID = r, ledgerID
 	}
@@ -148,10 +214,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		if deps.Points != nil {
 			_ = deps.Points.SettleSummary(ctx, owner, input.DiscussionID, reserveLedgerID, reserved, 0, PointsUsageDetail{})
 		}
-		logger.Warn("summary generation failed", "err", err)
-		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, err.Error())
-		publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
-		return
+		return err
 	}
 
 	sum := meter.snapshot()
@@ -173,10 +236,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		TotalTokens:      sum.TotalTokens,
 		LLMCostUSD:       sum.CostUSD,
 	}); err != nil {
-		logger.Warn("summary persist failed", "err", err)
-		_ = deps.Discussions.FailSummary(ctx, input.DiscussionID, docType, "failed to store summary")
-		publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryFailed))
-		return
+		return fmt.Errorf("store summary: %w", err)
 	}
 
 	logger.Info("summary ready",
@@ -187,6 +247,7 @@ func runSummaryGeneration(deps SummaryGenerationDeps, input SummaryGenerationInp
 		"cost_usd", sum.CostUSD)
 	notifySummaryReady(ctx, deps, input.DiscussionID)
 	publishSummaryEvent(deps, input.JobID, input.DiscussionID, docType, string(SummaryReadyState))
+	return nil
 }
 
 func notifySummaryReady(ctx context.Context, deps SummaryGenerationDeps, discussionID string) {

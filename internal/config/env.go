@@ -263,6 +263,17 @@ type Env struct {
 	// loading state. Empty disables Redis-backed recovery.
 	RedisURL string
 
+	// RabbitMQURL configures the durable generation-job queue (podcast,
+	// summary, mindmap, ppt/pdf export, video render, planning turns).
+	// Empty falls back to an in-process queue with the same retry
+	// semantics but no durability across restarts.
+	RabbitMQURL string
+
+	// MQQueuePrefix is prepended to every queue name. E2E runs set a
+	// per-run prefix so parallel/successive runs sharing one broker never
+	// see each other's messages; prefixed queues auto-expire when idle.
+	MQQueuePrefix string
+
 	// PodName is this process's stable network identity in a horizontally
 	// scaled deployment (the StatefulSet pod hostname, injected via the
 	// downward API as POD_NAME, falling back to HOSTNAME). Empty in single-pod
@@ -382,6 +393,8 @@ func LoadEnv() (*Env, error) {
 		TursoConnectionURL: strings.TrimSpace(os.Getenv("TURSO_CONNECTION_URL")),
 		TursoAuthToken:     strings.TrimSpace(os.Getenv("TURSO_AUTH_TOKEN")),
 		RedisURL:           strings.TrimSpace(os.Getenv("REDIS_URL")),
+		RabbitMQURL:        strings.TrimSpace(os.Getenv("RABBITMQ_URL")),
+		MQQueuePrefix:      strings.TrimSpace(os.Getenv("MQ_QUEUE_PREFIX")),
 
 		PodName:          podIdentity(),
 		PeerHostTemplate: strings.TrimSpace(os.Getenv("PEER_HOST_TEMPLATE")),
@@ -442,6 +455,19 @@ func LoadEnv() (*Env, error) {
 		e.TursoConnectionURL = ""
 		e.TursoAuthToken = ""
 		e.RedisURL = ""
+		// RabbitMQ is deliberately NOT scrubbed to nothing: E2E exercises the
+		// real broker-backed job queue. It is forced to a local broker
+		// (never .env's cluster URL) with a per-run queue-name prefix so
+		// successive/parallel runs sharing one broker stay isolated. The
+		// orchestration script (scripts/e2e.sh) starts the broker via
+		// Homebrew and sets both variables.
+		e.RabbitMQURL = strings.TrimSpace(os.Getenv("E2E_RABBITMQ_URL"))
+		if e.RabbitMQURL == "" {
+			e.RabbitMQURL = "amqp://guest:guest@127.0.0.1:5672/"
+		}
+		if e.MQQueuePrefix == "" {
+			e.MQQueuePrefix = "e2e-"
+		}
 		// Force an isolated, deterministic data root so the seeded SQLite DB and
 		// per-run output never collide with a developer's real OUT_DIR (which .env
 		// may pin). The orchestration script wipes E2E_DATA_ROOT before each run so

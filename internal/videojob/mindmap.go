@@ -31,6 +31,7 @@ func startMindmapGeneration(deps Deps, jobID string, topic *config.DebateTopic, 
 		Points:      deps.Points,
 		APNS:        deps.APNS,
 		Log:         deps.Log,
+		MQ:          deps.MQ,
 	}, server.SummaryGenerationInput{
 		DiscussionID: deps.DiscussionID,
 		JobID:        jobID,
