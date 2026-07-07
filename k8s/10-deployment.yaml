@@ -40,7 +40,10 @@ spec:
         - name: debate-bot
           image: ghcr.io/rxtech-lab/podcast-bot:sha-590cd5b
           imagePullPolicy: Always
-          args: ["server", "--mode", "video", "--addr", ":3000"]
+          # Dashboard mode keeps the job/discussion API enabled, mounts the
+          # schema-driven /admin API for the deployed Next.js admin, and avoids
+          # serving the embedded video SPA at the backend root.
+          args: ["server", "--mode", "dashboard", "--addr", ":3000"]
           ports:
             - name: http
               containerPort: 3000
