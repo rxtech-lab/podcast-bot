@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
 struct CoverEditor: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
+    @Environment(EntitlementsManager.self) private var entitlements
 
     let target: CoverGenerationTarget
     let title: String
@@ -70,8 +71,16 @@ struct CoverEditor: View {
                     } label: {
                         Label(isWorking ? "Generating" : "Generate Cover", systemImage: "sparkles")
                     }
-                    .disabled(isWorking || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!entitlements.features.canGenerateCoverWithAI
+                        || isWorking
+                        || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("cover.generate")
                     .popoverTip(GenerateCoverTip(), arrowEdge: .top)
+                    if !entitlements.features.canGenerateCoverWithAI {
+                        Text("AI cover generation isn't included in your plan.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
                 case .upload:
                     PhotosPicker(selection: $selectedPhoto, matching: .images) {
                         Label("Choose from Photos", systemImage: "photo.on.rectangle")

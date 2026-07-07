@@ -430,6 +430,7 @@ func (s *Server) handleAlbumUIActions(w http.ResponseWriter, r *http.Request) {
 		actionItem("remove-album", phrase(lang, "Remove Album", "移除专辑", "移除專輯"), "",
 			"rectangle.stack.badge.minus", "destructive", true, "request", albumActionLink(album.ID, "action", "remove")),
 	)
+	items = s.applyEntitlementsForUser(r, items)
 	writeJSON(w, discussionUIActionsResponse{ID: "album-actions", Items: items})
 }
 

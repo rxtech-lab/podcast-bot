@@ -18,6 +18,7 @@ struct iOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var auth = AuthManager()
     @State private var purchases: PurchaseManager
+    @State private var entitlements: EntitlementsManager
     @State private var launchFlow = LaunchFlowStore()
     @State private var deepLinks = DeepLinkRouter()
     @State private var push = PushNotificationManager()
@@ -46,6 +47,7 @@ struct iOSApp: App {
         let auth = AuthManager()
         _auth = State(initialValue: auth)
         _purchases = State(initialValue: PurchaseManager(tokens: auth))
+        _entitlements = State(initialValue: EntitlementsManager(tokens: auth))
 
         // E2E: preset the injected deep link before the first render so the
         // resolver's `.task(id:)` in RootView picks it up immediately, avoiding a
@@ -62,6 +64,7 @@ struct iOSApp: App {
             RootView()
                 .environment(auth)
                 .environment(purchases)
+                .environment(entitlements)
                 .environment(launchFlow)
                 .environment(deepLinks)
                 .environment(push)

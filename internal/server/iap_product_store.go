@@ -227,6 +227,50 @@ func (s *IAPProductStore) FindEnabled(ctx context.Context, productID, storeEnvir
 	return &matches[0], true, nil
 }
 
+// FindSubscription returns the subscription product matching product_id and
+// (optionally) store environment, regardless of its enabled flag or points
+// grant — a subscription class may grant 0 points and still gate features. It
+// is used by the admin users table to resolve a chosen subscription class into
+// the product needed to record the user's plan. Returns nil when no unambiguous
+// subscription product matches.
+func (s *IAPProductStore) FindSubscription(ctx context.Context, productID, storeEnvironment string) (*IAPProduct, error) {
+	if s == nil {
+		return nil, errors.New("iap product store is not configured")
+	}
+	productID = strings.TrimSpace(productID)
+	if productID == "" {
+		return nil, nil
+	}
+	query := `SELECT ` + iapProductColumns + ` FROM iap_products
+		WHERE product_id = ? AND product_type = ?`
+	args := []any{productID, IAPProductTypeSubscription}
+	if storeEnvironment = normalizeIAPStoreEnvironment(storeEnvironment); storeEnvironment != "" {
+		query += ` AND store_environment = ?`
+		args = append(args, storeEnvironment)
+	}
+	query += ` ORDER BY id ASC LIMIT 2`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var matches []IAPProduct
+	for rows.Next() {
+		p, err := scanIAPProduct(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(matches) != 1 {
+		return nil, nil
+	}
+	return &matches[0], nil
+}
+
 func (s *IAPProductStore) Get(ctx context.Context, id int64) (*IAPProduct, error) {
 	if s == nil {
 		return nil, errors.New("iap product store is not configured")

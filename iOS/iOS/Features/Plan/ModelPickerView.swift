@@ -7,6 +7,7 @@ import SwiftUI
 /// which always sorts last.
 struct ModelPickerView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(EntitlementsManager.self) private var entitlements
 
     let speakerName: String
     let currentModel: String?
@@ -40,14 +41,17 @@ struct ModelPickerView: View {
     }
 
     private func row(for model: ModelInfoDTO) -> some View {
-        Button {
+        // Models outside the subscription's allowlist are shown but disabled so
+        // the user sees what a higher tier unlocks.
+        let allowed = entitlements.isModelAllowed(model.id)
+        return Button {
             onSelect(model.id)
             dismiss()
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.displayLabel)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(allowed ? .primary : Theme.secondaryText)
                     if model.displayLabel != model.id {
                         Text(model.id)
                             .font(.caption)
@@ -55,12 +59,16 @@ struct ModelPickerView: View {
                     }
                 }
                 Spacer()
-                if model.id == currentModel {
+                if !allowed {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(Theme.secondaryText)
+                } else if model.id == currentModel {
                     Image(systemName: "checkmark")
                         .foregroundStyle(Theme.accent)
                 }
             }
         }
+        .disabled(!allowed)
         .accessibilityIdentifier("model.\(model.id)")
     }
 

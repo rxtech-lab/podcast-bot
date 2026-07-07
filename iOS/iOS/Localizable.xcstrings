@@ -927,6 +927,9 @@
         }
       }
     },
+    "AI cover generation isn't included in your plan." : {
+
+    },
     "Album creation is not available on this server." : {
       "localizations" : {
         "zh-Hans" : {

@@ -11,6 +11,7 @@ private let newDiscussionLog = Logger(subsystem: "com.debatebot.ios", category: 
 /// create a planning discussion from the submitted values.
 struct NewDiscussionView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(EntitlementsManager.self) private var entitlements
     @Environment(\.dismiss) private var dismiss
     @AppStorage("newDiscussion.settings.type") private var storedType = ""
     @AppStorage("newDiscussion.settings.template") private var storedTemplate = ""
@@ -192,6 +193,17 @@ struct NewDiscussionView: View {
             && !isLoadingForm
             && !isPlanning
             && !attachmentsCoordinator.isUploading
+            && studioAllowed
+    }
+
+    /// Whether the subscription permits creating the currently-selected studio
+    /// type. Unknown types fail open (the backend is the enforcement boundary).
+    private var studioAllowed: Bool {
+        switch storedType {
+        case "audio-book": return entitlements.canCreate(studio: .audioBook)
+        case "discussion": return entitlements.canCreate(studio: .discussion)
+        default: return true
+        }
     }
 
     @MainActor

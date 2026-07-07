@@ -1258,6 +1258,7 @@ struct DiscussionActionsMenu: View {
 
 struct PodcastActionsMenu: View {
     @Bindable var model: PlayerModel
+    @Environment(EntitlementsManager.self) private var entitlements
     @State private var showingForceStopConfirm = false
 
     let showsPoints: Bool
@@ -1325,6 +1326,7 @@ struct PodcastActionsMenu: View {
                 Button(action: onEditCover) {
                     Label("Edit Cover", systemImage: "photo.badge.plus")
                 }
+                .disabled(!entitlements.features.canGenerateCoverWithAI)
                 if model.discussion.isPublic {
                     Button(role: .destructive, action: onMakePrivate) {
                         Label("Make Private", systemImage: "lock")
@@ -1333,6 +1335,7 @@ struct PodcastActionsMenu: View {
                     Button(action: onPublish) {
                         Label("Publish to Market", systemImage: "globe")
                     }
+                    .disabled(!entitlements.features.canPublishPodcast)
                 }
             }
             // Share: public discussions hand out a plain permanent link; private
@@ -1345,6 +1348,7 @@ struct PodcastActionsMenu: View {
                 Button(action: onShare) {
                     Label("Share Link", systemImage: "square.and.arrow.up")
                 }
+                .disabled(!entitlements.features.canSharePodcastPrivately)
             }
             if model.canDownloadPodcast {
                 Button {

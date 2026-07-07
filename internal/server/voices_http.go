@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -74,6 +75,37 @@ func voiceMetas(voices []tts.Voice) []voiceMeta {
 		})
 	}
 	return out
+}
+
+// catalogVoices returns the Azure voice roster for admin dropdowns and other
+// non-request contexts, preferring the Redis cache and falling back to a live
+// fetch. Returns nil (not an error) when Azure is unconfigured — callers treat
+// an empty roster as "no voices to choose from".
+func (s *Server) catalogVoices(ctx context.Context) []tts.Voice {
+	if s.d.Env != nil && s.d.Env.E2EMode {
+		return e2eFakeVoicesTTS()
+	}
+	if cached, ok := s.d.VoiceCatalog.Get(ctx); ok {
+		return cached
+	}
+	client, err := s.azureTTS()
+	if err != nil {
+		return nil
+	}
+	voices, err := client.FetchVoices(ctx, "")
+	if err != nil {
+		return nil
+	}
+	s.d.VoiceCatalog.Set(ctx, voices)
+	return voices
+}
+
+// e2eFakeVoicesTTS mirrors e2eFakeVoices as tts.Voice values for catalog use.
+func e2eFakeVoicesTTS() []tts.Voice {
+	return []tts.Voice{
+		{ShortName: "en-US-E2EAvaNeural", Locale: "en-US", LocaleName: "English (United States)", Gender: "Female", VoiceType: "Neural"},
+		{ShortName: "en-US-E2ENovaNeural", Locale: "en-US", LocaleName: "English (United States)", Gender: "Male", VoiceType: "Neural"},
+	}
 }
 
 func (s *Server) azureTTS() (*tts.AzureClient, error) {
