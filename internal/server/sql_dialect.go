@@ -307,6 +307,48 @@ func (db *sqlDB) ensureColumn(ctx context.Context, table, column, definition str
 	return err
 }
 
+func (db *sqlDB) dropColumnIfExists(ctx context.Context, table, column string) error {
+	if err := validateSQLIdentifier(table); err != nil {
+		return err
+	}
+	if err := validateSQLIdentifier(column); err != nil {
+		return err
+	}
+	if db.kind == databasePostgres {
+		_, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s DROP COLUMN IF EXISTS %s`, table, column))
+		return err
+	}
+	rows, err := db.raw.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	exists := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultVal any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			exists = true
+			break
+		}
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return closeErr
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	_, err = db.raw.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, table, column))
+	return err
+}
+
 func validateSQLIdentifier(s string) error {
 	if s == "" {
 		return errors.New("empty SQL identifier")

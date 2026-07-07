@@ -135,6 +135,8 @@ github.com/rogpeppe/go-internal v1.9.0 h1:73kH8U+JUqXU8lRuOHeVHaa/SZPifC7BkcraZV
 github.com/rogpeppe/go-internal v1.9.0/go.mod h1:WtVeX8xhTBvf0smdhujwtBcq4Qrzq/fJaraNFVN+nFs=
 github.com/rxtech-lab/admin-generator v1.3.0 h1:ZuCUk8GnBrCN8hbHq43CcNSxa2Dr3PsxMLvy7lS1isM=
 github.com/rxtech-lab/admin-generator v1.3.0/go.mod h1:RizVj8jYeQvv1gK+5js2nHQKTwgn5lxDxxCh0Y5v+LA=
+github.com/rxtech-lab/admin-generator v1.4.0 h1:T0PxMzW9MCPtnoEZquCobjzH36hsdwvlotXejG0nLkA=
+github.com/rxtech-lab/admin-generator v1.4.0/go.mod h1:RizVj8jYeQvv1gK+5js2nHQKTwgn5lxDxxCh0Y5v+LA=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 h1:KRzFb2m7YtdldCEkzs6KqmJw4nqEVZGK7IN2kJkjTuQ=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.2/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
 github.com/spf13/cast v1.7.1 h1:cuNEagBQEHWN1FnbGEjCXL2szYEXqfJPbP2HNUaca9Y=

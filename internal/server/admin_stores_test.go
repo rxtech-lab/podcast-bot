@@ -25,6 +25,92 @@ func newTestAppConfigStore(t *testing.T) (*AppConfigStore, *DiscussionStore) {
 	return ac, ds
 }
 
+func newTestIAPProductStore(t *testing.T) *IAPProductStore {
+	t.Helper()
+	ds, err := NewDiscussionStore(filepath.Join(t.TempDir(), "iap.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = ds.Close() })
+	store, err := NewIAPProductStore(ds)
+	if err != nil {
+		t.Fatalf("NewIAPProductStore: %v", err)
+	}
+	return store
+}
+
+func TestIAPProductStoreEnsureSchemaIdempotent(t *testing.T) {
+	store := newTestIAPProductStore(t)
+	if err := store.ensureSchema(context.Background()); err != nil {
+		t.Fatalf("ensureSchema second run: %v", err)
+	}
+}
+
+func TestIAPProductStoreDropsLegacyIdentifierColumns(t *testing.T) {
+	ctx := context.Background()
+	ds, err := NewDiscussionStore(filepath.Join(t.TempDir(), "legacy-iap.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = ds.Close() })
+	if _, err := ds.db.ExecContext(ctx, `CREATE TABLE iap_products (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		product_id TEXT NOT NULL,
+		store_environment TEXT NOT NULL,
+		product_type TEXT NOT NULL DEFAULT 'consumable',
+		display_name TEXT NOT NULL DEFAULT '',
+		points_grant INTEGER NOT NULL DEFAULT 0,
+		price_currency TEXT NOT NULL DEFAULT '',
+		price_minor_units INTEGER NOT NULL DEFAULT 0,
+		subscription_period TEXT NOT NULL DEFAULT '',
+		last_sync_error TEXT NOT NULL DEFAULT '',
+		synced_at INTEGER NOT NULL DEFAULT 0,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		revenuecat_product_id TEXT NOT NULL DEFAULT '',
+		app_store_connect_id TEXT NOT NULL DEFAULT '',
+		revenuecat_offering_id TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("create legacy iap_products: %v", err)
+	}
+	if _, err := NewIAPProductStore(ds); err != nil {
+		t.Fatalf("NewIAPProductStore: %v", err)
+	}
+	for _, col := range []string{"revenuecat_product_id", "app_store_connect_id", "revenuecat_offering_id"} {
+		if iapProductsColumnExists(t, ds, col) {
+			t.Fatalf("legacy column %q still exists", col)
+		}
+	}
+	if !iapProductsColumnExists(t, ds, "product_id") {
+		t.Fatal("product_id column missing after migration")
+	}
+}
+
+func iapProductsColumnExists(t *testing.T, ds *DiscussionStore, column string) bool {
+	t.Helper()
+	rows, err := ds.db.raw.QueryContext(context.Background(), `PRAGMA table_info(iap_products)`)
+	if err != nil {
+		t.Fatalf("pragma table_info: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultVal any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			t.Fatalf("scan column info: %v", err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("column info rows: %v", err)
+	}
+	return false
+}
+
 func TestAppConfigStoreGetSet(t *testing.T) {
 	ac, _ := newTestAppConfigStore(t)
 	ctx := context.Background()
@@ -78,6 +164,113 @@ func TestResolvedModelDefaultsOverride(t *testing.T) {
 	}
 	if env.HostModel != "env/host" {
 		t.Errorf("base Env mutated: HostModel = %q", env.HostModel)
+	}
+}
+
+func TestIAPProductStoreFindEnabledByEnvironment(t *testing.T) {
+	store := newTestIAPProductStore(t)
+	ctx := context.Background()
+	testProduct := IAPProduct{
+		ProductID:        "points_1000",
+		StoreEnvironment: IAPStoreEnvironmentTest,
+		ProductType:      IAPProductTypeConsumable,
+		PointsGrant:      1000,
+		Enabled:          true,
+	}
+	if err := store.Create(ctx, &testProduct); err != nil {
+		t.Fatalf("create test product: %v", err)
+	}
+	appProduct := IAPProduct{
+		ProductID:        "points_1000",
+		StoreEnvironment: IAPStoreEnvironmentAppStore,
+		ProductType:      IAPProductTypeConsumable,
+		PointsGrant:      1200,
+		Enabled:          true,
+	}
+	if err := store.Create(ctx, &appProduct); err != nil {
+		t.Fatalf("create app product: %v", err)
+	}
+
+	got, ok, err := store.FindEnabled(ctx, "points_1000", "SANDBOX")
+	if err != nil || !ok {
+		t.Fatalf("FindEnabled sandbox ok=%v err=%v", ok, err)
+	}
+	if got.ID != testProduct.ID || got.PointsGrant != 1000 {
+		t.Fatalf("sandbox product = %#v, want test row", got)
+	}
+	got, ok, err = store.FindEnabled(ctx, "points_1000", "PRODUCTION")
+	if err != nil || !ok {
+		t.Fatalf("FindEnabled production ok=%v err=%v", ok, err)
+	}
+	if got.ID != appProduct.ID || got.PointsGrant != 1200 {
+		t.Fatalf("production product = %#v, want app-store row", got)
+	}
+	if _, ok, err := store.FindEnabled(ctx, "points_1000", ""); err != nil || ok {
+		t.Fatalf("ambiguous no-environment lookup ok=%v err=%v, want false nil", ok, err)
+	}
+}
+
+func TestIAPProductStorePersistsSubscriptionDuration(t *testing.T) {
+	store := newTestIAPProductStore(t)
+	ctx := context.Background()
+	product := IAPProduct{
+		ProductID:          "app.rxlab.pro.monthly",
+		StoreEnvironment:   IAPStoreEnvironmentAppStore,
+		ProductType:        IAPProductTypeSubscription,
+		DisplayName:        "Podcaster Pro Monthly",
+		PointsGrant:        1000,
+		SubscriptionPeriod: "one-month",
+		Enabled:            true,
+	}
+	if err := store.Create(ctx, &product); err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	got, err := store.Get(ctx, product.ID)
+	if err != nil {
+		t.Fatalf("get subscription: %v", err)
+	}
+	if got.SubscriptionPeriod != "ONE_MONTH" {
+		t.Fatalf("subscription duration = %#v", got)
+	}
+	if err := store.MarkSyncResult(ctx, product.ID, IAPProductSyncResult{}, errors.New("sync failed")); err != nil {
+		t.Fatalf("mark failed sync: %v", err)
+	}
+	got, err = store.Get(ctx, product.ID)
+	if err != nil {
+		t.Fatalf("get after failed sync: %v", err)
+	}
+	if got.SubscriptionPeriod != "ONE_MONTH" || got.LastSyncError == "" || got.SyncedAt != nil {
+		t.Fatalf("failed sync should preserve duration and record sync error, got %#v", got)
+	}
+}
+
+func TestIAPProductStoreDisabledOrZeroGrantNotEnabled(t *testing.T) {
+	store := newTestIAPProductStore(t)
+	ctx := context.Background()
+	disabled := IAPProduct{
+		ProductID:        "disabled",
+		StoreEnvironment: IAPStoreEnvironmentAppStore,
+		ProductType:      IAPProductTypeConsumable,
+		PointsGrant:      1000,
+		Enabled:          false,
+	}
+	if err := store.Create(ctx, &disabled); err != nil {
+		t.Fatalf("create disabled: %v", err)
+	}
+	zero := IAPProduct{
+		ProductID:        "zero",
+		StoreEnvironment: IAPStoreEnvironmentAppStore,
+		ProductType:      IAPProductTypeConsumable,
+		PointsGrant:      0,
+		Enabled:          true,
+	}
+	if err := store.Create(ctx, &zero); err != nil {
+		t.Fatalf("create zero: %v", err)
+	}
+	for _, id := range []string{"disabled", "zero"} {
+		if _, ok, err := store.FindEnabled(ctx, id, "PRODUCTION"); err != nil || ok {
+			t.Fatalf("FindEnabled(%s) ok=%v err=%v, want false nil", id, ok, err)
+		}
 	}
 }
 
@@ -253,6 +446,17 @@ func TestPointsListBalances(t *testing.T) {
 	}
 	if rows[0].UserID != "u1" || rows[0].Balance != 100 {
 		t.Errorf("row0 = %+v", rows[0])
+	}
+	product := IAPProduct{ProductID: "app.rxlab.pro.monthly", ProductType: IAPProductTypeSubscription, DisplayName: "Pro Monthly"}
+	if err := ps.RecordSubscription(ctx, "u2", product, "active", "evt-sub", 0); err != nil {
+		t.Fatalf("RecordSubscription: %v", err)
+	}
+	rows, next, err = ps.ListBalances(ctx, "", 2)
+	if err != nil {
+		t.Fatalf("ListBalances after subscription: %v", err)
+	}
+	if len(rows) != 2 || rows[1].UserID != "u2" || rows[1].SubscriptionPlan != "Pro Monthly" || rows[1].SubscriptionStatus != "active" {
+		t.Fatalf("subscription row = %+v next=%q", rows, next)
 	}
 	rows2, next2, err := ps.ListBalances(ctx, next, 2)
 	if err != nil {

@@ -83,6 +83,13 @@ type Deps struct {
 	// generation model) that overrides the env defaults. nil falls back to env
 	// entirely. Wired from the same database as Discussions.
 	AppConfig *AppConfigStore
+	// IAPProducts holds the admin-owned in-app-purchase product catalog. Purchase
+	// webhooks and admin top-ups use this table as the source of truth for
+	// product ids and points grants. nil makes purchase products unavailable.
+	IAPProducts *IAPProductStore
+	// IAPProductSyncer pushes enabled admin-created products to RevenueCat. nil
+	// means enabled product saves are rejected by the admin resource.
+	IAPProductSyncer IAPProductSyncer
 	// Maintenance backs scheduled-maintenance windows: the admin CRUD resource
 	// and the precheck/config gating that pauses the app during a window. nil
 	// disables maintenance gating. Wired from the JobRegistry's database.
@@ -255,6 +262,16 @@ func New(d Deps) *Server {
 		} else {
 			s.d.AppConfig = ac
 		}
+	}
+	if s.d.IAPProducts == nil && d.Discussions != nil {
+		if ps, err := NewIAPProductStore(d.Discussions); err != nil {
+			s.logger().Warn("iap product store disabled", "err", err)
+		} else {
+			s.d.IAPProducts = ps
+		}
+	}
+	if s.d.IAPProductSyncer == nil {
+		s.d.IAPProductSyncer = NewIAPProductSyncer(d.Env, nil)
 	}
 	if s.d.Maintenance == nil && d.Jobs != nil && d.Jobs.db != nil {
 		if ms, err := NewMaintenanceStore(d.Jobs.db); err != nil {

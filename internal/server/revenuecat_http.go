@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"io"
@@ -18,6 +19,7 @@ type revenueCatWebhook struct {
 		ProductID     string `json:"product_id"`
 		Store         string `json:"store"`
 		EnvironmentID string `json:"environment"`
+		ExpirationAt  int64  `json:"expiration_at_ms"`
 	} `json:"event"`
 }
 
@@ -34,6 +36,10 @@ func (s *Server) handleRevenueCatWebhook(w http.ResponseWriter, r *http.Request)
 
 	if !s.pointsEnabled() {
 		http.Error(w, "points not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	if s.d.Env == nil {
+		http.Error(w, "webhook disabled", http.StatusServiceUnavailable)
 		return
 	}
 	secret := s.d.Env.RevenueCatWebhookAuth
@@ -74,10 +80,20 @@ func (s *Server) handleRevenueCatWebhook(w http.ResponseWriter, r *http.Request)
 	switch eventType {
 	case "INITIAL_PURCHASE", "RENEWAL", "NON_RENEWING_PURCHASE":
 		productID := strings.TrimSpace(ev.ProductID)
-		grant, ok := s.d.Env.PointsProductGrants[productID]
-		if !ok || grant <= 0 {
+		if s.d.IAPProducts == nil {
+			s.logger().Warn("revenuecat webhook: product catalog unavailable", "product", productID)
+			writeRevenueCatWebhookError(w, http.StatusBadRequest, "invalid_product_id")
+			return
+		}
+		product, ok, err := s.d.IAPProducts.FindEnabled(r.Context(), productID, ev.EnvironmentID)
+		if err != nil {
+			s.logger().Error("revenuecat webhook product lookup failed", "product", productID, "err", err)
+			http.Error(w, "product lookup failed", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
 			s.logger().Warn("revenuecat webhook: rejected unconfigured product",
-				"product", productID, "event_type", ev.Type)
+				"product", productID, "event_type", ev.Type, "store", ev.Store, "environment", ev.EnvironmentID)
 			writeRevenueCatWebhookError(w, http.StatusBadRequest, "invalid_product_id")
 			return
 		}
@@ -95,23 +111,75 @@ func (s *Server) handleRevenueCatWebhook(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		reason := pointsReasonPurchase + ":" + eventType
-		bal, applied, err := s.d.Points.CreditWithResult(r.Context(), userID, grant, reason, ev.ID)
+		bal, applied, err := s.d.Points.CreditWithResult(r.Context(), userID, product.PointsGrant, reason, ev.ID)
 		if err != nil {
 			s.logger().Error("revenuecat webhook credit failed", "event", ev.ID, "user", userID, "err", err)
 			http.Error(w, "credit failed", http.StatusInternalServerError)
 			return
 		}
-		credited := grant
+		credited := product.PointsGrant
 		if !applied {
 			credited = 0
 		}
 		s.logger().Info("revenuecat webhook credited points",
 			"event", ev.ID, "user", userID, "product", productID, "granted", credited, "balance", bal, "duplicate", !applied)
+		s.recordRevenueCatSubscription(r.Context(), userID, product, eventType, ev.ID, ev.ExpirationAt)
 		writeJSON(w, map[string]any{"ok": true, "credited": credited, "balance": bal, "duplicate": !applied})
 	case "CANCELLATION", "EXPIRATION", "BILLING_ISSUE", "UNCANCELLATION", "PRODUCT_CHANGE":
+		productID := strings.TrimSpace(ev.ProductID)
+		userID := "oauth:" + appUser
+		if productID != "" && s.d.IAPProducts != nil {
+			exists := true
+			if s.d.Points != nil {
+				var err error
+				exists, err = s.d.Points.UserExists(r.Context(), userID)
+				if err != nil {
+					s.logger().Warn("revenuecat webhook lifecycle user check failed", "event", ev.ID, "user", userID, "err", err)
+					exists = false
+				}
+			}
+			if !exists {
+				writeJSON(w, map[string]any{"ok": true, "credited": 0})
+				return
+			}
+			if product, ok, err := s.d.IAPProducts.FindEnabled(r.Context(), productID, ev.EnvironmentID); err != nil {
+				s.logger().Warn("revenuecat webhook subscription lookup failed", "event", ev.ID, "product", productID, "err", err)
+			} else if ok {
+				s.recordRevenueCatSubscription(r.Context(), userID, product, eventType, ev.ID, ev.ExpirationAt)
+			}
+		}
 		writeJSON(w, map[string]any{"ok": true, "credited": 0})
 	default:
 		writeRevenueCatWebhookError(w, http.StatusBadRequest, "invalid_event_type")
+	}
+}
+
+func (s *Server) recordRevenueCatSubscription(ctx context.Context, userID string, product *IAPProduct, eventType, eventID string, expiresAtMS int64) {
+	if s == nil || s.d.Points == nil || product == nil || product.ProductType != IAPProductTypeSubscription {
+		return
+	}
+	status := revenueCatSubscriptionStatus(eventType)
+	if status == "" {
+		return
+	}
+	if err := s.d.Points.RecordSubscription(ctx, userID, *product, status, eventID, expiresAtMS); err != nil {
+		s.logger().Warn("revenuecat webhook subscription record failed",
+			"event", eventID, "user", userID, "product", product.ProductID, "err", err)
+	}
+}
+
+func revenueCatSubscriptionStatus(eventType string) string {
+	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+	case "INITIAL_PURCHASE", "RENEWAL", "NON_RENEWING_PURCHASE", "UNCANCELLATION", "PRODUCT_CHANGE":
+		return "active"
+	case "CANCELLATION":
+		return "cancelled"
+	case "EXPIRATION":
+		return "expired"
+	case "BILLING_ISSUE":
+		return "billing_issue"
+	default:
+		return ""
 	}
 }
 

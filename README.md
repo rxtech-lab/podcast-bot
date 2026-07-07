@@ -98,9 +98,9 @@ Required vars (validated at startup — the process refuses to boot if any are m
 | `SERIES_ROOT` | — | cross-run archive root for `series` episodes (default `OUT_DIR`) |
 | `APP_PASSWORD` | — | if set, gate the web UI + API behind this password (same as `--password`) |
 | `REVENUECAT_WEBHOOK_AUTH` | for points purchases | shared secret expected in `Authorization` on `POST /api/revenuecat/webhook`; empty disables purchase credits |
+| `REVENUECAT_REST_API_KEY` / `REVENUECAT_PROJECT_ID` / `REVENUECAT_APP_ID` | for IAP admin product setup | RevenueCat REST API v2 secret key plus project/app ids used when admins create enabled products |
 | `POINTS_COST_LEVERAGE` | — | multiplier over the points sale rate used for usage charges; default `3` |
 | `POINTS_PER_USD_COST` | — | exact raw points-per-provider-dollar override; bypasses `POINTS_COST_LEVERAGE` when set |
-| `POINTS_PRODUCT_GRANTS` | for points purchases | comma-separated RevenueCat product-id to point grants, e.g. `points_1000:1000,points_5000:5000` |
 | `POINTS_SIGNUP_GRANT` | — | optional starter balance granted once per signed-in user |
 
 Provider-specific TTS keys are only required when a `topic.md` selects that provider.
@@ -111,27 +111,36 @@ The iOS app uses RevenueCat for paywalls, but the server owns the points balance
 After a successful purchase, the app polls `GET /api/points/balance`; points are
 credited only when RevenueCat posts a webhook to `POST /api/revenuecat/webhook`.
 
-Configure every top-up product explicitly. The server does not infer points from
-the App Store price:
+Configure every top-up product explicitly in the admin dashboard under
+**In-App Products**. Creating or updating an enabled product syncs it to
+RevenueCat only. App Store Connect product metadata, review notes, screenshots,
+prices, and subscription groups are managed manually in App Store Connect. The
+server does not infer points from the App Store price.
+Each enabled product row must include:
 
-```bash
-REVENUECAT_WEBHOOK_AUTH=change-me
-POINTS_PRODUCT_GRANTS="points_1000:1000,points_5000:5000,points_10000:10000"
-```
+- the exact RevenueCat / App Store `product_id`
+- the store environment (`test_store` for sandbox testing, `app_store` for production)
+- the product type
+- the number of points granted
+- optional display price metadata for admin visibility
 
 Use the exact RevenueCat `product_id` values. For example, if the products are
 `app.rxlab.debatebot.points1000`, `app.rxlab.debatebot.points5000`, and
-`app.rxlab.debatebot.points10000`, configure:
+`app.rxlab.debatebot.points10000`, create one enabled admin row per product. If a
+purchase webhook arrives for an unknown, disabled, zero-grant, or wrong-store
+product id, the server rejects it with `400 {"error":"invalid_product_id"}`
+instead of silently crediting `0` points.
+
+The only remaining environment variable for purchase fulfillment is the webhook
+secret, but admin product setup also requires server-side RevenueCat
+credentials:
 
 ```bash
-POINTS_PRODUCT_GRANTS="app.rxlab.debatebot.points1000:1000,app.rxlab.debatebot.points5000:5000,app.rxlab.debatebot.points10000:10000"
+REVENUECAT_WEBHOOK_AUTH=change-me
+REVENUECAT_REST_API_KEY=rc_secret_v2_key
+REVENUECAT_PROJECT_ID=proj_...
+REVENUECAT_APP_ID=app_...
 ```
-
-Built-in defaults exist for early testing (`consumable:1000`, `monthly:6667`,
-`yearly:0`), but production top-ups should be listed with their real product ids.
-If a purchase webhook arrives for an unknown product id, the server rejects it
-with `400 {"error":"invalid_product_id"}` instead of silently crediting `0`
-points.
 
 For iOS local development, copy `iOS/Config/Secrets.xcconfig.example` to
 `iOS/Config/Secrets.xcconfig` and set:

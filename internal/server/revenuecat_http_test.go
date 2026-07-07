@@ -23,14 +23,38 @@ func newWebhookServer(t *testing.T) (*Server, *PointsStore) {
 	if err != nil {
 		t.Fatalf("NewPointsStore: %v", err)
 	}
+	iaps, err := NewIAPProductStore(ds)
+	if err != nil {
+		t.Fatalf("NewIAPProductStore: %v", err)
+	}
+	if err := iaps.Create(context.Background(), &IAPProduct{
+		ProductID:        "consumable",
+		StoreEnvironment: IAPStoreEnvironmentAppStore,
+		ProductType:      IAPProductTypeConsumable,
+		PointsGrant:      1000,
+		Enabled:          true,
+	}); err != nil {
+		t.Fatalf("create iap product: %v", err)
+	}
+	if err := iaps.Create(context.Background(), &IAPProduct{
+		ProductID:          "pro_monthly",
+		StoreEnvironment:   IAPStoreEnvironmentAppStore,
+		ProductType:        IAPProductTypeSubscription,
+		DisplayName:        "Pro Monthly",
+		PointsGrant:        1000,
+		SubscriptionPeriod: "ONE_MONTH",
+		Enabled:            true,
+	}); err != nil {
+		t.Fatalf("create subscription product: %v", err)
+	}
 	srv := New(Deps{
 		Mode:        ModeDashboard,
 		Discussions: ds,
 		Points:      ps,
 		Env: &config.Env{
 			RevenueCatWebhookAuth: "shh",
-			PointsProductGrants:   map[string]int64{"consumable": 1000},
 		},
+		IAPProducts: iaps,
 	})
 	return srv, ps
 }
@@ -93,7 +117,7 @@ func TestRevenueCatWebhookCreditsAndIsIdempotent(t *testing.T) {
 	srv, ps := newWebhookServer(t)
 	ctx := context.Background()
 	registerWebhookUser(t, ps, "sub123")
-	body := `{"event":{"id":"evt-1","type":"INITIAL_PURCHASE","app_user_id":"sub123","product_id":"consumable"}}`
+	body := `{"event":{"id":"evt-1","type":"INITIAL_PURCHASE","app_user_id":"sub123","product_id":"consumable","environment":"PRODUCTION"}}`
 
 	rec := postWebhook(t, srv, "shh", body)
 	if rec.Code != http.StatusOK {
@@ -119,9 +143,44 @@ func TestRevenueCatWebhookCreditsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRevenueCatWebhookRecordsSubscriptionPlan(t *testing.T) {
+	srv, ps := newWebhookServer(t)
+	ctx := context.Background()
+	registerWebhookUser(t, ps, "sub-pro")
+	body := `{"event":{"id":"evt-sub-1","type":"INITIAL_PURCHASE","app_user_id":"sub-pro","product_id":"pro_monthly","environment":"PRODUCTION","expiration_at_ms":1893456000000}}`
+
+	rec := postWebhook(t, srv, "shh", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	rows, _, err := ps.ListBalances(ctx, "", 20)
+	if err != nil {
+		t.Fatalf("ListBalances: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want one user", rows)
+	}
+	if rows[0].SubscriptionPlan != "Pro Monthly" || rows[0].SubscriptionStatus != "active" {
+		t.Fatalf("subscription = %+v, want Pro Monthly active", rows[0])
+	}
+
+	expire := `{"event":{"id":"evt-sub-2","type":"EXPIRATION","app_user_id":"sub-pro","product_id":"pro_monthly","environment":"PRODUCTION"}}`
+	rec = postWebhook(t, srv, "shh", expire)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expiration status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	rows, _, err = ps.ListBalances(ctx, "", 20)
+	if err != nil {
+		t.Fatalf("ListBalances after expiration: %v", err)
+	}
+	if rows[0].SubscriptionPlan != "Pro Monthly" || rows[0].SubscriptionStatus != "expired" {
+		t.Fatalf("expired subscription = %+v", rows[0])
+	}
+}
+
 func TestRevenueCatWebhookRejectsBadSecret(t *testing.T) {
 	srv, ps := newWebhookServer(t)
-	body := `{"event":{"id":"evt-2","type":"INITIAL_PURCHASE","app_user_id":"sub9","product_id":"consumable"}}`
+	body := `{"event":{"id":"evt-2","type":"INITIAL_PURCHASE","app_user_id":"sub9","product_id":"consumable","environment":"PRODUCTION"}}`
 	rec := postWebhook(t, srv, "wrong", body)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
@@ -135,7 +194,7 @@ func TestRevenueCatWebhookRejectsBadSecret(t *testing.T) {
 func TestRevenueCatWebhookBearerSecretAccepted(t *testing.T) {
 	srv, ps := newWebhookServer(t)
 	registerWebhookUser(t, ps, "sub5")
-	body := `{"event":{"id":"evt-3","type":"RENEWAL","app_user_id":"sub5","product_id":"consumable"}}`
+	body := `{"event":{"id":"evt-3","type":"RENEWAL","app_user_id":"sub5","product_id":"consumable","environment":"PRODUCTION"}}`
 	if rec := postWebhook(t, srv, "Bearer shh", body); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
@@ -178,6 +237,19 @@ func TestRevenueCatWebhookRejectsInvalidEventType(t *testing.T) {
 	rec := postWebhook(t, srv, "shh", body)
 	assertWebhookJSONError(t, rec, http.StatusBadRequest, "invalid_event_type")
 	bal, _ := ps.Balance(context.Background(), "oauth:sub7")
+	if bal != 0 {
+		t.Fatalf("balance = %d, want 0 (rejected)", bal)
+	}
+}
+
+func TestRevenueCatWebhookRejectsWrongEnvironment(t *testing.T) {
+	srv, ps := newWebhookServer(t)
+	registerWebhookUser(t, ps, "sub8")
+	body := `{"event":{"id":"evt-7","type":"INITIAL_PURCHASE","app_user_id":"sub8","product_id":"consumable","environment":"SANDBOX"}}`
+
+	rec := postWebhook(t, srv, "shh", body)
+	assertWebhookJSONError(t, rec, http.StatusBadRequest, "invalid_product_id")
+	bal, _ := ps.Balance(context.Background(), "oauth:sub8")
 	if bal != 0 {
 		t.Fatalf("balance = %d, want 0 (rejected)", bal)
 	}

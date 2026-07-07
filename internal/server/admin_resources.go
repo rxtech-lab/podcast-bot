@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"sort"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -97,6 +98,194 @@ func (s *Server) modelExists(ctx context.Context, id string) bool {
 }
 
 // ---------------------------------------------------------------------------
+// Usage dashboard (custom page resource)
+// ---------------------------------------------------------------------------
+
+type usageDashboardResource struct{ s *Server }
+
+func (s *Server) newUsageDashboardResource() admin.Resource {
+	return &usageDashboardResource{s: s}
+}
+
+func (r *usageDashboardResource) ID() string { return "usage-dashboard" }
+
+func (r *usageDashboardResource) actionURL(req admin.Request, action admin.ActionType) string {
+	return req.BasePath + "/resources/" + r.ID() + "/action?action=" + url.QueryEscape(string(action))
+}
+
+func (r *usageDashboardResource) authorize(ctx context.Context, req admin.Request, action admin.ActionType) error {
+	return requireAdmin()(ctx, req.Identity, action)
+}
+
+func (r *usageDashboardResource) Info(_ context.Context, req admin.Request) admin.ResourceInfo {
+	return admin.ResourceInfo{
+		ID:            r.ID(),
+		Name:          "Usage Dashboard",
+		Description:   "Daily provider spend, tokens, voice, image, and media usage.",
+		Icon:          "chart-no-axes-combined",
+		Type:          admin.ResourceCustom,
+		DataURL:       r.actionURL(req, admin.ActionView),
+		DefaultAction: admin.ActionView,
+		SupportedActions: []admin.ActionButton{{
+			Type:       admin.ButtonSecondary,
+			Label:      "Refresh",
+			Icon:       "refresh-cw",
+			Behavior:   admin.BehaviorNavigate,
+			ActionType: admin.ActionView,
+			OnClick:    req.BasePath + "/" + r.ID(),
+		}},
+	}
+}
+
+func (r *usageDashboardResource) Schema(ctx context.Context, req admin.Request, action admin.ActionType) (any, error) {
+	if action == "" {
+		action = admin.ActionView
+	}
+	if action != admin.ActionView {
+		return nil, fmt.Errorf("%w: no schema for action %q", admin.ErrBadInput, action)
+	}
+	if err := r.authorize(ctx, req, action); err != nil {
+		return nil, err
+	}
+	if r.s == nil || r.s.d.Points == nil {
+		return nil, fmt.Errorf("%w: points store unavailable", admin.ErrBadInput)
+	}
+	summary, err := r.s.d.Points.UsageSpendByDate(ctx, 14)
+	if err != nil {
+		return nil, err
+	}
+	page := usageSpendCustomPage(req, summary)
+	return &page, nil
+}
+
+func (r *usageDashboardResource) Fetch(ctx context.Context, req admin.Request, action admin.ActionType, _ map[string]any) (*admin.ActionResponse, error) {
+	if action == "" {
+		action = admin.ActionView
+	}
+	if action != admin.ActionView {
+		return nil, fmt.Errorf("%w: cannot fetch action %q", admin.ErrBadInput, action)
+	}
+	if err := r.authorize(ctx, req, action); err != nil {
+		return nil, err
+	}
+	return admin.Detail(map[string]any{}), nil
+}
+
+func (r *usageDashboardResource) Act(ctx context.Context, req admin.Request, action admin.ActionType, _ map[string]any) (*admin.ActionResponse, error) {
+	if err := r.authorize(ctx, req, action); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%w: action %q not supported by resource %q", admin.ErrBadInput, action, r.ID())
+}
+
+func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.CustomResourcePage {
+	rows := make([]map[string]any, 0, len(summary.Days))
+	var totalCost, totalLLM, totalTTS, totalImage, totalMusic, totalOther float64
+	var totalTokens, promptTokens, completionTokens int64
+	for _, day := range summary.Days {
+		rows = append(rows, map[string]any{
+			"date":              day.Date,
+			"total_cost_usd":    roundCents(day.TotalCostUSD),
+			"llm_cost_usd":      roundCents(day.LLMCostUSD),
+			"tts_cost_usd":      roundCents(day.TTSCostUSD),
+			"image_cost_usd":    roundCents(day.ImageCostUSD),
+			"music_cost_usd":    roundCents(day.MusicCostUSD),
+			"other_cost_usd":    roundCents(day.OtherCostUSD),
+			"prompt_tokens":     day.PromptTokens,
+			"completion_tokens": day.CompletionTokens,
+			"total_tokens":      day.TotalTokens,
+		})
+		totalCost += day.TotalCostUSD
+		totalLLM += day.LLMCostUSD
+		totalTTS += day.TTSCostUSD
+		totalImage += day.ImageCostUSD
+		totalMusic += day.MusicCostUSD
+		totalOther += day.OtherCostUSD
+		promptTokens += day.PromptTokens
+		completionTokens += day.CompletionTokens
+		totalTokens += day.TotalTokens
+	}
+
+	return admin.CustomResourcePage{
+		UIType: "custom",
+		Type:   admin.ActionView,
+		ActionButtons: []admin.ActionButton{{
+			Type:       admin.ButtonSecondary,
+			Label:      "Refresh",
+			Icon:       "refresh-cw",
+			Behavior:   admin.BehaviorNavigate,
+			ActionType: admin.ActionView,
+			OnClick:    req.BasePath + "/usage-dashboard",
+		}},
+		Sections: []admin.CustomPageSection{
+			{
+				Type:        admin.CustomPageSectionStatistics,
+				Title:       "Last 14 days",
+				Description: "Private admin-only totals from the points ledger.",
+				Statistics: []admin.Statistic{
+					{Label: "Provider spend", Value: formatUSD(totalCost), Description: "Total metered cost"},
+					{Label: "LLM tokens", Value: formatInt(totalTokens), Description: fmt.Sprintf("%s prompt, %s completion", formatInt(promptTokens), formatInt(completionTokens))},
+					{Label: "Azure voice spend", Value: formatUSD(totalTTS), Description: "Ledger TTS cost"},
+					{Label: "Image gen spend", Value: formatUSD(totalImage), Description: "Image generation ledger rows"},
+				},
+			},
+			{
+				Type:        admin.CustomPageSectionCharts,
+				Title:       "Daily spend by provider",
+				Description: "Dates are grouped in UTC.",
+				Children: []admin.Chart{{
+					Type:  admin.ChartTypeBar,
+					Title: "Provider cost",
+					Data:  rows,
+					XKey:  "date",
+					Series: []admin.ChartSeries{
+						{Key: "llm_cost_usd", Label: "LLM", Color: "#2563eb"},
+						{Key: "tts_cost_usd", Label: "Azure voice", Color: "#16a34a"},
+						{Key: "image_cost_usd", Label: "Image gen", Color: "#dc2626"},
+						{Key: "music_cost_usd", Label: "Music", Color: "#9333ea"},
+						{Key: "other_cost_usd", Label: "Other", Color: "#f59e0b"},
+					},
+				}},
+			},
+			{
+				Type:        admin.CustomPageSectionCharts,
+				Title:       "Daily token spend",
+				Description: "Prompt, completion, and total tokens from metered LLM calls.",
+				Children: []admin.Chart{{
+					Type:  admin.ChartTypeLine,
+					Title: "Tokens",
+					Data:  rows,
+					XKey:  "date",
+					Series: []admin.ChartSeries{
+						{Key: "prompt_tokens", Label: "Prompt", Color: "#2563eb"},
+						{Key: "completion_tokens", Label: "Completion", Color: "#16a34a"},
+						{Key: "total_tokens", Label: "Total", Color: "#dc2626"},
+					},
+				}},
+			},
+			{
+				Type:  admin.CustomPageSectionText,
+				Title: "Accounting notes",
+				Body: fmt.Sprintf("LLM: %s\nAzure voice / TTS: %s\nImage generation: %s\nMusic: %s\nOther provider cost: %s",
+					formatUSD(totalLLM), formatUSD(totalTTS), formatUSD(totalImage), formatUSD(totalMusic), formatUSD(totalOther)),
+			},
+		},
+	}
+}
+
+func roundCents(v float64) float64 {
+	return float64(int64(v*100+0.5)) / 100
+}
+
+func formatUSD(v float64) string {
+	return fmt.Sprintf("$%.2f", v)
+}
+
+func formatInt(v int64) string {
+	return strconv.FormatInt(v, 10)
+}
+
+// ---------------------------------------------------------------------------
 // Scheduled maintenance (generic CRUD resource)
 // ---------------------------------------------------------------------------
 
@@ -108,12 +297,442 @@ func (s *Server) newMaintenanceResource() admin.Resource {
 		Icon:        "wrench",
 		// Wrapped DataSource enforces the write rules (single ongoing window,
 		// no overlaps, ongoing => start now) the form tags can't express.
-		DataSource:  newMaintenanceDataSource(s.d.Maintenance),
-		CreateForm:  maintenanceForm{},
-		EditForm:    maintenanceForm{},
-		Authorize:   requireAdmin(),
-		Actions:     []admin.ActionType{admin.ActionView, admin.ActionCreate, admin.ActionEdit, admin.ActionDelete},
+		DataSource: newMaintenanceDataSource(s.d.Maintenance),
+		CreateForm: maintenanceForm{},
+		EditForm:   maintenanceForm{},
+		Authorize:  requireAdmin(),
+		Actions:    []admin.ActionType{admin.ActionView, admin.ActionCreate, admin.ActionEdit, admin.ActionDelete},
 	})
+}
+
+// ---------------------------------------------------------------------------
+// In-app purchase products (custom CRUD resource)
+// ---------------------------------------------------------------------------
+
+type iapProductsResource struct{ s *Server }
+
+func (s *Server) newIAPProductsResource() admin.Resource { return &iapProductsResource{s: s} }
+
+func (r *iapProductsResource) ID() string { return "iap-products" }
+
+func (r *iapProductsResource) actionURL(req admin.Request, action admin.ActionType, dynamicPath string) string {
+	u := req.BasePath + "/resources/iap-products/action?action=" + string(action)
+	if dynamicPath != "" {
+		u += "&dynamicPath=" + url.QueryEscape(dynamicPath)
+	}
+	return u
+}
+
+func (r *iapProductsResource) authorize(ctx context.Context, req admin.Request, action admin.ActionType) error {
+	return requireAdmin()(ctx, req.Identity, action)
+}
+
+func (r *iapProductsResource) Info(_ context.Context, req admin.Request) admin.ResourceInfo {
+	return admin.ResourceInfo{
+		ID:            "iap-products",
+		Name:          "In-App Products",
+		Description:   "Product IDs, store environment, prices, and point grants used by purchase webhooks.",
+		Icon:          "badge-dollar-sign",
+		Type:          admin.ResourceTable,
+		DataURL:       r.actionURL(req, admin.ActionView, ""),
+		DefaultAction: admin.ActionView,
+		SupportedActions: []admin.ActionButton{{
+			Type:       admin.ButtonPrimary,
+			Label:      "Create",
+			Icon:       "plus",
+			Behavior:   admin.BehaviorOpenSheet,
+			ActionType: admin.ActionCreate,
+			OnClick:    r.actionURL(req, admin.ActionCreate, ""),
+		}},
+	}
+}
+
+func (r *iapProductsResource) Schema(ctx context.Context, req admin.Request, action admin.ActionType) (any, error) {
+	if err := r.authorize(ctx, req, action); err != nil {
+		return nil, err
+	}
+	switch action {
+	case admin.ActionView:
+		return &admin.TableSchema{
+			UIType: "table",
+			Type:   admin.ActionView,
+			Columns: []admin.TableColumn{
+				{Name: "id", Label: "ID", Type: "number", Pinned: true},
+				{Name: "product_id", Label: "Shared Product ID", Type: "string", Pinned: true},
+				{Name: "store_environment", Label: "Store", Type: "string", Format: "chip"},
+				{Name: "product_type", Label: "Type", Type: "string"},
+				{Name: "display_name", Label: "Name", Type: "string"},
+				{Name: "points_grant", Label: "Points", Type: "number"},
+				{Name: "price_currency", Label: "Currency", Type: "string"},
+				{Name: "price_minor_units", Label: "Price", Type: "number"},
+				{Name: "enabled", Label: "Enabled", Type: "boolean", Format: "boolean"},
+				{Name: "created_at", Label: "Created", Type: "string", Format: "date-time"},
+			},
+		}, nil
+	case admin.ActionCreate, admin.ActionEdit:
+		label := "Create"
+		if action == admin.ActionEdit {
+			label = "Save"
+		}
+		fs, err := admin.FormSchemaFromModel(iapProductForm{}, action, label,
+			r.actionURL(req, action, strings.Trim(req.DynamicPath, "/")))
+		if err != nil {
+			return nil, err
+		}
+		applyIAPProductSchema(fs, action)
+		return fs, nil
+	default:
+		return nil, fmt.Errorf("%w: no schema for action %q", admin.ErrBadInput, action)
+	}
+}
+
+func applyIAPProductSchema(fs *admin.FormSchema, action admin.ActionType) {
+	if fs == nil || fs.Schema == nil || fs.Schema.Properties == nil {
+		return
+	}
+	subscriptionPeriod, _ := fs.Schema.Properties.Get("subscription_period")
+	pruneIAPProductSchema(fs)
+	applyIAPProductSubscriptionCondition(fs, subscriptionPeriod)
+	descriptions := map[string]string{
+		"product_id":        "One shared store product identifier. The server sends this as the RevenueCat store_identifier; purchase webhooks must report the same value.",
+		"store_environment": "Choose test_store for sandbox/test products or app_store for production App Store products. Webhooks are accepted only from the matching environment.",
+		"product_type":      "Store product kind. Consumable products grant points on purchase; subscriptions are synced to RevenueCat only.",
+		"display_name":      "Admin-facing product label. This is sent to RevenueCat as the display name.",
+		"points_grant":      "Number of points credited to the user after a successful purchase or renewal webhook. Must be greater than 0 for fulfillment and admin top-ups.",
+		"price_currency":    "Optional ISO 4217 currency code for admin visibility, such as USD. The App Store remains the source of truth for user-facing prices.",
+		"price_minor_units": "Optional price in minor currency units for admin visibility, such as 199 for $1.99 USD. This does not by itself set the App Store price.",
+		"enabled":           "Enabled products are synced to RevenueCat. Disabled products are saved as local drafts and ignored by webhooks.",
+	}
+	for name, desc := range descriptions {
+		if p, ok := fs.Schema.Properties.Get(name); ok {
+			p.Description = desc
+			if name == "product_id" {
+				p.Title = "Shared product ID"
+			}
+		}
+	}
+	if fs.UISchema == nil {
+		fs.UISchema = admin.UISchema{}
+	}
+	if action == admin.ActionCreate {
+		fs.UISchema["ui:order"] = []any{
+			"product_id",
+			"display_name",
+			"store_environment",
+			"product_type",
+			"subscription_period",
+			"points_grant",
+			"price_currency",
+			"price_minor_units",
+			"enabled",
+		}
+		return
+	}
+	fs.UISchema["ui:order"] = []any{
+		"product_id",
+		"display_name",
+		"store_environment",
+		"product_type",
+		"subscription_period",
+		"points_grant",
+		"price_currency",
+		"price_minor_units",
+		"enabled",
+	}
+}
+
+func pruneIAPProductSchema(fs *admin.FormSchema) {
+	pruned := []string{
+		"app_store_price_point_id",
+		"app_store_subscription_group_id",
+		"app_store_locale",
+		"subscription_display_name",
+		"subscription_description",
+		"app_store_review_note",
+		"app_store_review_screenshot_url",
+		"app_store_subscription_localization_id",
+		"revenuecat_offering_id",
+	}
+	for _, name := range pruned {
+		fs.Schema.Properties.Delete(name)
+		delete(fs.UISchema, name)
+	}
+	fs.Schema.Required = withoutSchemaRequiredFields(fs.Schema.Required, pruned...)
+}
+
+func applyIAPProductSubscriptionCondition(fs *admin.FormSchema, subscriptionPeriod *jsonschema.Schema) {
+	if subscriptionPeriod == nil {
+		return
+	}
+	subscriptionPeriod.Title = "Duration"
+	subscriptionPeriod.Description = "Subscription duration. Only shown for subscription products and synced to RevenueCat metadata."
+	subscriptionPeriod.Default = "ONE_MONTH"
+	// Keep the duration out of base properties so the form renderer only shows
+	// it when product_type selects the subscription branch.
+	fs.Schema.Properties.Delete("subscription_period")
+	fs.Schema.Required = withoutSchemaRequiredFields(fs.Schema.Required, "subscription_period")
+	ifProps := jsonschema.NewProperties()
+	ifProps.Set("product_type", &jsonschema.Schema{Const: IAPProductTypeSubscription})
+	thenProps := jsonschema.NewProperties()
+	thenProps.Set("subscription_period", subscriptionPeriod)
+	fs.Schema.If = &jsonschema.Schema{
+		Properties: ifProps,
+		Required:   []string{"product_type"},
+	}
+	fs.Schema.Then = &jsonschema.Schema{
+		Properties: thenProps,
+		Required:   []string{"subscription_period"},
+	}
+}
+
+func withoutSchemaRequiredFields(required []string, names ...string) []string {
+	if len(required) == 0 || len(names) == 0 {
+		return required
+	}
+	drop := make(map[string]bool, len(names))
+	for _, name := range names {
+		drop[name] = true
+	}
+	filtered := required[:0]
+	for _, name := range required {
+		if !drop[name] {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
+}
+
+func (r *iapProductsResource) Fetch(ctx context.Context, req admin.Request, action admin.ActionType, _ map[string]any) (*admin.ActionResponse, error) {
+	if err := r.authorize(ctx, req, action); err != nil {
+		return nil, err
+	}
+	if r.s.d.IAPProducts == nil {
+		return nil, fmt.Errorf("%w: iap product store unavailable", admin.ErrBadInput)
+	}
+	switch action {
+	case admin.ActionView:
+		limit := 20
+		if l, err := strconv.Atoi(req.Query.Get("limit")); err == nil && l > 0 {
+			limit = l
+		}
+		after, _ := strconv.ParseInt(req.Query.Get("after"), 10, 64)
+		rows, next, err := r.s.d.IAPProducts.List(ctx, after, limit)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]admin.Item, 0, len(rows))
+		for _, row := range rows {
+			id := strconv.FormatInt(row.ID, 10)
+			actions := []admin.ActionButton{
+				{
+					Type:       admin.ButtonSecondary,
+					Label:      "Edit",
+					Icon:       "pencil",
+					Behavior:   admin.BehaviorOpenSheet,
+					ActionType: admin.ActionEdit,
+					OnClick:    r.actionURL(req, admin.ActionEdit, id),
+				},
+			}
+			if rcURL := r.revenueCatProductURL(row); rcURL != "" {
+				actions = append(actions, admin.ActionButton{
+					Type:       admin.ButtonInfo,
+					Label:      "RevenueCat",
+					Icon:       "external-link",
+					Behavior:   admin.BehaviorNavigate,
+					ActionType: admin.ActionView,
+					OnClick:    rcURL,
+				})
+			}
+			actions = append(actions, admin.ActionButton{
+				Type:       admin.ButtonDanger,
+				Label:      "Delete",
+				Icon:       "trash-2",
+				Behavior:   admin.BehaviorConfirmDialog,
+				ActionType: admin.ActionDelete,
+				OnClick:    r.actionURL(req, admin.ActionDelete, id),
+			})
+			items = append(items, admin.Item{
+				Data:        row,
+				DynamicPath: id,
+				Actions:     actions,
+			})
+		}
+		var nextURL *string
+		if next > 0 {
+			u := r.actionURL(req, admin.ActionView, "") + "&after=" + strconv.FormatInt(next, 10) + "&limit=" + strconv.Itoa(limit)
+			nextURL = &u
+		}
+		return admin.Paginated(items, nil, nextURL, nil), nil
+	case admin.ActionCreate:
+		return admin.Detail(map[string]any{
+			"store_environment": IAPStoreEnvironmentTest,
+			"product_type":      IAPProductTypeConsumable,
+			"enabled":           true,
+		}), nil
+	case admin.ActionEdit:
+		id, err := strconv.ParseInt(strings.Trim(req.DynamicPath, "/"), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("%w: missing product id", admin.ErrBadInput)
+		}
+		p, err := r.s.d.IAPProducts.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, fmt.Errorf("%w: product not found", admin.ErrBadInput)
+		}
+		return admin.Detail(p), nil
+	default:
+		return nil, fmt.Errorf("%w: cannot fetch action %q", admin.ErrBadInput, action)
+	}
+}
+
+func (r *iapProductsResource) Act(ctx context.Context, req admin.Request, action admin.ActionType, data map[string]any) (*admin.ActionResponse, error) {
+	if err := r.authorize(ctx, req, action); err != nil {
+		return nil, err
+	}
+	if r.s.d.IAPProducts == nil {
+		return nil, fmt.Errorf("%w: iap product store unavailable", admin.ErrBadInput)
+	}
+	switch action {
+	case admin.ActionCreate:
+		p := iapProductFromForm(data)
+		if err := r.createAndSyncProduct(ctx, &p); err != nil {
+			return nil, err
+		}
+		if saved, err := r.s.d.IAPProducts.Get(ctx, p.ID); err == nil && saved != nil {
+			return admin.Detail(saved), nil
+		}
+		return admin.Detail(p), nil
+	case admin.ActionEdit:
+		id, err := strconv.ParseInt(strings.Trim(req.DynamicPath, "/"), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("%w: missing product id", admin.ErrBadInput)
+		}
+		existing, err := r.s.d.IAPProducts.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			return nil, fmt.Errorf("%w: product not found", admin.ErrBadInput)
+		}
+		p := iapProductFromForm(data)
+		if _, ok := data["subscription_period"]; !ok {
+			p.SubscriptionPeriod = existing.SubscriptionPeriod
+		}
+		if err := r.s.d.IAPProducts.Update(ctx, id, &p); err != nil {
+			return nil, err
+		}
+		p.ID = id
+		if err := r.syncProduct(ctx, &p); err != nil {
+			return nil, err
+		}
+		if saved, err := r.s.d.IAPProducts.Get(ctx, id); err == nil && saved != nil {
+			return admin.Detail(saved), nil
+		}
+		return admin.Detail(p), nil
+	case admin.ActionDelete:
+		id, err := strconv.ParseInt(strings.Trim(req.DynamicPath, "/"), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("%w: missing product id", admin.ErrBadInput)
+		}
+		p, err := r.s.d.IAPProducts.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, fmt.Errorf("%w: product not found", admin.ErrBadInput)
+		}
+		if err := r.deleteSyncedProduct(ctx, p); err != nil {
+			return nil, err
+		}
+		if err := r.s.d.IAPProducts.Delete(ctx, id); err != nil {
+			return nil, err
+		}
+		return admin.Detail(map[string]any{"deleted": true, "id": id}), nil
+	default:
+		return nil, fmt.Errorf("%w: cannot execute action %q", admin.ErrBadInput, action)
+	}
+}
+
+func (r *iapProductsResource) revenueCatProductURL(row IAPProduct) string {
+	if r == nil || r.s == nil || r.s.d.Env == nil {
+		return ""
+	}
+	projectID := strings.TrimSpace(r.s.d.Env.RevenueCatProjectID)
+	appID := strings.TrimSpace(r.s.d.Env.RevenueCatAppID)
+	productID := strings.TrimSpace(row.ProductID)
+	if projectID == "" || appID == "" || productID == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme: "https",
+		Host:   "app.revenuecat.com",
+		Path:   "/projects/" + url.PathEscape(projectID) + "/apps/" + url.PathEscape(appID) + "/products",
+	}
+	q := u.Query()
+	q.Set("search", productID)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func (r *iapProductsResource) deleteSyncedProduct(ctx context.Context, p *IAPProduct) error {
+	if p == nil {
+		return nil
+	}
+	if r.s.d.IAPProductSyncer == nil {
+		return fmt.Errorf("%w: iap product sync unavailable; cannot delete RevenueCat product", admin.ErrBadInput)
+	}
+	return r.s.d.IAPProductSyncer.DeleteIAPProduct(ctx, *p)
+}
+
+func (r *iapProductsResource) createAndSyncProduct(ctx context.Context, p *IAPProduct) error {
+	if p == nil {
+		return errors.New("iap product is nil")
+	}
+	tx, err := r.s.d.IAPProducts.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := r.s.d.IAPProducts.create(ctx, tx, p); err != nil {
+		return err
+	}
+	if !p.Enabled {
+		return tx.Commit()
+	}
+	if r.s.d.IAPProductSyncer == nil {
+		return fmt.Errorf("%w: iap product sync unavailable; set REVENUECAT_REST_API_KEY, REVENUECAT_PROJECT_ID, and REVENUECAT_APP_ID", admin.ErrBadInput)
+	}
+	result, err := r.s.d.IAPProductSyncer.SyncIAPProduct(ctx, *p)
+	if err != nil {
+		return err
+	}
+	if err := r.s.d.IAPProducts.markSyncResult(ctx, tx, p.ID, result, nil); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *iapProductsResource) syncProduct(ctx context.Context, p *IAPProduct) error {
+	if p == nil || !p.Enabled {
+		return nil
+	}
+	if r.s.d.IAPProductSyncer == nil {
+		err := fmt.Errorf("%w: iap product sync unavailable; set REVENUECAT_REST_API_KEY, REVENUECAT_PROJECT_ID, and REVENUECAT_APP_ID", admin.ErrBadInput)
+		if p != nil && p.ID > 0 && r.s.d.IAPProducts != nil {
+			_ = r.s.d.IAPProducts.MarkSyncResult(ctx, p.ID, IAPProductSyncResult{}, err)
+		}
+		return err
+	}
+	result, err := r.s.d.IAPProductSyncer.SyncIAPProduct(ctx, *p)
+	if p.ID > 0 && r.s.d.IAPProducts != nil {
+		if markErr := r.s.d.IAPProducts.MarkSyncResult(ctx, p.ID, result, err); markErr != nil && err == nil {
+			err = markErr
+		}
+	}
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +765,7 @@ func (r *usersResource) Info(_ context.Context, req admin.Request) admin.Resourc
 	return admin.ResourceInfo{
 		ID:            "users",
 		Name:          "Users",
-		Description:   "User balances. Top up a user by selecting a product.",
+		Description:   "User balances and subscription plans. Top up a user by selecting a product.",
 		Icon:          "users",
 		Type:          admin.ResourceTable,
 		DataURL:       r.actionURL(req, admin.ActionView, ""),
@@ -169,6 +788,8 @@ func (r *usersResource) Schema(ctx context.Context, req admin.Request, action ad
 			Columns: []admin.TableColumn{
 				{Name: "user_id", Label: "User ID", Type: "string", Pinned: true},
 				{Name: "display_name", Label: "Name", Type: "string"},
+				{Name: "subscription_plan", Label: "Plan", Type: "string"},
+				{Name: "subscription_status", Label: "Plan Status", Type: "string", Format: "chip"},
 				{Name: "balance", Label: "Balance", Type: "number"},
 			},
 		}, nil
@@ -197,7 +818,7 @@ func (r *usersResource) topupSchema(ctx context.Context, req admin.Request) (*ad
 	}
 	if p, ok := fs.Schema.Properties.Get("product"); ok {
 		p.Description = "Select a product to grant its points to the user." + balanceNote
-		p.OneOf = r.s.productOptions()
+		p.OneOf = r.s.productOptions(ctx)
 	}
 	return fs, nil
 }
@@ -233,9 +854,11 @@ func (r *usersResource) list(ctx context.Context, req admin.Request) (*admin.Act
 	for _, row := range rows {
 		items = append(items, admin.Item{
 			Data: map[string]any{
-				"user_id":      row.UserID,
-				"display_name": row.DisplayName,
-				"balance":      row.Balance,
+				"user_id":             row.UserID,
+				"display_name":        row.DisplayName,
+				"subscription_plan":   row.SubscriptionPlan,
+				"subscription_status": row.SubscriptionStatus,
+				"balance":             row.Balance,
 			},
 			Actions: []admin.ActionButton{{
 				Type:       admin.ButtonPrimary,
@@ -271,11 +894,18 @@ func (r *usersResource) Act(ctx context.Context, req admin.Request, action admin
 	if product == "" {
 		return nil, &admin.ValidationError{Fields: map[string]string{"product": "required"}}
 	}
-	if r.s.d.Env == nil {
+	if r.s.d.IAPProducts == nil {
 		return nil, fmt.Errorf("%w: products unavailable", admin.ErrBadInput)
 	}
-	grant, ok := r.s.d.Env.PointsProductGrants[product]
-	if !ok {
+	productID, err := strconv.ParseInt(product, 10, 64)
+	if err != nil || productID <= 0 {
+		return nil, &admin.ValidationError{Fields: map[string]string{"product": "unknown product"}}
+	}
+	iapProduct, err := r.s.d.IAPProducts.Get(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	if iapProduct == nil || !iapProduct.Enabled || iapProduct.PointsGrant <= 0 {
 		return nil, &admin.ValidationError{Fields: map[string]string{"product": "unknown product"}}
 	}
 	if r.s.d.Points == nil {
@@ -284,15 +914,16 @@ func (r *usersResource) Act(ctx context.Context, req admin.Request, action admin
 	if err := r.s.d.Points.EnsureUser(ctx, userID); err != nil {
 		return nil, err
 	}
-	balance, err := r.s.d.Points.Credit(ctx, userID, grant, pointsReasonAdminTopup, randomEventID("admin_topup:"))
+	balance, err := r.s.d.Points.Credit(ctx, userID, iapProduct.PointsGrant, pointsReasonAdminTopup, randomEventID("admin_topup:"))
 	if err != nil {
 		return nil, err
 	}
 	return admin.Detail(map[string]any{
-		"user_id": userID,
-		"product": product,
-		"granted": grant,
-		"balance": balance,
+		"user_id":    userID,
+		"product":    iapProduct.ProductID,
+		"product_id": iapProduct.ID,
+		"granted":    iapProduct.PointsGrant,
+		"balance":    balance,
 	}), nil
 }
 
@@ -301,22 +932,25 @@ type topupForm struct {
 	Product string `json:"product" jsonschema:"title=Product" validate:"required"`
 }
 
-// productOptions builds oneOf {const,title} entries from the configured product
-// grants so the topup dropdown shows "<product id> (+N points)".
-func (s *Server) productOptions() []*jsonschema.Schema {
-	if s.d.Env == nil {
+// productOptions builds oneOf {const,title} entries from enabled DB catalog rows
+// so the topup dropdown shows "<store> / <product id> (+N points)".
+func (s *Server) productOptions(ctx context.Context) []*jsonschema.Schema {
+	if s.d.IAPProducts == nil {
 		return nil
 	}
-	ids := make([]string, 0, len(s.d.Env.PointsProductGrants))
-	for id := range s.d.Env.PointsProductGrants {
-		ids = append(ids, id)
+	products, err := s.d.IAPProducts.EnabledForTopup(ctx)
+	if err != nil {
+		return nil
 	}
-	sort.Strings(ids)
-	opts := make([]*jsonschema.Schema, 0, len(ids))
-	for _, id := range ids {
+	opts := make([]*jsonschema.Schema, 0, len(products))
+	for _, p := range products {
+		label := p.ProductID
+		if p.DisplayName != "" {
+			label = p.DisplayName + " (" + p.ProductID + ")"
+		}
 		opts = append(opts, &jsonschema.Schema{
-			Const: id,
-			Title: fmt.Sprintf("%s (+%d points)", id, s.d.Env.PointsProductGrants[id]),
+			Const: strconv.FormatInt(p.ID, 10),
+			Title: fmt.Sprintf("%s / %s (+%d points)", p.StoreEnvironment, label, p.PointsGrant),
 		})
 	}
 	return opts
