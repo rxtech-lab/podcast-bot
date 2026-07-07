@@ -95,11 +95,19 @@ const nextAuth = NextAuth({
           ...token,
           accessToken: account.access_token,
           refreshToken: account.refresh_token,
-          exp: account.expires_at,
+          // Store the access-token expiry under a custom field. Do NOT write
+          // the reserved `exp` claim — that controls the NextAuth session JWT's
+          // own lifetime, and pinning it to the ~1h access-token expiry causes
+          // the whole session to be discarded as expired after a short idle
+          // period, before the refresh branch below can ever run.
+          expiresAt: account.expires_at,
           userId: profile?.sub,
         };
       }
-      if (token.exp && Date.now() < (token.exp as number) * 1000 - 60_000) {
+      if (
+        token.expiresAt &&
+        Date.now() < (token.expiresAt as number) * 1000 - 60_000
+      ) {
         return token;
       }
       if (!token.refreshToken) {
@@ -111,7 +119,7 @@ const nextAuth = NextAuth({
           ...token,
           accessToken: fresh.accessToken,
           refreshToken: fresh.refreshToken,
-          exp: fresh.expiresAt,
+          expiresAt: fresh.expiresAt,
           error: undefined,
         };
       } catch {
@@ -129,6 +137,10 @@ const nextAuth = NextAuth({
   },
   pages: { signIn: "/login" },
   trustHost: true,
+  // Session lifetime is decoupled from the OAuth access-token expiry: the
+  // access token is refreshed in the jwt() callback while the session itself
+  // survives idle periods up to this window.
+  session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
   // Use an app-specific cookie name so the viewer's session never collides with
   // the dashboard's when both run on the same localhost origin (they have
   // different AUTH_SECRETs; a shared cookie name causes "no matching decryption

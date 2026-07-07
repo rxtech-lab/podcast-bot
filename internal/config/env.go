@@ -126,17 +126,17 @@ type Env struct {
 	// POINTS_SIGNUP_GRANT.
 	PointsSignupGrant int64
 
-	// PointsProductGrants maps a RevenueCat product id to the points granted
-	// when that product is purchased or renewed. Seeded with defaults
-	// (consumable=1000, monthly=6667 ≈ $10/mo, yearly=0) and overridable via
-	// POINTS_PRODUCT_GRANTS ("id:points,id:points") and the per-product env vars
-	// POINTS_GRANT_CONSUMABLE / _MONTHLY / _YEARLY.
-	PointsProductGrants map[string]int64
-
 	// RevenueCatWebhookAuth is the shared secret expected in the Authorization
 	// header of POST /api/revenuecat/webhook. Empty disables the webhook.
 	// Set via REVENUECAT_WEBHOOK_AUTH.
 	RevenueCatWebhookAuth string
+	// RevenueCatRESTAPIKey / ProjectID / AppID configure server-side product
+	// setup against RevenueCat's REST API v2. This must be a secret v2 API key,
+	// not the public iOS SDK key from Secrets.xcconfig.
+	RevenueCatRESTAPIKey string
+	RevenueCatProjectID  string
+	RevenueCatAppID      string
+	RevenueCatAPIBaseURL string
 
 	AzureSpeechKey    string
 	AzureSpeechRegion string
@@ -358,6 +358,10 @@ func LoadEnv() (*Env, error) {
 		PointsMinPerPlanningConversation: parseIntEnvDefault("POINTS_MIN_PER_PLANNING_CONVERSATION", 1),
 		PointsSignupGrant:                parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
 		RevenueCatWebhookAuth:            strings.TrimSpace(os.Getenv("REVENUECAT_WEBHOOK_AUTH")),
+		RevenueCatRESTAPIKey:             strings.TrimSpace(os.Getenv("REVENUECAT_REST_API_KEY")),
+		RevenueCatProjectID:              strings.TrimSpace(os.Getenv("REVENUECAT_PROJECT_ID")),
+		RevenueCatAppID:                  strings.TrimSpace(os.Getenv("REVENUECAT_APP_ID")),
+		RevenueCatAPIBaseURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("REVENUECAT_API_BASE_URL")), "/"),
 		AzureSpeechKey:                   strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
 		AzureSpeechRegion:                strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
 		ElevenLabsAPIKey:                 strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
@@ -440,7 +444,9 @@ func LoadEnv() (*Env, error) {
 	if e.NotionAPIBaseURL == "" {
 		e.NotionAPIBaseURL = "https://api.notion.com"
 	}
-	e.PointsProductGrants = parseProductGrants()
+	if e.RevenueCatAPIBaseURL == "" {
+		e.RevenueCatAPIBaseURL = "https://api.revenuecat.com"
+	}
 	if e.PersistentRoot == "" {
 		// Default the cross-session archive root to the user's OUT_DIR so
 		// out-of-the-box runs put `tv-series/...` next to `session-<stamp>/...`.
@@ -608,42 +614,6 @@ func parseIntEnvDefault(key string, def int64) int64 {
 		return def
 	}
 	return n
-}
-
-// parseProductGrants builds the RevenueCat product-id → points-grant map. It
-// starts from the published defaults, then layers POINTS_PRODUCT_GRANTS
-// ("id:points,id:points") and the per-product overrides on top so operators can
-// tune grants without code changes.
-func parseProductGrants() map[string]int64 {
-	grants := map[string]int64{
-		"consumable": 1000,
-		"monthly":    6667, // ≈ $10/mo at the 1000 pts = $1.50 sale rate
-		"yearly":     0,    // set once the yearly price is finalised
-	}
-	for _, pair := range splitCSV(os.Getenv("POINTS_PRODUCT_GRANTS")) {
-		id, val, ok := strings.Cut(pair, ":")
-		if !ok {
-			continue
-		}
-		id = strings.TrimSpace(id)
-		n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
-		if id == "" || err != nil || n < 0 {
-			continue
-		}
-		grants[id] = n
-	}
-	for id, key := range map[string]string{
-		"consumable": "POINTS_GRANT_CONSUMABLE",
-		"monthly":    "POINTS_GRANT_MONTHLY",
-		"yearly":     "POINTS_GRANT_YEARLY",
-	} {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
-				grants[id] = n
-			}
-		}
-	}
-	return grants
 }
 
 // ErrEnvNotLoaded is returned when an Env was expected but not initialised.

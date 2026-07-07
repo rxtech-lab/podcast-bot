@@ -1,4 +1,4 @@
-import { AdminApp } from "@rxtech-lab/admin-generator-next/server";
+import { AdminAppWithAuthRedirect } from "@/lib/admin-app";
 import { adminConfig } from "@/lib/admin-config";
 import { auth, signOut } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ export default async function AdminPage(props: {
 }) {
   const session = await auth();
   return (
-    <AdminApp
+    <AdminAppWithAuthRedirect
       config={adminConfig}
       actions={actions}
       params={props.params}

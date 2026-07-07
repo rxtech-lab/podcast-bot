@@ -10,7 +10,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@rxtech-lab/admin-generator-next": "^1.3.0",
+    "@rxtech-lab/admin-generator-next": "1.4.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.469.0",
     "next": "^16.2.10",

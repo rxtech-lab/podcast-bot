@@ -30,10 +30,12 @@ func (s *Server) newAdminHandler(ctx context.Context) (http.Handler, error) {
 
 	reg := admin.NewRegistry()
 	reg.Register(s.newAppConfigResource())
+	reg.Register(s.newIAPProductsResource())
 	if s.d.Maintenance != nil {
 		reg.Register(s.newMaintenanceResource())
 	}
 	if s.d.Points != nil {
+		reg.Register(s.newUsageDashboardResource())
 		reg.Register(s.newUsersResource())
 	}
 

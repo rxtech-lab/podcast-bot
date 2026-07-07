@@ -67,6 +67,23 @@ type PointsStore struct {
 	db *sqlDB
 }
 
+type DailyUsageSpend struct {
+	Date             string
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	LLMCostUSD       float64
+	TTSCostUSD       float64
+	ImageCostUSD     float64
+	MusicCostUSD     float64
+	OtherCostUSD     float64
+	TotalCostUSD     float64
+}
+
+type UsageSpendSummary struct {
+	Days []DailyUsageSpend
+}
+
 // NewPointsStore builds a PointsStore over the discussion store's database so
 // the two share one connection and can transact across both tables. Returns nil
 // when the discussion store is nil (points disabled).
@@ -82,6 +99,84 @@ func NewPointsStore(ds *DiscussionStore) (*PointsStore, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// UsageSpendByDate returns private admin-only usage details grouped by UTC day.
+// User-facing APIs intentionally avoid these raw token and cost fields.
+func (s *PointsStore) UsageSpendByDate(ctx context.Context, days int) (UsageSpendSummary, error) {
+	if s == nil {
+		return UsageSpendSummary{}, errors.New("points store is not configured")
+	}
+	if days <= 0 {
+		days = 14
+	}
+	if days > 90 {
+		days = 90
+	}
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -(days - 1))
+	rows, err := s.db.QueryContext(ctx, `SELECT reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
+			llm_cost_usd, tts_cost_usd, music_cost_usd, created_at
+		FROM points_ledger
+		WHERE created_at >= ?
+		ORDER BY created_at ASC`, start.UnixMilli())
+	if err != nil {
+		return UsageSpendSummary{}, err
+	}
+	defer rows.Close()
+
+	byDate := make(map[string]*DailyUsageSpend, days)
+	ordered := make([]string, 0, days)
+	for i := 0; i < days; i++ {
+		date := start.AddDate(0, 0, i).Format("2006-01-02")
+		ordered = append(ordered, date)
+		byDate[date] = &DailyUsageSpend{Date: date}
+	}
+
+	for rows.Next() {
+		var reason string
+		var costUSD, llmCostUSD, ttsCostUSD, musicCostUSD float64
+		var promptTokens, completionTokens, totalTokens int64
+		var createdAt int64
+		if err := rows.Scan(&reason, &costUSD, &promptTokens, &completionTokens, &totalTokens, &llmCostUSD, &ttsCostUSD, &musicCostUSD, &createdAt); err != nil {
+			return UsageSpendSummary{}, err
+		}
+		date := time.UnixMilli(createdAt).UTC().Format("2006-01-02")
+		day := byDate[date]
+		if day == nil {
+			continue
+		}
+		day.PromptTokens += promptTokens
+		day.CompletionTokens += completionTokens
+		day.TotalTokens += totalTokens
+		day.LLMCostUSD += llmCostUSD
+		day.TTSCostUSD += ttsCostUSD
+		day.MusicCostUSD += musicCostUSD
+		day.TotalCostUSD += costUSD
+		if reason == pointsReasonImageGeneration {
+			day.ImageCostUSD += costUSD
+		}
+		knownCost := llmCostUSD + ttsCostUSD + musicCostUSD + dayCostForReason(reason, costUSD, pointsReasonImageGeneration)
+		if other := costUSD - knownCost; other > 0 {
+			day.OtherCostUSD += other
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return UsageSpendSummary{}, err
+	}
+
+	out := UsageSpendSummary{Days: make([]DailyUsageSpend, 0, len(ordered))}
+	for _, date := range ordered {
+		out.Days = append(out.Days, *byDate[date])
+	}
+	return out, nil
+}
+
+func dayCostForReason(reason string, costUSD float64, target string) float64 {
+	if reason == target {
+		return costUSD
+	}
+	return 0
 }
 
 func (s *PointsStore) ensureSchema(ctx context.Context) error {
@@ -111,6 +206,17 @@ func (s *PointsStore) ensureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS points_ledger_user_idx ON points_ledger(user_id, id)`,
 		`CREATE INDEX IF NOT EXISTS points_ledger_history_match_idx
 			ON points_ledger(user_id, reason, discussion_id, id)`,
+		`CREATE TABLE IF NOT EXISTS user_subscriptions (
+			user_id TEXT PRIMARY KEY,
+			product_id TEXT NOT NULL DEFAULT '',
+			display_name TEXT NOT NULL DEFAULT '',
+			store_environment TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			subscription_period TEXT NOT NULL DEFAULT '',
+			expires_at INTEGER NOT NULL DEFAULT 0,
+			last_event_id TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL
+		)`,
 		// One generation charge per discussion: the completion handler is
 		// lazy-on-GET and may fire repeatedly, so the debit must apply once.
 		`CREATE UNIQUE INDEX IF NOT EXISTS points_ledger_generation_uniq
@@ -130,9 +236,11 @@ func (s *PointsStore) ensureSchema(ctx context.Context) error {
 // UserBalance is one row of the admin user-management list: a user id, their
 // optional creator display name, and their current points balance.
 type UserBalance struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name"`
-	Balance     int64  `json:"balance"`
+	UserID             string `json:"user_id"`
+	DisplayName        string `json:"display_name"`
+	Balance            int64  `json:"balance"`
+	SubscriptionPlan   string `json:"subscription_plan"`
+	SubscriptionStatus string `json:"subscription_status"`
 }
 
 // ListBalances returns a cursor-paginated page of user balances ordered by user
@@ -147,9 +255,12 @@ func (s *PointsStore) ListBalances(ctx context.Context, after string, limit int)
 		limit = 20
 	}
 	// Fetch one extra row to detect whether another page follows.
-	result, err := s.db.QueryContext(ctx, `SELECT b.user_id, COALESCE(p.display_name, ''), b.balance
+	result, err := s.db.QueryContext(ctx, `SELECT b.user_id, COALESCE(p.display_name, ''), b.balance,
+			COALESCE(NULLIF(us.display_name, ''), us.product_id, '') AS subscription_plan,
+			COALESCE(us.status, '') AS subscription_status
 		FROM user_points_balance b
 		LEFT JOIN creator_profiles p ON p.user_id = b.user_id
+		LEFT JOIN user_subscriptions us ON us.user_id = b.user_id
 		WHERE (? = '' OR b.user_id > ?)
 		ORDER BY b.user_id ASC
 		LIMIT ?`, after, after, limit+1)
@@ -159,7 +270,7 @@ func (s *PointsStore) ListBalances(ctx context.Context, after string, limit int)
 	defer result.Close()
 	for result.Next() {
 		var r UserBalance
-		if err := result.Scan(&r.UserID, &r.DisplayName, &r.Balance); err != nil {
+		if err := result.Scan(&r.UserID, &r.DisplayName, &r.Balance, &r.SubscriptionPlan, &r.SubscriptionStatus); err != nil {
 			return nil, "", err
 		}
 		rows = append(rows, r)
@@ -378,6 +489,42 @@ func (s *PointsStore) UserExists(ctx context.Context, userID string) (bool, erro
 		EXISTS(SELECT 1 FROM native_discussions WHERE owner_user_id = ?)`,
 		userID, userID).Scan(&exists)
 	return exists != 0, err
+}
+
+// RecordSubscription stores the latest subscription plan state visible in the
+// admin users table. RevenueCat remains the source of truth; this projection is
+// only the backend's last webhook-derived view.
+func (s *PointsStore) RecordSubscription(ctx context.Context, userID string, product IAPProduct, status, eventID string, expiresAtMS int64) error {
+	if s == nil {
+		return errors.New("points store is not configured")
+	}
+	if product.ProductType != IAPProductTypeSubscription {
+		return nil
+	}
+	userID = strings.TrimSpace(userID)
+	status = strings.TrimSpace(status)
+	if userID == "" || status == "" {
+		return nil
+	}
+	if err := s.EnsureUser(ctx, userID); err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO user_subscriptions
+		(user_id, product_id, display_name, store_environment, status, subscription_period, expires_at, last_event_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			product_id = excluded.product_id,
+			display_name = excluded.display_name,
+			store_environment = excluded.store_environment,
+			status = excluded.status,
+			subscription_period = excluded.subscription_period,
+			expires_at = excluded.expires_at,
+			last_event_id = excluded.last_event_id,
+			updated_at = excluded.updated_at`,
+		userID, product.ProductID, product.DisplayName, product.StoreEnvironment, status,
+		product.SubscriptionPeriod, expiresAtMS, eventID, now)
+	return err
 }
 
 // DiscussionPoints returns the running points total charged to a discussion.
