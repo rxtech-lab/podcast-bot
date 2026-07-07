@@ -5,7 +5,7 @@
     "": {
       "name": "debate-bot-dashboard",
       "dependencies": {
-        "@rxtech-lab/admin-generator-next": "1.4.1",
+        "@rxtech-lab/admin-generator-next": "1.5.0",
         "clsx": "^2.1.1",
         "lucide-react": "^0.469.0",
         "next": "^16.2.10",
@@ -230,7 +230,7 @@
 
     "@rtsao/scc": ["@rtsao/scc@1.1.0", "", {}, "sha512-zt6OdqaDoOnJ1ZYsCYGt9YmWzDXl4vQdKTyJev62gFhRGKdx7mcT54V9KIjg+d2wi9EXsPvAPKe7i7WjfVWB8g=="],
 
-    "@rxtech-lab/admin-generator-next": ["@rxtech-lab/admin-generator-next@1.4.1", "", { "dependencies": { "@radix-ui/react-dialog": "^1.1.6", "@rjsf/core": "6.1.1", "@rjsf/utils": "6.1.1", "@rjsf/validator-ajv8": "6.1.1", "class-variance-authority": "^0.7.1", "clsx": "^2.1.1", "dayjs": "^1.11.13", "lucide-react": "^0.475.0", "recharts": "^3.9.2", "swr": "^2.3.2", "tailwind-merge": "^3.0.2" }, "peerDependencies": { "next": ">=15", "react": ">=19", "react-dom": ">=19" } }, "sha512-HAXrsi36m7sp9VAZ1o4Byh4eLCx5r8KuMQX28vt5JxQzRQw/H0ecKARIxAQ0eiY4hbEIV9CTtU3Lk5R4XqQDYg=="],
+    "@rxtech-lab/admin-generator-next": ["@rxtech-lab/admin-generator-next@1.5.0", "", { "dependencies": { "@radix-ui/react-dialog": "^1.1.6", "@rjsf/core": "6.1.1", "@rjsf/utils": "6.1.1", "@rjsf/validator-ajv8": "6.1.1", "class-variance-authority": "^0.7.1", "clsx": "^2.1.1", "dayjs": "^1.11.13", "lucide-react": "^0.475.0", "recharts": "^3.9.2", "swr": "^2.3.2", "tailwind-merge": "^3.0.2" }, "peerDependencies": { "next": ">=15", "react": ">=19", "react-dom": ">=19" } }, "sha512-qNm8w/k2On68ZZhgVA6EAI/cMh//Npzbt7EIIwZlDnh28nZOv2Q9Tl0iW4YV04ti3w7xb5W5PK0eP+Xo1+yR0Q=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 

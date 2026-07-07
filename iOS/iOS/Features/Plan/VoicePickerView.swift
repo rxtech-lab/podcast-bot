@@ -7,6 +7,7 @@ import SwiftUI
 /// for each supported language and caches rendered previews.
 struct VoicePickerView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(EntitlementsManager.self) private var entitlements
     @Environment(\.dismiss) private var dismiss
 
     let speakerName: String
@@ -91,7 +92,10 @@ struct VoicePickerView: View {
     }
 
     private func row(for voice: VoiceInfoDTO) -> some View {
-        HStack(spacing: 12) {
+        // Voices outside the subscription's allowlist are shown but not
+        // selectable (preview stays available so the user can sample them).
+        let allowed = entitlements.isVoiceAllowed(voice.name)
+        return HStack(spacing: 12) {
             Button {
                 onSelect(voice.name)
                 dismiss()
@@ -99,7 +103,7 @@ struct VoicePickerView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(voice.displayName)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(allowed ? .primary : Theme.secondaryText)
                         if let detail = voiceDetail(voice) {
                             Text(detail)
                                 .font(.caption)
@@ -107,13 +111,17 @@ struct VoicePickerView: View {
                         }
                     }
                     Spacer()
-                    if voice.name == currentVoice {
+                    if !allowed {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(Theme.secondaryText)
+                    } else if voice.name == currentVoice {
                         Image(systemName: "checkmark")
                             .foregroundStyle(Theme.accent)
                     }
                 }
             }
             .buttonStyle(.plain)
+            .disabled(!allowed)
             .accessibilityIdentifier("voice.\(voice.name)")
 
             previewButton(for: voice)

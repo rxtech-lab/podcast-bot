@@ -20,6 +20,12 @@ enum AppConfig {
     /// injection below. Read once from the launch environment.
     static let isE2E: Bool = ProcessInfo.processInfo.environment["E2E_TEST_MODE"] == "1"
 
+    /// True when a UI test launches with no subscription permissions. Makes
+    /// `EntitlementsManager` resolve to `.none` so gated native surfaces (model/
+    /// voice pickers, AI cover, studio types) render disabled without a network
+    /// round-trip. Read once from the launch environment.
+    static let e2eNoPermission: Bool = ProcessInfo.processInfo.environment["E2E_NO_PERMISSION"] == "1"
+
     /// The static bearer token the E2E harness sends; the backend ignores its
     /// value in E2E mode (every request resolves to the fixed "test" user).
     static let e2eAuthToken = "e2e-test-token"

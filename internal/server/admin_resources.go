@@ -224,7 +224,7 @@ func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.Cu
 				Description: "Private admin-only totals from the points ledger.",
 				Statistics: []admin.Statistic{
 					{Label: "Provider spend", Value: formatUSD(totalCost), Description: "Total metered cost"},
-					{Label: "LLM tokens", Value: formatInt(totalTokens), Description: fmt.Sprintf("%s prompt, %s completion", formatInt(promptTokens), formatInt(completionTokens))},
+					{Label: "LLM tokens", Value: formatCompactInt(totalTokens), Description: fmt.Sprintf("%s total, %s prompt, %s completion", formatDelimitedInt(totalTokens), formatDelimitedInt(promptTokens), formatDelimitedInt(completionTokens))},
 					{Label: "Azure voice spend", Value: formatUSD(totalTTS), Description: "Ledger TTS cost"},
 					{Label: "Image gen spend", Value: formatUSD(totalImage), Description: "Image generation ledger rows"},
 				},
@@ -281,8 +281,57 @@ func formatUSD(v float64) string {
 	return fmt.Sprintf("$%.2f", v)
 }
 
-func formatInt(v int64) string {
-	return strconv.FormatInt(v, 10)
+func formatCompactInt(v int64) string {
+	sign := ""
+	if v < 0 {
+		sign = "-"
+		v = -v
+	}
+
+	type compactUnit struct {
+		value  int64
+		suffix string
+	}
+	for _, unit := range []compactUnit{
+		{value: 1_000_000_000, suffix: "b"},
+		{value: 1_000_000, suffix: "m"},
+		{value: 1_000, suffix: "k"},
+	} {
+		if v >= unit.value {
+			if v%unit.value == 0 {
+				return sign + strconv.FormatInt(v/unit.value, 10) + unit.suffix
+			}
+			scaled := float64(v) / float64(unit.value)
+			format := "%.1f"
+			if scaled >= 100 {
+				format = "%.0f"
+			}
+			return sign + strings.TrimSuffix(fmt.Sprintf(format, scaled), ".0") + unit.suffix
+		}
+	}
+	return sign + formatDelimitedInt(v)
+}
+
+func formatDelimitedInt(v int64) string {
+	sign := ""
+	if v < 0 {
+		sign = "-"
+		v = -v
+	}
+	raw := strconv.FormatInt(v, 10)
+	if len(raw) <= 3 {
+		return sign + raw
+	}
+	var b strings.Builder
+	b.Grow(len(raw) + (len(raw)-1)/3 + len(sign))
+	b.WriteString(sign)
+	for i, r := range raw {
+		if i > 0 && (len(raw)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -736,13 +785,15 @@ func (r *iapProductsResource) syncProduct(ctx context.Context, p *IAPProduct) er
 }
 
 // ---------------------------------------------------------------------------
-// User management + topup (custom resource: table + per-row topup form)
+// User management (custom resource: table + per-row "Manage" form)
 // ---------------------------------------------------------------------------
 
-// usersResource lists user balances and exposes a per-row "Top up" form action.
-// It is a hand-written admin.Resource because the topup is a bespoke action
-// (credit points from a selected product) rather than a generic CRUD update,
-// and the list is backed by the points store rather than a GORM model.
+// usersResource lists user balances and subscription plans and exposes a
+// per-row "Manage" form that can re-assign the user's subscription class and/or
+// top up their points. It is a hand-written admin.Resource because these are
+// bespoke actions (change the recorded plan, credit points from a selected
+// product) rather than generic CRUD updates, and the list is backed by the
+// points store rather than a GORM model.
 type usersResource struct{ s *Server }
 
 func (s *Server) newUsersResource() admin.Resource { return &usersResource{s: s} }
@@ -794,21 +845,26 @@ func (r *usersResource) Schema(ctx context.Context, req admin.Request, action ad
 			},
 		}, nil
 	case admin.ActionEdit:
-		return r.topupSchema(ctx, req)
+		return r.manageSchema(ctx, req)
 	default:
 		return nil, fmt.Errorf("%w: no schema for action %q", admin.ErrBadInput, action)
 	}
 }
 
-// topupSchema is the per-user topup form: a product dropdown built from the
-// configured product→grant map, with the user's current balance shown in the
-// description.
-func (r *usersResource) topupSchema(ctx context.Context, req admin.Request) (*admin.FormSchema, error) {
+// manageSchema is the per-user management form: a subscription-class dropdown
+// (free plus every IAP subscription product) for re-assigning the user's plan,
+// and an optional product dropdown for topping up their points balance. Both
+// are optional so an admin can change either independently.
+func (r *usersResource) manageSchema(ctx context.Context, req admin.Request) (*admin.FormSchema, error) {
 	userID := strings.Trim(req.DynamicPath, "/")
-	fs, err := admin.FormSchemaFromModel(topupForm{}, admin.ActionEdit, "Top up",
+	fs, err := admin.FormSchemaFromModel(userManageForm{}, admin.ActionEdit, "Save",
 		r.actionURL(req, admin.ActionEdit, userID))
 	if err != nil {
 		return nil, err
+	}
+	if p, ok := fs.Schema.Properties.Get("subscription_class"); ok {
+		p.OneOf = r.s.subscriptionClassOptions(ctx)
+		p.Description = "Set the user's subscription plan. This overrides the last webhook-derived plan; RevenueCat remains the source of truth and a later webhook may change it back."
 	}
 	balanceNote := ""
 	if r.s.d.Points != nil && userID != "" {
@@ -817,9 +873,16 @@ func (r *usersResource) topupSchema(ctx context.Context, req admin.Request) (*ad
 		}
 	}
 	if p, ok := fs.Schema.Properties.Get("product"); ok {
-		p.Description = "Select a product to grant its points to the user." + balanceNote
-		p.OneOf = r.s.productOptions(ctx)
+		p.Description = "Optional: select a product to grant its points to the user." + balanceNote
+		// The field is optional and prefilled empty, so the empty value must be a
+		// valid oneOf branch — otherwise AJV rejects "" ("must match exactly one
+		// schema in oneOf"). Prepend an explicit "no top up" option.
+		p.OneOf = append([]*jsonschema.Schema{{Const: "", Title: "— No top up —"}}, r.s.productOptions(ctx)...)
 	}
+	if fs.UISchema == nil {
+		fs.UISchema = admin.UISchema{}
+	}
+	fs.UISchema["ui:order"] = []any{"subscription_class", "product"}
 	return fs, nil
 }
 
@@ -831,11 +894,29 @@ func (r *usersResource) Fetch(ctx context.Context, req admin.Request, action adm
 	case admin.ActionView:
 		return r.list(ctx, req)
 	case admin.ActionEdit:
-		// Prefill: no product preselected.
-		return admin.Detail(map[string]any{"product": ""}), nil
+		// Prefill the subscription-class dropdown to the user's current plan (so a
+		// no-op submit doesn't change it) and leave the topup product unselected.
+		return admin.Detail(map[string]any{
+			"subscription_class": r.currentClassValue(ctx, strings.Trim(req.DynamicPath, "/")),
+			"product":            "",
+		}), nil
 	default:
 		return nil, fmt.Errorf("%w: cannot fetch action %q", admin.ErrBadInput, action)
 	}
+}
+
+// currentClassValue returns the dropdown value for the user's currently recorded
+// subscription class ("free" when none is on file), matching the encoding used
+// by subscriptionClassOptions.
+func (r *usersResource) currentClassValue(ctx context.Context, userID string) string {
+	if r.s.d.Points == nil || userID == "" {
+		return "free"
+	}
+	sub, err := r.s.d.Points.Subscription(ctx, userID)
+	if err != nil || sub == nil {
+		return "free"
+	}
+	return encodeClassValue(sub.ProductID, sub.StoreEnvironment)
 }
 
 func (r *usersResource) list(ctx context.Context, req admin.Request) (*admin.ActionResponse, error) {
@@ -862,8 +943,8 @@ func (r *usersResource) list(ctx context.Context, req admin.Request) (*admin.Act
 			},
 			Actions: []admin.ActionButton{{
 				Type:       admin.ButtonPrimary,
-				Label:      "Top up",
-				Icon:       "plus",
+				Label:      "Manage",
+				Icon:       "settings",
 				Behavior:   admin.BehaviorOpenSheet,
 				ActionType: admin.ActionEdit,
 				OnClick:    r.actionURL(req, admin.ActionEdit, row.UserID),
@@ -889,47 +970,92 @@ func (r *usersResource) Act(ctx context.Context, req admin.Request, action admin
 	if userID == "" {
 		return nil, fmt.Errorf("%w: missing user id", admin.ErrBadInput)
 	}
-	product, _ := data["product"].(string)
-	product = strings.TrimSpace(product)
-	if product == "" {
-		return nil, &admin.ValidationError{Fields: map[string]string{"product": "required"}}
-	}
-	if r.s.d.IAPProducts == nil {
-		return nil, fmt.Errorf("%w: products unavailable", admin.ErrBadInput)
-	}
-	productID, err := strconv.ParseInt(product, 10, 64)
-	if err != nil || productID <= 0 {
-		return nil, &admin.ValidationError{Fields: map[string]string{"product": "unknown product"}}
-	}
-	iapProduct, err := r.s.d.IAPProducts.Get(ctx, productID)
-	if err != nil {
-		return nil, err
-	}
-	if iapProduct == nil || !iapProduct.Enabled || iapProduct.PointsGrant <= 0 {
-		return nil, &admin.ValidationError{Fields: map[string]string{"product": "unknown product"}}
-	}
 	if r.s.d.Points == nil {
 		return nil, fmt.Errorf("%w: points unavailable", admin.ErrBadInput)
 	}
-	if err := r.s.d.Points.EnsureUser(ctx, userID); err != nil {
-		return nil, err
+
+	result := map[string]any{"user_id": userID}
+
+	// 1) Optionally re-assign the subscription class, but only when it differs
+	// from what's on file so a topup-only submit doesn't disturb the plan.
+	subscriptionClass := strings.TrimSpace(stringField(data, "subscription_class"))
+	if subscriptionClass != "" && subscriptionClass != r.currentClassValue(ctx, userID) {
+		if err := r.setSubscriptionClass(ctx, userID, subscriptionClass); err != nil {
+			return nil, err
+		}
+		r.s.invalidateEntitlementsCache(ctx)
+		result["subscription_class"] = classLabel(func() string {
+			pid, _ := decodeClassValue(subscriptionClass)
+			return pid
+		}())
 	}
-	balance, err := r.s.d.Points.Credit(ctx, userID, iapProduct.PointsGrant, pointsReasonAdminTopup, randomEventID("admin_topup:"))
-	if err != nil {
-		return nil, err
+
+	// 2) Optionally top up points.
+	product := strings.TrimSpace(stringField(data, "product"))
+	if product != "" {
+		if r.s.d.IAPProducts == nil {
+			return nil, fmt.Errorf("%w: products unavailable", admin.ErrBadInput)
+		}
+		productID, err := strconv.ParseInt(product, 10, 64)
+		if err != nil || productID <= 0 {
+			return nil, &admin.ValidationError{Fields: map[string]string{"product": "unknown product"}}
+		}
+		iapProduct, err := r.s.d.IAPProducts.Get(ctx, productID)
+		if err != nil {
+			return nil, err
+		}
+		if iapProduct == nil || !iapProduct.Enabled || iapProduct.PointsGrant <= 0 {
+			return nil, &admin.ValidationError{Fields: map[string]string{"product": "unknown product"}}
+		}
+		if err := r.s.d.Points.EnsureUser(ctx, userID); err != nil {
+			return nil, err
+		}
+		balance, err := r.s.d.Points.Credit(ctx, userID, iapProduct.PointsGrant, pointsReasonAdminTopup, randomEventID("admin_topup:"))
+		if err != nil {
+			return nil, err
+		}
+		result["product"] = iapProduct.ProductID
+		result["product_id"] = iapProduct.ID
+		result["granted"] = iapProduct.PointsGrant
+		result["balance"] = balance
 	}
-	return admin.Detail(map[string]any{
-		"user_id":    userID,
-		"product":    iapProduct.ProductID,
-		"product_id": iapProduct.ID,
-		"granted":    iapProduct.PointsGrant,
-		"balance":    balance,
-	}), nil
+
+	return admin.Detail(result), nil
 }
 
-// topupForm is the DTO reflected into the topup form.
-type topupForm struct {
-	Product string `json:"product" jsonschema:"title=Product" validate:"required"`
+// setSubscriptionClass overrides the user's recorded plan to the given class
+// value (as encoded by subscriptionClassOptions). The free sentinel clears the
+// subscription; any other value resolves the matching subscription product and
+// records it as an active plan with no expiry.
+func (r *usersResource) setSubscriptionClass(ctx context.Context, userID, classValue string) error {
+	productID, storeEnv := decodeClassValue(classValue)
+	if productID == "" {
+		// Free / no-subscription class.
+		return r.s.d.Points.ClearSubscription(ctx, userID)
+	}
+	if r.s.d.IAPProducts == nil {
+		return fmt.Errorf("%w: products unavailable", admin.ErrBadInput)
+	}
+	product, err := r.s.d.IAPProducts.FindSubscription(ctx, productID, storeEnv)
+	if err != nil {
+		return err
+	}
+	if product == nil {
+		return &admin.ValidationError{Fields: map[string]string{"subscription_class": "unknown subscription product"}}
+	}
+	// expires_at = 0 means "no known expiry" and is treated as active while the
+	// status is active (see UserSubscription.Active). Each admin override is a
+	// distinct ledger event, so use a fresh idempotency key.
+	return r.s.d.Points.RecordSubscription(ctx, userID, *product, "active", randomEventID("admin_subscription:"), 0)
+}
+
+// userManageForm is the DTO reflected into the per-user management sheet. Both
+// fields are optional and independent: changing subscription_class re-assigns
+// the user's plan, and picking a product tops up their points. An admin may do
+// either or both in one submit.
+type userManageForm struct {
+	SubscriptionClass string `json:"subscription_class" jsonschema:"title=Subscription class"`
+	Product           string `json:"product,omitempty" jsonschema:"title=Top up product"`
 }
 
 // productOptions builds oneOf {const,title} entries from enabled DB catalog rows

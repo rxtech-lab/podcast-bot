@@ -90,6 +90,16 @@ type Deps struct {
 	// IAPProductSyncer pushes enabled admin-created products to RevenueCat. nil
 	// means enabled product saves are rejected by the admin resource.
 	IAPProductSyncer IAPProductSyncer
+	// SubscriptionPermissions maps each subscription class (an IAP subscription
+	// product, plus a free/no-subscription sentinel) to a nested permission
+	// object. It backs the admin CRUD resource and the /api/entitlements
+	// resolver. nil disables per-class gating (everyone resolves to the default
+	// permissions). Wired from the same database as Discussions.
+	SubscriptionPermissions *SubscriptionPermissionStore
+	// Entitlements caches per-user resolved permissions in Redis for 60s so the
+	// entitlements endpoint and UI-action gating stay cheap. nil disables
+	// caching — the resolver recomputes on every call.
+	Entitlements *EntitlementsStore
 	// Maintenance backs scheduled-maintenance windows: the admin CRUD resource
 	// and the precheck/config gating that pauses the app during a window. nil
 	// disables maintenance gating. Wired from the JobRegistry's database.
@@ -273,6 +283,13 @@ func New(d Deps) *Server {
 	if s.d.IAPProductSyncer == nil {
 		s.d.IAPProductSyncer = NewIAPProductSyncer(d.Env, nil)
 	}
+	if s.d.SubscriptionPermissions == nil && d.Discussions != nil {
+		if sp, err := NewSubscriptionPermissionStore(d.Discussions); err != nil {
+			s.logger().Warn("subscription permission store disabled", "err", err)
+		} else {
+			s.d.SubscriptionPermissions = sp
+		}
+	}
 	if s.d.Maintenance == nil && d.Jobs != nil && d.Jobs.db != nil {
 		if ms, err := NewMaintenanceStore(d.Jobs.db); err != nil {
 			s.logger().Warn("maintenance store disabled", "err", err)
@@ -297,6 +314,7 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("GET /api/discussion-types", s.handleDiscussionTypes)
 	s.mux.HandleFunc("GET /api/templates", s.handleTemplates)
 	s.mux.HandleFunc("GET /api/models", s.handleModels)
+	s.mux.HandleFunc("GET /api/entitlements", s.handleEntitlements)
 	s.mux.HandleFunc("GET /api/voices", s.handleVoices)
 	s.mux.HandleFunc("POST /api/voices/preview", s.handleVoicePreview)
 	s.mux.HandleFunc("GET /api/tools", s.handleTools)

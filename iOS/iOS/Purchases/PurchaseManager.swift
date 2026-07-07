@@ -89,3 +89,112 @@ final class PurchaseManager {
         }
     }
 }
+
+struct Entitlements: Codable, Sendable, Equatable {
+    var studios: Studios
+    var features: Features
+    var models: Rule
+    var voices: Rule
+
+    struct Studios: Codable, Sendable, Equatable {
+        var discussion = false
+        var audioBook = false
+        var album = false
+    }
+
+    struct Features: Codable, Sendable, Equatable {
+        var canPublishPodcast = false
+        var canSharePodcastPrivately = false
+        var canGenerateVideo = false
+        var canGenerateSummary = false
+        var canExportToNotion = false
+        var canGeneratePPT = false
+        var canGenerateMindmap = false
+        var canGenerateCoverWithAI = false
+    }
+
+    /// A catalog constraint. Mode "all" allows every entry; mode "only" allows
+    /// just the whitelisted ids (model ids or Azure voice ShortNames).
+    struct Rule: Codable, Sendable, Equatable {
+        var mode: String = "all"
+        var allow: [String] = []
+
+        func allows(_ id: String) -> Bool {
+            mode != "only" || allow.contains(id)
+        }
+    }
+
+    func isModelAllowed(_ id: String) -> Bool { models.allows(id) }
+    func isVoiceAllowed(_ shortName: String) -> Bool { voices.allows(shortName) }
+
+    /// Which content types the user may create.
+    func canCreate(studio: StudioKind) -> Bool {
+        switch studio {
+        case .discussion: return studios.discussion
+        case .audioBook: return studios.audioBook
+        case .album: return studios.album
+        }
+    }
+
+    enum StudioKind { case discussion, audioBook, album }
+
+    /// Everything granted — the optimistic default used while entitlements load
+    /// (and the fail-open state on a load error) so the UI doesn't flash disabled.
+    static let all = Entitlements(
+        studios: Studios(discussion: true, audioBook: true, album: true),
+        features: Features(
+            canPublishPodcast: true, canSharePodcastPrivately: true, canGenerateVideo: true,
+            canGenerateSummary: true, canExportToNotion: true, canGeneratePPT: true,
+            canGenerateMindmap: true, canGenerateCoverWithAI: true),
+        models: Rule(mode: "all", allow: []),
+        voices: Rule(mode: "all", allow: []))
+
+    /// Nothing granted — used by UI tests (E2E_NO_PERMISSION) to assert the
+    /// disabled state of gated surfaces.
+    static let none = Entitlements(
+        studios: Studios(),
+        features: Features(),
+        models: Rule(mode: "only", allow: []),
+        voices: Rule(mode: "only", allow: []))
+}
+
+/// App-wide holder for the resolved entitlements. Created in `iOSApp` and
+/// injected via the environment, mirroring `PurchaseManager`. Loaded once the
+/// user is authenticated (see `RootView`).
+@Observable
+@MainActor
+final class EntitlementsManager {
+    /// Optimistic default until the first load completes.
+    private(set) var current: Entitlements = .all
+
+    private let tokens: TokenProviding
+
+    init(tokens: TokenProviding) {
+        self.tokens = tokens
+    }
+
+    /// Fetches the caller's entitlements. E2E defaults to the optimistic `.all`
+    /// state so an unseeded entitlement table cannot gray out creation flows;
+    /// `E2E_NO_PERMISSION` still short-circuits to `.none` for gated-surface
+    /// tests. On a network error it leaves the current value (fail-open) — the
+    /// generation endpoints remain the real enforcement boundary.
+    func load() async {
+        if AppConfig.e2eNoPermission {
+            current = .none
+            return
+        }
+        if AppConfig.isE2E {
+            return
+        }
+        if let ent = try? await APIClient(tokens: tokens).entitlements() {
+            current = ent
+        }
+    }
+
+    /// Convenience passthroughs for call sites.
+    var features: Entitlements.Features { current.features }
+    var studios: Entitlements.Studios { current.studios }
+    func isModelAllowed(_ id: String) -> Bool { current.isModelAllowed(id) }
+    func isVoiceAllowed(_ shortName: String) -> Bool { current.isVoiceAllowed(shortName) }
+    func canCreate(studio: Entitlements.StudioKind) -> Bool { current.canCreate(studio: studio) }
+}

@@ -162,8 +162,63 @@ func TestUsersResourceTopup(t *testing.T) {
 	if row["subscription_plan"] != "" || row["subscription_status"] != "" {
 		t.Errorf("unexpected subscription fields = %#v", row)
 	}
-	if len(list.Items[0].Actions) != 1 || list.Items[0].Actions[0].Label != "Top up" {
-		t.Errorf("expected a Top up row action, got %#v", list.Items[0].Actions)
+	if len(list.Items[0].Actions) != 1 || list.Items[0].Actions[0].Label != "Manage" {
+		t.Errorf("expected a Manage row action, got %#v", list.Items[0].Actions)
+	}
+}
+
+func TestUsersResourceChangeSubscriptionClass(t *testing.T) {
+	ps, _ := newTestPointsStore(t)
+	iaps := newTestIAPProductStore(t)
+	sub := IAPProduct{
+		ProductID:        "pro_monthly",
+		StoreEnvironment: IAPStoreEnvironmentTest,
+		ProductType:      IAPProductTypeSubscription,
+		DisplayName:      "Pro",
+		PointsGrant:      0,
+		Enabled:          true,
+	}
+	if err := iaps.Create(context.Background(), &sub); err != nil {
+		t.Fatalf("create iap product: %v", err)
+	}
+	s := &Server{d: Deps{Points: ps, IAPProducts: iaps}}
+	res := s.newUsersResource()
+	ctx := context.Background()
+
+	classValue := encodeClassValue(sub.ProductID, sub.StoreEnvironment)
+
+	// Assign the subscription class to a user with no prior plan.
+	if _, err := res.Act(ctx, adminReq("u1"), admin.ActionEdit, map[string]any{"subscription_class": classValue}); err != nil {
+		t.Fatalf("Act set subscription: %v", err)
+	}
+	got, err := ps.Subscription(ctx, "u1")
+	if err != nil || got == nil {
+		t.Fatalf("Subscription after set: %v (%#v)", err, got)
+	}
+	if got.ProductID != "pro_monthly" || got.Status != "active" || !got.Active(0) {
+		t.Fatalf("recorded subscription = %#v", got)
+	}
+
+	// The prefill now reflects the current class.
+	prefill, err := res.Fetch(ctx, adminReq("u1"), admin.ActionEdit, nil)
+	if err != nil {
+		t.Fatalf("Fetch prefill: %v", err)
+	}
+	if m, _ := prefill.Data.(map[string]any); m["subscription_class"] != classValue {
+		t.Fatalf("prefill class = %#v, want %q", prefill.Data, classValue)
+	}
+
+	// Unknown subscription class → validation error.
+	if _, err := res.Act(ctx, adminReq("u1"), admin.ActionEdit, map[string]any{"subscription_class": "test_store|does_not_exist"}); err == nil {
+		t.Error("expected unknown-subscription rejection")
+	}
+
+	// Setting the free class clears the subscription.
+	if _, err := res.Act(ctx, adminReq("u1"), admin.ActionEdit, map[string]any{"subscription_class": "free"}); err != nil {
+		t.Fatalf("Act clear subscription: %v", err)
+	}
+	if got, err := ps.Subscription(ctx, "u1"); err != nil || got != nil {
+		t.Fatalf("Subscription after clear = %#v (err %v), want nil", got, err)
 	}
 }
 
@@ -312,6 +367,29 @@ func TestUsageDashboardResourceCustomPage(t *testing.T) {
 	todayRow := spendChart.Data[len(spendChart.Data)-1]
 	if todayRow["date"] != today.Format("2006-01-02") || todayRow["image_cost_usd"] != 0.4 || todayRow["tts_cost_usd"] != 0.2 {
 		t.Fatalf("today chart row = %#v", todayRow)
+	}
+}
+
+func TestUsageDashboardTokenFormatting(t *testing.T) {
+	cases := []struct {
+		value       int64
+		wantCompact string
+		wantExact   string
+	}{
+		{value: 165, wantCompact: "165", wantExact: "165"},
+		{value: 1_200, wantCompact: "1.2k", wantExact: "1,200"},
+		{value: 12_000, wantCompact: "12k", wantExact: "12,000"},
+		{value: 1_200_000, wantCompact: "1.2m", wantExact: "1,200,000"},
+		{value: 1_200_000_000, wantCompact: "1.2b", wantExact: "1,200,000,000"},
+	}
+
+	for _, tc := range cases {
+		if got := formatCompactInt(tc.value); got != tc.wantCompact {
+			t.Errorf("formatCompactInt(%d) = %q, want %q", tc.value, got, tc.wantCompact)
+		}
+		if got := formatDelimitedInt(tc.value); got != tc.wantExact {
+			t.Errorf("formatDelimitedInt(%d) = %q, want %q", tc.value, got, tc.wantExact)
+		}
 	}
 }
 

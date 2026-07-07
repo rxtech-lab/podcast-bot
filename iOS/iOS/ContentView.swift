@@ -12,6 +12,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(PurchaseManager.self) private var purchases
+    @Environment(EntitlementsManager.self) private var entitlements
     @Environment(LaunchFlowStore.self) private var launchFlow
     @Environment(DeepLinkRouter.self) private var deepLinks
     @Environment(PushNotificationManager.self) private var push
@@ -50,6 +51,9 @@ struct RootView: View {
                             await purchases.identify(userID: subject)
                         }
                     }
+                    // Load the user's subscription permissions so native surfaces
+                    // (model/voice pickers, AI cover, studio types) gray out.
+                    .task(id: auth.currentUser?.id) { await entitlements.load() }
                     .task { await startLaunchFlow() }
                     // Surface an active or upcoming maintenance window at launch.
                     // The library loads via endpoints that don't carry maintenance

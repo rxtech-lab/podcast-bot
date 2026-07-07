@@ -20,10 +20,14 @@ class E2ETestCase: XCTestCase {
     // MARK: - Launch helpers
 
     @discardableResult
-    func launch(deepLink: String? = nil, userID: String = "test", resetNewDiscussionSettings: Bool = true) -> XCUIApplication {
+    func launch(deepLink: String? = nil, userID: String = "test", resetNewDiscussionSettings: Bool = true,
+                noPermission: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         var env = ["E2E_TEST_MODE": "1", "E2E_API_BASE_URL": baseURL, "E2E_USER_ID": userID]
         if let deepLink { env["E2E_DEEP_LINK"] = deepLink }
+        // Force the entitlements manager to resolve to `.none` so gated surfaces
+        // render disabled without a network round-trip.
+        if noPermission { env["E2E_NO_PERMISSION"] = "1" }
         app.launchEnvironment = env
         if resetNewDiscussionSettings {
             app.launchArguments += [

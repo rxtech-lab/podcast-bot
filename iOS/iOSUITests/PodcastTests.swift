@@ -280,4 +280,36 @@ final class PodcastTests: E2ETestCase {
         }
         return false
     }
+
+    // MARK: - Entitlements: gated native surfaces render disabled
+
+    /// With no permission (E2E_NO_PERMISSION forces entitlements to `.none`),
+    /// the model picker still lists models but every row is disabled — mode
+    /// "only" with an empty allowlist rejects all model ids.
+    func testModelPickerDisabledWithoutPermission() throws {
+        let app = launch(noPermission: true)
+        openLibraryRow(app, id: "test-plan")
+
+        let input = app.textFields["plan.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 12), "planner input not found")
+        input.tap()
+        input.typeText("Design a podcast about renewable energy")
+        app.buttons["plan.send"].tap()
+
+        app.swipeDown()
+
+        let editModels = app.buttons["plan.editModels"]
+        XCTAssertTrue(editModels.waitForExistence(timeout: 40), "plan card / edit-models never appeared")
+        editModels.tap()
+
+        let modelLink = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'speakerModel.link.'")).firstMatch
+        XCTAssertTrue(modelLink.waitForExistence(timeout: 10), "speaker model link not found")
+        modelLink.tap()
+
+        // The row is visible (so the user sees what a plan unlocks) but disabled.
+        let option = app.buttons["model.gpt-4o"]
+        XCTAssertTrue(option.waitForExistence(timeout: 6), "gpt-4o row not found in picker")
+        XCTAssertFalse(option.isEnabled, "model row must be disabled without permission")
+    }
 }

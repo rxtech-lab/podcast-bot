@@ -836,6 +836,12 @@ final class APIClient: Sendable {
         return response.models ?? []
     }
 
+    /// The caller's resolved subscription permissions, cached server-side (60s).
+    /// Gates the app's native model/voice pickers, AI cover, and studio types.
+    func entitlements() async throws -> Entitlements {
+        try await get("/api/entitlements")
+    }
+
     /// The Azure TTS voices available for per-speaker assignment, fetched from
     /// Azure's voices/list endpoint and cached server-side (24h).
     func availableVoices() async throws -> [VoiceInfoDTO] {

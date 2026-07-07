@@ -527,6 +527,63 @@ func (s *PointsStore) RecordSubscription(ctx context.Context, userID string, pro
 	return err
 }
 
+// ClearSubscription removes a user's recorded subscription plan, dropping them
+// back to the free class. Used by the admin users table to set a user to "No
+// subscription (free)". RevenueCat remains the source of truth; a later webhook
+// may re-create this projection.
+func (s *PointsStore) ClearSubscription(ctx context.Context, userID string) error {
+	if s == nil {
+		return errors.New("points store is not configured")
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM user_subscriptions WHERE user_id = ?`, userID)
+	return err
+}
+
+// UserSubscription is the backend's last webhook-derived view of a user's
+// subscription plan, read from user_subscriptions. It is the join input for
+// resolving a user's entitlements.
+type UserSubscription struct {
+	ProductID          string
+	DisplayName        string
+	StoreEnvironment   string
+	Status             string
+	SubscriptionPeriod string
+	ExpiresAt          int64 // unix milliseconds
+}
+
+// Active reports whether the subscription grants access right now: status
+// "active" and not past its expiry (expiry 0 means no known expiry, treated as
+// active while status is active).
+func (u UserSubscription) Active(nowMillis int64) bool {
+	if strings.TrimSpace(u.Status) != "active" {
+		return false
+	}
+	return u.ExpiresAt == 0 || u.ExpiresAt > nowMillis
+}
+
+// Subscription returns the user's recorded subscription, or nil when none is on
+// file.
+func (s *PointsStore) Subscription(ctx context.Context, userID string) (*UserSubscription, error) {
+	if s == nil {
+		return nil, errors.New("points store is not configured")
+	}
+	var u UserSubscription
+	err := s.db.QueryRowContext(ctx, `SELECT product_id, display_name, store_environment, status, subscription_period, expires_at
+		FROM user_subscriptions WHERE user_id = ?`, strings.TrimSpace(userID)).
+		Scan(&u.ProductID, &u.DisplayName, &u.StoreEnvironment, &u.Status, &u.SubscriptionPeriod, &u.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 // DiscussionPoints returns the running points total charged to a discussion.
 func (s *PointsStore) DiscussionPoints(ctx context.Context, id string) (int64, error) {
 	if s == nil {

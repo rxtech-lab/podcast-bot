@@ -25,7 +25,16 @@ export async function listResources() {
 export async function getSchema(
   ...args: Parameters<typeof actions.getSchema>
 ) {
-  return redirectOnUnauthorized(await actions.getSchema(...args));
+  const result = await redirectOnUnauthorized(await actions.getSchema(...args));
+  // Opt-in debug: set ADMIN_DEBUG_SCHEMA=1 to dump the exact schema the RJSF
+  // form receives (e.g. to verify conditional `dependencies` fields render).
+  if (process.env.ADMIN_DEBUG_SCHEMA === "1" && result.ok) {
+    console.log(
+      `[admin schema] ${JSON.stringify(args)}\n` +
+        JSON.stringify(result.data, null, 2),
+    );
+  }
+  return result;
 }
 
 export async function fetchAction(

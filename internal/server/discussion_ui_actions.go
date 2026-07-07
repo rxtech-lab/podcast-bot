@@ -37,7 +37,7 @@ func (s *Server) handleHomeUIActions(w http.ResponseWriter, r *http.Request) {
 	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
 	writeJSON(w, discussionUIActionsResponse{
 		ID:       "home-toolbar",
-		Toolbars: s.homeToolbarActions(r, lang),
+		Toolbars: s.applyEntitlementsForUser(r, s.homeToolbarActions(r, lang)),
 	})
 }
 
@@ -73,6 +73,7 @@ func (s *Server) handleDiscussionUIActions(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid surface", http.StatusBadRequest)
 		return
 	}
+	resp.Items = s.applyEntitlementsForUser(r, resp.Items)
 	writeJSON(w, resp)
 }
 
@@ -370,6 +371,74 @@ func homeActionLink(parts ...string) string {
 		escaped = append(escaped, url.PathEscape(part))
 	}
 	return "debatepod://home/" + strings.Join(escaped, "/")
+}
+
+// allowsAction reports whether a UI-action id is subject to entitlement gating
+// and, if so, whether the resolved permissions allow it. Non-gated ids (the
+// bulk of navigation/utility actions) always return allowed. This is the single
+// source of truth mapping action ids → subscription features/studios.
+func (p Permissions) allowsAction(id string) (gated bool, allowed bool) {
+	switch id {
+	case "generate-summary":
+		return true, p.Features.CanGenerateSummary
+	case "generate-mindmap":
+		return true, p.Features.CanGenerateMindmap
+	case "generate-video":
+		return true, p.Features.CanGenerateVideo
+	case "download-pptx", "download-slides-pdf", "ppt-document":
+		return true, p.Features.CanGeneratePPT
+	case "export-notion":
+		return true, p.Features.CanExportToNotion
+	case "share-private":
+		return true, p.Features.CanSharePodcastPrivately
+	case "publish", "publish-album":
+		return true, p.Features.CanPublishPodcast
+	case "edit-cover":
+		return true, p.Features.CanGenerateCoverWithAI
+	case "new-album":
+		return true, p.Studios.Album
+	case "new-station":
+		return true, p.Studios.Discussion || p.Studios.AudioBook
+	default:
+		return false, true
+	}
+}
+
+// applyEntitlements grays out (Enabled=false) any gated action the resolved
+// permissions disallow, walking nested children. Items stay visible so the app
+// renders them disabled rather than hiding them. It only ever disables; it
+// never enables an item the builder left disabled.
+func applyEntitlements(items []discussionUIActionItem, ent Permissions) []discussionUIActionItem {
+	for i := range items {
+		if gated, allowed := ent.allowsAction(items[i].ID); gated && !allowed {
+			items[i].Enabled = false
+		}
+		if len(items[i].Children) > 0 {
+			items[i].Children = applyEntitlements(items[i].Children, ent)
+		}
+	}
+	return items
+}
+
+// applyEntitlementsForUser resolves the caller's permissions and grays out the
+// gated actions they lack. On a resolve error it fails open (returns the items
+// unchanged) so a cache/DB hiccup never blanks the app's menus — the gating
+// here is advisory UI, and the generation endpoints remain the enforcement
+// boundary.
+func (s *Server) applyEntitlementsForUser(r *http.Request, items []discussionUIActionItem) []discussionUIActionItem {
+	// Hermetic E2E runs configure no subscription_permissions, so gating here
+	// would blanket-disable every server-driven action and break the UI tests
+	// that exercise those flows. Client-side native gating is tested separately
+	// via the E2E_NO_PERMISSION launch flag.
+	if s.d.Env != nil && s.d.Env.E2EMode {
+		return items
+	}
+	ent, err := s.resolveEntitlements(r.Context(), s.requestUser(r).ID)
+	if err != nil {
+		s.logger().Warn("resolve entitlements for ui-actions", "err", err)
+		return items
+	}
+	return applyEntitlements(items, ent)
 }
 
 func queryBool(r *http.Request, key string) bool {
