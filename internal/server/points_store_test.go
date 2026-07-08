@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -22,6 +23,24 @@ func newTestPointsStore(t *testing.T) (*PointsStore, *DiscussionStore) {
 	ps, err := NewPointsStore(ds)
 	if err != nil {
 		t.Fatalf("NewPointsStore: %v", err)
+	}
+	return ps, ds
+}
+
+func newPostgresTestPointsStore(t *testing.T) (*PointsStore, *DiscussionStore) {
+	t.Helper()
+	databaseURL := os.Getenv("POSTGRES_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("POSTGRES_TEST_DATABASE_URL is not set")
+	}
+	ds, err := NewDiscussionStore("", databaseURL, "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = ds.Close() })
+	ps, err := NewPointsStore(ds)
+	if err != nil {
+		t.Fatalf("NewPointsStore postgres: %v", err)
 	}
 	return ps, ds
 }
@@ -192,6 +211,42 @@ func TestHistoryCollapsesSettledPlanningHoldIntoUsage(t *testing.T) {
 	for _, entry := range entries {
 		if entry.Reason == "reserve:planning" {
 			t.Fatalf("settled planning hold should be hidden: %#v", entries)
+		}
+	}
+}
+
+func TestPostgresHistoryCollapsesSettledPlanningHoldIntoUsage(t *testing.T) {
+	ps, ds := newPostgresTestPointsStore(t)
+	ctx := context.Background()
+	owner := "pg-points-owner-" + newJobID()
+	d, err := ds.Create(ctx, owner, "postgres points history", planResponse{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 100, "signup_grant", "signup:"+owner); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	if ok, _, err := ps.Reserve(ctx, owner, d.ID, 50, pointsReasonPlanning); err != nil || !ok {
+		t.Fatalf("Reserve = ok=%v err=%v", ok, err)
+	}
+	if _, err := ps.SettlePlanning(ctx, owner, d.ID, 0, 50, 20, PointsUsageDetail{CostUSD: 0.015}); err != nil {
+		t.Fatalf("SettlePlanning: %v", err)
+	}
+
+	page, err := ps.History(ctx, owner, 200, 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(page.Entries) != 2 {
+		t.Fatalf("History returned %d entries, want 2: %#v", len(page.Entries), page.Entries)
+	}
+	if page.Entries[0].Reason != pointsReasonPlanning || page.Entries[0].Delta != -20 || page.Entries[0].BalanceAfter != 80 {
+		t.Fatalf("latest entry = (%q, %d, balance %d), want planning -20 balance 80",
+			page.Entries[0].Reason, page.Entries[0].Delta, page.Entries[0].BalanceAfter)
+	}
+	for _, entry := range page.Entries {
+		if entry.Reason == "reserve:"+pointsReasonPlanning {
+			t.Fatalf("settled planning hold should be hidden: %#v", page.Entries)
 		}
 	}
 }
