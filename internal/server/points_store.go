@@ -790,11 +790,15 @@ func (s *PointsStore) matchingReserves(ctx context.Context, userID string, raw [
 
 	var values strings.Builder
 	args := make([]any, 0, len(keys)*4+1)
+	valuePlaceholder := "(?, ?, ?, ?)"
+	if s.db.kind == databasePostgres {
+		valuePlaceholder = "(?::BIGINT, ?::TEXT, ?::TEXT, ?::BIGINT)"
+	}
 	for i, key := range keys {
 		if i > 0 {
 			values.WriteString(", ")
 		}
-		values.WriteString("(?, ?, ?, ?)")
+		values.WriteString(valuePlaceholder)
 		args = append(args, key.settlementID, key.settlementReason, key.reserveDiscussionID, key.priority)
 	}
 	args = append(args, userID)
