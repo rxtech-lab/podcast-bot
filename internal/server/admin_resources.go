@@ -803,9 +803,21 @@ func (r *usersResource) ID() string { return "users" }
 func (r *usersResource) actionURL(req admin.Request, action admin.ActionType, dynamicPath string) string {
 	u := req.BasePath + "/resources/users/action?action=" + string(action)
 	if dynamicPath != "" {
-		u += "&dynamicPath=" + dynamicPath
+		u += "&dynamicPath=" + url.QueryEscape(dynamicPath)
 	}
 	return u
+}
+
+// userID decodes the route-safe dynamic path emitted by the Next.js admin.
+// Query-string action URLs already arrive decoded, while row navigation can
+// preserve encodeURIComponent output such as "oauth%3A..." in the catch-all
+// slug, so every Users action must normalize through this helper.
+func (r *usersResource) userID(req admin.Request) string {
+	userID := strings.Trim(req.DynamicPath, "/")
+	if decoded, err := url.PathUnescape(userID); err == nil {
+		userID = decoded
+	}
+	return strings.Trim(userID, "/")
 }
 
 func (r *usersResource) authorize(ctx context.Context, req admin.Request, action admin.ActionType) error {
@@ -833,6 +845,18 @@ func (r *usersResource) Schema(ctx context.Context, req admin.Request, action ad
 	}
 	switch action {
 	case admin.ActionView:
+		userID := r.userID(req)
+		if userID != "" {
+			dashboard, exists, err := r.s.d.Points.UserDashboard(ctx, userID, userDashboardRecentDays)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				return nil, fmt.Errorf("%w: user %q", admin.ErrNotFound, userID)
+			}
+			page := userDashboardCustomPage(req, dashboard)
+			return &page, nil
+		}
 		return &admin.TableSchema{
 			UIType: "table",
 			Type:   admin.ActionView,
@@ -856,7 +880,7 @@ func (r *usersResource) Schema(ctx context.Context, req admin.Request, action ad
 // and an optional product dropdown for topping up their points balance. Both
 // are optional so an admin can change either independently.
 func (r *usersResource) manageSchema(ctx context.Context, req admin.Request) (*admin.FormSchema, error) {
-	userID := strings.Trim(req.DynamicPath, "/")
+	userID := r.userID(req)
 	fs, err := admin.FormSchemaFromModel(userManageForm{}, admin.ActionEdit, "Save",
 		r.actionURL(req, admin.ActionEdit, userID))
 	if err != nil {
@@ -892,12 +916,18 @@ func (r *usersResource) Fetch(ctx context.Context, req admin.Request, action adm
 	}
 	switch action {
 	case admin.ActionView:
+		// Dynamic user views are custom pages whose data is embedded in Schema;
+		// the admin client skips Fetch for custom resources. Keep this response
+		// well-formed for direct API callers.
+		if r.userID(req) != "" {
+			return admin.Detail(map[string]any{}), nil
+		}
 		return r.list(ctx, req)
 	case admin.ActionEdit:
 		// Prefill the subscription-class dropdown to the user's current plan (so a
 		// no-op submit doesn't change it) and leave the topup product unselected.
 		return admin.Detail(map[string]any{
-			"subscription_class": r.currentClassValue(ctx, strings.Trim(req.DynamicPath, "/")),
+			"subscription_class": r.currentClassValue(ctx, r.userID(req)),
 			"product":            "",
 		}), nil
 	default:
@@ -949,6 +979,7 @@ func (r *usersResource) list(ctx context.Context, req admin.Request) (*admin.Act
 				ActionType: admin.ActionEdit,
 				OnClick:    r.actionURL(req, admin.ActionEdit, row.UserID),
 			}},
+			DynamicPath: row.UserID,
 		})
 	}
 	var nextURL *string
@@ -966,7 +997,7 @@ func (r *usersResource) Act(ctx context.Context, req admin.Request, action admin
 	if action != admin.ActionEdit {
 		return nil, fmt.Errorf("%w: cannot execute action %q", admin.ErrBadInput, action)
 	}
-	userID := strings.Trim(req.DynamicPath, "/")
+	userID := r.userID(req)
 	if userID == "" {
 		return nil, fmt.Errorf("%w: missing user id", admin.ErrBadInput)
 	}

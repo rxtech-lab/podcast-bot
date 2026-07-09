@@ -483,12 +483,14 @@ func (s *PointsStore) UserExists(ctx context.Context, userID string) (bool, erro
 	if s == nil {
 		return false, errors.New("points store is not configured")
 	}
-	var exists int
+	// PostgreSQL returns EXISTS as bool while SQLite returns 0/1. Use the
+	// shared cross-dialect scanner so this admin/user lookup works on both.
+	var exists sqlBoolInt
 	err := s.db.QueryRowContext(ctx, `SELECT
 		EXISTS(SELECT 1 FROM user_points_balance WHERE user_id = ?) OR
 		EXISTS(SELECT 1 FROM native_discussions WHERE owner_user_id = ?)`,
 		userID, userID).Scan(&exists)
-	return exists != 0, err
+	return exists.Int() != 0, err
 }
 
 // RecordSubscription stores the latest subscription plan state visible in the
