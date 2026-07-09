@@ -165,6 +165,155 @@ func TestUsersResourceTopup(t *testing.T) {
 	if len(list.Items[0].Actions) != 1 || list.Items[0].Actions[0].Label != "Manage" {
 		t.Errorf("expected a Manage row action, got %#v", list.Items[0].Actions)
 	}
+	if list.Items[0].DynamicPath != "u1" {
+		t.Errorf("row dynamic path = %q, want u1", list.Items[0].DynamicPath)
+	}
+}
+
+func TestUsersResourceDetailDashboard(t *testing.T) {
+	ps, ds := newTestPointsStore(t)
+	ctx := context.Background()
+	owner := "oauth:user-detail"
+	now := time.Now().UTC()
+
+	if _, err := ps.Credit(ctx, owner, 1_000, "purchase:INITIAL_PURCHASE", "purchase-detail-1"); err != nil {
+		t.Fatalf("purchase credit: %v", err)
+	}
+	if _, err := ps.Credit(ctx, owner, 500, pointsReasonAdminTopup, "admin-detail-1"); err != nil {
+		t.Fatalf("admin credit: %v", err)
+	}
+	if _, err := ds.db.ExecContext(ctx, `INSERT INTO creator_profiles
+		(user_id, display_name, username, avatar_url, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		owner, "Detail User", "detail", "https://example.com/avatar.png", now.UnixMilli()); err != nil {
+		t.Fatalf("insert creator profile: %v", err)
+	}
+
+	discussion, err := ds.Create(ctx, owner, "Dashboard discussion", planResponse{Script: &config.DebateTopic{
+		Title: "Dashboard discussion", Type: config.ContentTypeDiscussion,
+		Host: config.AgentSpec{Name: "Host", Model: "model-a"},
+		Discussants: []config.AgentSpec{
+			{Name: "Alice", Model: "model-b"},
+			{Name: "Bob", Model: "model-a"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("create discussion: %v", err)
+	}
+	for speaker, voice := range map[string]string{
+		"Host":  "en-US-AvaMultilingualNeural",
+		"Alice": "en-US-AvaMultilingualNeural",
+		"Bob":   "en-US-GuyNeural",
+	} {
+		if _, err := ds.SetSpeakerVoice(ctx, owner, discussion.ID, speaker, voice); err != nil {
+			t.Fatalf("set %s voice: %v", speaker, err)
+		}
+	}
+	if _, err := ds.SetJob(ctx, owner, discussion.ID, "job-detail"); err != nil {
+		t.Fatalf("set job: %v", err)
+	}
+	if err := ds.SetJobResultAndUsage(ctx, discussion.ID, DiscussionReady, "", PointsUsageDetail{
+		PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, LLMCostUSD: 0.4, LLMCostKnown: true, TTSCostUSD: 0.2,
+	}); err != nil {
+		t.Fatalf("set ready result: %v", err)
+	}
+	audioBook, err := ds.Create(ctx, owner, "Dashboard audiobook", planResponse{Script: &config.DebateTopic{
+		Title: "Dashboard audiobook", Type: config.ContentTypeAudioBook,
+		AudioBookHost: config.AgentSpec{Name: "Narrator", Model: "model-a"},
+	}})
+	if err != nil {
+		t.Fatalf("create audiobook: %v", err)
+	}
+	if _, err := ds.SetJob(ctx, owner, audioBook.ID, "job-audio-detail"); err != nil {
+		t.Fatalf("set audiobook job: %v", err)
+	}
+	if err := ds.SetJobResult(ctx, audioBook.ID, DiscussionFailed, ""); err != nil {
+		t.Fatalf("set audiobook failed: %v", err)
+	}
+
+	for _, row := range []struct {
+		discussionID string
+		reason       string
+		cost         float64
+		prompt       int64
+		completion   int64
+		total        int64
+		llm          float64
+		tts          float64
+	}{
+		{discussionID: discussion.ID, reason: pointsReasonGeneration, cost: 0.6, prompt: 100, completion: 50, total: 150, llm: 0.4, tts: 0.2},
+		{discussionID: discussion.ID, reason: pointsReasonImageGeneration, cost: 0.1},
+	} {
+		if _, err := ps.db.ExecContext(ctx, `INSERT INTO points_ledger
+			(user_id, discussion_id, delta, reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
+			 llm_cost_usd, tts_cost_usd, balance_after, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			owner, row.discussionID, -1, row.reason, row.cost, row.prompt, row.completion, row.total,
+			row.llm, row.tts, 1_498, now.UnixMilli()); err != nil {
+			t.Fatalf("insert usage ledger row: %v", err)
+		}
+	}
+
+	s := &Server{d: Deps{Points: ps}}
+	res := s.newUsersResource()
+	// Next.js can preserve encodeURIComponent output in its catch-all slug, so
+	// exercise the same oauth%3A... dynamic path seen by the deployed admin.
+	encodedOwner := "oauth%3Auser-detail"
+	raw, err := res.Schema(ctx, adminReq(encodedOwner), admin.ActionView)
+	if err != nil {
+		t.Fatalf("detail schema: %v", err)
+	}
+	page, ok := raw.(*admin.CustomResourcePage)
+	if !ok {
+		t.Fatalf("detail schema = %T, want *admin.CustomResourcePage", raw)
+	}
+	if page.UIType != "custom" || len(page.Sections) != 7 {
+		t.Fatalf("detail page = %#v", page)
+	}
+	stats := page.Sections[0].Statistics
+	if len(stats) != 6 || stats[1].Value != "2" || stats[2].Value != "150" || stats[4].Value != "1" || stats[5].Value != "1,500" {
+		t.Fatalf("detail stats = %#v", stats)
+	}
+	if page.Sections[0].Title != "Detail User" || !strings.Contains(page.Sections[1].Body, owner) {
+		t.Fatalf("detail identity sections = %#v / %#v", page.Sections[0], page.Sections[1])
+	}
+	if len(page.ActionButtons) != 3 || !strings.Contains(page.ActionButtons[1].OnClick, "action=edit") {
+		t.Fatalf("detail actions = %#v", page.ActionButtons)
+	}
+	acted, err := res.Act(ctx, adminReq(encodedOwner), admin.ActionEdit, map[string]any{})
+	if err != nil {
+		t.Fatalf("encoded user action: %v", err)
+	}
+	if result, _ := acted.Data.(map[string]any); result["user_id"] != owner {
+		t.Fatalf("encoded action user = %#v, want %q", acted.Data, owner)
+	}
+
+	var typeChart, modelChart, voiceChart *admin.Chart
+	for i := range page.Sections {
+		for j := range page.Sections[i].Children {
+			chart := &page.Sections[i].Children[j]
+			switch chart.Title {
+			case "Podcasts by type":
+				typeChart = chart
+			case "Models":
+				modelChart = chart
+			case "Azure voices":
+				voiceChart = chart
+			}
+		}
+	}
+	if typeChart == nil || len(typeChart.Data) != 2 {
+		t.Fatalf("type chart = %#v", typeChart)
+	}
+	if modelChart == nil || len(modelChart.Data) != 2 || modelChart.Data[0]["model"] != "model-a" || modelChart.Data[0]["count"] != int64(3) {
+		t.Fatalf("model chart = %#v", modelChart)
+	}
+	if voiceChart == nil || len(voiceChart.Data) != 2 || voiceChart.Data[0]["voice"] != "en-US-AvaMultilingualNeural" || voiceChart.Data[0]["count"] != int64(2) {
+		t.Fatalf("voice chart = %#v", voiceChart)
+	}
+
+	if _, err := res.Schema(ctx, adminReq("missing-user"), admin.ActionView); !errors.Is(err, admin.ErrNotFound) {
+		t.Fatalf("missing user error = %v, want ErrNotFound", err)
+	}
 }
 
 func TestUsersResourceChangeSubscriptionClass(t *testing.T) {
