@@ -10,5 +10,8 @@ import { auth } from "@/lib/auth";
 export const adminConfig = defineAdminConfig({
   apiUrl: process.env.ENGINE_BASE_URL ?? "http://localhost:8080",
   basePath: "/admin",
-  getToken: async () => (await auth())?.accessToken ?? null,
+  getToken: async () =>
+    process.env.E2E_MODE === "true"
+      ? null
+      : (await auth())?.accessToken ?? null,
 });

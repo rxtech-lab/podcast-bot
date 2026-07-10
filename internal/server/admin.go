@@ -19,13 +19,24 @@ const adminBasePath = "/admin"
 // users resources. It returns an error when the issuer is unreachable so the
 // caller can log and continue without the admin API.
 func (s *Server) newAdminHandler(ctx context.Context) (http.Handler, error) {
-	opts := []oidc.Option{}
-	if len(s.d.AdminAllowedClientIDs) > 0 {
-		opts = append(opts, oidc.WithAllowedClientIDs(s.d.AdminAllowedClientIDs...))
-	}
-	authn, err := oidc.New(ctx, s.d.AuthIssuer, opts...)
-	if err != nil {
-		return nil, err
+	var authn adminhttp.Authenticator
+	if s.e2eMode() {
+		// E2E mode is already isolated to a disposable local database. Give the
+		// browser harness a deterministic admin identity without contacting the
+		// real OIDC issuer or accepting a test credential in normal deployments.
+		authn = adminhttp.AuthenticatorFunc(func(*http.Request) (admin.Identity, error) {
+			return &oidc.Claims{Subject: e2eUserID, Roles: []string{"admin"}}, nil
+		})
+	} else {
+		opts := []oidc.Option{}
+		if len(s.d.AdminAllowedClientIDs) > 0 {
+			opts = append(opts, oidc.WithAllowedClientIDs(s.d.AdminAllowedClientIDs...))
+		}
+		var err error
+		authn, err = oidc.New(ctx, s.d.AuthIssuer, opts...)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	reg := admin.NewRegistry()

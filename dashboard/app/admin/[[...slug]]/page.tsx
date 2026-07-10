@@ -10,7 +10,7 @@ export default async function AdminPage(props: {
   params: Promise<{ slug?: string[] }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const session = await auth();
+  const session = process.env.E2E_MODE === "true" ? null : await auth();
   return (
     <AdminAppWithAuthRedirect
       config={adminConfig}

@@ -460,8 +460,9 @@ func New(d Deps) *Server {
 	// The schema-driven admin API (dashboard mode only). It is mounted on the
 	// mux under /admin/ — outside the /api/ auth allowlist — and enforces its
 	// own OIDC bearer + admin-role authorization. Requires the rxlab OAuth
-	// issuer; disabled (with a warning) when discovery fails.
-	if d.Mode == ModeDashboard && d.AuthIssuer != "" {
+	// issuer; disabled (with a warning) when discovery fails. Hermetic E2E mode
+	// supplies its own fixed admin identity, so it intentionally needs no issuer.
+	if d.Mode == ModeDashboard && (d.AuthIssuer != "" || s.e2eMode()) {
 		if adminHandler, err := s.newAdminHandler(context.Background()); err != nil {
 			s.logger().Warn("admin API disabled", "err", err)
 		} else {
