@@ -469,15 +469,16 @@ func LoadEnv() (*Env, error) {
 		e.TursoConnectionURL = ""
 		e.TursoAuthToken = ""
 		e.RedisURL = ""
-		// RabbitMQ is deliberately NOT scrubbed to nothing: E2E exercises the
-		// real broker-backed job queue. It is forced to a local broker
-		// (never .env's cluster URL) with a per-run queue-name prefix so
-		// successive/parallel runs sharing one broker stay isolated. The
-		// orchestration script (scripts/e2e.sh) starts the broker via
-		// Homebrew and sets both variables.
-		e.RabbitMQURL = strings.TrimSpace(os.Getenv("E2E_RABBITMQ_URL"))
-		if e.RabbitMQURL == "" {
-			e.RabbitMQURL = "amqp://guest:guest@127.0.0.1:5672/"
+		// The full iOS E2E suite exercises the real broker-backed job queue. Admin
+		// browser tests do not submit generation jobs, so they may opt into the
+		// in-process queue and avoid bringing up unrelated infrastructure.
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("E2E_QUEUE_MODE")), "inline") {
+			e.RabbitMQURL = ""
+		} else {
+			e.RabbitMQURL = strings.TrimSpace(os.Getenv("E2E_RABBITMQ_URL"))
+			if e.RabbitMQURL == "" {
+				e.RabbitMQURL = "amqp://guest:guest@127.0.0.1:5672/"
+			}
 		}
 		if e.MQQueuePrefix == "" {
 			e.MQQueuePrefix = "e2e-"

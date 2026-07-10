@@ -9,6 +9,11 @@ import { auth } from "@/lib/auth";
 export default auth((req) => {
   const { pathname, origin } = req.nextUrl;
 
+  // The Playwright stack runs against the backend's disposable E2E database
+  // and fixed admin identity. Keep this bypass behind the same explicit mode;
+  // production still requires a real AuthJS session and admin role.
+  if (process.env.E2E_MODE === "true") return;
+
   if (!req.auth) {
     if (pathname === "/login") return;
     return Response.redirect(new URL("/login", origin));

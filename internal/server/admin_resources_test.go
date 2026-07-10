@@ -28,6 +28,22 @@ func adminReq(dynamicPath string) admin.Request {
 	}
 }
 
+func TestAdminHandlerMountsInE2EModeWithoutIssuer(t *testing.T) {
+	s := New(Deps{
+		Mode: ModeDashboard,
+		Env:  &config.Env{E2EMode: true},
+	})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/resources", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /admin/resources = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"id":"app-config"`) {
+		t.Fatalf("admin resources missing app-config: %s", rec.Body.String())
+	}
+}
+
 func TestMaintenanceMiddleware(t *testing.T) {
 	ms := newTestMaintenanceStore(t)
 	s := &Server{d: Deps{Maintenance: ms}}
