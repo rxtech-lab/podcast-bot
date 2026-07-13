@@ -492,6 +492,7 @@ struct FullScreenPlayerView: View {
                     .lineLimit(1)
             }
         }
+        .glassChip()
         .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
     }
 
