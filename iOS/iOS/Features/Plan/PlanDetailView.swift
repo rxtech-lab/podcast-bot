@@ -24,6 +24,7 @@ struct PlanDetailView: View {
     @State private var showingSources = false
     @State private var showingSpeakerModels = false
     @State private var selectedChapters: PlanChaptersPresentation?
+    @State private var selectedTranscript: UploadedAudioTranscriptPresentation?
     @State private var showingGenerateConfirm = false
     @State private var showingPaywall = false
     @State private var showingPointsHistory = false
@@ -69,6 +70,15 @@ struct PlanDetailView: View {
         .sheet(isPresented: $showingSpeakerModels) { SpeakerModelsSheet(discussion: $discussion) }
         .sheet(item: $selectedChapters) { presentation in
             AudioBookChaptersSheet(presentation: presentation)
+        }
+        .sheet(item: $selectedTranscript) { presentation in
+            UploadedAudioTranscriptSheet(
+                discussionID: discussion.id,
+                presentation: presentation
+            ) { updated in
+                discussion = updated
+                editTurns = rebuiltHistory()
+            }
         }
         .task {
             await purchases.refreshBalance()
@@ -163,7 +173,7 @@ struct PlanDetailView: View {
                 PlanEditBubble(turn: turn, progressText: progressText,
                                onEditModels: { showingSpeakerModels = true },
                                onChaptersTapped: { snapshot in
-                                   selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+                                   openPlanSections(snapshot)
                                })
                 {
                     showingSources = true
@@ -776,6 +786,14 @@ struct PlanDetailView: View {
             }
         }
     }
+
+    private func openPlanSections(_ snapshot: PlanSnapshot) {
+        if snapshot.isUploadedAudio {
+            selectedTranscript = UploadedAudioTranscriptPresentation(snapshot: snapshot)
+        } else {
+            selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+        }
+    }
 }
 
 private struct PlanEditTurn: Identifiable, MessageListItem {
@@ -906,19 +924,24 @@ private struct PlanEditBubble: View {
                 .background(Color.red.opacity(0.12), in: .rect(cornerRadius: 20))
         }
     }
+
 }
 
 #if DEBUG
 extension PlanSnapshot {
     /// Memberwise initializer for previews/tests (the production type only ships
     /// `init(discussion:)`).
-    init(title: String, topic: String, isAudioBook: Bool = false, style: String = "", background: String,
+    init(title: String, topic: String, isAudioBook: Bool = false, isUploadedAudio: Bool = false,
+         style: String = "", background: String,
          chapters: [PlanChapterSnapshot] = [],
          people: [PlanPersonSnapshot], sources: [PlanSourceSnapshot])
     {
         self.title = title
         self.topic = topic
         self.isAudioBook = isAudioBook
+        self.isUploadedAudio = isUploadedAudio
+        self.uploadedAudioDurationMs = 0
+        self.transcriptSegments = []
         self.style = style
         self.background = background
         self.chapters = chapters

@@ -141,6 +141,30 @@ type Env struct {
 	AzureSpeechKey    string
 	AzureSpeechRegion string
 
+	// AzureSpeechEndpoint is the full Azure AI Services resource endpoint
+	// (https://{resource}.cognitiveservices.azure.com) used by the fast-
+	// transcription STT API. Optional: when empty the endpoint is derived from
+	// AzureSpeechRegion. Set via AZURE_SPEECH_ENDPOINT.
+	AzureSpeechEndpoint string
+
+	// STTProvider is the environment default speech-to-text provider used to
+	// transcribe uploaded podcast audio ("gemini" or "azure"); the admin App
+	// Config override wins when set. Default "gemini". Set via STT_PROVIDER.
+	STTProvider string
+
+	// AzureSTTCostPerHour / GeminiSTTCostPerHour price one hour of transcribed
+	// audio in dollars, folded into the points ledger as stt_cost_usd. Azure
+	// fast transcription lists at ~$0.36/hr; the Gemini figure approximates its
+	// audio-token pricing. Override with AZURE_STT_COST_PER_HOUR /
+	// GEMINI_STT_COST_PER_HOUR.
+	AzureSTTCostPerHour  float64
+	GeminiSTTCostPerHour float64
+
+	// MaxPodcastAudioUploadMB is the global ceiling for one uploaded podcast
+	// audio file in MiB; per-subscription-tier limits apply under it. Default
+	// 500 (the Azure fast-transcription max). Set via MAX_PODCAST_AUDIO_UPLOAD_MB.
+	MaxPodcastAudioUploadMB int64
+
 	ElevenLabsAPIKey string
 
 	// GeminiAPIKey authenticates against Google's Generative Language REST
@@ -364,6 +388,11 @@ func LoadEnv() (*Env, error) {
 		RevenueCatAPIBaseURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("REVENUECAT_API_BASE_URL")), "/"),
 		AzureSpeechKey:                   strings.TrimSpace(os.Getenv("AZURE_SPEECH_KEY")),
 		AzureSpeechRegion:                strings.TrimSpace(os.Getenv("AZURE_SPEECH_REGION")),
+		AzureSpeechEndpoint:              strings.TrimRight(strings.TrimSpace(os.Getenv("AZURE_SPEECH_ENDPOINT")), "/"),
+		STTProvider:                      strings.ToLower(strings.TrimSpace(os.Getenv("STT_PROVIDER"))),
+		AzureSTTCostPerHour:              parseFloatEnvDefault("AZURE_STT_COST_PER_HOUR", 0.36),
+		GeminiSTTCostPerHour:             parseFloatEnvDefault("GEMINI_STT_COST_PER_HOUR", 0.10),
+		MaxPodcastAudioUploadMB:          parseIntEnvDefault("MAX_PODCAST_AUDIO_UPLOAD_MB", 500),
 		ElevenLabsAPIKey:                 strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")),
 		GeminiAPIKey:                     strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		CloudflareAccountID:              strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")),
@@ -434,6 +463,9 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.TranscribeModel == "" {
 		e.TranscribeModel = "gemini-2.5-flash"
+	}
+	if e.STTProvider == "" {
+		e.STTProvider = "gemini"
 	}
 	if e.OutDir == "" {
 		e.OutDir = "./out"

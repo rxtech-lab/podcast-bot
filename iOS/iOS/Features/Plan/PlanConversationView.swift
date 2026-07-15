@@ -21,6 +21,7 @@ struct PlanConversationView: View {
     @State private var selectedReference: PodcastReference?
     @State private var selectedSourcesDiscussion: Discussion?
     @State private var selectedChapters: PlanChaptersPresentation?
+    @State private var selectedTranscript: UploadedAudioTranscriptPresentation?
     @State private var isGenerating = false
     @State private var showingGenerateConfirm = false
     @State private var showingChapterChecklist = false
@@ -39,11 +40,14 @@ struct PlanConversationView: View {
     @State private var languageOptions: [PlanLanguageOption] = []
     @State private var streamTask: Task<Void, Never>?
     @State private var initialScrollTask: Task<Void, Never>?
+    @State private var isTranscribing = false
+    @State private var transcribePollTask: Task<Void, Never>?
     @State private var streamHasActivity = false
     @FocusState private var inputFocused: Bool
 
     init(discussion: Discussion,
-         onGenerated: @escaping (Discussion) -> Void = { _ in }) {
+         onGenerated: @escaping (Discussion) -> Void = { _ in })
+    {
         _discussion = State(initialValue: discussion)
         _selectedLanguage = State(initialValue: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language))
         self.onGenerated = onGenerated
@@ -102,10 +106,20 @@ struct PlanConversationView: View {
         .sheet(item: $selectedChapters) { presentation in
             AudioBookChaptersSheet(presentation: presentation)
         }
+        .sheet(item: $selectedTranscript) { presentation in
+            UploadedAudioTranscriptSheet(
+                discussionID: discussion.id,
+                presentation: presentation
+            ) { updated in
+                discussion = updated
+                syncVisiblePlanCards(from: updated)
+            }
+        }
         .sheet(isPresented: $showingChapterChecklist) {
             if let script = latestAudioBookScript {
                 ChapterChecklistSheet(mode: .plan(script),
-                                      editableDiscussion: speakerModelsDiscussionBinding) { indices in
+                                      editableDiscussion: speakerModelsDiscussionBinding)
+                { indices in
                     showingChapterChecklist = false
                     generate(chapters: indices)
                 }
@@ -144,6 +158,7 @@ struct PlanConversationView: View {
         .onDisappear {
             streamTask?.cancel()
             initialScrollTask?.cancel()
+            transcribePollTask?.cancel()
             showingPaywall = false
         }
     }
@@ -154,6 +169,10 @@ struct PlanConversationView: View {
         var r = visibleParts.map { PlanningRow(id: $0.id, content: .part($0)) }
         if isStreaming {
             r.append(PlanningRow(id: "planning-loading", content: .loading))
+        } else if isTranscribing {
+            let text = discussion.progress?.text
+                ?? String(localized: "Transcribing audio…", comment: "Progress shown while an uploaded audio file is being transcribed")
+            r.append(PlanningRow(id: "transcribing", content: .transcribing(text)))
         }
         return r
     }
@@ -180,6 +199,8 @@ struct PlanConversationView: View {
         switch row.content {
         case .loading:
             loadingBubble
+        case let .transcribing(text):
+            transcribingBubble(text)
         case let .part(part):
             if part.kind == "text" {
                 textBubble(part)
@@ -351,8 +372,8 @@ struct PlanConversationView: View {
                         .foregroundStyle(questionColor(part.status))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(count == 1
-                             ? String(localized: "1 question", comment: "Question card header for a single question")
-                             : String(localized: "\(count) questions", comment: "Question card header; value is the question count"))
+                            ? String(localized: "1 question", comment: "Question card header for a single question")
+                            : String(localized: "\(count) questions", comment: "Question card header; value is the question count"))
                             .font(.subheadline.weight(.medium))
                         Text(questionStatusText(part.status, firstTitle: firstTitle))
                             .font(.caption)
@@ -389,6 +410,27 @@ struct PlanConversationView: View {
         case "rejected": return String(localized: "Skipped", comment: "Question card status when the user skipped")
         default: return String(localized: "Answered", comment: "Question card status when answered")
         }
+    }
+
+    private func transcribingBubble(_ text: String) -> some View {
+        HStack {
+            HStack(spacing: 10) {
+                Image(systemName: "waveform")
+                    .foregroundStyle(Theme.accent)
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
+                PlanningTypingDots()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Theme.agentBubble, in: .rect(cornerRadius: 20))
+            Spacer(minLength: 34)
+        }
+        .accessibilityLabel(text)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .planningCardAppear()
     }
 
     private var loadingBubble: some View {
@@ -664,7 +706,11 @@ struct PlanConversationView: View {
     }
 
     private func openChapters(_ snapshot: PlanSnapshot) {
-        selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+        if snapshot.isUploadedAudio {
+            selectedTranscript = UploadedAudioTranscriptPresentation(snapshot: snapshot)
+        } else {
+            selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+        }
     }
 
     private func syncVisiblePlanCards(from updated: Discussion) {
@@ -686,9 +732,19 @@ struct PlanConversationView: View {
                 didLoadHistory = true
                 isLoadingHistory = true
                 defer { isLoadingHistory = false }
-                let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id)
+                let api = APIClient(tokens: auth)
+                async let conversationRequest: PlanningConversationView? = try? api.planningConversation(id: discussion.id)
+                async let discussionRequest: Discussion? = try? api.discussion(
+                    id: discussion.id,
+                    includeEditTurns: false
+                )
+                let (view, latestDiscussion) = await (conversationRequest, discussionRequest)
+                if let latestDiscussion {
+                    discussion = latestDiscussion
+                }
                 if let view {
                     parts = view.parts
+                    syncVisiblePlanCards(from: discussion)
                     requestInitialBottomScrollIfNeeded()
                 }
                 let conversationFailed = view?.conversation?.status == "failed"
@@ -697,6 +753,14 @@ struct PlanConversationView: View {
                         beginStream {
                             APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
                         }
+                        return
+                    }
+                    // An uploaded-audio discussion whose transcription is still
+                    // running has no conversation yet — poll the discussion
+                    // until the transcript plan and the seeded review turn
+                    // land, then auto-run the review.
+                    if parts.isEmpty, discussion.status == .planning, isTranscribeInProgress(discussion) {
+                        beginTranscribePolling()
                         return
                     }
                     // Connect to the plan stream when the server has a turn waiting
@@ -731,6 +795,48 @@ struct PlanConversationView: View {
                     markdown: discussion.markdown
                 )]
                 requestInitialBottomScrollIfNeeded()
+            }
+        }
+    }
+
+    private func isTranscribeInProgress(_ d: Discussion) -> Bool {
+        d.progress?.operation == "transcribe" && d.progress?.active == true
+    }
+
+    /// Polls the discussion while its uploaded audio transcribes server-side.
+    /// When the transcript plan lands (the server also seeds the review turn),
+    /// this loads the conversation and auto-runs the AI transcript review.
+    private func beginTranscribePolling() {
+        guard !isTranscribing else { return }
+        isTranscribing = true
+        transcribePollTask?.cancel()
+        transcribePollTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                guard let updated = try? await APIClient(tokens: auth).discussion(id: discussion.id) else { continue }
+                discussion = updated
+                if updated.status == .failed {
+                    isTranscribing = false
+                    errorMessage = String(localized: "Transcription failed. Please delete this \(AppStringLiteral.stationNameRaw) and try again.",
+                                          comment: "Shown when server-side audio transcription failed")
+                    return
+                }
+                if isTranscribeInProgress(updated) {
+                    continue
+                }
+                // Progress cleared: the transcript should be stored now.
+                isTranscribing = false
+                if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
+                    parts = view.parts
+                    requestInitialBottomScrollIfNeeded()
+                    if view.needsRun == true {
+                        beginStream {
+                            APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
+                        }
+                    }
+                }
+                return
             }
         }
     }
@@ -853,7 +959,8 @@ struct PlanConversationView: View {
                 presentPlanningError((error as? APIError)?.errorDescription ?? error.localizedDescription,
                                      offersTopUp: false)
                 if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id),
-                   view.isRunning == true {
+                   view.isRunning == true
+                {
                     parts = view.parts
                     clearPlanningError()
                     streamTask = nil
@@ -1033,7 +1140,7 @@ private struct PlanningTypingDots: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { index in
+            ForEach(0 ..< 3, id: \.self) { index in
                 Circle()
                     .fill(Theme.secondaryText)
                     .frame(width: 7, height: 7)
@@ -1153,6 +1260,7 @@ private struct PlanningRow: Identifiable, MessageListItem {
     enum Content {
         case part(PlanningPart)
         case loading
+        case transcribing(String)
     }
 
     let id: String
@@ -1167,7 +1275,7 @@ private struct PlanningRow: Identifiable, MessageListItem {
 
     var isMessageListAccessory: Bool {
         switch content {
-        case .loading:
+        case .loading, .transcribing:
             return true
         case .part:
             return false

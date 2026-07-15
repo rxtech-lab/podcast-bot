@@ -207,7 +207,7 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 			return errors.New("priors zip is only valid for type=series")
 		}
 	}
-	if topic.Type == config.ContentTypeAudioBook {
+	if topic.Type == config.ContentTypeAudioBook || topic.Type == config.ContentTypeUploadedAudio {
 		sub.AudioOnly = true
 	}
 	if len(sub.SubtitleLanguages) > 0 && !sub.SoftSubs {
@@ -324,7 +324,7 @@ func RunFromTask(ctx context.Context, deps Deps, p PodcastGeneratePayload) error
 		BurnSubs:          p.BurnSubs,
 		Resolution:        p.Resolution,
 		SubtitleLanguages: p.SubtitleLanguages,
-		AudioOnly:         p.AudioOnly || topic.Type == config.ContentTypeAudioBook,
+		AudioOnly:         p.AudioOnly || topic.Type == config.ContentTypeAudioBook || topic.Type == config.ContentTypeUploadedAudio,
 		DiscussionID:      p.DiscussionID,
 	}
 	if p.PriorsZipS3Key != "" {
@@ -386,6 +386,11 @@ func discussionIDForJob(deps Deps, jobID string) string {
 func run(ctx context.Context, deps Deps, jobID string,
 	sub server.JobSubmission, topic *config.DebateTopic,
 ) error {
+	// Uploaded-audio podcasts skip the whole synthesis pipeline: the audio
+	// already exists, so publish is copy + captions + transcript + docs.
+	if topic.Type == config.ContentTypeUploadedAudio {
+		return runUploadedAudio(ctx, deps, jobID, topic)
+	}
 	logger := deps.Log.With("job", jobID, "type", topic.Type, "title", topic.Title)
 	audioOnly := sub.AudioOnly
 	// E2E mode always renders audio-only so the video encoder/stitch path (and its

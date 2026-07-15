@@ -38,6 +38,9 @@ type subscriptionPermissionForm struct {
 	CanGeneratePPT           bool `json:"can_generate_ppt" jsonschema:"title=Generate slide deck (PPT)"`
 	CanGenerateMindmap       bool `json:"can_generate_mindmap" jsonschema:"title=Generate mindmap"`
 	CanGenerateCoverWithAI   bool `json:"can_generate_cover" jsonschema:"title=Generate cover art with AI"`
+	CanUploadOwnAudio        bool `json:"can_upload_own_audio" jsonschema:"title=Upload own audio as a podcast"`
+
+	MaxUploadAudioMB int64 `json:"max_upload_audio_mb" jsonschema:"title=Max audio upload size (MB)"`
 
 	ModelsMode  string   `json:"models_mode" jsonschema:"title=Models,enum=all,enum=only,default=all"`
 	ModelsAllow []string `json:"models_allow,omitempty" jsonschema:"title=Allowed models"`
@@ -142,6 +145,8 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 	setPropDescription(fs, "can_generate_ppt", "Allow generating a slide deck (PowerPoint) from an episode.")
 	setPropDescription(fs, "can_generate_mindmap", "Allow generating a mindmap of an episode's key points.")
 	setPropDescription(fs, "can_generate_cover", "Allow generating cover artwork for an episode or album with AI.")
+	setPropDescription(fs, "can_upload_own_audio", "Allow creating a podcast from the user's own uploaded audio (server-side transcription). Also requires the global App Config toggle.")
+	setPropDescription(fs, "max_upload_audio_mb", "Largest audio file this tier may upload, in MB. 0 uses the server-wide default cap.")
 
 	// The reflector marks every non-pointer bool as `required`, but the studio and
 	// feature toggles are optional: an unchecked box is simply absent from the
@@ -154,7 +159,8 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 		"studio_discussion", "studio_audio_book", "studio_album",
 		"can_publish_podcast", "can_share_privately", "can_generate_video",
 		"can_generate_summary", "can_export_notion", "can_generate_ppt",
-		"can_generate_mindmap", "can_generate_cover",
+		"can_generate_mindmap", "can_generate_cover", "can_upload_own_audio",
+		"max_upload_audio_mb",
 	)
 
 	// Each allowlist array only makes sense in "only" mode, so pull it out of the
@@ -225,7 +231,8 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 		"studio_discussion", "studio_audio_book", "studio_album",
 		"can_publish_podcast", "can_share_privately", "can_generate_video",
 		"can_generate_summary", "can_export_notion", "can_generate_ppt",
-		"can_generate_mindmap", "can_generate_cover",
+		"can_generate_mindmap", "can_generate_cover", "can_upload_own_audio",
+		"max_upload_audio_mb",
 		"models_mode",
 		"voices_mode",
 		"*",
@@ -294,8 +301,9 @@ func (r *subscriptionPermissionsResource) Fetch(ctx context.Context, req admin.R
 			"studio_discussion": true, "studio_audio_book": true, "studio_album": true,
 			"can_publish_podcast": true, "can_share_privately": true, "can_generate_video": true,
 			"can_generate_summary": true, "can_export_notion": true, "can_generate_ppt": true,
-			"can_generate_mindmap": true, "can_generate_cover": true,
-			"models_mode": PermissionModeAll, "voices_mode": PermissionModeAll,
+			"can_generate_mindmap": true, "can_generate_cover": true, "can_upload_own_audio": true,
+			"max_upload_audio_mb": int64(0),
+			"models_mode":         PermissionModeAll, "voices_mode": PermissionModeAll,
 		}), nil
 	case admin.ActionEdit:
 		id, err := strconv.ParseInt(strings.Trim(req.DynamicPath, "/"), 10, 64)
@@ -527,6 +535,8 @@ func formFromRow(row *SubscriptionPermission) map[string]any {
 		"can_generate_ppt":     p.Features.CanGeneratePPT,
 		"can_generate_mindmap": p.Features.CanGenerateMindmap,
 		"can_generate_cover":   p.Features.CanGenerateCoverWithAI,
+		"can_upload_own_audio": p.Features.CanUploadOwnAudio,
+		"max_upload_audio_mb":  p.Limits.MaxUploadAudioMB,
 		"models_mode":          p.Models.Mode,
 		"models_allow":         p.Models.Allow,
 		"voices_mode":          p.Voices.Mode,
@@ -552,9 +562,11 @@ func permissionsFromForm(data map[string]any) Permissions {
 			CanGeneratePPT:           boolField(data, "can_generate_ppt", false),
 			CanGenerateMindmap:       boolField(data, "can_generate_mindmap", false),
 			CanGenerateCoverWithAI:   boolField(data, "can_generate_cover", false),
+			CanUploadOwnAudio:        boolField(data, "can_upload_own_audio", false),
 		},
 		Models: PermissionRule{Mode: stringField(data, "models_mode"), Allow: stringSliceField(data, "models_allow")},
 		Voices: PermissionRule{Mode: stringField(data, "voices_mode"), Allow: stringSliceField(data, "voices_allow")},
+		Limits: PermissionLimits{MaxUploadAudioMB: max(int64Field(data, "max_upload_audio_mb"), 0)},
 	}
 }
 

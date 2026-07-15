@@ -75,6 +75,12 @@ func (s *Server) pointsCharged(ctx context.Context, id string) (int64, error) {
 // duration is expected to cost — the amount required up front so a run can never
 // deplete mid-generation.
 func generationEstimatePoints(env *config.Env, script *config.DebateTopic) int64 {
+	// Uploaded-audio publish skips LLM scripting and TTS entirely (the audio
+	// already exists; transcription was billed separately), so only the
+	// per-podcast floor is held.
+	if script != nil && script.Type == config.ContentTypeUploadedAudio {
+		return env.PointsMinPerPodcast
+	}
 	minutes := 30.0
 	if script != nil && script.TotalMinutes > 0 {
 		minutes = float64(script.TotalMinutes)
@@ -175,6 +181,71 @@ func (s *Server) refundPlanning(ctx context.Context, userID, discID string, rese
 	}
 	if _, err := s.d.Points.SettlePlanning(ctx, userID, discID, reserveLedgerID, reserved, 0, PointsUsageDetail{}); err != nil {
 		s.logger().Warn("planning refund failed", "discussion", discID, "err", err)
+	}
+}
+
+// transcriptionEstimateHours estimates an uploaded audio file's duration in
+// hours from its byte size, assuming ~16 KB/s (128 kbps) compressed audio,
+// with a floor so a short clip still reserves a minimal amount.
+func transcriptionEstimateHours(sizeBytes int64) float64 {
+	const bytesPerSecond = 16 << 10
+	hours := float64(sizeBytes) / bytesPerSecond / 3600
+	if hours < 0.05 { // 3-minute floor
+		hours = 0.05
+	}
+	return hours
+}
+
+// reserveTranscription atomically holds the estimated transcription cost for an
+// uploaded audio file before the transcribe task is enqueued. Returns the
+// reserved amount, reserve ledger id, and ok; writes 402 when the balance is
+// short. The caller MUST later settle via settleTranscription or refund via
+// refundTranscription.
+func (s *Server) reserveTranscription(w http.ResponseWriter, r *http.Request, userID, discID string, sizeBytes int64) (int64, int64, bool) {
+	if !s.pointsEnabled() {
+		return 0, 0, true
+	}
+	rate := s.sttCostPerHour(s.resolvedSTTProvider(r.Context()))
+	required := pointsForUSD(s.d.Env, transcriptionEstimateHours(sizeBytes)*rate)
+	if required < 1 {
+		required = 1
+	}
+	ok, bal, reserveLedgerID, err := s.d.Points.ReserveWithLedgerID(r.Context(), userID, discID, required, pointsReasonTranscription)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return 0, 0, false
+	}
+	if !ok {
+		writeInsufficientPoints(w, required, bal)
+		return 0, 0, false
+	}
+	return required, reserveLedgerID, true
+}
+
+// settleTranscription reconciles a transcription reservation against the audio's
+// real transcribed duration. Best-effort: failures are logged, not surfaced.
+func (s *Server) settleTranscription(ctx context.Context, userID, discID string, reserved, reserveLedgerID int64, costUSD float64) {
+	if !s.pointsEnabled() || reserved <= 0 {
+		return
+	}
+	actual := pointsForCost(s.d.Env, costUSD)
+	if actual < 1 {
+		actual = 1 // transcription is never free
+	}
+	detail := PointsUsageDetail{STTCostUSD: costUSD, CostUSD: costUSD}
+	if _, err := s.d.Points.SettleReserved(ctx, userID, discID, reserveLedgerID, reserved, actual, pointsReasonTranscription, detail); err != nil {
+		s.logger().Warn("transcription settle failed", "discussion", discID, "err", err)
+	}
+}
+
+// refundTranscription releases a transcription reservation in full when the
+// task failed before producing a transcript.
+func (s *Server) refundTranscription(ctx context.Context, userID, discID string, reserved, reserveLedgerID int64) {
+	if !s.pointsEnabled() || reserved <= 0 {
+		return
+	}
+	if _, err := s.d.Points.SettleReserved(ctx, userID, discID, reserveLedgerID, reserved, 0, pointsReasonTranscription, PointsUsageDetail{}); err != nil {
+		s.logger().Warn("transcription refund failed", "discussion", discID, "err", err)
 	}
 }
 

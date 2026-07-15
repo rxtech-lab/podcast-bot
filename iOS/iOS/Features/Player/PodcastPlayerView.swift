@@ -1492,6 +1492,7 @@ private struct PlanSheetView: View {
     @State private var showingSources = false
     @State private var showingSpeakerModels = false
     @State private var selectedChapters: PlanChaptersPresentation?
+    @State private var selectedTranscript: UploadedAudioTranscriptPresentation?
     @State private var isLoadingFullPlan = false
     @State private var loadError: String?
 
@@ -1511,7 +1512,11 @@ private struct PlanSheetView: View {
                             onSourcesTapped: { showingSources = true },
                             onChaptersTapped: {
                                 let snapshot = PlanSnapshot(discussion: discussion)
-                                selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+                                if snapshot.isUploadedAudio {
+                                    selectedTranscript = UploadedAudioTranscriptPresentation(snapshot: snapshot)
+                                } else {
+                                    selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
+                                }
                             },
                             onEditModels: { showingSpeakerModels = true }
                         )
@@ -1556,6 +1561,13 @@ private struct PlanSheetView: View {
             }
             .sheet(item: $selectedChapters) { presentation in
                 AudioBookChaptersSheet(presentation: presentation)
+            }
+            .sheet(item: $selectedTranscript) { presentation in
+                UploadedAudioTranscriptSheet(
+                    discussionID: discussion.id,
+                    presentation: presentation,
+                    allowsEditing: false
+                )
             }
         }
     }

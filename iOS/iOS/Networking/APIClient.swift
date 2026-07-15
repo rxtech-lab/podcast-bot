@@ -356,6 +356,38 @@ final class APIClient: Sendable {
         try await send("POST", "/api/discussions/\(id)/create/plan", body: EmptyRequest())
     }
 
+    /// Creates a discussion from the user's own uploaded audio (the upload-audio
+    /// form values posted verbatim) and starts server-side transcription. The
+    /// returned discussion is in the planning state; the plan chat shows the
+    /// transcription progress and, once done, the transcript review.
+    func createUploadAudioDiscussion(form: FormData) async throws -> Discussion {
+        try await send("POST", "/api/discussions/upload-audio",
+                       body: UploadAudioCreateRequest(form: form))
+    }
+
+    /// Mints a short-lived URL for replaying the user's original upload.
+    func uploadedAudioPlaybackURL(id: String) async throws -> URL {
+        let response: UploadedAudioPlaybackResponse = try await get(
+            "/api/discussions/\(id)/uploaded-audio"
+        )
+        return response.url
+    }
+
+    /// Saves a direct user correction to one uploaded-audio transcript segment.
+    func updateTranscriptSegment(id: String, index: Int,
+                                 segment: TranscriptSegmentDTO) async throws -> Discussion {
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/transcript/segments/\(index)",
+            body: TranscriptSegmentUpdateRequest(
+                speaker: segment.speaker,
+                offsetMs: segment.offsetMs,
+                durationMs: segment.durationMs,
+                text: segment.text
+            )
+        )
+    }
+
     /// Streaming plan generation into an existing placeholder discussion: emits
     /// progress steps, finishing with a `.done(Discussion)` event carrying the
     /// persisted plan. The discussion is already saved server-side, so a dropped
@@ -652,6 +684,38 @@ final class APIClient: Sendable {
             "POST",
             "/api/uploads/complete",
             body: UploadCompleteRequest(key: presign.key, filename: filename, mimeType: mimeType)
+        )
+    }
+
+    /// Uploads a full-length podcast audio file for the upload-own-audio flow.
+    /// Streams straight from disk with an upload task (files can be hundreds of
+    /// MB, so they are never loaded into memory) using kind "podcast-audio",
+    /// which the server gates by entitlement and caps per subscription tier.
+    func uploadPodcastAudio(fileURL: URL, filename: String, mimeType: String) async throws -> UploadResponse {
+        let kind = "podcast-audio"
+        let presign: UploadPresignResponse = try await send(
+            "POST",
+            "/api/uploads/presign",
+            body: UploadPresignRequest(filename: filename, mimeType: mimeType, kind: kind)
+        )
+
+        var uploadReq = URLRequest(url: presign.uploadURL)
+        uploadReq.httpMethod = presign.method
+        uploadReq.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        for (name, value) in presign.headers {
+            uploadReq.setValue(value, forHTTPHeaderField: name)
+        }
+        let (uploadData, uploadResp) = try await session.upload(for: uploadReq, fromFile: fileURL)
+        guard let uploadHTTP = uploadResp as? HTTPURLResponse,
+              (200..<300).contains(uploadHTTP.statusCode) else {
+            let status = (uploadResp as? HTTPURLResponse)?.statusCode ?? 0
+            throw APIError.http(status, String(decoding: uploadData, as: UTF8.self))
+        }
+
+        return try await send(
+            "POST",
+            "/api/uploads/complete",
+            body: UploadCompleteRequest(key: presign.key, filename: filename, mimeType: mimeType, kind: kind)
         )
     }
 

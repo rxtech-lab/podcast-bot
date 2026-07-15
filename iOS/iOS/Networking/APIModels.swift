@@ -96,6 +96,9 @@ struct PrecheckResponseDTO: Codable, Sendable {
     var newDiscussion: PrecheckNewDiscussionDTO
     /// Optional so older servers without album support still decode.
     var newAlbum: PrecheckNewAlbumDTO?
+    /// Present only when the upload-own-audio feature is enabled for this user
+    /// (global admin toggle + subscription tier).
+    var uploadAudio: PrecheckUploadAudioDTO?
     /// Present only while a scheduled maintenance window is active. /api/precheck
     /// stays reachable during maintenance, so the bootstrap call carries the
     /// window here and the client can show the message proactively at launch.
@@ -104,6 +107,7 @@ struct PrecheckResponseDTO: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case newDiscussion = "new_discussion"
         case newAlbum = "new_album"
+        case uploadAudio = "upload_audio"
         case maintenance
     }
 }
@@ -113,6 +117,10 @@ struct PrecheckNewDiscussionDTO: Codable, Sendable {
 }
 
 struct PrecheckNewAlbumDTO: Codable, Sendable {
+    var form: PrecheckFormDTO
+}
+
+struct PrecheckUploadAudioDTO: Codable, Sendable {
     var form: PrecheckFormDTO
 }
 
@@ -288,6 +296,11 @@ struct ScriptDTO: Codable, Hashable, Sendable {
     var background: String?
     var surface: String?
     var sources: [SourceDTO]?
+    /// Uploaded-audio plans: the durable storage key of the user's original
+    /// upload, the transcribed duration, and the sentence-level transcript.
+    var uploadedAudioKey: String?
+    var uploadedAudioDurationMs: Int64?
+    var transcriptSegments: [TranscriptSegmentDTO]?
 
     enum CodingKeys: String, CodingKey {
         case title, type, language, channel
@@ -298,6 +311,24 @@ struct ScriptDTO: Codable, Hashable, Sendable {
         case audioBookSpeakers = "audio_book_speakers"
         case audioBookChapters = "audio_book_chapters"
         case audioBookChapterIndices = "audio_book_chapter_indices"
+        case uploadedAudioKey = "uploaded_audio_key"
+        case uploadedAudioDurationMs = "uploaded_audio_duration_ms"
+        case transcriptSegments = "transcript_segments"
+    }
+}
+
+/// One sentence-level piece of an uploaded-audio transcript.
+struct TranscriptSegmentDTO: Codable, Hashable, Sendable {
+    var speaker: String
+    var offsetMs: Int64
+    var durationMs: Int64
+    var text: String
+
+    enum CodingKeys: String, CodingKey {
+        case speaker
+        case offsetMs = "offset_ms"
+        case durationMs = "duration_ms"
+        case text
     }
 }
 
@@ -420,10 +451,14 @@ struct UploadResponse: Codable, Sendable {
 struct UploadPresignRequest: Codable, Sendable {
     var filename: String
     var mimeType: String
+    /// Upload kind ("podcast-audio" for the upload-own-audio flow); nil keeps
+    /// the default reference-document rules.
+    var kind: String?
 
     enum CodingKeys: String, CodingKey {
         case filename
         case mimeType = "mime_type"
+        case kind
     }
 }
 
@@ -445,11 +480,40 @@ struct UploadCompleteRequest: Codable, Sendable {
     var key: String
     var filename: String
     var mimeType: String
+    var kind: String?
 
     enum CodingKeys: String, CodingKey {
         case key
         case filename
         case mimeType = "mime_type"
+        case kind
+    }
+}
+
+/// POST /api/discussions/upload-audio request body: the upload-audio form
+/// values posted verbatim (same contract as DiscussionCreateRequest).
+struct UploadAudioCreateRequest: Codable, Sendable {
+    var form: FormData
+}
+
+/// Short-lived playback URL for the original audio behind an uploaded-audio
+/// discussion. The durable storage key is never exposed to the client.
+struct UploadedAudioPlaybackResponse: Codable, Sendable {
+    var url: URL
+}
+
+/// Complete replacement for one sentence-level transcript segment.
+struct TranscriptSegmentUpdateRequest: Codable, Sendable {
+    var speaker: String
+    var offsetMs: Int64
+    var durationMs: Int64
+    var text: String
+
+    enum CodingKeys: String, CodingKey {
+        case speaker
+        case offsetMs = "offset_ms"
+        case durationMs = "duration_ms"
+        case text
     }
 }
 

@@ -12,6 +12,12 @@ import (
 // default and the admin UI can override without a redeploy.
 const (
 	appConfigKeyDefaultHostModel = "default_host_model"
+	// appConfigKeySTTProvider picks the speech-to-text provider used to
+	// transcribe uploaded podcast audio (stt.ProviderGemini / stt.ProviderAzure).
+	appConfigKeySTTProvider = "stt_provider"
+	// appConfigKeySTTGeminiModel picks the Gemini model used when the STT
+	// provider is gemini; empty falls back to the env transcribe model.
+	appConfigKeySTTGeminiModel = "stt_gemini_model"
 )
 
 // AppConfigStore persists admin-editable, app-level configuration as a simple

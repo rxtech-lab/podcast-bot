@@ -21,6 +21,7 @@ struct LibraryView: View {
     @State private var discussions: [Discussion] = []
     @State private var showingNew = false
     @State private var showingNewAlbum = false
+    @State private var showingUploadAudio = false
     @State private var showingPointsHistory = false
     @State private var showingSettings = false
     @State private var showingWhatsNew = false
@@ -74,6 +75,13 @@ struct LibraryView: View {
                 NewAlbumSheet { album in
                     showingNewAlbum = false
                     navigateToAlbum(id: album.id)
+                }
+            }
+            .sheet(isPresented: $showingUploadAudio) {
+                UploadAudioSheet { discussion in
+                    showingUploadAudio = false
+                    upsert(discussion)
+                    navigate(to: discussion)
                 }
             }
             .alert("Could not load \(AppStringLiteral.stationsNameRaw)", isPresented: errorBinding) {
@@ -370,6 +378,8 @@ struct LibraryView: View {
             showingNew = true
         case ["sheet", "new-album"]:
             showingNewAlbum = true
+        case ["sheet", "upload-audio"]:
+            showingUploadAudio = true
         case ["filter", "all"]:
             visibilityFilter = .all
         case ["filter", "public"]:

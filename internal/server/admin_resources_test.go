@@ -522,8 +522,11 @@ func TestUsageDashboardResourceCustomPage(t *testing.T) {
 		t.Fatalf("page = %#v", page)
 	}
 	stats := page.Sections[0].Statistics
-	if len(stats) != 4 || stats[0].Value != "$1.65" || stats[1].Value != "165" {
+	if len(stats) != 5 || stats[0].Value != "$1.65" || stats[1].Value != "165" {
 		t.Fatalf("stats = %#v", stats)
+	}
+	if stats[4].Label != "Speech-to-text spend" || stats[4].Value != "$0.00" {
+		t.Fatalf("stt stat = %#v", stats[4])
 	}
 	spendChart := page.Sections[1].Children[0]
 	if len(spendChart.Data) != 14 {
@@ -1012,5 +1015,60 @@ func TestAdminResourceForbidsNonAdmin(t *testing.T) {
 	req := admin.Request{Identity: &oidc.Claims{Roles: []string{"user"}}, BasePath: adminBasePath, Query: url.Values{}}
 	if _, err := res.Schema(context.Background(), req, admin.ActionView); err != admin.ErrForbidden {
 		t.Errorf("non-admin Schema = %v, want ErrForbidden", err)
+	}
+}
+
+// TestAppConfigGeminiModelConditional pins the app-config schema shape: the
+// Gemini transcription model lives only inside a draft-07 dependencies oneOf
+// keyed on stt_provider, so the form shows it only when Gemini is selected.
+// Saving with the field absent (Azure selected) must preserve the stored model.
+func TestAppConfigGeminiModelConditional(t *testing.T) {
+	ac, _ := newTestAppConfigStore(t)
+	env := &config.Env{HostModel: "env/host", TranscribeModel: "gemini-2.5-flash"}
+	s := &Server{d: Deps{Env: env, AppConfig: ac}}
+	res := s.newAppConfigResource()
+	ctx := context.Background()
+
+	raw, err := res.Schema(ctx, adminReq(""), admin.ActionView)
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	fs := raw.(*admin.FormSchema)
+	if _, ok := fs.Schema.Properties.Get("stt_gemini_model"); ok {
+		t.Fatal("stt_gemini_model must not be a base property (dependency-injected only)")
+	}
+	deps, ok := fs.Schema.Extras["dependencies"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema missing dependencies extras: %#v", fs.Schema.Extras)
+	}
+	branch, ok := deps["stt_provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("dependencies missing stt_provider branch: %#v", deps)
+	}
+	oneOf, ok := branch["oneOf"].([]any)
+	if !ok || len(oneOf) != 2 {
+		t.Fatalf("stt_provider dependency oneOf = %#v", branch["oneOf"])
+	}
+	if fs.Schema.AdditionalProperties != nil {
+		t.Fatal("additionalProperties must be removed for dependency-injected fields")
+	}
+
+	// Save with Gemini selected: the model persists.
+	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, map[string]any{
+		"stt_provider": "gemini", "stt_gemini_model": "gemini-2.5-pro",
+	}); err != nil {
+		t.Fatalf("Act gemini: %v", err)
+	}
+	if got := s.resolvedSTTGeminiModel(ctx); got != "gemini-2.5-pro" {
+		t.Fatalf("stored gemini model = %q", got)
+	}
+	// Save with Azure selected (field not rendered → absent): stored model kept.
+	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, map[string]any{
+		"stt_provider": "azure",
+	}); err != nil {
+		t.Fatalf("Act azure: %v", err)
+	}
+	if got := s.resolvedSTTGeminiModel(ctx); got != "gemini-2.5-pro" {
+		t.Fatalf("gemini model after azure save = %q, want preserved", got)
 	}
 }

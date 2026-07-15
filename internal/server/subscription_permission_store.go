@@ -19,6 +19,15 @@ type Permissions struct {
 	Features PermissionFeatures `json:"features"`
 	Models   PermissionRule     `json:"models"`
 	Voices   PermissionRule     `json:"voices"`
+	Limits   PermissionLimits   `json:"limits"`
+}
+
+// PermissionLimits holds per-tier numeric quotas.
+type PermissionLimits struct {
+	// MaxUploadAudioMB caps one uploaded podcast audio file in MiB for this
+	// tier. 0 means "no tier-specific cap" — the env-wide
+	// MAX_PODCAST_AUDIO_UPLOAD_MB ceiling still applies.
+	MaxUploadAudioMB int64 `json:"maxUploadAudioMB"`
 }
 
 // PermissionStudios gates which content types a user may create.
@@ -39,6 +48,7 @@ type PermissionFeatures struct {
 	CanGeneratePPT           bool `json:"canGeneratePPT"`
 	CanGenerateMindmap       bool `json:"canGenerateMindmap"`
 	CanGenerateCoverWithAI   bool `json:"canGenerateCoverWithAI"`
+	CanUploadOwnAudio        bool `json:"canUploadOwnAudio"`
 }
 
 // PermissionRuleMode values for PermissionRule.Mode.

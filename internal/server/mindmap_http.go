@@ -44,7 +44,7 @@ func mindmapDocumentFrom(doc *SummaryDocument) (*MindmapDocument, error) {
 // exports that need something richer (Notion) embed a rendered SVG instead.
 // Injected on read like the "listen again" link, never stored; idempotent.
 func (s *Server) summaryMarkdownWithMindmapLink(ctx context.Context, d *Discussion, markdown string) string {
-	if !discussionIsDiscussion(d) {
+	if !discussionSupportsMindmap(d) {
 		return markdown
 	}
 	status, exists, err := s.d.Discussions.SummaryStatusFor(ctx, d.ID, SummaryDocTypeMindmap)
@@ -113,7 +113,7 @@ func (s *Server) handleDiscussionMindmapGenerate(w http.ResponseWriter, r *http.
 		http.Error(w, "discussion is not ready", http.StatusConflict)
 		return
 	}
-	if !discussionIsDiscussion(d) {
+	if !discussionSupportsMindmap(d) {
 		http.Error(w, "mindmap generation is only available for discussions", http.StatusConflict)
 		return
 	}

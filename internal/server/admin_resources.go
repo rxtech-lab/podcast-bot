@@ -14,6 +14,7 @@ import (
 	"github.com/rxtech-lab/admin-generator/admin"
 	"github.com/rxtech-lab/admin-generator/adminauth/oidc"
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/stt"
 )
 
 // requireAdmin is the authorization hook shared by every admin resource: the
@@ -28,6 +29,8 @@ func requireAdmin() func(context.Context, admin.Identity, admin.ActionType) erro
 
 type appConfigForm struct {
 	DefaultHostModel string `json:"default_host_model" jsonschema:"title=Default generation model"`
+	STTProvider      string `json:"stt_provider" jsonschema:"title=Speech-to-text provider"`
+	STTGeminiModel   string `json:"stt_gemini_model" jsonschema:"title=Gemini transcription model"`
 }
 
 // newAppConfigResource serves the single app-level configuration form. The
@@ -50,11 +53,62 @@ func (s *Server) newAppConfigResource() admin.Resource {
 				p.Description = "The default model used when generating new content. Fetched live from the gateway."
 				p.OneOf = modelOptions(s.modelCatalog(ctx))
 			}
+			if p, ok := fs.Schema.Properties.Get("stt_provider"); ok {
+				p.Description = "Speech-to-text provider used to transcribe uploaded audio with speaker diarization."
+				p.OneOf = []*jsonschema.Schema{
+					{Const: stt.ProviderGemini, Title: "Gemini"},
+					{Const: stt.ProviderAzure, Title: "Azure fast transcription"},
+				}
+			}
+			// The Gemini model picker renders only when the provider is Gemini:
+			// pull it out of the base properties and inject it via a draft-07
+			// `dependencies` oneOf keyed on stt_provider (the same pattern as the
+			// subscription-permission allowlists — see admin_subscription_permissions.go
+			// for why additionalProperties must be removed, not set true).
+			if p, ok := fs.Schema.Properties.Get("stt_gemini_model"); ok {
+				p.Description = "Gemini model used for transcription when the provider is Gemini. Fetched live from the Gemini catalog (audio-capable models only)."
+				if options := geminiModelOptions(s.geminiSTTModelOptions(ctx)); len(options) > 0 {
+					p.OneOf = options
+				}
+				fs.Schema.Properties.Delete("stt_gemini_model")
+				fs.Schema.Required = withoutSchemaRequiredFields(fs.Schema.Required, "stt_gemini_model")
+				if fs.Schema.Extras == nil {
+					fs.Schema.Extras = map[string]any{}
+				}
+				fs.Schema.Extras["dependencies"] = map[string]any{
+					"stt_provider": map[string]any{
+						"oneOf": []any{
+							map[string]any{
+								"properties": map[string]any{
+									"stt_provider": map[string]any{"enum": []string{stt.ProviderAzure}},
+								},
+							},
+							map[string]any{
+								"properties": map[string]any{
+									"stt_provider":     map[string]any{"enum": []string{stt.ProviderGemini}},
+									"stt_gemini_model": p,
+								},
+							},
+						},
+					},
+				}
+				fs.Schema.AdditionalProperties = nil
+				if fs.UISchema == nil {
+					fs.UISchema = admin.UISchema{}
+				}
+				// The wildcard lets RJSF accept the dependency-injected field
+				// without tripping its ui:order completeness check.
+				fs.UISchema["ui:order"] = []any{"default_host_model", "stt_provider", "*"}
+			}
 			return fs, nil
 		},
 		Fetch: func(ctx context.Context, _ admin.Request, _ admin.ActionType, _ map[string]any) (*admin.ActionResponse, error) {
 			d := s.resolvedModelDefaults(ctx)
-			return admin.Detail(map[string]any{"default_host_model": d.Host}), nil
+			return admin.Detail(map[string]any{
+				"default_host_model": d.Host,
+				"stt_provider":       s.resolvedSTTProvider(ctx),
+				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
+			}), nil
 		},
 		Act: func(ctx context.Context, _ admin.Request, _ admin.ActionType, data map[string]any) (*admin.ActionResponse, error) {
 			model, _ := data["default_host_model"].(string)
@@ -62,15 +116,74 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			if model != "" && !s.modelExists(ctx, model) {
 				return nil, fmt.Errorf("%w: unknown model %q", admin.ErrBadInput, model)
 			}
+			provider, _ := data["stt_provider"].(string)
+			provider = strings.ToLower(strings.TrimSpace(provider))
+			switch provider {
+			case "", stt.ProviderGemini, stt.ProviderAzure:
+			default:
+				return nil, fmt.Errorf("%w: stt_provider must be %q or %q", admin.ErrBadInput, stt.ProviderGemini, stt.ProviderAzure)
+			}
+			// The Gemini model field is dependency-injected and only submitted
+			// while the provider is Gemini; when the key is absent (Azure
+			// selected) the stored value is preserved rather than cleared.
+			geminiModelRaw, geminiModelPresent := data["stt_gemini_model"]
+			geminiModel, _ := geminiModelRaw.(string)
+			geminiModel = strings.TrimSpace(geminiModel)
+			// Validate against the live catalog when it is reachable; fail open
+			// (accept the id) when the catalog can't be fetched so a transient
+			// Google outage never locks the form.
+			if geminiModel != "" {
+				if catalog := s.geminiSTTModelOptions(ctx); len(catalog) > 0 && !geminiModelInCatalog(catalog, geminiModel) {
+					return nil, fmt.Errorf("%w: unknown gemini model %q", admin.ErrBadInput, geminiModel)
+				}
+			}
 			if s.d.AppConfig == nil {
 				return nil, fmt.Errorf("%w: app config store unavailable", admin.ErrBadInput)
 			}
 			if err := s.d.AppConfig.Set(ctx, appConfigKeyDefaultHostModel, model); err != nil {
 				return nil, err
 			}
-			return admin.Detail(map[string]any{"default_host_model": model}), nil
+			if provider != "" {
+				if err := s.d.AppConfig.Set(ctx, appConfigKeySTTProvider, provider); err != nil {
+					return nil, err
+				}
+			}
+			if geminiModelPresent {
+				if err := s.d.AppConfig.Set(ctx, appConfigKeySTTGeminiModel, geminiModel); err != nil {
+					return nil, err
+				}
+			}
+			return admin.Detail(map[string]any{
+				"default_host_model": model,
+				"stt_provider":       s.resolvedSTTProvider(ctx),
+				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
+			}), nil
 		},
 	})
+}
+
+// geminiModelOptions builds oneOf {const,title} entries for the Gemini
+// transcription-model dropdown.
+func geminiModelOptions(models []stt.GeminiModel) []*jsonschema.Schema {
+	opts := make([]*jsonschema.Schema, 0, len(models))
+	for _, m := range models {
+		title := m.DisplayName
+		if title != m.ID {
+			title = fmt.Sprintf("%s (%s)", m.DisplayName, m.ID)
+		}
+		opts = append(opts, &jsonschema.Schema{Const: m.ID, Title: title})
+	}
+	return opts
+}
+
+// geminiModelInCatalog reports whether id is one of the fetched Gemini models.
+func geminiModelInCatalog(models []stt.GeminiModel, id string) bool {
+	for _, m := range models {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // modelOptions builds oneOf {const,title} entries so RJSF renders a labeled
@@ -180,7 +293,7 @@ func (r *usageDashboardResource) Act(ctx context.Context, req admin.Request, act
 
 func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.CustomResourcePage {
 	rows := make([]map[string]any, 0, len(summary.Days))
-	var totalCost, totalLLM, totalTTS, totalImage, totalMusic, totalOther float64
+	var totalCost, totalLLM, totalTTS, totalImage, totalMusic, totalSTT, totalOther float64
 	var totalTokens, promptTokens, completionTokens int64
 	for _, day := range summary.Days {
 		rows = append(rows, map[string]any{
@@ -190,6 +303,7 @@ func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.Cu
 			"tts_cost_usd":      roundCents(day.TTSCostUSD),
 			"image_cost_usd":    roundCents(day.ImageCostUSD),
 			"music_cost_usd":    roundCents(day.MusicCostUSD),
+			"stt_cost_usd":      roundCents(day.STTCostUSD),
 			"other_cost_usd":    roundCents(day.OtherCostUSD),
 			"prompt_tokens":     day.PromptTokens,
 			"completion_tokens": day.CompletionTokens,
@@ -200,6 +314,7 @@ func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.Cu
 		totalTTS += day.TTSCostUSD
 		totalImage += day.ImageCostUSD
 		totalMusic += day.MusicCostUSD
+		totalSTT += day.STTCostUSD
 		totalOther += day.OtherCostUSD
 		promptTokens += day.PromptTokens
 		completionTokens += day.CompletionTokens
@@ -227,6 +342,7 @@ func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.Cu
 					{Label: "LLM tokens", Value: formatCompactInt(totalTokens), Description: fmt.Sprintf("%s total, %s prompt, %s completion", formatDelimitedInt(totalTokens), formatDelimitedInt(promptTokens), formatDelimitedInt(completionTokens))},
 					{Label: "Azure voice spend", Value: formatUSD(totalTTS), Description: "Ledger TTS cost"},
 					{Label: "Image gen spend", Value: formatUSD(totalImage), Description: "Image generation ledger rows"},
+					{Label: "Speech-to-text spend", Value: formatUSD(totalSTT), Description: "Uploaded-audio transcription"},
 				},
 			},
 			{
@@ -243,6 +359,7 @@ func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.Cu
 						{Key: "tts_cost_usd", Label: "Azure voice", Color: "#16a34a"},
 						{Key: "image_cost_usd", Label: "Image gen", Color: "#dc2626"},
 						{Key: "music_cost_usd", Label: "Music", Color: "#9333ea"},
+						{Key: "stt_cost_usd", Label: "Speech-to-text", Color: "#0891b2"},
 						{Key: "other_cost_usd", Label: "Other", Color: "#f59e0b"},
 					},
 				}},
@@ -266,8 +383,8 @@ func usageSpendCustomPage(req admin.Request, summary UsageSpendSummary) admin.Cu
 			{
 				Type:  admin.CustomPageSectionText,
 				Title: "Accounting notes",
-				Body: fmt.Sprintf("LLM: %s\nAzure voice / TTS: %s\nImage generation: %s\nMusic: %s\nOther provider cost: %s",
-					formatUSD(totalLLM), formatUSD(totalTTS), formatUSD(totalImage), formatUSD(totalMusic), formatUSD(totalOther)),
+				Body: fmt.Sprintf("LLM: %s\nAzure voice / TTS: %s\nImage generation: %s\nMusic: %s\nSpeech-to-text: %s\nOther provider cost: %s",
+					formatUSD(totalLLM), formatUSD(totalTTS), formatUSD(totalImage), formatUSD(totalMusic), formatUSD(totalSTT), formatUSD(totalOther)),
 			},
 		},
 	}

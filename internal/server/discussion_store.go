@@ -2208,6 +2208,15 @@ func (s *DiscussionStore) SetJob(ctx context.Context, owner, id, jobID string) (
 	return s.Get(ctx, owner, id)
 }
 
+// SetDurationSeconds records a podcast's real audio duration. Written by the
+// uploaded-audio publish path, where the duration comes from probing the
+// user's file rather than from a synthesis timeline.
+func (s *DiscussionStore) SetDurationSeconds(ctx context.Context, id string, seconds float64) error {
+	_, err := s.exec(ctx, `UPDATE native_discussions SET duration_seconds = ?, updated_at = ? WHERE id = ?`,
+		seconds, time.Now().UnixMilli(), id)
+	return err
+}
+
 func (s *DiscussionStore) SetJobResult(ctx context.Context, id string, status DiscussionStatus, downloadURL string) error {
 	_, err := s.exec(ctx, `UPDATE native_discussions SET status = ?, download_url = ?, updated_at = ?
 		WHERE id = ?`, status, downloadURL, time.Now().UnixMilli(), id)

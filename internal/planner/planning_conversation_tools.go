@@ -20,7 +20,10 @@ func conversationPlanSchema(contentType, template string) map[string]any {
 // conversationTools is the tool set for the conversational planner loop.
 func conversationTools(contentType, template string) []openai.ChatCompletionToolParam {
 	tools := []openai.ChatCompletionToolParam{}
-	if contentType != config.ContentTypeAudioBook && IsResearchTemplate(template) {
+	// Transcript review needs no research: the source of truth is the user's
+	// own audio, so only the plan/question tools are offered.
+	researchable := contentType != config.ContentTypeUploadedAudio
+	if researchable && contentType != config.ContentTypeAudioBook && IsResearchTemplate(template) {
 		tools = append(tools,
 			toolDef("search_research_papers", "Search Firecrawl Research Index for ranked scientific or engineering papers. Use this before general web search for the research template.", map[string]any{
 				"type": "object",
@@ -39,27 +42,35 @@ func conversationTools(contentType, template string) []openai.ChatCompletionTool
 			}),
 		)
 	}
-	tools = append(tools,
-		toolDef("search_sources", "Search the web through Firecrawl and return candidate source URLs with snippets. Use this before crawl_sources; do not treat search snippets as full source content.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "Search query to research the discussion topic."},
-			},
-			"required": []string{"query"},
-		}),
-		toolDef("crawl_sources", "Scrape/read one or more promising URLs and return clean markdown context. Use after search_sources when candidate sources look useful.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"urls": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "The selected http(s) URLs to read.",
+	if researchable {
+		tools = append(tools,
+			toolDef("search_sources", "Search the web through Firecrawl and return candidate source URLs with snippets. Use this before crawl_sources; do not treat search snippets as full source content.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "Search query to research the discussion topic."},
 				},
-			},
-			"required": []string{"urls"},
-		}),
+				"required": []string{"query"},
+			}),
+			toolDef("crawl_sources", "Scrape/read one or more promising URLs and return clean markdown context. Use after search_sources when candidate sources look useful.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"urls": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "The selected http(s) URLs to read.",
+					},
+				},
+				"required": []string{"urls"},
+			}),
+		)
+	}
+	updatePlanDesc := "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display."
+	if contentType == config.ContentTypeUploadedAudio {
+		updatePlanDesc = "Apply transcript corrections: pass only the segments you change (by index), plus an optional corrected title and speaker renames. Unlisted segments stay unchanged. This does not show the plan to the user; call show_plan after this when the corrections are ready to display."
+	}
+	tools = append(tools,
 		toolDef("write_plan", "Write and save the initial plan internally. This does not show the plan to the user; call show_plan after this when the plan is ready to display.", conversationPlanSchema(contentType, template)),
-		toolDef("update_plan", "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display.", conversationPlanSchema(contentType, template)),
+		toolDef("update_plan", updatePlanDesc, conversationPlanSchema(contentType, template)),
 		toolDef("show_plan", "Show the current saved plan in the app. Call only after write_plan or update_plan, and only when the plan should be visible to the user. After this tool returns, acknowledge briefly instead of summarizing the plan.", map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

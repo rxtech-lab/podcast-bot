@@ -73,6 +73,12 @@ const (
 	// emitting `<season-S-episode-E-image-N/>` markers in the host's
 	// stream.
 	ContentTypeSeries = "series"
+	// ContentTypeUploadedAudio wraps user-provided audio: the user uploads a
+	// finished recording, the server transcribes it with speaker diarization,
+	// and the plan carries the sentence-level transcript segments instead of
+	// a generative roster. Generation skips TTS entirely — the uploaded audio
+	// becomes the podcast audio and the segments become captions/transcript.
+	ContentTypeUploadedAudio = "uploaded-audio"
 )
 
 // Research-scratchpad storage backends selectable via the `storage:` field in
@@ -127,6 +133,19 @@ const (
 	AudioBookModeNarration = "narration"
 	AudioBookModeDialogue  = "dialogue"
 )
+
+// TranscriptSegment is one sentence-level piece of an uploaded-audio
+// transcript: who said it, where it sits on the audio timeline, and the text.
+// Segments are the source of truth for uploaded-audio podcasts — the plan
+// chat edits Speaker/Text, direct user edits may also correct the time range,
+// and publish renders subtitles and the transcript from the saved result. The
+// AI planner still treats offsets/durations as fixed source-audio metadata.
+type TranscriptSegment struct {
+	Speaker    string `yaml:"speaker" json:"speaker"`
+	OffsetMS   int64  `yaml:"offset_ms" json:"offset_ms"`
+	DurationMS int64  `yaml:"duration_ms" json:"duration_ms"`
+	Text       string `yaml:"text" json:"text"`
+}
 
 // DebateTopic is the full topic.md content: YAML frontmatter + named markdown
 // sections. Despite the name, it now covers every supported content type
@@ -193,6 +212,16 @@ type DebateTopic struct {
 	Host        AgentSpec   `yaml:"host,omitempty" json:"host,omitempty"`
 	Commander   AgentSpec   `yaml:"commander,omitempty" json:"commander,omitempty"`
 	Storage     string      `yaml:"storage,omitempty" json:"storage,omitempty"`
+
+	// Uploaded-audio-only fields. UploadedAudioKey is the durable storage key
+	// of the user's original upload; the duration and max-speaker setting come
+	// from transcription. TranscriptSegments carry yaml tags (unlike Sources)
+	// because they must survive the RenderMarkdown → LoadTopic round trip the
+	// generation submit path performs.
+	UploadedAudioKey         string              `yaml:"uploaded_audio_key,omitempty" json:"uploaded_audio_key,omitempty"`
+	UploadedAudioDurationMS  int64               `yaml:"uploaded_audio_duration_ms,omitempty" json:"uploaded_audio_duration_ms,omitempty"`
+	UploadedAudioMaxSpeakers int                 `yaml:"uploaded_audio_max_speakers,omitempty" json:"uploaded_audio_max_speakers,omitempty"`
+	TranscriptSegments       []TranscriptSegment `yaml:"transcript_segments,omitempty" json:"transcript_segments,omitempty"`
 
 	// Shared across both content types.
 	Viewers []AgentSpec `yaml:"viewers,omitempty" json:"viewers,omitempty"`
@@ -339,10 +368,10 @@ func validateTopic(t *DebateTopic) error {
 		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
 	switch t.Type {
-	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook:
+	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, ContentTypeUploadedAudio:
 	default:
-		return fmt.Errorf("type must be one of %q, %q, %q, %q, %q (got %q)",
-			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, t.Type)
+		return fmt.Errorf("type must be one of %q, %q, %q, %q, %q, %q (got %q)",
+			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, ContentTypeUploadedAudio, t.Type)
 	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:
@@ -372,6 +401,29 @@ func validateTopic(t *DebateTopic) error {
 		return validateDiscussion(t)
 	case ContentTypeAudioBook:
 		return validateAudioBook(t)
+	case ContentTypeUploadedAudio:
+		return validateUploadedAudio(t)
+	}
+	return nil
+}
+
+func validateUploadedAudio(t *DebateTopic) error {
+	if len(t.Affirmative) > 0 || len(t.Negative) > 0 || t.Judge.Model != "" ||
+		t.PuzzleHost.Model != "" || len(t.Players) > 0 || t.SeriesHost.Model != "" ||
+		len(t.Discussants) > 0 || t.Host.Model != "" || t.Commander.Model != "" ||
+		t.AudioBookHost.Model != "" {
+		return fmt.Errorf("type=uploaded-audio must not declare a generative roster — the transcript defines the speakers")
+	}
+	if strings.TrimSpace(t.UploadedAudioKey) == "" {
+		return fmt.Errorf("uploaded_audio_key is required for type=uploaded-audio")
+	}
+	if len(t.TranscriptSegments) == 0 {
+		return fmt.Errorf("type=uploaded-audio requires at least one transcript_segments entry")
+	}
+	for _, seg := range t.TranscriptSegments {
+		if strings.TrimSpace(seg.Speaker) == "" || strings.TrimSpace(seg.Text) == "" {
+			return fmt.Errorf("transcript_segments entries need speaker and text")
+		}
 	}
 	return nil
 }

@@ -33,9 +33,15 @@ type uploadResponse struct {
 	MIMEType string `json:"mime_type,omitempty"`
 }
 
+// uploadKindPodcastAudio marks an upload as full-length podcast audio for the
+// upload-own-audio flow: audio MIME required, and the per-subscription-tier
+// size cap applies instead of the small reference-document ceiling.
+const uploadKindPodcastAudio = "podcast-audio"
+
 type uploadPresignRequest struct {
 	Filename string `json:"filename"`
 	MIMEType string `json:"mime_type"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 type uploadPresignResponse struct {
@@ -49,6 +55,28 @@ type uploadCompleteRequest struct {
 	Key      string `json:"key"`
 	Filename string `json:"filename"`
 	MIMEType string `json:"mime_type"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+// checkUploadKind validates a kind-specific upload: for podcast audio it
+// requires the feature gate, an audio MIME type, and returns the caller's
+// per-tier byte cap. The default kind keeps the reference-document ceiling.
+// Returns cap and an http error message ("" when allowed).
+func (s *Server) checkUploadKind(ctx context.Context, userID, kind, mimeType string) (int64, string, int) {
+	switch strings.TrimSpace(kind) {
+	case "":
+		return maxUploadBytes, "", 0
+	case uploadKindPodcastAudio:
+		if !s.uploadAudioAllowedForUser(ctx, userID) {
+			return 0, "upload own audio is not enabled for your account", http.StatusForbidden
+		}
+		if !isAudioMIME(mimeType) {
+			return 0, "podcast-audio uploads must be an audio file", http.StatusBadRequest
+		}
+		return s.uploadAudioCapBytes(ctx, userID), "", 0
+	default:
+		return 0, "unknown upload kind", http.StatusBadRequest
+	}
 }
 
 // handleUploadPresign mints a short-lived PUT URL so native clients can upload
@@ -70,6 +98,10 @@ func (s *Server) handleUploadPresign(w http.ResponseWriter, r *http.Request) {
 	mimeType := normalizedUploadMIME(req.MIMEType)
 	ext := strings.ToLower(filepath.Ext(filename))
 	user := s.requestUser(r)
+	if _, msg, code := s.checkUploadKind(r.Context(), user.ID, req.Kind, mimeType); msg != "" {
+		http.Error(w, msg, code)
+		return
+	}
 	key := s.d.Uploader.Key(uploadKeyName(user.ID, ext))
 	uploadURL, err := s.d.Uploader.PresignPut(r.Context(), key, mimeType, uploadPutTTL)
 	if err != nil || uploadURL == "" {
@@ -101,6 +133,11 @@ func (s *Server) handleUploadComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid upload key", http.StatusBadRequest)
 		return
 	}
+	maxBytes, msg, code := s.checkUploadKind(r.Context(), user.ID, req.Kind, normalizedUploadMIME(req.MIMEType))
+	if msg != "" {
+		http.Error(w, msg, code)
+		return
+	}
 	info, err := s.d.Uploader.Head(r.Context(), req.Key)
 	if err != nil {
 		http.Error(w, "inspect upload: "+err.Error(), http.StatusBadGateway)
@@ -110,7 +147,7 @@ func (s *Server) handleUploadComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "uploaded file is empty", http.StatusBadRequest)
 		return
 	}
-	if info.ContentLength > maxUploadBytes {
+	if info.ContentLength > maxBytes {
 		http.Error(w, "file too large", http.StatusBadRequest)
 		return
 	}

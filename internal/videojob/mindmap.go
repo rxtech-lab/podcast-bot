@@ -17,7 +17,7 @@ func startMindmapGeneration(deps Deps, jobID string, topic *config.DebateTopic, 
 	if deps.Discussions == nil || deps.DiscussionID == "" || deps.Env == nil {
 		return
 	}
-	if topic == nil || topic.Type != config.ContentTypeDiscussion {
+	if topic == nil || (topic.Type != config.ContentTypeDiscussion && topic.Type != config.ContentTypeUploadedAudio) {
 		return
 	}
 	summaryLines := toSummaryLines(lines)

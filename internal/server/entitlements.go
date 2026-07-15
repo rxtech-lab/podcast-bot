@@ -170,6 +170,34 @@ func (s *Server) computeEntitlements(ctx context.Context, userID string) (Permis
 	return DefaultPermissions(), nil
 }
 
+// uploadAudioAllowedForUser reports whether the caller may use the
+// upload-own-audio feature: their subscription tier must grant
+// CanUploadOwnAudio (admin-managed per class in Subscription Permissions).
+func (s *Server) uploadAudioAllowedForUser(ctx context.Context, userID string) bool {
+	perms, err := s.resolveEntitlements(ctx, userID)
+	if err != nil {
+		return false
+	}
+	return perms.Features.CanUploadOwnAudio
+}
+
+// uploadAudioCapBytes returns the caller's effective per-file audio upload cap
+// in bytes: the tier's MaxUploadAudioMB when set, bounded by the server-wide
+// MAX_PODCAST_AUDIO_UPLOAD_MB ceiling.
+func (s *Server) uploadAudioCapBytes(ctx context.Context, userID string) int64 {
+	var envMB int64 = 500
+	if s.d.Env != nil && s.d.Env.MaxPodcastAudioUploadMB > 0 {
+		envMB = s.d.Env.MaxPodcastAudioUploadMB
+	}
+	capMB := envMB
+	if perms, err := s.resolveEntitlements(ctx, userID); err == nil {
+		if tier := perms.Limits.MaxUploadAudioMB; tier > 0 && tier < capMB {
+			capMB = tier
+		}
+	}
+	return capMB << 20
+}
+
 // handleEntitlements serves the caller's resolved permissions. Auth is enforced
 // upstream by withAuth, so requestUser().ID is a validated identity here.
 func (s *Server) handleEntitlements(w http.ResponseWriter, r *http.Request) {

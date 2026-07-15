@@ -61,6 +61,11 @@ func (t *DebateTopic) RenderMarkdown() (string, error) {
 		fm.add("discussants", t.Discussants)
 		fm.add("commander", t.Commander)
 		fm.addIf("storage", t.Storage, t.Storage != "")
+	case ContentTypeUploadedAudio:
+		fm.add("uploaded_audio_key", t.UploadedAudioKey)
+		fm.addIf("uploaded_audio_duration_ms", t.UploadedAudioDurationMS, t.UploadedAudioDurationMS > 0)
+		fm.addIf("uploaded_audio_max_speakers", t.UploadedAudioMaxSpeakers, t.UploadedAudioMaxSpeakers > 0)
+		fm.add("transcript_segments", t.TranscriptSegments)
 	}
 	if len(t.Viewers) > 0 {
 		fm.add("viewers", t.Viewers)

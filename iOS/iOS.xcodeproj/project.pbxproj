@@ -157,6 +157,7 @@
 				Features/Plan/QuestionSheetView.swift,
 				Features/Plan/SourcesView.swift,
 				Features/Plan/SpeakerModelsSheet.swift,
+				Features/Plan/UploadAudioSheet.swift,
 				Features/Plan/VoicePickerView.swift,
 				Features/Player/AudioMessagePlayer.swift,
 				Features/Player/CoverPalette.swift,
