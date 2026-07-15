@@ -302,17 +302,28 @@ extension APIClient {
     /// Saves a direct user correction to one uploaded-audio transcript segment.
     func updateTranscriptSegment(id: String, index: Int,
                                  segment: TranscriptSegmentDTO) async throws -> Discussion {
-        try await updateTranscriptSegments(
-            id: id,
-            updates: [TranscriptSegmentUpdate(index: index, segment: segment)]
+        try await send(
+            "PATCH",
+            "/api/discussions/\(id)/transcript/segments/\(index)",
+            body: segment
         )
     }
 
-    /// Saves multiple uploaded-audio caption corrections in one request and one
-    /// backend plan update.
+    /// Saves uploaded-audio caption corrections. A single edit uses the direct
+    /// indexed route; multiple edits share one batch request and plan update.
     func updateTranscriptSegments(id: String,
                                   updates: [TranscriptSegmentUpdate]) async throws -> Discussion {
-        try await send(
+        guard let first = updates.first else {
+            throw APIError.invalidRequest("At least one transcript segment update is required.")
+        }
+        if updates.count == 1 {
+            return try await updateTranscriptSegment(
+                id: id,
+                index: first.index,
+                segment: first.segment
+            )
+        }
+        return try await send(
             "PATCH",
             "/api/discussions/\(id)/transcript/segments",
             body: TranscriptSegmentBatchUpdateRequest(updates: updates)

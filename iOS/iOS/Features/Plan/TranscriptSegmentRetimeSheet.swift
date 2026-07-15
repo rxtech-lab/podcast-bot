@@ -152,21 +152,33 @@ private enum TranscriptRetimeNavigationDirection {
     }
 }
 
+// Haptics are inert in the simulator, but the generators still round-trip
+// through media services; on a loaded CI host running parallel simulator
+// clones that call can block the main thread once the editor's AVPlayer has
+// an active audio session. Compile them out of simulator builds entirely.
 private enum TranscriptRetimeHaptic {
     static func setBoundary() {
+        #if !targetEnvironment(simulator)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
     }
 
     static func togglePlayback() {
+        #if !targetEnvironment(simulator)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
     }
 
     static func movePrevious() {
+        #if !targetEnvironment(simulator)
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        #endif
     }
 
     static func moveNext() {
+        #if !targetEnvironment(simulator)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #endif
     }
 }
 
@@ -458,9 +470,7 @@ struct TranscriptSegmentRetimeSheet: View {
     }
 
     private var audioControls: some View {
-        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-            audioControlsContent
-        }
+        audioControlsContent
     }
 
     private var audioControlsContent: some View {

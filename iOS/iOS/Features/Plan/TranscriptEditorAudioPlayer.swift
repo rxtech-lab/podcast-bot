@@ -19,12 +19,16 @@ final class TranscriptEditorAudioPlayer {
     private(set) var isPlaying = false
 
     var playbackTimestampMs: Int64 {
+        // Register the observable timestamp even when AVPlayer is available.
+        // Its periodic observer drives SwiftUI updates without a TimelineView
+        // continuously rebuilding the surrounding accessibility hierarchy.
+        let observedTimestampMs = currentTimestampMs
         guard let player,
               let timestampMs = transcriptPlaybackTimestamp(
                   player.currentTime(),
                   maximumMs: audioDurationMs
               ) else {
-            return currentTimestampMs
+            return observedTimestampMs
         }
         return timestampMs
     }
@@ -40,6 +44,18 @@ final class TranscriptEditorAudioPlayer {
     }
 
     func togglePlayback() async throws {
+        // Hermetic E2E runs never touch AVFoundation: on headless CI hosts the
+        // simulator's media services can block the main thread once a player
+        // exists, wedging the whole UI. Timing is simulated instead — the
+        // E2E tests drive current time through deterministic seeks anyway.
+        if AppConfig.isE2E {
+            if !isPlaying, reachedEnd || (audioDurationMs > 0 && currentTimestampMs >= audioDurationMs - 25) {
+                currentTimestampMs = 0
+                reachedEnd = false
+            }
+            isPlaying.toggle()
+            return
+        }
         let player = try await loadPlayerIfNeeded()
         if isPlaying {
             player.pause()
@@ -56,6 +72,10 @@ final class TranscriptEditorAudioPlayer {
     }
 
     func seek(to timestampMs: Int64) async throws {
+        if AppConfig.isE2E {
+            currentTimestampMs = clampedTimestamp(timestampMs)
+            return
+        }
         let player = try await loadPlayerIfNeeded()
         let clamped = clampedTimestamp(timestampMs)
         await seekPlayer(player, to: clamped)

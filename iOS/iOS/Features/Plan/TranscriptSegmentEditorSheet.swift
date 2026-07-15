@@ -145,9 +145,7 @@ struct TranscriptSegmentEditorSheet: View {
     }
 
     private var audioPlayerControls: some View {
-        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-            audioPlayerControlsContent
-        }
+        audioPlayerControlsContent
     }
 
     private var audioPlayerControlsContent: some View {

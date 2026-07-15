@@ -55,7 +55,9 @@ class E2ETestCase: XCTestCase {
 
     func openLibraryRow(_ app: XCUIApplication, id: String, timeout: TimeInterval = 20) {
         let row = findLibraryRow(app, id: id, timeout: timeout)
-        XCTAssertTrue(row.exists, "library row \(id) never appeared")
+        guard row.exists, row.isHittable else {
+            return XCTFail("library row \(id) never became visible and tappable")
+        }
         row.tap()
     }
 
@@ -64,17 +66,28 @@ class E2ETestCase: XCTestCase {
                         timeout: TimeInterval = 20,
                         maxScrolls: Int = 8) -> XCUIElement {
         let row = app.buttons["discussion.row.\(id)"]
-        if row.waitForExistence(timeout: timeout) {
+        if row.waitForExistence(timeout: timeout), libraryRowIsReady(row, in: app) {
             return row
         }
 
         for _ in 0..<maxScrolls {
             app.swipeUp()
-            if row.waitForExistence(timeout: 2) {
+            if row.waitForExistence(timeout: 2), libraryRowIsReady(row, in: app) {
                 break
             }
         }
         return row
+    }
+
+    private func libraryRowIsReady(_ row: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard row.exists, row.isHittable else { return false }
+        let rowFrame = row.frame
+        let appFrame = app.frame
+        // Keep the whole row above the floating search/tab controls. XCTest can
+        // report a partially covered List row as hittable while tapping its
+        // center still lands on the overlay.
+        let unobscuredBottom = appFrame.maxY - 100
+        return rowFrame.minY >= appFrame.minY && rowFrame.maxY <= unobscuredBottom
     }
 
     // MARK: - Backend helpers

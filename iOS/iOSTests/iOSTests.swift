@@ -158,6 +158,56 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(encodedUpdates[1]["text"] as? String, "Third")
     }
 
+    func testSingleTranscriptUpdateUsesIndexedRoute() async throws {
+        var capturedRequest: URLRequest?
+        var capturedBody: Data?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            capturedBody = request.httpBodyStreamData ?? request.httpBody
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            let responseBody = """
+            {
+              "id": "discussion-1",
+              "topic": "Uploaded audio",
+              "title": "Uploaded audio",
+              "status": "planning",
+              "language": "en-US"
+            }
+            """
+            return (response, Data(responseBody.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+        let update = TranscriptSegmentUpdate(
+            index: 3,
+            segment: TranscriptSegmentDTO(
+                speaker: "Guest", offsetMs: 9_000, durationMs: 2_500, text: "Fourth"
+            )
+        )
+
+        _ = try await api.updateTranscriptSegments(id: "discussion-1", updates: [update])
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "PATCH")
+        XCTAssertEqual(
+            capturedRequest?.url?.path,
+            "/api/discussions/discussion-1/transcript/segments/3"
+        )
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["updates"])
+        XCTAssertEqual(json["speaker"] as? String, "Guest")
+        XCTAssertEqual(json["offset_ms"] as? Int, 9_000)
+        XCTAssertEqual(json["duration_ms"] as? Int, 2_500)
+        XCTAssertEqual(json["text"] as? String, "Fourth")
+    }
+
     func testSendJobMessagePostsToRunningJobOrchestrator() async throws {
         var capturedRequest: URLRequest?
         var capturedBody: Data?
