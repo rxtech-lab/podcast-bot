@@ -62,6 +62,8 @@ struct AttachmentPreviewSheet: View {
             Group {
                 if attachment.isImageAttachment, let url = attachment.previewURL {
                     imagePreview(url)
+                } else if attachment.isAudioAttachment, let url = attachment.previewURL {
+                    audioPreview(url)
                 } else if let markdown = attachment.markdown?.trimmingCharacters(in: .whitespacesAndNewlines),
                           !markdown.isEmpty {
                     ScrollView {
@@ -100,6 +102,24 @@ struct AttachmentPreviewSheet: View {
             }
             .background(Theme.background)
         }
+    }
+
+    private func audioPreview(_ url: URL) -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 72))
+                .foregroundStyle(Theme.accent)
+            Text(attachment.displayName)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            VoiceMessageControl(urlString: url.absoluteString, isUser: false)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .background(Theme.accent.opacity(0.1), in: .rect(cornerRadius: 18))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .background(Theme.background)
     }
 
     private var fallbackPreview: some View {
@@ -147,8 +167,18 @@ extension Attachment {
         return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif"].contains { name.hasSuffix($0) }
     }
 
+    var isAudioAttachment: Bool {
+        if mimeType?.lowercased().hasPrefix("audio/") == true {
+            return true
+        }
+        let name = filename.lowercased()
+        return [".mp3", ".m4a", ".mp4", ".aac", ".wav", ".ogg", ".opus", ".flac", ".aiff", ".aif"]
+            .contains { name.hasSuffix($0) }
+    }
+
     var iconName: String {
         if isImageAttachment { return "photo.fill" }
+        if isAudioAttachment { return "waveform.circle.fill" }
         if mimeType?.contains("notion") == true { return "doc.text.magnifyingglass" }
         return "doc.text.fill"
     }

@@ -1762,6 +1762,70 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	return s.Get(ctx, owner, id)
 }
 
+// UpdateUploadedAudioPlan persists a transcript-plan snapshot and its visible
+// edit-history turn atomically. Uploaded-audio plans cannot contain generative
+// speaker models, so this narrow path can avoid UpdatePlan's model-override
+// reads/upserts while still writing all caption changes in one script_json
+// UPDATE regardless of how many segments changed.
+func (s *DiscussionStore) UpdateUploadedAudioPlan(
+	ctx context.Context,
+	owner, id, label string,
+	resp planResponse,
+) (*Discussion, error) {
+	if resp.Script == nil || resp.Script.Type != config.ContentTypeUploadedAudio {
+		return nil, errors.New("uploaded-audio transcript update requires an uploaded-audio plan")
+	}
+	scriptJSON, err := marshalString(resp.Script)
+	if err != nil {
+		return nil, err
+	}
+	sourcesJSON, err := marshalString(resp.Sources)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UnixMilli()
+	opID := newJobID()
+	updated := false
+	err = retryTransientDBConnection(ctx, func() error {
+		updated = false
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		res, err := tx.ExecContext(ctx, `UPDATE native_discussions SET
+			title = ?, language = ?, script_json = ?, markdown = ?, sources_json = ?, researched = ?, updated_at = ?
+			WHERE owner_user_id = ? AND id = ?`,
+			resp.Script.Title, resp.Script.Language, scriptJSON, resp.Markdown, sourcesJSON,
+			boolInt(resp.Researched), now, owner, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO native_discussion_edit_turns
+			(op_id, discussion_id, role, text, script_json, sources_json, markdown, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			opID, id, "plan", label, scriptJSON, sourcesJSON, resp.Markdown, now); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !updated {
+		return nil, nil
+	}
+	return s.Get(ctx, owner, id)
+}
+
 // applySpeakerOverrides layers the user's per-speaker model and voice
 // overrides onto a freshly loaded discussion's script.
 func (s *DiscussionStore) applySpeakerOverrides(ctx context.Context, d *Discussion) error {

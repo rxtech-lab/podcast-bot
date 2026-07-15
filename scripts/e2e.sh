@@ -22,6 +22,10 @@ SCHEME="${E2E_SCHEME:-iOS}"
 TEST_PLAN="${E2E_TEST_PLAN:-iosUITestPlan}"
 IOS_PROJECT="${REPO_ROOT}/iOS/iOS.xcodeproj"
 RESULT_BUNDLE="${E2E_RESULT_BUNDLE:-${DATA_ROOT}.xcresult}"
+# Parallel XCUITest workers (simulator clones). XCTest distributes work at
+# test-class granularity, so more workers than test classes buys nothing.
+# E2E_WORKERS=1 restores fully serial execution.
+WORKERS="${E2E_WORKERS:-3}"
 
 log()  { printf '\033[1;34m[e2e]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[e2e] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -47,6 +51,12 @@ done
 export E2E_RABBITMQ_URL="${E2E_RABBITMQ_URL:-amqp://guest:guest@127.0.0.1:5672/}"
 export MQ_QUEUE_PREFIX="e2e-$(date +%s)-$$-"
 log "rabbitmq ready · queue prefix ${MQ_QUEUE_PREFIX}"
+
+# A stale or concurrent server on the port would serve the wrong seed data to
+# every simulator clone; fail fast instead of debugging cross-run mismatches.
+if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+  fail "port ${PORT} already in use (another e2e run?) — set E2E_PORT to override"
+fi
 
 # --- Build the backend ------------------------------------------------------
 log "building backend…"
@@ -82,7 +92,7 @@ for _ in $(seq 1 120); do
   sleep 0.5
 done
 [ "${ok:-}" = 1 ] || { cat "${DATA_ROOT}.server.log" >&2 || true; fail "backend did not become healthy"; }
-log "backend healthy · seeded fixtures: test-ready, test-ongoing, test-plan, test-plan-voice, test2-private, test2-public"
+log "backend healthy · seeded fixtures: test-ready, test-ready-summary, test-ongoing, test-plan, test-plan-voice, test2-private, test2-public"
 
 if [ "${E2E_ONLY:-}" = "backend" ]; then
   log "E2E_ONLY=backend · backend running at ${BASE_URL}. Press Ctrl-C to stop."
@@ -91,18 +101,23 @@ if [ "${E2E_ONLY:-}" = "backend" ]; then
 fi
 
 # --- Run the iOS UI tests ---------------------------------------------------
-log "running test plan '${TEST_PLAN}' on '${SIMULATOR}'…"
+log "running test plan '${TEST_PLAN}' on '${SIMULATOR}' with ${WORKERS} worker(s)…"
 # xcodebuild forwards host env vars prefixed with TEST_RUNNER_ to the UI-test
 # runner process (stripping the prefix), so the test reads E2E_API_BASE_URL and
 # forwards it (plus E2E_TEST_MODE) to the app under test via launchEnvironment.
 export TEST_RUNNER_E2E_API_BASE_URL="$BASE_URL"
 rm -rf "$RESULT_BUNDLE"
+PARALLEL_FLAGS=(-parallel-testing-enabled NO)
+if [ "$WORKERS" -gt 1 ]; then
+  PARALLEL_FLAGS=(-parallel-testing-enabled YES -parallel-testing-worker-count "$WORKERS")
+fi
 set -x
 xcodebuild test \
   -project "$IOS_PROJECT" \
   -scheme "$SCHEME" \
   -testPlan "$TEST_PLAN" \
   -destination "platform=iOS Simulator,name=${SIMULATOR}" \
+  "${PARALLEL_FLAGS[@]}" \
   -resultBundlePath "$RESULT_BUNDLE" \
   -skipMacroValidation \
   | tee "${DATA_ROOT}.xcodebuild.log"

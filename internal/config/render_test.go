@@ -158,6 +158,7 @@ func TestRenderMarkdownRoundTripUploadedAudio(t *testing.T) {
 		UploadedAudioKey:         "uploads/user-1/abc123.mp3",
 		UploadedAudioDurationMS:  695000,
 		UploadedAudioMaxSpeakers: 3,
+		UploadedAudioSpeakers:    []string{"Speaker 1", "Speaker 2", "Guest"},
 		TranscriptSegments: []TranscriptSegment{
 			{Speaker: "Speaker 1", OffsetMS: 10080, DurationMS: 24920, Text: "各位听众朋友们，"},
 			{Speaker: "Speaker 2", OffsetMS: 35000, DurationMS: 4000, Text: "Welcome to the show."},

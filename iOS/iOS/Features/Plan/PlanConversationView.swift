@@ -4,46 +4,46 @@ import SwiftUI
 /// questions (bottom sheet), and writes/refines the plan over an SSE stream. Each
 /// tool call shows as an inline card; `show_plan` renders the current plan card.
 struct PlanConversationView: View {
-    @Environment(AuthManager.self) private var auth
-    @Environment(PurchaseManager.self) private var purchases
+    @Environment(AuthManager.self) var auth
+    @Environment(PurchaseManager.self) var purchases
     @State var discussion: Discussion
     var onGenerated: (Discussion) -> Void = { _ in }
 
-    @State private var parts: [PlanningPart] = []
-    @State private var input = ""
-    @State private var isStreaming = false
-    @State private var progressText: String?
-    @State private var errorMessage: String?
-    @State private var showingErrorAlert = false
-    @State private var pendingQuestion: QuestionPayload?
-    @State private var selectedToolPart: PlanningPart?
-    @State private var selectedAttachment: AttachmentPreviewItem?
-    @State private var selectedReference: PodcastReference?
-    @State private var selectedSourcesDiscussion: Discussion?
-    @State private var selectedChapters: PlanChaptersPresentation?
-    @State private var selectedTranscript: UploadedAudioTranscriptPresentation?
-    @State private var isGenerating = false
-    @State private var showingGenerateConfirm = false
-    @State private var showingChapterChecklist = false
-    @State private var showingPaywall = false
-    @State private var errorOffersTopUp = false
-    @State private var showingSpeakerModels = false
-    @State private var didStart = false
-    @State private var didLoadHistory = false
-    @State private var isLoadingHistory = false
-    @State private var historyLoadingPulse = false
-    @State private var editIsAtBottom = true
-    @State private var attachments: [PendingAttachment] = []
-    @State private var shouldScrollToInitialBottom = false
-    @State private var didRequestInitialBottomScroll = false
-    @State private var selectedLanguage: String
-    @State private var languageOptions: [PlanLanguageOption] = []
-    @State private var streamTask: Task<Void, Never>?
-    @State private var initialScrollTask: Task<Void, Never>?
-    @State private var isTranscribing = false
-    @State private var transcribePollTask: Task<Void, Never>?
-    @State private var streamHasActivity = false
-    @FocusState private var inputFocused: Bool
+    @State var parts: [PlanningPart] = []
+    @State var input = ""
+    @State var isStreaming = false
+    @State var progressText: String?
+    @State var errorMessage: String?
+    @State var showingErrorAlert = false
+    @State var pendingQuestion: QuestionPayload?
+    @State var selectedToolPart: PlanningPart?
+    @State var selectedAttachment: AttachmentPreviewItem?
+    @State var selectedReference: PodcastReference?
+    @State var selectedSourcesDiscussion: Discussion?
+    @State var selectedChapters: PlanChaptersPresentation?
+    @State var selectedTranscript: UploadedAudioTranscriptPresentation?
+    @State var isGenerating = false
+    @State var showingGenerateConfirm = false
+    @State var showingChapterChecklist = false
+    @State var showingPaywall = false
+    @State var errorOffersTopUp = false
+    @State var showingSpeakerModels = false
+    @State var didStart = false
+    @State var didLoadHistory = false
+    @State var isLoadingHistory = false
+    @State var historyLoadingPulse = false
+    @State var editIsAtBottom = true
+    @State var attachments: [PendingAttachment] = []
+    @State var shouldScrollToInitialBottom = false
+    @State var didRequestInitialBottomScroll = false
+    @State var selectedLanguage: String
+    @State var languageOptions: [PlanLanguageOption] = []
+    @State var streamTask: Task<Void, Never>?
+    @State var initialScrollTask: Task<Void, Never>?
+    @State var isTranscribing = false
+    @State var transcribePollTask: Task<Void, Never>?
+    @State var streamHasActivity = false
+    @FocusState var inputFocused: Bool
 
     init(discussion: Discussion,
          onGenerated: @escaping (Discussion) -> Void = { _ in })
@@ -165,7 +165,7 @@ struct PlanConversationView: View {
 
     // MARK: - Rows
 
-    private var rows: [PlanningRow] {
+    var rows: [PlanningRow] {
         var r = visibleParts.map { PlanningRow(id: $0.id, content: .part($0)) }
         if isStreaming {
             r.append(PlanningRow(id: "planning-loading", content: .loading))
@@ -177,7 +177,7 @@ struct PlanConversationView: View {
         return r
     }
 
-    private var visibleParts: [PlanningPart] {
+    var visibleParts: [PlanningPart] {
         guard isStreaming else { return parts }
         var visible = parts
         if let last = visible.last, last.isTransientRunningTool {
@@ -186,16 +186,16 @@ struct PlanConversationView: View {
         return visible
     }
 
-    private var animatedRowIDs: [String] {
+    var animatedRowIDs: [String] {
         rows.map(\.id)
     }
 
-    private var latestPlanPartID: String? {
+    var latestPlanPartID: String? {
         visibleParts.last(where: { $0.isPlanCard })?.id
     }
 
     @ViewBuilder
-    private func rowView(_ row: PlanningRow) -> some View {
+    func rowView(_ row: PlanningRow) -> some View {
         switch row.content {
         case .loading:
             loadingBubble
@@ -219,7 +219,7 @@ struct PlanConversationView: View {
     }
 
     @ViewBuilder
-    private func textBubble(_ part: PlanningPart) -> some View {
+    func textBubble(_ part: PlanningPart) -> some View {
         let text = part.displayText
         let displayText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let messageAttachments = part.attachments ?? []
@@ -258,7 +258,7 @@ struct PlanConversationView: View {
         }
     }
 
-    private func userAttachmentChips(_ attachments: [Attachment]) -> some View {
+    func userAttachmentChips(_ attachments: [Attachment]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
                 Button {
@@ -284,7 +284,7 @@ struct PlanConversationView: View {
         }
     }
 
-    private func userReferenceChips(_ references: [PodcastReference]) -> some View {
+    func userReferenceChips(_ references: [PodcastReference]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(references) { reference in
                 Button {
@@ -311,12 +311,12 @@ struct PlanConversationView: View {
     }
 
     @ViewBuilder
-    private func assistantContent(_ text: String) -> some View {
+    func assistantContent(_ text: String) -> some View {
         MarkdownText(text)
     }
 
     @ViewBuilder
-    private func planCard(_ part: PlanningPart) -> some View {
+    func planCard(_ part: PlanningPart) -> some View {
         let turn = DiscussionEditTurnDTO(id: nil, role: "plan", text: nil,
                                          script: part.script, sources: part.sources,
                                          markdown: part.markdown, createdAt: nil)
@@ -358,7 +358,7 @@ struct PlanConversationView: View {
         .planningCardAppear(delay: 0.04)
     }
 
-    private func questionCard(_ part: PlanningPart) -> some View {
+    func questionCard(_ part: PlanningPart) -> some View {
         let count = part.questions?.count ?? 0
         let firstTitle = part.questions?.first?.title ?? ""
         return HStack {
@@ -394,7 +394,7 @@ struct PlanConversationView: View {
         }
     }
 
-    private func questionColor(_ status: String?) -> Color {
+    func questionColor(_ status: String?) -> Color {
         switch status {
         case "pending_question": return Theme.accent
         case "rejected": return .orange
@@ -402,7 +402,7 @@ struct PlanConversationView: View {
         }
     }
 
-    private func questionStatusText(_ status: String?, firstTitle: String) -> String {
+    func questionStatusText(_ status: String?, firstTitle: String) -> String {
         switch status {
         case "pending_question": return firstTitle.isEmpty
             ? String(localized: "Tap to answer", comment: "Question card hint when awaiting an answer")
@@ -412,7 +412,7 @@ struct PlanConversationView: View {
         }
     }
 
-    private func transcribingBubble(_ text: String) -> some View {
+    func transcribingBubble(_ text: String) -> some View {
         HStack {
             HStack(spacing: 10) {
                 Image(systemName: "waveform")
@@ -433,7 +433,7 @@ struct PlanConversationView: View {
         .planningCardAppear()
     }
 
-    private var loadingBubble: some View {
+    var loadingBubble: some View {
         HStack {
             HStack(spacing: 10) {
                 if !streamHasActivity {
@@ -457,11 +457,11 @@ struct PlanConversationView: View {
 
     // MARK: - History loading skeleton
 
-    private var isShowingHistorySkeleton: Bool {
+    var isShowingHistorySkeleton: Bool {
         isLoadingHistory && parts.isEmpty
     }
 
-    private var historyLoadingSkeleton: some View {
+    var historyLoadingSkeleton: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 14) {
@@ -487,7 +487,7 @@ struct PlanConversationView: View {
         .allowsHitTesting(false)
     }
 
-    private func historySkeletonAssistant(widths: [CGFloat]) -> some View {
+    func historySkeletonAssistant(widths: [CGFloat]) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 9) {
                 ForEach(Array(widths.enumerated()), id: \.offset) { item in
@@ -500,7 +500,7 @@ struct PlanConversationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func historySkeletonUser(widths: [CGFloat]) -> some View {
+    func historySkeletonUser(widths: [CGFloat]) -> some View {
         HStack {
             Spacer(minLength: 46)
             VStack(alignment: .leading, spacing: 9) {
@@ -515,7 +515,7 @@ struct PlanConversationView: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private func historySkeletonToolCard(compact: Bool = false) -> some View {
+    func historySkeletonToolCard(compact: Bool = false) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
@@ -540,7 +540,7 @@ struct PlanConversationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var historySkeletonComposer: some View {
+    var historySkeletonComposer: some View {
         VStack(spacing: 0) {
             Divider().opacity(0.18)
             HStack(spacing: 10) {
@@ -557,7 +557,7 @@ struct PlanConversationView: View {
         }
     }
 
-    private func historySkeletonLine(widthFactor: CGFloat, opacity: Double = 0.22, tint: Color? = nil) -> some View {
+    func historySkeletonLine(widthFactor: CGFloat, opacity: Double = 0.22, tint: Color? = nil) -> some View {
         GeometryReader { proxy in
             RoundedRectangle(cornerRadius: 5)
                 .fill(tint ?? Theme.secondaryText.opacity(opacity))
@@ -567,7 +567,7 @@ struct PlanConversationView: View {
         .frame(height: 12)
     }
 
-    private func startHistoryLoadingAnimation() {
+    func startHistoryLoadingAnimation() {
         guard !historyLoadingPulse else { return }
         withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
             historyLoadingPulse = true
@@ -576,7 +576,7 @@ struct PlanConversationView: View {
 
     // MARK: - Edit bar
 
-    private var editBar: some View {
+    var editBar: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !attachments.isEmpty {
                 AttachmentsRow(attachments: $attachments, showsButton: false)
@@ -603,7 +603,7 @@ struct PlanConversationView: View {
         .disabled(isGenerating)
     }
 
-    private var errorAlertBinding: Binding<Bool> {
+    var errorAlertBinding: Binding<Bool> {
         Binding(
             get: { showingErrorAlert },
             set: {
@@ -616,7 +616,7 @@ struct PlanConversationView: View {
     }
 
     @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
+    var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Picker("Podcast language", selection: $selectedLanguage) {
@@ -642,7 +642,7 @@ struct PlanConversationView: View {
 
     /// Multi-chapter audiobooks pick a batch of chapters (server caps a run at
     /// 5) in a checklist; everything else confirms via the plain dialog.
-    private func requestGenerate() {
+    func requestGenerate() {
         if let script = latestAudioBookScript, (script.audioBookChapters?.count ?? 0) > 1 {
             if discussion.script == nil {
                 discussion.script = script
@@ -656,629 +656,10 @@ struct PlanConversationView: View {
 
     /// The most recent audiobook plan shown in the conversation (falls back to
     /// the persisted discussion script); nil for non-audiobook plans.
-    private var latestAudioBookScript: ScriptDTO? {
+    var latestAudioBookScript: ScriptDTO? {
         let script = visibleParts.last(where: { $0.isPlanCard })?.script ?? discussion.script
         guard let script, script.type == "audio-book" else { return nil }
         return script
     }
 
-    // MARK: - Derived state
-
-    private var canSend: Bool {
-        (!input.trimmingCharacters(in: .whitespaces).isEmpty || !attachments.apiAttachments.isEmpty)
-            && !attachments.isUploading
-            && !isStreaming && !isGenerating && pendingQuestion == nil
-    }
-
-    private var canGenerate: Bool {
-        discussion.script != nil || parts.contains { $0.isPlanCard }
-    }
-
-    private var speakerModelsDiscussionBinding: Binding<Discussion> {
-        Binding(
-            get: { discussion },
-            set: { updated in
-                discussion = updated
-                syncVisiblePlanCards(from: updated)
-            }
-        )
-    }
-
-    private func openSpeakerModels(for part: PlanningPart) {
-        if discussion.script == nil, let script = part.script {
-            discussion.script = script
-            discussion.title = script.title
-            discussion.markdown = part.markdown
-            discussion.sources = part.sources
-        }
-        showingSpeakerModels = true
-    }
-
-    private func openSources(for part: PlanningPart) {
-        var sourceDiscussion = discussion
-        if let script = part.script {
-            sourceDiscussion.script = script
-            sourceDiscussion.title = script.title
-        }
-        sourceDiscussion.markdown = part.markdown
-        sourceDiscussion.sources = part.sources
-        selectedSourcesDiscussion = sourceDiscussion
-    }
-
-    private func openChapters(_ snapshot: PlanSnapshot) {
-        if snapshot.isUploadedAudio {
-            selectedTranscript = UploadedAudioTranscriptPresentation(snapshot: snapshot)
-        } else {
-            selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
-        }
-    }
-
-    private func syncVisiblePlanCards(from updated: Discussion) {
-        guard let script = updated.script else { return }
-        for idx in parts.indices where parts[idx].isPlanCard {
-            parts[idx].script = script
-            parts[idx].sources = updated.sources
-            parts[idx].markdown = updated.markdown
-        }
-    }
-
-    // MARK: - Lifecycle
-
-    private func start() {
-        guard !didStart else { return }
-        didStart = true
-        Task {
-            if !didLoadHistory {
-                didLoadHistory = true
-                isLoadingHistory = true
-                defer { isLoadingHistory = false }
-                let api = APIClient(tokens: auth)
-                async let conversationRequest: PlanningConversationView? = try? api.planningConversation(id: discussion.id)
-                async let discussionRequest: Discussion? = try? api.discussion(
-                    id: discussion.id,
-                    includeEditTurns: false
-                )
-                let (view, latestDiscussion) = await (conversationRequest, discussionRequest)
-                if let latestDiscussion {
-                    discussion = latestDiscussion
-                }
-                if let view {
-                    parts = view.parts
-                    syncVisiblePlanCards(from: discussion)
-                    requestInitialBottomScrollIfNeeded()
-                }
-                let conversationFailed = view?.conversation?.status == "failed"
-                if !conversationFailed {
-                    if view?.isRunning == true {
-                        beginStream {
-                            APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
-                        }
-                        return
-                    }
-                    // An uploaded-audio discussion whose transcription is still
-                    // running has no conversation yet — poll the discussion
-                    // until the transcript plan and the seeded review turn
-                    // land, then auto-run the review.
-                    if parts.isEmpty, discussion.status == .planning, isTranscribeInProgress(discussion) {
-                        beginTranscribePolling()
-                        return
-                    }
-                    // Connect to the plan stream when the server has a turn waiting
-                    // to run (needs_run), or when this is a freshly created planning
-                    // station whose server-seeded first turn hasn't surfaced/run yet
-                    // (empty history, no plan — the history fetch can lag right after
-                    // creation, or fail outright). The resume endpoint re-checks
-                    // server-side and no-ops cleanly if there's nothing to run, so
-                    // this is safe and idempotent.
-                    let isUnstartedPlanning = parts.isEmpty
-                        && discussion.status == .planning
-                        && discussion.script == nil
-                    if view?.needsRun == true || isUnstartedPlanning {
-                        beginStream {
-                            APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
-                        }
-                        return
-                    }
-                }
-            }
-            if parts.isEmpty, discussion.script != nil {
-                // Legacy discussion (a plan made before conversational planning, with
-                // no planning conversation yet): seed a plan card from the saved plan
-                // so it's visible and can be generated/refined here.
-                parts = [PlanningPart(
-                    kind: "tool",
-                    id: "legacy-plan",
-                    toolName: "show_plan",
-                    status: "completed",
-                    script: discussion.script,
-                    sources: discussion.sources,
-                    markdown: discussion.markdown
-                )]
-                requestInitialBottomScrollIfNeeded()
-            }
-        }
-    }
-
-    private func isTranscribeInProgress(_ d: Discussion) -> Bool {
-        d.progress?.operation == "transcribe" && d.progress?.active == true
-    }
-
-    /// Polls the discussion while its uploaded audio transcribes server-side.
-    /// When the transcript plan lands (the server also seeds the review turn),
-    /// this loads the conversation and auto-runs the AI transcript review.
-    private func beginTranscribePolling() {
-        guard !isTranscribing else { return }
-        isTranscribing = true
-        transcribePollTask?.cancel()
-        transcribePollTask = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { return }
-                guard let updated = try? await APIClient(tokens: auth).discussion(id: discussion.id) else { continue }
-                discussion = updated
-                if updated.status == .failed {
-                    isTranscribing = false
-                    errorMessage = String(localized: "Transcription failed. Please delete this \(AppStringLiteral.stationNameRaw) and try again.",
-                                          comment: "Shown when server-side audio transcription failed")
-                    return
-                }
-                if isTranscribeInProgress(updated) {
-                    continue
-                }
-                // Progress cleared: the transcript should be stored now.
-                isTranscribing = false
-                if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
-                    parts = view.parts
-                    requestInitialBottomScrollIfNeeded()
-                    if view.needsRun == true {
-                        beginStream {
-                            APIClient(tokens: auth).resumePlanningConversation(id: discussion.id)
-                        }
-                    }
-                }
-                return
-            }
-        }
-    }
-
-    private func requestInitialBottomScrollIfNeeded() {
-        guard !didRequestInitialBottomScroll, !rows.isEmpty else { return }
-        didRequestInitialBottomScroll = true
-        initialScrollTask?.cancel()
-        shouldScrollToInitialBottom = false
-        initialScrollTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(10))
-            guard !Task.isCancelled else { return }
-            shouldScrollToInitialBottom = true
-        }
-    }
-
-    @MainActor
-    private func loadLanguageOptions() async {
-        guard languageOptions.isEmpty else { return }
-        do {
-            let form = try await APIClient(tokens: auth).precheck().newDiscussion.form
-            languageOptions = form.languageOptions
-        } catch {
-            languageOptions = []
-        }
-    }
-
-    // MARK: - Sending / streaming
-
-    private func send() {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ready = attachments.apiAttachments
-        guard !text.isEmpty || !ready.isEmpty else { return }
-        input = ""
-        attachments = []
-        // A vertical-axis TextField that is the first responder doesn't always
-        // refresh its displayed text when the binding is reset synchronously inside
-        // the send action. Re-assert the empty value on the next runloop so the
-        // field visibly clears without dismissing the keyboard.
-        DispatchQueue.main.async { input = "" }
-        send(prompt: text.isEmpty ? String(localized: "Please use the attached files.", comment: "Fallback chat message when sending attachments without text") : text,
-             attachments: ready)
-    }
-
-    private func send(prompt: String, attachments: [Attachment]) {
-        clearPlanningError()
-        // Optimistic user bubble; the server echoes it back in the final parts.
-        parts.append(PlanningPart(kind: "text",
-                                  id: "local-user-\(UUID().uuidString)",
-                                  role: "user",
-                                  text: prompt,
-                                  attachments: attachments.isEmpty ? nil : attachments))
-        beginStream {
-            APIClient(tokens: auth).planningConversationStream(id: discussion.id, prompt: prompt,
-                                                               language: selectedLanguage,
-                                                               attachments: attachments)
-        }
-    }
-
-    private func answer(question: QuestionPayload, answers: [[String: AnyCodable]]) {
-        pendingQuestion = nil
-        clearPlanningError()
-        beginStream {
-            APIClient(tokens: auth).answerPlanningQuestion(id: discussion.id, questionId: question.questionId,
-                                                           action: "answered", language: selectedLanguage,
-                                                           answers: answers)
-        }
-    }
-
-    private func reject(question: QuestionPayload) {
-        pendingQuestion = nil
-        clearPlanningError()
-        beginStream {
-            APIClient(tokens: auth).answerPlanningQuestion(id: discussion.id, questionId: question.questionId,
-                                                           action: "rejected", language: selectedLanguage,
-                                                           answers: [])
-        }
-    }
-
-    private func beginStream(_ makeStream: @escaping () -> AsyncThrowingStream<PlanningStreamEvent, Error>) {
-        isStreaming = true
-        streamHasActivity = false
-        progressText = String(localized: "Thinking…", comment: "Progress text while the planning agent works")
-        streamTask?.cancel()
-        let stream = makeStream()
-        streamTask = Task {
-            do {
-                for try await event in stream {
-                    handle(event)
-                }
-                // Stream closed without a done event — fall back to a fresh fetch.
-                if isStreaming {
-                    if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) {
-                        parts = view.parts
-                        if view.isRunning == true {
-                            streamTask = nil
-                            beginStream {
-                                APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
-                            }
-                            return
-                        }
-                    }
-                    isStreaming = false
-                    progressText = nil
-                }
-            } catch {
-                if case let APIError.insufficientPoints(required, balance) = error {
-                    isStreaming = false
-                    progressText = nil
-                    presentPlanningError(
-                        String(localized: "You need \(required) points but have \(balance).",
-                               comment: "Shown when the user lacks enough points; values are point amounts"),
-                        offersTopUp: true
-                    )
-                    await purchases.refreshBalance()
-                    return
-                }
-                isStreaming = false
-                progressText = nil
-                presentPlanningError((error as? APIError)?.errorDescription ?? error.localizedDescription,
-                                     offersTopUp: false)
-                if let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id),
-                   view.isRunning == true
-                {
-                    parts = view.parts
-                    clearPlanningError()
-                    streamTask = nil
-                    beginStream {
-                        APIClient(tokens: auth).resumeActivePlanningStream(id: discussion.id)
-                    }
-                }
-            }
-        }
-    }
-
-    private func handle(_ event: PlanningStreamEvent) {
-        switch event {
-        case let .textDelta(delta):
-            streamHasActivity = true
-            upsertPart(id: "assistant-stream") { existing in
-                var p = existing ?? PlanningPart(kind: "text", id: "assistant-stream", role: "assistant", text: "")
-                p.text = (p.text ?? "") + delta
-                return p
-            }
-        case let .toolInputStart(payload):
-            streamHasActivity = true
-            progressText = friendlyToolStatus(payload.toolName)
-            if let id = payload.toolCallId, !id.isEmpty {
-                upsertPart(id: "tc-\(id)") { existing in
-                    var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(id)")
-                    p.kind = "tool"
-                    p.toolCallID = id
-                    p.toolName = payload.toolName
-                    p.status = "running"
-                    return p
-                }
-            }
-        case let .toolInputDelta(payload):
-            streamHasActivity = true
-            guard let id = payload.toolCallId, !id.isEmpty else { return }
-            upsertPart(id: "tc-\(id)") { existing in
-                var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(id)")
-                p.kind = "tool"
-                p.toolCallID = id
-                p.toolName = payload.toolName ?? p.toolName
-                p.status = "running"
-                p.inputText = (p.inputText ?? "") + payload.delta
-                return p
-            }
-        case let .toolCall(payload):
-            streamHasActivity = true
-            upsertPart(id: "tc-\(payload.toolCallId)") { existing in
-                var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(payload.toolCallId)")
-                p.kind = "tool"
-                p.toolCallID = payload.toolCallId
-                p.toolName = payload.toolName
-                p.status = "running"
-                p.input = payload.input
-                return p
-            }
-        case let .toolResult(payload):
-            streamHasActivity = true
-            upsertPart(id: "tc-\(payload.toolCallId)") { existing in
-                var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(payload.toolCallId)", toolCallID: payload.toolCallId, toolName: payload.toolName)
-                p.status = (payload.isError ?? false) ? "failed" : "completed"
-                p.resultText = payload.output?.prettyString
-                return p
-            }
-        case let .plan(payload):
-            streamHasActivity = true
-            if let script = payload.script {
-                discussion.script = script
-                discussion.title = script.title
-                discussion.markdown = payload.markdown
-                discussion.sources = payload.sources
-            }
-            parts.removeAll { $0.id == "tc-\(payload.toolCallId)" }
-            removeVisiblePlanCards(except: "current-plan")
-            upsertPart(id: "current-plan") { existing in
-                var p = existing ?? PlanningPart(kind: "tool", id: "current-plan", toolCallID: payload.toolCallId)
-                p.toolCallID = payload.toolCallId
-                p.toolName = payload.toolName ?? "show_plan"
-                p.status = "completed"
-                p.script = payload.script
-                p.sources = payload.sources
-                p.markdown = payload.markdown
-                return p
-            }
-        case let .question(payload):
-            streamHasActivity = true
-            progressText = nil
-            upsertPart(id: "tc-\(payload.toolCallId)") { existing in
-                var p = existing ?? PlanningPart(kind: "tool", id: "tc-\(payload.toolCallId)", toolCallID: payload.toolCallId)
-                p.toolName = payload.toolName
-                p.status = "pending_question"
-                p.questionID = payload.questionId
-                p.questions = payload.questions
-                return p
-            }
-            pendingQuestion = payload
-        case let .progress(ev):
-            progressText = ev.text
-        case let .done(payload):
-            if let updated = payload.discussion { discussion = updated }
-            parts = payload.conversation.parts
-            isStreaming = false
-            progressText = nil
-        case let .failed(message):
-            isStreaming = false
-            progressText = nil
-            errorMessage = message
-        }
-    }
-
-    /// Inserts or updates the part with the given id, preserving order.
-    private func upsertPart(id: String, _ mutate: (PlanningPart?) -> PlanningPart) {
-        if let idx = parts.firstIndex(where: { $0.id == id }) {
-            parts[idx] = mutate(parts[idx])
-        } else {
-            parts.append(mutate(nil))
-        }
-    }
-
-    private func friendlyToolStatus(_ name: String) -> String {
-        switch name {
-        case "search_sources": return String(localized: "Searching the web…", comment: "Progress while searching sources")
-        case "crawl_sources": return String(localized: "Reading links…", comment: "Progress while reading URLs")
-        case "write_plan", "update_plan": return String(localized: "Writing the plan…", comment: "Progress while writing the plan")
-        case "show_plan": return String(localized: "Showing the plan…", comment: "Progress while showing the plan")
-        case "ask_question": return String(localized: "Preparing a question…", comment: "Progress while preparing a question")
-        default: return String(localized: "Working…", comment: "Generic progress text")
-        }
-    }
-
-    private func removeVisiblePlanCards(except id: String) {
-        parts.removeAll { $0.id != id && $0.isPlanCard }
-    }
-
-    // MARK: - Generate
-
-    private func generate(chapters: [Int]? = nil) {
-        isGenerating = true
-        clearPlanningError()
-        Task {
-            do {
-                discussion = try await APIClient(tokens: auth).generateDiscussion(id: discussion.id, language: selectedLanguage, chapters: chapters)
-                isGenerating = false
-                onGenerated(discussion)
-            } catch let APIError.insufficientPoints(required, balance) {
-                isGenerating = false
-                presentPlanningError(
-                    String(localized: "You need \(required) points but have \(balance).",
-                           comment: "Shown when the user lacks enough points; values are point amounts"),
-                    offersTopUp: true
-                )
-                await purchases.refreshBalance()
-            } catch {
-                isGenerating = false
-                presentPlanningError((error as? APIError)?.errorDescription ?? error.localizedDescription,
-                                     offersTopUp: false)
-            }
-        }
-    }
-
-    private func presentPlanningError(_ message: String, offersTopUp: Bool) {
-        inputFocused = false
-        errorMessage = message
-        errorOffersTopUp = offersTopUp
-        showingErrorAlert = true
-    }
-
-    private func clearPlanningError() {
-        errorMessage = nil
-        errorOffersTopUp = false
-        showingErrorAlert = false
-    }
-}
-
-private struct PlanningTypingDots: View {
-    @State private var isAnimating = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0 ..< 3, id: \.self) { index in
-                Circle()
-                    .fill(Theme.secondaryText)
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(isAnimating ? 1 : 0.55)
-                    .opacity(isAnimating ? 1 : 0.3)
-                    .animation(
-                        .easeInOut(duration: 0.6)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(index) * 0.18),
-                        value: isAnimating
-                    )
-            }
-        }
-        // No oversized frame: the dots size to their intrinsic 7pt height so the
-        // bubble's padding centers them. A taller frame leaves vertical slack the
-        // dots ride to the top of, making them spill out of the bubble.
-        .onAppear { isAnimating = true }
-    }
-}
-
-private struct PodcastReferencePreviewSheet: View {
-    @Environment(AuthManager.self) private var auth
-    @Environment(\.dismiss) private var dismiss
-    let reference: PodcastReference
-    @State private var discussion: Discussion?
-    @State private var errorMessage: String?
-    @State private var isLoading = false
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if let discussion {
-                    PodcastPlayerView(discussion: discussion)
-                } else if isLoading {
-                    ProgressView()
-                        .tint(Theme.accent)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Theme.background.ignoresSafeArea())
-                } else {
-                    ContentUnavailableView(reference.displayTitle,
-                                           systemImage: "waveform.circle",
-                                           description: Text(errorMessage ?? reference.subtitle))
-                        .background(Theme.background.ignoresSafeArea())
-                }
-            }
-            .navigationTitle(reference.displayTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .task(id: reference.id) {
-            await load()
-        }
-    }
-
-    @MainActor
-    private func load() async {
-        isLoading = true
-        defer { isLoading = false }
-        let api = APIClient(tokens: auth)
-        do {
-            discussion = try await api.discussion(id: reference.id)
-            errorMessage = nil
-        } catch {
-            do {
-                discussion = try await api.marketStation(id: reference.id)
-                errorMessage = nil
-            } catch {
-                guard !APIClient.isCancellation(error) else { return }
-                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
-            }
-        }
-    }
-}
-
-private struct PlanningCardAppearModifier: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isVisible = false
-    let delay: Double
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(isVisible ? 1 : 0)
-            .scaleEffect(reduceMotion ? 1 : (isVisible ? 1 : 0.97), anchor: .topLeading)
-            .offset(y: reduceMotion ? 0 : (isVisible ? 0 : 10))
-            .transition(.asymmetric(
-                insertion: .opacity.combined(with: .move(edge: .bottom)),
-                removal: .opacity
-            ))
-            .onAppear {
-                guard !isVisible else { return }
-                if reduceMotion {
-                    isVisible = true
-                } else {
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.84).delay(delay)) {
-                        isVisible = true
-                    }
-                }
-            }
-    }
-}
-
-private extension View {
-    func planningCardAppear(delay: Double = 0) -> some View {
-        modifier(PlanningCardAppearModifier(delay: delay))
-    }
-}
-
-/// One row in the planning conversation: a persisted/streaming part, or the
-/// transient loading accessory shown while the agent works.
-private struct PlanningRow: Identifiable, MessageListItem {
-    enum Content {
-        case part(PlanningPart)
-        case loading
-        case transcribing(String)
-    }
-
-    let id: String
-    let content: Content
-
-    var isUserMessage: Bool {
-        // Planning rows keep user text visually right-aligned in `textBubble`,
-        // but should not opt into MessageList's chat turn-pinning spacer. That
-        // spacer can leave the finished plan above an empty bottom region.
-        return false
-    }
-
-    var isMessageListAccessory: Bool {
-        switch content {
-        case .loading, .transcribing:
-            return true
-        case .part:
-            return false
-        }
-    }
 }

@@ -45,7 +45,7 @@ git clone https://github.com/sirily11/debate-bot.git
 cd debate-bot
 
 # macOS
-brew install go ffmpeg oven-sh/bun/bun
+brew install go ffmpeg oven-sh/bun/bun swiftlint
 
 # Debian/Ubuntu
 sudo apt-get install -y golang ffmpeg build-essential
@@ -324,6 +324,7 @@ judge: { model: "gpt-4o" }
 | `make frontend` / `make backend` | build one half |
 | `make run` | build then run the server |
 | `make dev` | Vite + Go in parallel for development |
+| `make lint` | enforce the 800-line maximum for Swift source files |
 | `make gen-assets` | regenerate the embedded TV-studio background plates |
 | `make series-smoke` / `make series-recap-smoke` | end-to-end series smoke tests |
 | `make tidy` | `go mod tidy` + `bun install` |

@@ -153,11 +153,17 @@ func assembleUploadedAudioPlan(existing *config.DebateTopic, d *uploadedAudioDra
 			return nil, fmt.Errorf("speaker renames need both from and to")
 		}
 		for i := range merged.TranscriptSegments {
-			if merged.TranscriptSegments[i].Speaker == from {
+			if strings.EqualFold(strings.TrimSpace(merged.TranscriptSegments[i].Speaker), from) {
 				merged.TranscriptSegments[i].Speaker = to
 			}
 		}
+		for i := range merged.UploadedAudioSpeakers {
+			if strings.EqualFold(strings.TrimSpace(merged.UploadedAudioSpeakers[i]), from) {
+				merged.UploadedAudioSpeakers[i] = to
+			}
+		}
 	}
+	merged.UploadedAudioSpeakers = config.UploadedAudioSpeakerNames(&merged)
 	if err := config.ValidateTopic(&merged); err != nil {
 		return nil, err
 	}

@@ -397,9 +397,6 @@
         }
       }
     },
-    "0:00.000" : {
-
-    },
     "1 day" : {
       "comment" : "Share-link duration option",
       "localizations" : {
@@ -673,6 +670,50 @@
         }
       }
     },
+    "Adjust End Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整结束时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整結束時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整結束時間"
+          }
+        }
+      }
+    },
+    "Adjust Start Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整开始时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整開始時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整開始時間"
+          }
+        }
+      }
+    },
     "Add" : {
       "localizations" : {
         "zh-Hans" : {
@@ -691,6 +732,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增"
+          }
+        }
+      }
+    },
+    "Add a speaker when recognition missed someone, then assign that speaker while editing transcript segments." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当识别遗漏了说话人时添加一个，然后在编辑转录片段时进行指派。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "當辨識遺漏講者時新增一位，然後在編輯轉錄片段時指派。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "當辨識遺漏講者時新增一位，然後在編輯轉錄片段時指派。"
           }
         }
       }
@@ -823,6 +886,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增來源"
+          }
+        }
+      }
+    },
+    "Add Speaker" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加说话人"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增講者"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增講者"
           }
         }
       }
@@ -1144,6 +1229,28 @@
         }
       }
     },
+    "Audio" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音频"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音訊"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音訊"
+          }
+        }
+      }
+    },
     "Audio book %@ will appear here." : {
       "localizations" : {
         "zh-Hans" : {
@@ -1320,6 +1427,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自動語音"
+          }
+        }
+      }
+    },
+    "Back 1 Second" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后退 1 秒"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "後退 1 秒"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "後退 1 秒"
           }
         }
       }
@@ -1962,6 +2091,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "複製使用者 ID"
+          }
+        }
+      }
+    },
+    "Could not cache uploaded audio." : {
+      "comment" : "Error shown when the original uploaded audio cannot be saved for transcript replay",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法缓存上传的音频。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法快取已上載的音訊。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法快取已上傳的音訊。"
           }
         }
       }
@@ -3008,6 +3160,28 @@
         }
       }
     },
+    "Current Subtitle" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前字幕"
+          }
+        }
+      }
+    },
     "Current plan" : {
       "comment" : "Label for the plan card shown when there is no edit history",
       "localizations" : {
@@ -3594,6 +3768,28 @@
         }
       }
     },
+    "Edit Caption Timing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整字幕时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整字幕時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整字幕時間"
+          }
+        }
+      }
+    },
     "Edit Cover" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3612,6 +3808,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "編輯封面"
+          }
+        }
+      }
+    },
+    "Edit From Start" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从头编辑"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從頭編輯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從頭編輯"
           }
         }
       }
@@ -3656,6 +3874,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "編輯逐字稿"
+          }
+        }
+      }
+    },
+    "Edit transcript text and precisely retime every caption against your uploaded audio." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑转录文本，并根据已上传的音频精准调整每条字幕的时间。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯轉錄文字，並根據已上載的音訊精準調整每段字幕的時間。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯轉錄文字，並依照已上傳的音訊精準調整每段字幕的時間。"
           }
         }
       }
@@ -3751,6 +3991,28 @@
         }
       }
     },
+    "Enter fullscreen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进入全屏"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進入全螢幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進入全螢幕"
+          }
+        }
+      }
+    },
     "Enter transcript content." : {
       "comment" : "Transcript segment editor validation when content is empty",
       "localizations" : {
@@ -3776,6 +4038,7 @@
     },
     "Enter valid start and end timestamps." : {
       "comment" : "Transcript segment editor validation for malformed timestamps",
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3793,28 +4056,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請輸入有效的開始和結束時間。"
-          }
-        }
-      }
-    },
-    "Enter fullscreen" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "进入全屏"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "進入全螢幕"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "進入全螢幕"
           }
         }
       }
@@ -3837,6 +4078,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "單集"
+          }
+        }
+      }
+    },
+    "Every matching transcript segment will use the new speaker name." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有匹配的转录片段都会使用新的说话人名称。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有相符的轉錄片段都會使用新的講者名稱。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有相符的轉錄片段都會使用新的講者名稱。"
           }
         }
       }
@@ -4325,6 +4588,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "強制停止此 %@？"
+          }
+        }
+      }
+    },
+    "Forward 1 Second" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前进 1 秒"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前進 1 秒"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前進 1 秒"
           }
         }
       }
@@ -4935,6 +5220,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "漸層"
+          }
+        }
+      }
+    },
+    "Hours" : {
+      "comment" : "Hours in transcript timestamp wheel",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小时"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小時"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小時"
           }
         }
       }
@@ -5658,6 +5966,29 @@
         }
       }
     },
+    "Milliseconds" : {
+      "comment" : "Milliseconds in transcript timestamp wheel",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毫秒"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毫秒"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毫秒"
+          }
+        }
+      }
+    },
     "Mindmap support" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5698,6 +6029,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最小化"
+          }
+        }
+      }
+    },
+    "Minutes" : {
+      "comment" : "Minutes in transcript timestamp wheel",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分钟"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分鐘"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分鐘"
           }
         }
       }
@@ -5878,6 +6232,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下一步"
+          }
+        }
+      }
+    },
+    "Next Subtitle" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一条字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一句字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一句字幕"
           }
         }
       }
@@ -6731,6 +7107,28 @@
         }
       }
     },
+    "Pause audio" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停音频"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫停音訊"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫停音訊"
+          }
+        }
+      }
+    },
     "Pause audio clip" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7240,6 +7638,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "策劃未完成。下拉重新整理或嘗試編輯計劃。"
+          }
+        }
+      }
+    },
+    "Play audio" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放音频"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放音訊"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放音訊"
           }
         }
       }
@@ -7778,8 +8198,30 @@
         }
       }
     },
+    "Previous Subtitle" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一条字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一句字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一句字幕"
+          }
+        }
+      }
+    },
     "Private" : {
-      "comment" : "Library visibility filter: private stations",
+      "comment" : "Library visibility filter: stations",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8470,6 +8912,50 @@
         }
       }
     },
+    "Rename Speaker" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名说话人"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名講者"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名講者"
+          }
+        }
+      }
+    },
+    "Renaming a speaker updates every matching transcript segment." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名说话人会更新所有匹配的转录片段。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名講者會更新所有相符的轉錄片段。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名講者會更新所有相符的轉錄片段。"
+          }
+        }
+      }
+    },
     "Request failed (%lld): %@" : {
       "comment" : "Generic HTTP error; code is the status code, msg is the server message",
       "localizations" : {
@@ -9096,6 +9582,29 @@
         }
       }
     },
+    "Seconds" : {
+      "comment" : "Seconds in transcript timestamp wheel",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秒"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秒"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秒"
+          }
+        }
+      }
+    },
     "See exactly how your points are spent with a full usage history." : {
       "localizations" : {
         "zh-Hans" : {
@@ -9207,6 +9716,50 @@
         }
       }
     },
+    "Select End Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择结束时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇結束時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇結束時間"
+          }
+        }
+      }
+    },
+    "Select Start Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择开始时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇開始時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇開始時間"
+          }
+        }
+      }
+    },
     "Select source" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9298,6 +9851,50 @@
     },
     "Service should be back by %@." : {
       "comment" : "Appended to an active maintenance message; 'when' is a formatted date/time"
+    },
+    "Set End to Current Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将结束时间设为当前时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將結束時間設為目前時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將結束時間設為目前時間"
+          }
+        }
+      }
+    },
+    "Set Start to Current Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将开始时间设为当前时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將開始時間設為目前時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將開始時間設為目前時間"
+          }
+        }
+      }
     },
     "Settings" : {
       "localizations" : {
@@ -9770,6 +10367,28 @@
         }
       }
     },
+    "Speakers" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说话人"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "講者"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "講者"
+          }
+        }
+      }
+    },
     "Start" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9951,6 +10570,28 @@
         }
       }
     },
+    "Subtitle Timing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕时间调整"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕時間調整"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕時間調整"
+          }
+        }
+      }
+    },
     "Summaries can include mindmaps, and individual mindmaps can be exported on their own." : {
       "localizations" : {
         "zh-Hans" : {
@@ -10036,6 +10677,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "摘要已匯出到 Notion。"
+          }
+        }
+      }
+    },
+    "Swipe left on a segment to edit its text or retime it against the uploaded audio." : {
+      "comment" : "Tip explaining transcript segment editing and retiming swipe actions",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向左轻扫片段即可编辑文本，或根据已上传的音频重新调整时间。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向左輕掃片段即可編輯文字，或根據已上傳的音訊重新調整時間。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向左輕掃片段即可編輯文字，或根據已上傳的音訊重新調整時間。"
           }
         }
       }
@@ -10248,52 +10912,6 @@
         }
       }
     },
-    "The end timestamp must be after the start timestamp." : {
-      "comment" : "Transcript segment editor validation for an inverted time range",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "结束时间必须晚于开始时间。"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "結束時間必須晚於開始時間。"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "結束時間必須晚於開始時間。"
-          }
-        }
-      }
-    },
-    "The time range exceeds the uploaded audio duration." : {
-      "comment" : "Transcript segment editor validation when the range exceeds the source audio",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "时间范围超出了上传音频的时长。"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "時間範圍超出已上傳音訊的長度。"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "時間範圍超出已上傳音訊的長度。"
-          }
-        }
-      }
-    },
     "The edit didn’t finish. Pull to refresh or try again." : {
       "comment" : "Fallback error when a plan edit never produced a revised plan",
       "localizations" : {
@@ -10313,6 +10931,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "編輯未完成。下拉重新整理或重試。"
+          }
+        }
+      }
+    },
+    "The end timestamp must be after the start timestamp." : {
+      "comment" : "Transcript segment editor validation for an inverted time range",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束时间必须晚于开始时间。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結束時間必須晚於開始時間。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結束時間必須晚於開始時間。"
           }
         }
       }
@@ -10357,6 +10998,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "心智圖尚未就緒。"
+          }
+        }
+      }
+    },
+    "The new speaker will be available in the transcript speaker picker." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新说话人会出现在转录说话人选取器中。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新講者會出現在轉錄講者選擇器中。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新講者會出現在轉錄講者選擇器中。"
           }
         }
       }
@@ -10496,6 +11159,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "摘要會以新頁面加入你選擇的頁面中。"
+          }
+        }
+      }
+    },
+    "The time range exceeds the uploaded audio duration." : {
+      "comment" : "Transcript segment editor validation when the range exceeds the source audio",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间范围超出了上传音频的时长。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間範圍超出已上傳音訊的長度。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間範圍超出已上傳音訊的長度。"
           }
         }
       }
@@ -10800,6 +11486,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "時間範圍"
+          }
+        }
+      }
+    },
+    "Timestamp" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间戳"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間戳"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間戳"
           }
         }
       }
@@ -11218,8 +11926,50 @@
         }
       }
     },
+    "Upload an audio file, automatically transcribe its speakers, and publish it as a podcast." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传音频文件，自动转录并识别说话人，然后将其发布为播客。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上載音訊檔案，自動轉錄並辨識講者，然後發佈成 Podcast。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳音訊檔案，自動轉錄並辨識講者，再將其發佈為 Podcast。"
+          }
+        }
+      }
+    },
     "Upload Own Audio" : {
-      "comment" : "Upload own audio sheet title"
+      "comment" : "Upload own audio sheet title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传自己的音频"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上載自己的音訊"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳自己的音訊"
+          }
+        }
+      }
     },
     "Uploading your own audio is not enabled for your account." : {
       "comment" : "Upload own audio unavailable description"
@@ -11227,7 +11977,30 @@
     "Uploading…" : {
       "comment" : "Audio upload in progress"
     },
+    "Use Current Audio Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用当前音频时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用目前音訊時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用目前音訊時間"
+          }
+        }
+      }
+    },
     "Use M:SS.mmm or H:MM:SS.mmm." : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

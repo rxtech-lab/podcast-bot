@@ -378,6 +378,14 @@ Current plan settings:
 	if len(parts) != 1 || parts[0].Text != "Please make it more technical" {
 		t.Fatalf("language settings display text = %+v, want only visible message", parts)
 	}
+	settingsOnly := `Current plan settings:
+- The visible user input is the attached original audio.
+
+Review the uploaded transcript.`
+	parts = planningConversationParts([]planningTurnRow{{ID: 6, Role: "user", Text: settingsOnly}})
+	if len(parts) != 1 || parts[0].Text != "" {
+		t.Fatalf("settings-only display text = %+v, want hidden text", parts)
+	}
 	withAttachmentBlock := `Please use this file
 
 The user uploaded these reference documents; ground the discussion in their content:
@@ -404,6 +412,28 @@ Old episode summary`
 	parts = planningConversationParts([]planningTurnRow{{ID: 5, Role: "user", Text: withReferenceBlock}})
 	if len(parts) != 1 || parts[0].Text != "What comes after spatial computing?" {
 		t.Fatalf("reference display text = %+v, want only topic", parts)
+	}
+}
+
+func TestRefreshedPlanningPartAttachments(t *testing.T) {
+	parts := []PlanningPart{{
+		Kind: "text",
+		Role: "user",
+		Attachments: []planner.Attachment{{
+			Filename: "interview.m4a",
+			MIMEType: "audio/mp4",
+			Key:      "uploads/u1/interview.m4a",
+			URL:      "https://media.example/stale",
+		}},
+	}}
+	got := refreshedPlanningPartAttachments(parts, func(key string) string {
+		if key != "uploads/u1/interview.m4a" {
+			t.Fatalf("refresh key = %q", key)
+		}
+		return "https://media.example/fresh"
+	})
+	if got[0].Attachments[0].URL != "https://media.example/fresh" {
+		t.Fatalf("attachment URL = %q, want refreshed URL", got[0].Attachments[0].URL)
 	}
 }
 

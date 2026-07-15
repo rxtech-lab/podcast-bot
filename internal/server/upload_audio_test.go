@@ -213,6 +213,54 @@ func TestUploadAudioTitle(t *testing.T) {
 	}
 }
 
+func TestUploadedAudioReviewTurnDisplaysOriginalAudioAttachment(t *testing.T) {
+	pl := AudioTranscribePayload{
+		DiscussionID: "discussion-1",
+		AudioKey:     "uploads/user-1/recording.m4a",
+		Filename:     "Team interview.m4a",
+		MIMEType:     "audio/mp4",
+	}
+	turn := uploadedAudioReviewTurn(pl, &Discussion{Topic: "Team interview"}, 42, 2, 120_000)
+	if turn.Role != "user" || turn.OpID != "transcript-review:discussion-1" {
+		t.Fatalf("turn identity = role %q op %q", turn.Role, turn.OpID)
+	}
+	if visible := planningUserDisplayText(turn.Text); visible != "" {
+		t.Fatalf("visible review text = %q, want attachment-only bubble", visible)
+	}
+	if !strings.Contains(turn.Text, "The audio has been transcribed: 42 segments, 2 speaker(s), 2:00") {
+		t.Fatalf("model review instruction missing from %q", turn.Text)
+	}
+	if len(turn.Attachments) != 1 {
+		t.Fatalf("attachments = %+v, want one", turn.Attachments)
+	}
+	got := turn.Attachments[0]
+	if got.Filename != "Team interview.m4a" || got.MIMEType != "audio/mp4" || got.Key != pl.AudioKey {
+		t.Fatalf("attachment = %+v, want original audio metadata", got)
+	}
+}
+
+func TestRestoreLegacyUploadedAudioReviewPart(t *testing.T) {
+	parts := []PlanningPart{{
+		Kind: "text", Role: "user",
+		Text: "The audio has been transcribed: 3 segments, 1 speaker(s), 0:15. Review the transcript.",
+	}}
+	d := &Discussion{
+		Topic: "Legacy interview",
+		Script: &config.DebateTopic{
+			Type:             config.ContentTypeUploadedAudio,
+			UploadedAudioKey: "uploads/user-1/source.mp3",
+		},
+	}
+	got := restoreLegacyUploadedAudioReviewParts(parts, d)
+	if got[0].Text != "" || len(got[0].Attachments) != 1 {
+		t.Fatalf("legacy part = %+v, want attachment-only user part", got[0])
+	}
+	attachment := got[0].Attachments[0]
+	if attachment.Filename != "Legacy interview.mp3" || attachment.MIMEType != "audio/mp3" || attachment.Key != d.Script.UploadedAudioKey {
+		t.Fatalf("legacy attachment = %+v", attachment)
+	}
+}
+
 func TestUploadedAudioTranscriptSegmentUpdateAPI(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "transcript-edit.db"), "", "")
@@ -272,6 +320,43 @@ func TestUploadedAudioTranscriptSegmentUpdateAPI(t *testing.T) {
 	if !strings.Contains(updated.Markdown, "offset_ms: 11250") || !strings.Contains(updated.Markdown, "Corrected words.") {
 		t.Fatalf("updated markdown = %q", updated.Markdown)
 	}
+	if got := updated.Script.UploadedAudioSpeakers; len(got) != 1 || got[0] != "Host" {
+		t.Fatalf("speaker roster after segment edit = %v", got)
+	}
+
+	addSpeakerReq := httptest.NewRequest(http.MethodPost,
+		"/api/discussions/"+discussion.ID+"/transcript/speakers", strings.NewReader(`{"name":"Guest"}`))
+	addSpeakerReq.Header.Set("Content-Type", "application/json")
+	addSpeakerRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(addSpeakerRec, addSpeakerReq)
+	if addSpeakerRec.Code != http.StatusOK {
+		t.Fatalf("add speaker status = %d body=%s", addSpeakerRec.Code, addSpeakerRec.Body.String())
+	}
+	if err := json.NewDecoder(addSpeakerRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode added speaker: %v", err)
+	}
+	if got := updated.Script.UploadedAudioSpeakers; len(got) != 2 || got[0] != "Host" || got[1] != "Guest" {
+		t.Fatalf("speaker roster after add = %v", got)
+	}
+
+	renameSpeakerReq := httptest.NewRequest(http.MethodPatch,
+		"/api/discussions/"+discussion.ID+"/transcript/speakers",
+		strings.NewReader(`{"from":"Host","to":"Moderator"}`))
+	renameSpeakerReq.Header.Set("Content-Type", "application/json")
+	renameSpeakerRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(renameSpeakerRec, renameSpeakerReq)
+	if renameSpeakerRec.Code != http.StatusOK {
+		t.Fatalf("rename speaker status = %d body=%s", renameSpeakerRec.Code, renameSpeakerRec.Body.String())
+	}
+	if err := json.NewDecoder(renameSpeakerRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode renamed speaker: %v", err)
+	}
+	if segment := updated.Script.TranscriptSegments[0]; segment.Speaker != "Moderator" {
+		t.Fatalf("segment speaker after rename = %q", segment.Speaker)
+	}
+	if got := updated.Script.UploadedAudioSpeakers; len(got) != 2 || got[0] != "Moderator" || got[1] != "Guest" {
+		t.Fatalf("speaker roster after rename = %v", got)
+	}
 
 	playbackReq := httptest.NewRequest(http.MethodGet,
 		"/api/discussions/"+discussion.ID+"/uploaded-audio", nil)
@@ -296,6 +381,89 @@ func TestUploadedAudioTranscriptSegmentUpdateAPI(t *testing.T) {
 	srv.Handler().ServeHTTP(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest || !strings.Contains(badRec.Body.String(), "exceeds") {
 		t.Fatalf("invalid range status = %d body=%s", badRec.Code, badRec.Body.String())
+	}
+}
+
+func TestUploadedAudioTranscriptSegmentBatchUpdateAPI(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "transcript-batch-edit.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	srv := New(Deps{Discussions: store})
+
+	plan := &config.DebateTopic{
+		Title:                   "Uploaded interview",
+		Type:                    config.ContentTypeUploadedAudio,
+		Language:                "en-US",
+		TotalMinutes:            1,
+		Channel:                 "default",
+		UploadedAudioKey:        "uploads/anonymous/audio.mp3",
+		UploadedAudioDurationMS: 30_000,
+		TranscriptSegments: []config.TranscriptSegment{
+			{Speaker: "Speaker 1", OffsetMS: 0, DurationMS: 4_000, Text: "First"},
+			{Speaker: "Speaker 1", OffsetMS: 4_000, DurationMS: 4_000, Text: "Second"},
+			{Speaker: "Speaker 1", OffsetMS: 8_000, DurationMS: 4_000, Text: "Third"},
+		},
+	}
+	discussion, err := store.Create(ctx, "anonymous", plan.Title, planResponse{Script: plan})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	body := `{"updates":[` +
+		`{"index":0,"speaker":"Host","offset_ms":250,"duration_ms":4250,"text":"First corrected"},` +
+		`{"index":2,"speaker":"Guest","offset_ms":8500,"duration_ms":3000,"text":"Third corrected"}` +
+		`]}`
+	req := httptest.NewRequest(http.MethodPatch,
+		"/api/discussions/"+discussion.ID+"/transcript/segments", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("batch update status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updated Discussion
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if updated.Script == nil || len(updated.Script.TranscriptSegments) != 3 {
+		t.Fatalf("updated script = %+v", updated.Script)
+	}
+	segments := updated.Script.TranscriptSegments
+	if got := segments[0]; got.Speaker != "Host" || got.OffsetMS != 250 || got.DurationMS != 4_250 || got.Text != "First corrected" {
+		t.Fatalf("first updated segment = %+v", got)
+	}
+	if got := segments[1]; got.Speaker != "Speaker 1" || got.Text != "Second" {
+		t.Fatalf("untouched segment = %+v", got)
+	}
+	if got := segments[2]; got.Speaker != "Guest" || got.OffsetMS != 8_500 || got.DurationMS != 3_000 || got.Text != "Third corrected" {
+		t.Fatalf("third updated segment = %+v", got)
+	}
+	if got := updated.Script.UploadedAudioSpeakers; len(got) != 3 || got[0] != "Host" || got[1] != "Speaker 1" || got[2] != "Guest" {
+		t.Fatalf("speaker roster after batch edit = %v", got)
+	}
+
+	var editTurns int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM native_discussion_edit_turns
+		WHERE discussion_id = ? AND text = ?`, discussion.ID, "Edited transcript").Scan(&editTurns); err != nil {
+		t.Fatalf("count edit turns: %v", err)
+	}
+	if editTurns != 1 {
+		t.Fatalf("batch edit turns = %d, want 1", editTurns)
+	}
+
+	duplicateReq := httptest.NewRequest(http.MethodPatch,
+		"/api/discussions/"+discussion.ID+"/transcript/segments",
+		strings.NewReader(`{"updates":[`+
+			`{"index":1,"speaker":"Host","offset_ms":4000,"duration_ms":3000,"text":"One"},`+
+			`{"index":1,"speaker":"Host","offset_ms":4500,"duration_ms":3000,"text":"Two"}]}`))
+	duplicateReq.Header.Set("Content-Type", "application/json")
+	duplicateRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(duplicateRec, duplicateReq)
+	if duplicateRec.Code != http.StatusBadRequest || !strings.Contains(duplicateRec.Body.String(), "duplicated") {
+		t.Fatalf("duplicate update status = %d body=%s", duplicateRec.Code, duplicateRec.Body.String())
 	}
 }
 

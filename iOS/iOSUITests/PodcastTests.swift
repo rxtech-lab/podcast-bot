@@ -46,8 +46,8 @@ final class PodcastTests: E2ETestCase {
 
     func testReadyPlanGenerateAndViewSummary() throws {
         let app = launch()
-        openLibraryRow(app, id: "test-ready")
-        XCTAssertTrue(playerOpened(app), "player did not open for test-ready")
+        openLibraryRow(app, id: "test-ready-summary")
+        XCTAssertTrue(playerOpened(app), "player did not open for test-ready-summary")
 
         // Start summary generation from the actions menu (retry the menu open,
         // which can race with the player settling).
@@ -64,18 +64,18 @@ final class PodcastTests: E2ETestCase {
         }
         // Fallback so a flaky menu interaction never blocks the view assertion.
         if !triggered {
-            _ = try? triggerSummary(id: "test-ready")
+            _ = try? triggerSummary(id: "test-ready-summary")
         }
 
         // Confirm generation completed on the backend (authoritative).
-        XCTAssertTrue(waitForSummaryReady(id: "test-ready", timeout: 30),
+        XCTAssertTrue(waitForSummaryReady(id: "test-ready-summary", timeout: 30),
                       "summary never became ready on the backend")
 
         // Relaunch so the player loads a fresh discussion that already advertises
         // the summary, then open and view it.
         let app2 = launch()
-        openLibraryRow(app2, id: "test-ready")
-        XCTAssertTrue(playerOpened(app2), "player did not reopen for test-ready")
+        openLibraryRow(app2, id: "test-ready-summary")
+        XCTAssertTrue(playerOpened(app2), "player did not reopen for test-ready-summary")
         var viewed = false
         for _ in 0..<4 {
             app2.buttons["player.documents"].tap()

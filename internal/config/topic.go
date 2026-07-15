@@ -221,6 +221,7 @@ type DebateTopic struct {
 	UploadedAudioKey         string              `yaml:"uploaded_audio_key,omitempty" json:"uploaded_audio_key,omitempty"`
 	UploadedAudioDurationMS  int64               `yaml:"uploaded_audio_duration_ms,omitempty" json:"uploaded_audio_duration_ms,omitempty"`
 	UploadedAudioMaxSpeakers int                 `yaml:"uploaded_audio_max_speakers,omitempty" json:"uploaded_audio_max_speakers,omitempty"`
+	UploadedAudioSpeakers    []string            `yaml:"uploaded_audio_speakers,omitempty" json:"uploaded_audio_speakers,omitempty"`
 	TranscriptSegments       []TranscriptSegment `yaml:"transcript_segments,omitempty" json:"transcript_segments,omitempty"`
 
 	// Shared across both content types.
@@ -420,12 +421,55 @@ func validateUploadedAudio(t *DebateTopic) error {
 	if len(t.TranscriptSegments) == 0 {
 		return fmt.Errorf("type=uploaded-audio requires at least one transcript_segments entry")
 	}
+	seenSpeakers := make(map[string]struct{}, len(t.UploadedAudioSpeakers))
+	for _, speaker := range t.UploadedAudioSpeakers {
+		name := strings.TrimSpace(speaker)
+		if name == "" {
+			return fmt.Errorf("uploaded_audio_speakers entries must not be empty")
+		}
+		key := strings.ToLower(name)
+		if _, exists := seenSpeakers[key]; exists {
+			return fmt.Errorf("uploaded_audio_speakers entries must be unique")
+		}
+		seenSpeakers[key] = struct{}{}
+	}
 	for _, seg := range t.TranscriptSegments {
 		if strings.TrimSpace(seg.Speaker) == "" || strings.TrimSpace(seg.Text) == "" {
 			return fmt.Errorf("transcript_segments entries need speaker and text")
 		}
 	}
 	return nil
+}
+
+// UploadedAudioSpeakerNames returns the persisted roster followed by any
+// transcript speakers missing from it. It keeps older plans (which predate the
+// explicit roster) compatible while allowing newly added, not-yet-assigned
+// speakers to remain available in the transcript editor.
+func UploadedAudioSpeakerNames(t *DebateTopic) []string {
+	if t == nil {
+		return nil
+	}
+	names := make([]string, 0, len(t.UploadedAudioSpeakers)+len(t.TranscriptSegments))
+	seen := make(map[string]struct{}, cap(names))
+	appendName := func(raw string) {
+		name := strings.TrimSpace(raw)
+		key := strings.ToLower(name)
+		if name == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	for _, name := range t.UploadedAudioSpeakers {
+		appendName(name)
+	}
+	for _, segment := range t.TranscriptSegments {
+		appendName(segment.Speaker)
+	}
+	return names
 }
 
 func validateAudioBook(t *DebateTopic) error {

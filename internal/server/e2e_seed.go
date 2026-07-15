@@ -76,6 +76,60 @@ func e2eAudioBookScript(title string, chapterCount int, indices []int) string {
 	return string(b)
 }
 
+// e2eUploadedAudioScript builds a valid uploaded-audio DebateTopic JSON: no
+// generative roster (the transcript defines the speakers), a durable audio key
+// resolved by the E2E playback route, and five distinctly-worded caption
+// segments the transcript-editor UI tests assert against.
+func e2eUploadedAudioScript(title string) string {
+	captions := []string{
+		"E2E caption one",
+		"E2E caption two",
+		"E2E caption three",
+		"E2E caption four",
+		"E2E caption five",
+	}
+	speakers := []string{"Alice", "Bob"}
+	segments := make([]config.TranscriptSegment, 0, len(captions))
+	for i, text := range captions {
+		segments = append(segments, config.TranscriptSegment{
+			Speaker:    speakers[i%len(speakers)],
+			OffsetMS:   int64(i) * 5000,
+			DurationMS: 4000,
+			Text:       text,
+		})
+	}
+	topic := &config.DebateTopic{
+		Title:                   title,
+		Type:                    config.ContentTypeUploadedAudio,
+		Language:                "en-US",
+		Channel:                 "default",
+		UploadedAudioKey:        "e2e/uploaded-audio.mp3",
+		UploadedAudioDurationMS: 60_000,
+		UploadedAudioSpeakers:   speakers,
+		TranscriptSegments:      segments,
+	}
+	b, _ := json.Marshal(topic)
+	return string(b)
+}
+
+// seedUploadedAudioRow inserts one uploaded-audio fixture. It stays in the
+// planning state (transcript segments are only editable before generation)
+// and carries its captions inside script_json, not native_discussion_lines.
+func (s *DiscussionStore) seedUploadedAudioRow(ctx context.Context, id, owner, title string) error {
+	now := time.Now().UnixMilli()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO native_discussions
+		(id, owner_user_id, topic, title, status, language, job_id, download_url, duration_seconds,
+		 points_charged, visibility, published_at, cover_type, cover_gradient_start, cover_gradient_end,
+		 script_json, markdown, sources_json, researched, plan_template, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'en-US', '', '', 0, 10, 'private', 0, 'gradient', '#6E8BFF', '#9B6EFF',
+		 ?, ?, '[]', 0, 'default', ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		id, owner, title, title, string(DiscussionPlanning),
+		e2eUploadedAudioScript(title), "# "+title+"\n\nSynthetic uploaded-audio plan markdown.",
+		now, now)
+	return err
+}
+
 // seedAudioBookRow inserts one audiobook fixture, optionally linked to a
 // parent (referenceID) and placed into an album at the given position.
 func (s *DiscussionStore) seedAudioBookRow(ctx context.Context, id, owner, title, status, scriptJSON, referenceID, albumID string, albumPosition int64) error {
@@ -174,6 +228,10 @@ func (s *DiscussionStore) seedTranscript(ctx context.Context, id string) error {
 // on. It is idempotent (every insert is ON CONFLICT DO NOTHING) and only ever
 // called in E2E mode. Owner ids are the plain strings "test" (the acting test
 // user) and "test2" (a different owner, for join/visibility tests).
+//
+// The UI suite runs its test classes in parallel against this one backend, so
+// fixtures follow a strict convention: a fixture a test class mutates must be
+// private to that class, and fixtures shared across classes must stay read-only.
 func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("discussion store not configured")
@@ -195,6 +253,7 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 	}
 	fixtures := []fixture{
 		{"test-ready", "test", "E2E Ready Podcast", string(DiscussionReady), "private", true, false, true},
+		{"test-ready-summary", "test", "E2E Summary Podcast", string(DiscussionReady), "private", true, false, true},
 		{"test-ongoing", "test", "E2E Ongoing Podcast", string(DiscussionGenerating), "private", false, false, false},
 		{"test-plan", "test", "E2E Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
 		{"test-plan-voice", "test", "E2E Voice Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
@@ -212,6 +271,12 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 				return fmt.Errorf("seed transcript %s: %w", f.id, err)
 			}
 		}
+	}
+
+	// Uploaded-audio fixture: a planning-stage station whose captions the
+	// transcript-editor UI tests retime, save, and navigate.
+	if err := s.seedUploadedAudioRow(ctx, "test-uploaded-audio", "test", "E2E Uploaded Audio"); err != nil {
+		return fmt.Errorf("seed uploaded audio: %w", err)
 	}
 
 	// Audiobook chapter-batch + album fixtures: a 12-chapter plan whose root

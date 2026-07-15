@@ -20,6 +20,7 @@ type AudioTranscribePayload struct {
 	DiscussionID    string `json:"discussion_id"`
 	UserID          string `json:"user_id"`
 	AudioKey        string `json:"audio_key"`
+	Filename        string `json:"filename,omitempty"`
 	MIMEType        string `json:"mime_type"`
 	SizeBytes       int64  `json:"size_bytes"`
 	MaxSpeakers     int    `json:"max_speakers"`
@@ -108,6 +109,7 @@ func (s *Server) RunAudioTranscribeTask(ctx context.Context, pl AudioTranscribeP
 		UploadedAudioMaxSpeakers: pl.MaxSpeakers,
 		TranscriptSegments:       segments,
 	}
+	topic.UploadedAudioSpeakers = config.UploadedAudioSpeakerNames(topic)
 	if topic.TotalMinutes < 1 {
 		topic.TotalMinutes = 1
 	}
@@ -127,11 +129,9 @@ func (s *Server) RunAudioTranscribeTask(ctx context.Context, pl AudioTranscribeP
 	// plan view's auto-run fires the assistant's transcript review when opened.
 	if s.d.Planning != nil {
 		if conv, err := s.d.Planning.EnsureConversation(ctx, pl.UserID, d.ID); err == nil {
-			if err := s.d.Planning.AppendTurn(ctx, conv.ID, planningTurnInput{
-				Role: "user",
-				Text: uploadedAudioReviewPrompt(len(segments), len(speakers), durationMS),
-				OpID: "transcript-review:" + d.ID,
-			}); err != nil {
+			if err := s.d.Planning.AppendTurn(ctx, conv.ID, uploadedAudioReviewTurn(
+				pl, d, len(segments), len(speakers), durationMS,
+			)); err != nil {
 				s.logger().Warn("seed transcript review turn failed", "discussion", d.ID, "err", err)
 			}
 		} else {

@@ -208,3 +208,21 @@ struct SummaryPDFDownloadTip: Tip {
         Tips.MaxDisplayCount(1)
     }
 }
+
+struct TranscriptEditingTip: Tip {
+    var title: Text {
+        Text("Edit Transcript")
+    }
+
+    var message: Text? {
+        Text("Swipe left on a segment to edit its text or retime it against the uploaded audio.")
+    }
+
+    var image: Image? {
+        Image(systemName: "hand.draw.fill")
+    }
+
+    var options: [any TipOption] {
+        Tips.MaxDisplayCount(1)
+    }
+}

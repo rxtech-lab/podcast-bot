@@ -21,6 +21,9 @@ struct SpeakerModelsSheet: View {
     /// on that row and blocks dismissal).
     @State private var updatingSpeaker: String?
     @State private var errorMessage: String?
+    @State private var speakerNameDraft = ""
+    @State private var speakerBeingRenamed: Speaker?
+    @State private var isAddingSpeaker = false
     /// Programmatic navigation target. The model and voice rows live in the
     /// same list row, and two NavigationLinks in one row misfire (tapping one
     /// can activate the other), so the rows are plain buttons that set this.
@@ -61,6 +64,16 @@ struct SpeakerModelsSheet: View {
             seen.insert(key)
         }
 
+        if discussion.script?.type == "uploaded-audio" {
+            var seenNames = Set<String>()
+            let roster = (discussion.script?.uploadedAudioSpeakers ?? [])
+                + (discussion.script?.transcriptSegments ?? []).map(\.speaker)
+            for name in roster {
+                appendUnique(name: name, role: "", isHost: out.isEmpty,
+                             model: nil, voice: nil, seen: &seenNames)
+            }
+            return out
+        }
         if discussion.script?.type == "audio-book" {
             var seenNames = Set<String>()
             if let host = discussion.script?.audioBookHost, !host.name.isEmpty {
@@ -96,10 +109,41 @@ struct SpeakerModelsSheet: View {
         discussion.script?.language ?? discussion.language
     }
 
+    private var isUploadedAudio: Bool {
+        discussion.script?.type == "uploaded-audio"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                if isLoadingModels && models.isEmpty {
+                if isUploadedAudio {
+                    if speakers.isEmpty {
+                        Section {
+                            Text("This plan has no speakers yet.")
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    } else {
+                        Section {
+                            ForEach(speakers) { speaker in
+                                uploadedAudioSpeakerRow(speaker)
+                            }
+                        } footer: {
+                            Text("Renaming a speaker updates every matching transcript segment.")
+                        }
+                    }
+                    if allowsEditing {
+                        Section {
+                            Button {
+                                speakerNameDraft = ""
+                                isAddingSpeaker = true
+                            } label: {
+                                Label("Add Speaker", systemImage: "person.badge.plus")
+                            }
+                        } footer: {
+                            Text("Add a speaker when recognition missed someone, then assign that speaker while editing transcript segments.")
+                        }
+                    }
+                } else if isLoadingModels && models.isEmpty {
                     Section {
                         modelCatalogLoadingView
                     }
@@ -126,7 +170,7 @@ struct SpeakerModelsSheet: View {
                     }
                 }
             }
-            .navigationTitle("Speaker Models")
+            .navigationTitle(isUploadedAudio ? "Speakers" : "Speaker Models")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(item: $pickerRoute) { route in
                 destination(for: route)
@@ -142,10 +186,64 @@ struct SpeakerModelsSheet: View {
         .presentationDetents([.medium, .large])
         .interactiveDismissDisabled(updatingSpeaker != nil)
         .task {
-            async let modelsLoad: Void = loadModels()
-            async let voicesLoad: Void = loadVoices()
-            async let discussionLoad: Void = refreshDiscussion()
-            _ = await (modelsLoad, voicesLoad, discussionLoad)
+            if isUploadedAudio {
+                isLoadingModels = false
+                isLoadingVoices = false
+                await refreshDiscussion()
+            } else {
+                async let modelsLoad: Void = loadModels()
+                async let voicesLoad: Void = loadVoices()
+                async let discussionLoad: Void = refreshDiscussion()
+                _ = await (modelsLoad, voicesLoad, discussionLoad)
+            }
+        }
+        .alert("Add Speaker", isPresented: $isAddingSpeaker) {
+            TextField("Speaker name", text: $speakerNameDraft)
+                .textInputAutocapitalization(.words)
+            Button("Cancel", role: .cancel) {}
+            Button("Add") { addUploadedAudioSpeaker() }
+                .disabled(speakerNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("The new speaker will be available in the transcript speaker picker.")
+        }
+        .alert("Rename Speaker", isPresented: renameAlertBinding) {
+            TextField("Speaker name", text: $speakerNameDraft)
+                .textInputAutocapitalization(.words)
+            Button("Cancel", role: .cancel) { speakerBeingRenamed = nil }
+            Button("Rename") { renameUploadedAudioSpeaker() }
+                .disabled(speakerNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("Every matching transcript segment will use the new speaker name.")
+        }
+    }
+
+    private var renameAlertBinding: Binding<Bool> {
+        Binding(
+            get: { speakerBeingRenamed != nil },
+            set: { if !$0 { speakerBeingRenamed = nil } }
+        )
+    }
+
+    private func uploadedAudioSpeakerRow(_ speaker: Speaker) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: speaker.isHost ? "person.wave.2.fill" : "person.fill")
+                .foregroundStyle(Theme.accent)
+                .frame(width: 22)
+            Text(speaker.name)
+                .font(.body.weight(.semibold))
+            Spacer()
+            if updatingSpeaker == speaker.id {
+                ProgressView().controlSize(.small)
+            } else if allowsEditing {
+                Button {
+                    speakerNameDraft = speaker.name
+                    speakerBeingRenamed = speaker
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Rename Speaker")
+            }
         }
     }
 
@@ -379,6 +477,47 @@ struct SpeakerModelsSheet: View {
             do {
                 discussion = try await APIClient(tokens: auth).updateSpeakerModel(
                     id: discussion.id, speaker: speaker.name, model: model)
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func addUploadedAudioSpeaker() {
+        let name = speakerNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        updatingSpeaker = name
+        errorMessage = nil
+        Task { @MainActor in
+            defer { updatingSpeaker = nil }
+            do {
+                discussion = try await APIClient(tokens: auth).addUploadedAudioSpeaker(
+                    id: discussion.id,
+                    name: name
+                )
+            } catch {
+                guard !APIClient.isCancellation(error) else { return }
+                errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func renameUploadedAudioSpeaker() {
+        guard let speaker = speakerBeingRenamed else { return }
+        let name = speakerNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        speakerBeingRenamed = nil
+        guard !name.isEmpty, name != speaker.name else { return }
+        updatingSpeaker = speaker.id
+        errorMessage = nil
+        Task { @MainActor in
+            defer { updatingSpeaker = nil }
+            do {
+                discussion = try await APIClient(tokens: auth).renameUploadedAudioSpeaker(
+                    id: discussion.id,
+                    from: speaker.name,
+                    to: name
+                )
             } catch {
                 guard !APIClient.isCancellation(error) else { return }
                 errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription

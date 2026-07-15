@@ -185,18 +185,16 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 	}
 
 	// Soft subs + translated tracks work for any type whose stage
-	// emits a subtitles.vtt sidecar — series and discussion. Burn-in
+	// emits a subtitles.vtt sidecar. Burn-in
 	// captions are painted only by the series renderer (discussion
 	// already burns its active-speaker caption natively), and the
 	// priors zip is a series-only continuity feature. Reject mismatched
 	// flags early with a clear message rather than silently ignoring
 	// them.
-	supportsSoftSubs := topic.Type == config.ContentTypeSeries ||
-		topic.Type == config.ContentTypeDiscussion ||
-		topic.Type == config.ContentTypeAudioBook
+	supportsSoftSubs := supportsSoftSubtitles(topic.Type)
 	if !supportsSoftSubs {
 		if sub.SoftSubs || len(sub.SubtitleLanguages) > 0 {
-			return errors.New("subtitle options (soft_subs) are only valid for type=series, type=discussion, or type=audio-book")
+			return errors.New("subtitle options (soft_subs) are only valid for type=series, type=discussion, type=audio-book, or type=uploaded-audio")
 		}
 	}
 	if topic.Type != config.ContentTypeSeries {
@@ -291,6 +289,18 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 		return fmt.Errorf("enqueue generation task: %w", err)
 	}
 	return nil
+}
+
+func supportsSoftSubtitles(contentType string) bool {
+	switch contentType {
+	case config.ContentTypeSeries,
+		config.ContentTypeDiscussion,
+		config.ContentTypeAudioBook,
+		config.ContentTypeUploadedAudio:
+		return true
+	default:
+		return false
+	}
 }
 
 // RunFromTask executes one queued generation attempt on the consuming pod:

@@ -325,6 +325,12 @@ func New(d Deps) *Server {
 	s.mux.HandleFunc("POST /api/uploads", s.handleUpload)
 	s.mux.HandleFunc("POST /api/transcribe", s.handleTranscribeAudio)
 
+	// Hermetic E2E runs have no S3, so uploaded-audio playback resolves to
+	// this local silent clip instead of a presigned URL.
+	if s.e2eMode() {
+		s.mux.HandleFunc("GET /api/e2e/uploaded-audio.mp3", s.handleE2EUploadedAudio)
+	}
+
 	// "video" and "dashboard" both run the upload-and-render job pipeline;
 	// only the embedded SPA differs (dashboard has its own frontend). Stream
 	// mode is everything else.
@@ -370,7 +376,10 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/create/plan", s.handleDiscussionCreateFromPlan)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
 		s.mux.HandleFunc("GET /api/discussions/{id}/uploaded-audio", s.handleUploadedAudioPlayback)
+		s.mux.HandleFunc("PATCH /api/discussions/{id}/transcript/segments", s.handleUploadedAudioSegmentBatchUpdate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/transcript/segments/{index}", s.handleUploadedAudioSegmentUpdate)
+		s.mux.HandleFunc("POST /api/discussions/{id}/transcript/speakers", s.handleUploadedAudioSpeakerAdd)
+		s.mux.HandleFunc("PATCH /api/discussions/{id}/transcript/speakers", s.handleUploadedAudioSpeakerRename)
 		s.mux.HandleFunc("GET /api/discussions/{id}/ui-actions", s.handleDiscussionUIActions)
 		s.mux.HandleFunc("GET /api/discussions/{id}/parent-podcast", s.handleDiscussionParentPodcastGet)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary", s.handleDiscussionSummary)

@@ -90,6 +90,7 @@ func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Re
 		turnCount = len(turns)
 		phase = time.Now()
 		view.Parts = planningConversationParts(turns)
+		view.Parts = s.preparePlanningPartsForClient(r.Context(), user.ID, id, view.Parts)
 		partsBuild = time.Since(phase)
 		view.NeedsRun = planningConversationShouldAutoRun(conv, turns)
 		phase = time.Now()
@@ -126,6 +127,60 @@ func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Re
 		"write_json_ms", durMS(writeDuration),
 		"total_ms", durMS(time.Since(started)),
 	)
+}
+
+// preparePlanningPartsForClient restores the original audio attachment for
+// turns created before audio metadata was persisted, validates every stored key
+// against the conversation owner, and replaces stale attachment URLs with fresh
+// playback URLs for this history load.
+func (s *Server) preparePlanningPartsForClient(ctx context.Context, userID, discussionID string, parts []PlanningPart) []PlanningPart {
+	if hasLegacyUploadedAudioReviewPart(parts) {
+		if d, err := s.d.Discussions.Get(ctx, userID, discussionID); err == nil && d != nil && d.Script != nil &&
+			d.Script.Type == config.ContentTypeUploadedAudio && strings.TrimSpace(d.Script.UploadedAudioKey) != "" {
+			parts = restoreLegacyUploadedAudioReviewParts(parts, d)
+		}
+	}
+	for i := range parts {
+		parts[i].Attachments = s.sanitizedAttachments(userID, parts[i].Attachments)
+	}
+	return refreshedPlanningPartAttachments(parts, s.planningAttachmentURLRefresher(ctx, userID))
+}
+
+func hasLegacyUploadedAudioReviewPart(parts []PlanningPart) bool {
+	for _, part := range parts {
+		if part.Role == "user" && len(part.Attachments) == 0 && strings.HasPrefix(part.Text, "The audio has been transcribed:") {
+			return true
+		}
+	}
+	return false
+}
+
+func restoreLegacyUploadedAudioReviewParts(parts []PlanningPart, d *Discussion) []PlanningPart {
+	if d == nil || d.Script == nil || d.Script.Type != config.ContentTypeUploadedAudio ||
+		strings.TrimSpace(d.Script.UploadedAudioKey) == "" {
+		return parts
+	}
+	attachment := uploadedAudioPlanningAttachment("", d.Topic, "", d.Script.UploadedAudioKey)
+	for i := range parts {
+		if parts[i].Role == "user" && len(parts[i].Attachments) == 0 && strings.HasPrefix(parts[i].Text, "The audio has been transcribed:") {
+			parts[i].Text = ""
+			parts[i].Attachments = []planner.Attachment{attachment}
+		}
+	}
+	return parts
+}
+
+func (s *Server) planningAttachmentURLRefresher(ctx context.Context, userID string) func(key string) string {
+	return func(key string) string {
+		if s.d.Uploader == nil || !s.d.Uploader.Enabled() || !s.ownsUploadKey(userID, key) {
+			return ""
+		}
+		url, err := s.d.Uploader.DownloadURL(ctx, key, uploadedAudioPlaybackTTL)
+		if err != nil {
+			return ""
+		}
+		return url
+	}
 }
 
 func (s *Server) planningActiveStreamForLoad(ctx context.Context, conversationID string) (*PlanningActiveStream, bool, bool) {
@@ -227,6 +282,7 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			sse := newSSEWriter(w)
 			_ = sse.comment("ok")
 			parts := planningConversationParts(turns)
+			parts = s.preparePlanningPartsForClient(r.Context(), user.ID, id, parts)
 			_ = sse.send("done", planningDonePayload{
 				Discussion: d,
 				Conversation: PlanningConversationView{
@@ -333,7 +389,8 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 	if pending == nil {
 		// Already answered (or unknown) — idempotent no-op: return current state.
 		turns, _ := s.d.Planning.Turns(r.Context(), conv.ID)
-		writeJSON(w, planningDonePayload{Discussion: d, Conversation: PlanningConversationView{Conversation: conv, Parts: planningConversationParts(turns), NeedsRun: planningConversationShouldAutoRun(conv, turns)}})
+		parts := s.preparePlanningPartsForClient(r.Context(), user.ID, id, planningConversationParts(turns))
+		writeJSON(w, planningDonePayload{Discussion: d, Conversation: PlanningConversationView{Conversation: conv, Parts: parts, NeedsRun: planningConversationShouldAutoRun(conv, turns)}})
 		return
 	}
 	status := "answered"
@@ -461,9 +518,10 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 	}
 	convFresh, _ := s.d.Planning.ConversationByDiscussion(workCtx, userID, d.ID)
 	finalTurns, _ := s.d.Planning.Turns(workCtx, conv.ID)
+	finalParts := s.preparePlanningPartsForClient(workCtx, userID, d.ID, planningConversationParts(finalTurns))
 	_ = sse.send("done", planningDonePayload{
 		Discussion:   updated,
-		Conversation: PlanningConversationView{Conversation: convFresh, Parts: planningConversationParts(finalTurns), NeedsRun: planningConversationShouldAutoRun(convFresh, finalTurns)},
+		Conversation: PlanningConversationView{Conversation: convFresh, Parts: finalParts, NeedsRun: planningConversationShouldAutoRun(convFresh, finalTurns)},
 	})
 	s.logger().Info("planning turn finished",
 		"discussion", d.ID,
@@ -649,11 +707,12 @@ func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload
 	}
 	convFresh, _ := s.d.Planning.ConversationByDiscussion(workCtx, pl.UserID, d.ID)
 	finalTurns, _ := s.d.Planning.Turns(workCtx, conv.ID)
+	finalParts := s.preparePlanningPartsForClient(workCtx, pl.UserID, d.ID, planningConversationParts(finalTurns))
 	_ = sink.send("done", planningDonePayload{
 		Discussion: updated,
 		Conversation: PlanningConversationView{
 			Conversation: convFresh,
-			Parts:        planningConversationParts(finalTurns),
+			Parts:        finalParts,
 			NeedsRun:     planningConversationShouldAutoRun(convFresh, finalTurns),
 		},
 	})

@@ -13,9 +13,16 @@ BUILDER   := debate-bot-builder
 
 .PHONY: all build frontend backend run dev clean tidy gen-assets series-smoke series-recap-smoke \
         style-test style-golden style-font buildx-setup docker-build docker-push \
-        e2e e2e-server rabbitmq-dev
+        e2e e2e-server rabbitmq-dev lint
 
 all: build
+
+lint:
+	@command -v swiftlint >/dev/null 2>&1 || { \
+		echo "SwiftLint is required. Install it with: brew install swiftlint" >&2; \
+		exit 1; \
+	}
+	swiftlint lint --config .swiftlint.yml --quiet --no-cache
 
 # Full production build: bundle the React SPA into the embed directory,
 # then build the Go binary that embeds it.

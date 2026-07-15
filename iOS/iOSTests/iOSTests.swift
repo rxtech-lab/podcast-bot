@@ -15,6 +15,149 @@ final class iOSTests: XCTestCase {
         super.tearDown()
     }
 
+    func testTranscriptRetimeStateClampsNudgesAndPreservesCaption() {
+        let original = TranscriptSegmentDTO(
+            speaker: "Guest",
+            offsetMs: 2_000,
+            durationMs: 3_000,
+            text: "Keep this caption unchanged."
+        )
+        var state = TranscriptRetimeState(segment: original, audioDurationMs: 10_000)
+
+        XCTAssertEqual(state.nudgedTimestamp(from: 500, by: -1_000), 0)
+        XCTAssertEqual(state.nudgedTimestamp(from: 9_500, by: 1_000), 10_000)
+
+        state.set(.start, to: 2_500)
+        state.set(.end, to: 7_000)
+        let revised = state.revisedSegment(from: original)
+
+        XCTAssertTrue(state.isValid)
+        XCTAssertEqual(revised.speaker, original.speaker)
+        XCTAssertEqual(revised.text, original.text)
+        XCTAssertEqual(revised.offsetMs, 2_500)
+        XCTAssertEqual(revised.durationMs, 4_500)
+
+        state.set(.start, to: 10_000)
+        XCTAssertFalse(state.isValid)
+    }
+
+    func testTranscriptRetimeTimestampUsesFixedClockFields() {
+        XCTAssertEqual(transcriptRetimeTimestamp(663_800), "00:11:03:800")
+        XCTAssertEqual(transcriptRetimeTimestamp(3_661_007), "01:01:01:007")
+        XCTAssertEqual(transcriptRetimeTimestamp(-1), "00:00:00:000")
+    }
+
+    func testTranscriptPlaybackTimestampTracksAndClampsObservedPlayerTime() {
+        XCTAssertEqual(
+            transcriptPlaybackTimestamp(CMTime(value: 2_345, timescale: 1_000), maximumMs: 10_000),
+            2_345
+        )
+        XCTAssertEqual(
+            transcriptPlaybackTimestamp(CMTime(value: 12_000, timescale: 1_000), maximumMs: 10_000),
+            10_000
+        )
+        XCTAssertEqual(
+            transcriptPlaybackTimestamp(CMTime(value: -500, timescale: 1_000), maximumMs: 10_000),
+            0
+        )
+        XCTAssertNil(transcriptPlaybackTimestamp(.invalid, maximumMs: 10_000))
+    }
+
+    func testTranscriptRetimeSequenceUsesChronologicalOrderAndMovesBackward() {
+        let segments = [
+            TranscriptSegmentDTO(speaker: "C", offsetMs: 8_000, durationMs: 1_000, text: "Third"),
+            TranscriptSegmentDTO(speaker: "A", offsetMs: 1_000, durationMs: 1_000, text: "First"),
+            TranscriptSegmentDTO(speaker: "B", offsetMs: 4_000, durationMs: 1_000, text: "Second")
+        ]
+        var sequence = TranscriptRetimeSequence(segments: segments, initialIndex: 1)
+
+        XCTAssertNil(sequence.previousSegment)
+        XCTAssertEqual(sequence.currentSegment.text, "First")
+        XCTAssertEqual(sequence.nextSegment?.text, "Second")
+        XCTAssertTrue(sequence.moveNext())
+        XCTAssertEqual(sequence.currentSegment.text, "Second")
+        XCTAssertEqual(sequence.previousSegment?.text, "First")
+        XCTAssertEqual(sequence.nextSegment?.text, "Third")
+
+        let revised = TranscriptSegmentDTO(
+            speaker: "B",
+            offsetMs: 4_500,
+            durationMs: 750,
+            text: "Second"
+        )
+        sequence.replaceCurrent(with: revised)
+        XCTAssertEqual(sequence.pendingIndices, [2])
+        XCTAssertEqual(sequence.pendingUpdates, [
+            TranscriptSegmentUpdate(index: 2, segment: revised)
+        ])
+
+        XCTAssertTrue(sequence.movePrevious())
+        XCTAssertEqual(sequence.currentSegment.text, "First")
+        XCTAssertTrue(sequence.moveNext())
+        XCTAssertEqual(sequence.currentSegment.offsetMs, 4_500)
+        sequence.markSaved(at: 2)
+        XCTAssertTrue(sequence.pendingIndices.isEmpty)
+    }
+
+    func testTranscriptBatchUpdateUsesOneRequest() async throws {
+        var capturedRequest: URLRequest?
+        var capturedBody: Data?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            capturedBody = request.httpBodyStreamData ?? request.httpBody
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            let responseBody = """
+            {
+              "id": "discussion-1",
+              "topic": "Uploaded audio",
+              "title": "Uploaded audio",
+              "status": "planning",
+              "language": "en-US"
+            }
+            """
+            return (response, Data(responseBody.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let session = URLSession(configuration: config)
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: session)
+        let updates = [
+            TranscriptSegmentUpdate(
+                index: 0,
+                segment: TranscriptSegmentDTO(
+                    speaker: "Host", offsetMs: 250, durationMs: 4_250, text: "First"
+                )
+            ),
+            TranscriptSegmentUpdate(
+                index: 2,
+                segment: TranscriptSegmentDTO(
+                    speaker: "Guest", offsetMs: 8_500, durationMs: 3_000, text: "Third"
+                )
+            )
+        ]
+
+        _ = try await api.updateTranscriptSegments(id: "discussion-1", updates: updates)
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "PATCH")
+        XCTAssertEqual(
+            capturedRequest?.url?.path,
+            "/api/discussions/discussion-1/transcript/segments"
+        )
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let encodedUpdates = try XCTUnwrap(json["updates"] as? [[String: Any]])
+        XCTAssertEqual(encodedUpdates.count, 2)
+        XCTAssertEqual(encodedUpdates[0]["index"] as? Int, 0)
+        XCTAssertEqual(encodedUpdates[0]["offset_ms"] as? Int, 250)
+        XCTAssertEqual(encodedUpdates[1]["index"] as? Int, 2)
+        XCTAssertEqual(encodedUpdates[1]["text"] as? String, "Third")
+    }
+
     func testSendJobMessagePostsToRunningJobOrchestrator() async throws {
         var capturedRequest: URLRequest?
         var capturedBody: Data?
@@ -405,765 +548,4 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(cover["gradient_end"] as? String, "#777777")
     }
 
-    func testTranscriptChunksAppendUntilDoneMarker() {
-        var lines: [LiveLine] = []
-
-        XCTAssertNil(LiveLine.applyTranscriptEvent(to: &lines,
-                                                   speaker: "Sarah",
-                                                   role: "discussant",
-                                                   text: "First sentence.",
-                                                   done: false))
-        XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines[0].text, "First sentence.")
-        XCTAssertFalse(lines[0].done)
-
-        XCTAssertNil(LiveLine.applyTranscriptEvent(to: &lines,
-                                                   speaker: "Sarah",
-                                                   role: "discussant",
-                                                   text: "Second sentence.",
-                                                   done: false))
-        XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines[0].text, "First sentence. Second sentence.")
-
-        let completed = LiveLine.applyTranscriptEvent(to: &lines,
-                                                      speaker: "Sarah",
-                                                      role: "discussant",
-                                                      text: "",
-                                                      done: true)
-        XCTAssertEqual(completed?.text, "First sentence. Second sentence.")
-        XCTAssertTrue(lines[0].done)
-    }
-
-    func testTranscriptScrollTokenChangesWhenLastMessageTextUpdates() {
-        var lines = [
-            LiveLine(speaker: "Sarah", role: "discussant", text: "First", isUser: false, done: false)
-        ]
-        let before = TranscriptScrollToken.make(for: lines)
-
-        lines[0].text = "First Second"
-        let afterTextUpdate = TranscriptScrollToken.make(for: lines)
-
-        lines[0].done = true
-        let afterDone = TranscriptScrollToken.make(for: lines)
-
-        XCTAssertNotEqual(before, afterTextUpdate)
-        XCTAssertNotEqual(afterTextUpdate, afterDone)
-        XCTAssertEqual(before.count, afterTextUpdate.count)
-    }
-
-    func testPodcastTranscriptReadinessIgnoresUserOnlyLines() {
-        let userOnly = [
-            LiveLine(speaker: "Qiwei", role: "user", text: "Are we ready?", isUser: true, done: true),
-            LiveLine(speaker: "Qiwei", role: "viewer", text: "Echoed from stream", isUser: false, done: true)
-        ]
-        let podcastLines = userOnly + [
-            LiveLine(speaker: "Host", role: "host", text: "Welcome to the discussion.", isUser: false, done: true)
-        ]
-
-        XCTAssertFalse(PlayerModel.containsPodcastTranscript(userOnly))
-        XCTAssertTrue(PlayerModel.containsPodcastTranscript(podcastLines))
-    }
-
-    func testPodcastTranscriptVisibilityKeepsLocalUserMessageButHidesRoleOnlyEcho() {
-        let localUserMessage = LiveLine(speaker: "Qiwei",
-                                       role: "user",
-                                       text: "What about the budget?",
-                                       isUser: true,
-                                       done: true)
-        let roleOnlyEcho = LiveLine(speaker: "Qiwei",
-                                    role: "user",
-                                    text: "What about the budget?",
-                                    isUser: false,
-                                    done: true)
-        let panelLine = LiveLine(speaker: "Host",
-                                 role: "host",
-                                 text: "Let's take that question.",
-                                 isUser: false,
-                                 done: true)
-
-        XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(localUserMessage))
-        XCTAssertFalse(PlayerModel.isVisibleTranscriptLine(roleOnlyEcho))
-        XCTAssertTrue(PlayerModel.isVisibleTranscriptLine(panelLine))
-    }
-
-    func testVisibleTranscriptLinesSuppressesAdjacentRepeatedPrefix() {
-        let intro = "欢迎收听由我为您播讲的长篇有声书，《一滴水的威力：极简冷笑话》。"
-        let lines = [
-            LiveLine(speaker: "小雅",
-                     role: "host",
-                     text: intro,
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "小雅",
-                     role: "host",
-                     text: "\(intro)\n\n生活，有时像是一场严谨的实验。",
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "小雅",
-                     role: "host",
-                     text: "Yes.",
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "小雅",
-                     role: "host",
-                     text: "Yes.",
-                     isUser: false,
-                     done: true)
-        ]
-
-        let visible = PlayerModel.visibleTranscriptLines(lines)
-
-        XCTAssertEqual(visible.map(\.text), [
-            "\(intro)\n\n生活，有时像是一场严谨的实验。",
-            "Yes.",
-            "Yes."
-        ])
-    }
-
-    func testVisibleTranscriptLinesSuppressesEmptyHistoricalRows() {
-        let lines = [
-            LiveLine(speaker: "路人甲",
-                     role: "host",
-                     text: "那个，各位老师，我就想问一句，你们平时淋过雨吗？",
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "小雅",
-                     role: "host",
-                     text: "   ",
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "张博士",
-                     role: "discussant",
-                     text: "是啊，原来我们都淋过雨。",
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "小雅",
-                     role: "host",
-                     text: "",
-                     isUser: false,
-                     done: true)
-        ]
-
-        let visible = PlayerModel.visibleTranscriptLines(lines)
-
-        XCTAssertEqual(visible.map(\.speaker), ["路人甲", "张博士"])
-        XCTAssertTrue(visible.allSatisfy(\.hasRenderablePayload))
-    }
-
-    func testTranscriptDisplayTextStripsNaturalSpeechMarkers() {
-        let line = LiveLine(speaker: "小雅",
-                            role: "series-host",
-                            text: #"""
-<pause time="800ms"/>
-这条消息发出来的瞬间，那个飞速滚动的学术群突然停滞了。
-"""#,
-                            isUser: false,
-                            done: true)
-
-        XCTAssertTrue(line.hasDisplayText)
-        XCTAssertEqual(line.displayText, "这条消息发出来的瞬间，那个飞速滚动的学术群突然停滞了。")
-        XCTAssertEqual(PlayerModel.visibleTranscriptLines([line]).map(\.displayText), [
-            "这条消息发出来的瞬间，那个飞速滚动的学术群突然停滞了。"
-        ])
-    }
-
-    func testMarkerOnlyTranscriptLineIsNotVisible() {
-        let line = LiveLine(speaker: "小雅",
-                            role: "series-host",
-                            text: #"<pause time="500ms"/>"#,
-                            isUser: false,
-                            done: true)
-
-        XCTAssertFalse(line.hasDisplayText)
-        XCTAssertFalse(PlayerModel.isVisibleTranscriptLine(line))
-    }
-
-    func testAudioOnlyVoiceMessageDoesNotRequireDisplayText() {
-        let voiceLine = LiveLine(speaker: "Qiwei",
-                                 role: "user",
-                                 text: "   ",
-                                 isUser: true,
-                                 done: true,
-                                 audioURL: "https://media.example/voice.m4a")
-        let textLine = LiveLine(speaker: "Qiwei",
-                                role: "user",
-                                text: "hello",
-                                isUser: true,
-                                done: true)
-
-        XCTAssertTrue(voiceLine.hasAudio)
-        XCTAssertFalse(voiceLine.hasDisplayText)
-        XCTAssertFalse(textLine.hasAudio)
-        XCTAssertTrue(textLine.hasDisplayText)
-    }
-
-    func testAudioInterruptionResumeOptionIsRecognized() {
-        let resumable: [AnyHashable: Any] = [
-            AVAudioSessionInterruptionOptionKey: AVAudioSession.InterruptionOptions.shouldResume.rawValue
-        ]
-        let notResumable: [AnyHashable: Any] = [
-            AVAudioSessionInterruptionOptionKey: UInt(0)
-        ]
-
-        XCTAssertTrue(PlayerModel.audioInterruptionShouldResume(resumable))
-        XCTAssertFalse(PlayerModel.audioInterruptionShouldResume(notResumable))
-        XCTAssertFalse(PlayerModel.audioInterruptionShouldResume(nil))
-    }
-
-    func testNowPlayingArtworkSourceKeyUsesRenderableCover() {
-        let imageCover = DiscussionCover(type: "image",
-                                         imageURL: "https://cdn.example/cover.webp",
-                                         imageKey: "covers/cover.webp",
-                                         gradientStart: nil,
-                                         gradientEnd: nil,
-                                         prompt: nil)
-        let gradientCover = DiscussionCover(type: "gradient",
-                                            imageURL: nil,
-                                            imageKey: nil,
-                                            gradientStart: "#111111",
-                                            gradientEnd: "#777777",
-                                            prompt: nil)
-        let keyOnlyCover = DiscussionCover(type: "image",
-                                           imageURL: nil,
-                                           imageKey: "covers/cover.webp",
-                                           gradientStart: nil,
-                                           gradientEnd: nil,
-                                           prompt: nil)
-
-        XCTAssertEqual(PlayerModel.nowPlayingArtworkSourceKey(for: imageCover),
-                       "image:https://cdn.example/cover.webp")
-        XCTAssertEqual(PlayerModel.nowPlayingArtworkSourceKey(for: gradientCover),
-                       "gradient:#111111:#777777")
-        XCTAssertNil(PlayerModel.nowPlayingArtworkSourceKey(for: keyOnlyCover))
-    }
-
-    @MainActor
-    func testPlayerSessionStoreReusesFullScreenSessionAcrossRebuild() async throws {
-        let discussion = try decodeDiscussion(status: "ready", pointsCharged: 0)
-        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
-                            tokens: StaticTokenProvider(token: "token-1"))
-        var createdModels = 0
-        let store = PlayerSessionStore(
-            releaseGracePeriod: .milliseconds(5),
-            startsModels: false
-        ) { discussion, api, username, userID, shareToken in
-            createdModels += 1
-            return PlayerModel(discussion: discussion,
-                               api: api,
-                               username: username,
-                               userID: userID,
-                               shareToken: shareToken)
-        }
-
-        let first = store.acquire(discussion: discussion,
-                                  api: api,
-                                  username: "Qiwei",
-                                  userID: "user-1")
-        first.isFullPlayerPresented = true
-        store.release(first)
-        let second = store.acquire(discussion: discussion,
-                                   api: api,
-                                   username: "Qiwei",
-                                   userID: "user-1")
-
-        XCTAssertTrue(first === second)
-        XCTAssertTrue(second.isFullPlayerPresented)
-        XCTAssertEqual(createdModels, 1)
-        XCTAssertEqual(store.activeSessionCount, 1)
-    }
-
-    @MainActor
-    func testPlayerSessionStoreReleasesInactiveSessionAfterGracePeriod() async throws {
-        let discussion = try decodeDiscussion(status: "ready", pointsCharged: 0)
-        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
-                            tokens: StaticTokenProvider(token: "token-1"))
-        let store = PlayerSessionStore(releaseGracePeriod: .milliseconds(5),
-                                       startsModels: false)
-        let session = store.acquire(discussion: discussion,
-                                    api: api,
-                                    username: "Qiwei",
-                                    userID: "user-1")
-
-        store.release(session)
-        try await Task.sleep(for: .milliseconds(20))
-
-        XCTAssertEqual(store.activeSessionCount, 0)
-    }
-
-    func testPersistedSenderMetadataMarksReloadedJobTranscriptUserLineAsMine() {
-        var reloadedLine = LiveLine(speaker: "Qiwei",
-                                    role: "user",
-                                    text: "What about the budget?",
-                                    isUser: true,
-                                    done: true)
-        let persistedLine = DiscussionLineDTO(speaker: "Qiwei",
-                                              role: "user",
-                                              side: nil,
-                                              text: "What about the budget?",
-                                              startMS: nil,
-                                              isUser: true,
-                                              senderUserID: "oauth:me")
-
-        XCTAssertFalse(PlayerModel.isLineAuthoredByCurrentUser(
-            reloadedLine,
-            currentUserID: "oauth:me",
-            currentUsername: "Renamed User"
-        ))
-
-        PlayerModel.applyPersistedMetadata(to: &reloadedLine, from: persistedLine)
-
-        XCTAssertEqual(reloadedLine.senderUserID, "oauth:me")
-        XCTAssertTrue(PlayerModel.isLineAuthoredByCurrentUser(
-            reloadedLine,
-            currentUserID: "oauth:me",
-            currentUsername: "Renamed User"
-        ))
-    }
-
-    func testPersistedMetadataCarriesAudiobookImageURL() {
-        var reloadedLine = LiveLine(speaker: "Narrator",
-                                    role: "host",
-                                    text: "",
-                                    isUser: false,
-                                    done: true)
-        let persistedLine = DiscussionLineDTO(speaker: "Narrator",
-                                              role: "host",
-                                              side: nil,
-                                              text: "",
-                                              startMS: nil,
-                                              isUser: false,
-                                              imageURL: "https://cdn.example/chapter-1.webp")
-
-        PlayerModel.applyPersistedMetadata(to: &reloadedLine, from: persistedLine)
-
-        XCTAssertEqual(reloadedLine.imageURL, "https://cdn.example/chapter-1.webp")
-        XCTAssertTrue(reloadedLine.hasImage)
-    }
-
-    func testTranscriptSnapshotReplacesLocalPrefixLine() {
-        let local = [
-            LiveLine(speaker: "晓凡 (XIAO FAN)",
-                     role: "host",
-                     text: "欢迎收听音频书，星海的最后回响。",
-                     isUser: false,
-                     done: true)
-        ]
-        let snapshot = [
-            TranscriptDTO(speaker: "晓凡 (XIAO FAN)",
-                          role: "host",
-                          side: nil,
-                          text: "欢迎收听音频书，星海的最后回响。 在遥远的未来，当星际航行的辉煌逐渐褪色。",
-                          at: nil)
-        ]
-
-        XCTAssertEqual(PlayerModel.snapshotPrefixReplacementIndex(for: snapshot[0],
-                                                                  text: snapshot[0].text,
-                                                                  isUser: false,
-                                                                  in: local,
-                                                                  snapshot: snapshot),
-                       0)
-    }
-
-    func testTranscriptSnapshotKeepsPrefixLineWhenAuthoritative() {
-        let local = [
-            LiveLine(speaker: "晓凡 (XIAO FAN)",
-                     role: "host",
-                     text: "欢迎收听音频书，星海的最后回响。",
-                     isUser: false,
-                     done: true)
-        ]
-        let snapshot = [
-            TranscriptDTO(speaker: "晓凡 (XIAO FAN)",
-                          role: "host",
-                          side: nil,
-                          text: "欢迎收听音频书，星海的最后回响。",
-                          at: nil),
-            TranscriptDTO(speaker: "晓凡 (XIAO FAN)",
-                          role: "host",
-                          side: nil,
-                          text: "欢迎收听音频书，星海的最后回响。 在遥远的未来，当星际航行的辉煌逐渐褪色。",
-                          at: nil)
-        ]
-
-        XCTAssertNil(PlayerModel.snapshotPrefixReplacementIndex(for: snapshot[1],
-                                                                text: snapshot[1].text,
-                                                                isUser: false,
-                                                                in: local,
-                                                                snapshot: snapshot))
-    }
-
-    func testSpeakerPaletteUsesTranscriptOrderToAvoidHashCollision() {
-        let lines = [
-            LiveLine(speaker: "Host", role: "host", text: "Welcome.", isUser: false, done: true),
-            LiveLine(speaker: "Guest", role: "discussant", text: "Thanks.", isUser: false, done: true)
-        ]
-
-        XCTAssertEqual(SpeakerPalette.index(for: "Host"), SpeakerPalette.index(for: "Guest"))
-        XCTAssertNotEqual(SpeakerPalette.index(for: "Host", in: lines),
-                          SpeakerPalette.index(for: "Guest", in: lines))
-    }
-
-    func testDiscussionPointsTextWaitsForReadyStatus() throws {
-        let generating = try decodeDiscussion(status: "generating", pointsCharged: 21)
-        let ready = try decodeDiscussion(status: "ready", pointsCharged: 21)
-        let hidden = try decodeDiscussion(status: "ready", pointsCharged: 21, showUsageSummary: false)
-
-        XCTAssertNil(generating.pointsText)
-        XCTAssertEqual(ready.pointsText, "21 points")
-        XCTAssertNil(hidden.pointsText)
-    }
-
-    func testFinishedDiscussionRefreshUsesAuthoritativePoints() throws {
-        var current = try decodeDiscussion(status: "generating", pointsCharged: 15)
-        current.lines = [
-            DiscussionLineDTO(speaker: "Host", role: "host", side: nil,
-                              text: "Local final line", startMS: nil, isUser: false)
-        ]
-        var fresh = try decodeDiscussion(status: "ready", pointsCharged: 132)
-        fresh.lines = []
-
-        let merged = PlayerModel.mergingLocalDiscussionState(current: current, fresh: fresh)
-
-        XCTAssertEqual(merged.status, .ready)
-        XCTAssertEqual(merged.pointsCharged, 132)
-        XCTAssertEqual(merged.pointsText, "132 points")
-        XCTAssertEqual(merged.lines?.map(\.text), ["Local final line"])
-    }
-
-    func testLikedStationPreservesKnownRenderableCoverURL() throws {
-        var marketStation = try decodeDiscussion(status: "ready", pointsCharged: 0)
-        marketStation.cover = DiscussionCover(type: "image",
-                                               imageURL: "https://cdn.example/cover.webp?signature=abc",
-                                               imageKey: "covers/discussion-1.webp",
-                                               gradientStart: nil,
-                                               gradientEnd: nil,
-                                               prompt: nil)
-        var likeResponse = try decodeDiscussion(status: "ready", pointsCharged: 0)
-        likeResponse.cover = DiscussionCover(type: "image",
-                                             imageURL: nil,
-                                             imageKey: "covers/discussion-1.webp",
-                                             gradientStart: nil,
-                                             gradientEnd: nil,
-                                             prompt: nil)
-
-        let merged = likeResponse.preservingRenderableCover(from: marketStation)
-
-        XCTAssertEqual(merged.cover?.imageURL, marketStation.cover?.imageURL)
-        XCTAssertNotNil(merged.cover?.renderableImageURL)
-        XCTAssertNil(likeResponse.cover?.renderableImageURL)
-    }
-
-    func testSpeakerInitialsIgnoreParenthesizedRomanization() {
-        XCTAssertEqual(SpeakerPalette.initials(for: "陆严 (LU YAN)"), "陆")
-        XCTAssertEqual(SpeakerPalette.initials(for: "陆严（LU YAN）"), "陆")
-    }
-
-    func testTranscriptLoadingDelayKeepsOneSecondMinimum() {
-        let start = Date(timeIntervalSinceReferenceDate: 100)
-
-        XCTAssertEqual(PlayerModel.minimumTranscriptLoadingSeconds, 1.0)
-        XCTAssertEqual(PlayerModel.remainingTranscriptLoadingDelay(startedAt: start,
-                                                                   now: start.addingTimeInterval(0.25)),
-                       0.75,
-                       accuracy: 0.001)
-        XCTAssertEqual(PlayerModel.remainingTranscriptLoadingDelay(startedAt: start,
-                                                                   now: start.addingTimeInterval(1.25)),
-                       0,
-                       accuracy: 0.001)
-    }
-
-    func testTranscriptLoadingClearsWhenJobFailsWithoutTranscript() {
-        XCTAssertFalse(PlayerModel.transcriptLoadingVisibleAfterTerminalFailure(wasVisible: true))
-        XCTAssertFalse(PlayerModel.transcriptLoadingVisibleAfterTerminalFailure(wasVisible: false))
-    }
-
-    func testCaptionTextSelectsCueForLookupTime() {
-        let cues = [
-            VTTCue(start: 0, end: 1, text: "First"),
-            VTTCue(start: 1.5, end: 3, text: "Second")
-        ]
-
-        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 0.5), "First")
-        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 2.0), "Second")
-        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 3.5), "")
-    }
-
-    func testCaptionSpeakerMatchesCaptionTextIgnoringPunctuation() {
-        let lines = [
-            LiveLine(speaker: "建國兄",
-                     role: "discussant",
-                     text: "建國兄看到的技術杠杆和雅麗擔心的分配風險。",
-                     isUser: false,
-                     done: true),
-            LiveLine(speaker: "You",
-                     role: "user",
-                     text: "What happens next?",
-                     isUser: true,
-                     done: true)
-        ]
-
-        XCTAssertEqual(PlayerModel.captionSpeaker(for: "建國兄看到的技術杠杆和雅麗擔心的分配風險", in: lines),
-                       "建國兄")
-        XCTAssertNil(PlayerModel.captionSpeaker(for: "not in the transcript", in: lines))
-    }
-
-    func testAudioBookChapterTitleTracksLatestHeardCaptionTitle() throws {
-        let script = try decodeScript("""
-        {
-          "title": "云间的送信人",
-          "type": "audio-book",
-          "language": "zh-Hans",
-          "audio_book_chapters": [
-            { "title": "晓峰的来信", "summary": "开篇。" },
-            { "title": "雨后的归途", "summary": "结尾。" }
-          ]
-        }
-        """)
-        let cues = [
-            VTTCue(start: 0, end: 3, text: "第一章：晓峰的来信"),
-            VTTCue(start: 12, end: 18, text: "陈奶奶是村里年纪最大的长辈。"),
-            VTTCue(start: 90, end: 94, text: "第二章，雨后的归途"),
-            VTTCue(start: 100, end: 106, text: "他们沿着山路慢慢走回去。")
-        ]
-
-        XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 20, in: cues, script: script), "晓峰的来信")
-        XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 101, in: cues, script: script), "雨后的归途")
-    }
-
-    func testAudioBookChapterTitleUsesLeadForDelayedTitleCue() throws {
-        let script = try decodeScript("""
-        {
-          "title": "云间的送信人",
-          "type": "audio-book",
-          "language": "zh-Hans",
-          "audio_book_chapters": [
-            { "title": "晓峰的来信", "summary": "开篇。" },
-            { "title": "雨后的归途", "summary": "结尾。" }
-          ]
-        }
-        """)
-        let cues = [
-            VTTCue(start: 0, end: 3, text: "第一章：晓峰的来信"),
-            VTTCue(start: 86, end: 89, text: "陈奶奶望向山路。"),
-            VTTCue(start: 90, end: 94, text: "第二章，雨后的归途")
-        ]
-
-        XCTAssertEqual(PlayerModel.audioBookChapterTitle(at: 88.2, in: cues, script: script), "雨后的归途")
-    }
-
-    func testLiveCaptionHasNoManualLead() {
-        // The backend now emits zero-bias VTT for audio-only feeds, so cues align
-        // with the recording and the frontend must not advance the lookup time —
-        // a non-zero lead would surface captions early.
-        let cues = [
-            VTTCue(start: 1.5, end: 3, text: "Now audible")
-        ]
-
-        XCTAssertEqual(PlayerModel.liveCaptionLeadSeconds, 0.0)
-        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 0.0), "")
-        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 1.5), "Now audible")
-    }
-
-    func testCaptionLookupTimeIsUnshiftedRegardlessOfTimingMode() {
-        let playbackTime = 10.0
-
-        let duringLivePlayback = PlayerModel.captionLookupTime(playbackTime: playbackTime,
-                                                               usesLiveCaptionTiming: true)
-        let afterFinalAudioLoaded = PlayerModel.captionLookupTime(playbackTime: playbackTime,
-                                                                  usesLiveCaptionTiming: false)
-
-        XCTAssertEqual(duringLivePlayback, playbackTime)
-        XCTAssertEqual(afterFinalAudioLoaded, playbackTime)
-    }
-
-    func testFinalLyricsGroupAdjacentShortCues() {
-        let cues = [
-            VTTCue(start: 0.0, end: 1.0, text: "Yes"),
-            VTTCue(start: 1.1, end: 2.0, text: "that is the point"),
-            VTTCue(start: 2.1, end: 3.0, text: "we should pause"),
-            VTTCue(start: 8.0, end: 9.0, text: "A later caption stands alone")
-        ]
-
-        let groups = PlayerModel.groupLyricCues(cues)
-
-        XCTAssertEqual(groups.count, 2)
-        XCTAssertEqual(groups[0].start, 0.0)
-        XCTAssertEqual(groups[0].end, 3.0)
-        XCTAssertEqual(groups[0].text, "Yes\nthat is the point\nwe should pause")
-        XCTAssertEqual(groups[0].firstCueIndex, 0)
-        XCTAssertEqual(groups[0].lastCueIndex, 2)
-        XCTAssertEqual(groups[1].text, "A later caption stands alone")
-    }
-
-    func testFinalLyricsDoNotGroupKnownSpeakerChanges() {
-        let cues = [
-            VTTCue(start: 0.0, end: 1.0, text: "Yes"),
-            VTTCue(start: 1.1, end: 2.0, text: "No")
-        ]
-
-        let groups = PlayerModel.groupLyricCues(cues) { cue in
-            cue.text == "Yes" ? "Speaker A" : "Speaker B"
-        }
-
-        XCTAssertEqual(groups.count, 2)
-        XCTAssertEqual(groups[0].text, "Yes")
-        XCTAssertEqual(groups[1].text, "No")
-    }
-
-    func testHLSReadinessFindsFirstMediaSegment() {
-        let playlist = """
-        #EXTM3U
-        #EXT-X-VERSION:3
-        #EXT-X-TARGETDURATION:4
-        #EXTINF:4.000000,
-        seg_00000.ts
-        #EXTINF:4.000000,
-        seg_00001.ts
-        """
-
-        XCTAssertEqual(APIClient.firstHLSMediaSegment(in: playlist), "seg_00000.ts")
-        XCTAssertNil(APIClient.firstHLSMediaSegment(in: "#EXTM3U\n#EXT-X-VERSION:3\n"))
-    }
-
-    func testCancellationErrorsAreRecognizedAsNonAlerting() {
-        XCTAssertTrue(APIClient.isCancellation(CancellationError()))
-        XCTAssertTrue(APIClient.isCancellation(URLError(.cancelled)))
-        XCTAssertTrue(APIClient.isCancellation(NSError(domain: NSURLErrorDomain,
-                                                       code: NSURLErrorCancelled)))
-        XCTAssertFalse(APIClient.isCancellation(URLError(.timedOut)))
-        XCTAssertFalse(APIClient.isCancellation(APIError.notAuthenticated))
-    }
-}
-
-private func decodeDiscussion(status: String, pointsCharged: Int, showUsageSummary: Bool = true) throws -> Discussion {
-    let json = """
-    {
-      "id": "discussion-1",
-      "topic": "Topic",
-      "title": "Title",
-      "status": "\(status)",
-      "language": "en",
-      "points_charged": \(pointsCharged),
-      "showUsageSummary": \(showUsageSummary)
-    }
-    """
-    return try JSONDecoder().decode(Discussion.self, from: Data(json.utf8))
-}
-
-private func decodeScript(_ json: String) throws -> ScriptDTO {
-    try JSONDecoder().decode(ScriptDTO.self, from: Data(json.utf8))
-}
-
-private struct StaticTokenProvider: TokenProviding {
-    let tokenValue: String
-
-    init(token: String) {
-        self.tokenValue = token
-    }
-
-    func token() async -> String? {
-        tokenValue
-    }
-
-    func refreshedToken() async -> String? {
-        tokenValue
-    }
-}
-
-private final class URLProtocolStub: URLProtocol {
-    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        true
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
-        request
-    }
-
-    override func startLoading() {
-        guard let handler = Self.handler else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
-        do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
-}
-
-private extension URLRequest {
-    var httpBodyStreamData: Data? {
-        guard let stream = httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        while stream.hasBytesAvailable {
-            let count = stream.read(&buffer, maxLength: buffer.count)
-            if count <= 0 { break }
-            data.append(buffer, count: count)
-        }
-        return data
-    }
-}
-
-private extension URL {
-    var queryItems: [String: String] {
-        URLComponents(url: self, resolvingAgainstBaseURL: false)?
-            .queryItems?
-            .reduce(into: [:]) { result, item in result[item.name] = item.value ?? "" } ?? [:]
-    }
-}
-
-// MARK: - Timed illustration timeline (backend-owned)
-
-extension iOSTests {
-    func testIllustrationCuesMapServerDTOs() {
-        let dtos = [
-            IllustrationCueDTO(startMS: 78694, imageURL: "https://img/2.png", caption: " star "),
-            IllustrationCueDTO(startMS: 0, imageURL: "https://img/0.png", caption: "Opening"),
-            IllustrationCueDTO(startMS: 36406, imageURL: "https://img/1.png", caption: nil),
-        ]
-        let cues = PlayerModel.illustrationCues(from: dtos)
-        XCTAssertEqual(cues.count, 3)
-        XCTAssertEqual(cues[0].start, 0)
-        XCTAssertEqual(cues[0].url.absoluteString, "https://img/0.png")
-        XCTAssertEqual(cues[0].caption, "Opening")
-        XCTAssertEqual(cues[1].start, 36.406, accuracy: 0.001)
-        XCTAssertEqual(cues[1].caption, "")
-        XCTAssertEqual(cues[2].start, 78.694, accuracy: 0.001)
-        XCTAssertEqual(cues[2].caption, "star")
-    }
-
-    func testIllustrationCuesDropInvalidEntries() {
-        let dtos = [
-            IllustrationCueDTO(startMS: 10_000, imageURL: "   ", caption: nil),
-            IllustrationCueDTO(startMS: -500, imageURL: "https://img/a.png", caption: nil),
-        ]
-        let cues = PlayerModel.illustrationCues(from: dtos)
-        XCTAssertEqual(cues.count, 1)
-        // Negative offsets clamp to 0 rather than producing an unreachable cue.
-        XCTAssertEqual(cues[0].start, 0)
-        XCTAssertTrue(PlayerModel.illustrationCues(from: []).isEmpty)
-    }
-
-    func testIllustrationCueDTODecodesServerJSON() throws {
-        let json = Data("""
-        {"illustrations":[{"start_ms":36406,"image_url":"https://img/1.png","caption":"bar"},{"start_ms":0,"image_url":"https://img/0.png"}]}
-        """.utf8)
-        let decoded = try JSONDecoder().decode(IllustrationsResponseDTO.self, from: json)
-        XCTAssertEqual(decoded.illustrations.count, 2)
-        XCTAssertEqual(decoded.illustrations[0].startMS, 36406)
-        XCTAssertEqual(decoded.illustrations[0].imageURL, "https://img/1.png")
-        XCTAssertEqual(decoded.illustrations[0].caption, "bar")
-        XCTAssertNil(decoded.illustrations[1].caption)
-    }
 }
