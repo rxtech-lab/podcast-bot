@@ -202,7 +202,11 @@ func (s *Server) translationBundle(ctx context.Context, d *Discussion, target st
 		add(fmt.Sprintf("line.%d.judgement", i), &bundle.Lines[i].JudgementComment)
 	}
 
-	if vtt, err := s.translationSourceVTT(ctx, d.JobID); err == nil && vtt != "" {
+	vtt, err := s.translationSourceVTT(ctx, d.JobID)
+	if err != nil {
+		return bundle, nil, fmt.Errorf("load source captions: %w", err)
+	}
+	if strings.TrimSpace(vtt) != "" {
 		bundle.CaptionsVTT = vtt
 		collectVTTTranslationSlots(&bundle.CaptionsVTT, &slots)
 	}
@@ -413,18 +417,15 @@ func (s *Server) translationSourceVTT(ctx context.Context, jobID string) (string
 	if strings.TrimSpace(jobID) == "" {
 		return "", nil
 	}
+	job := &Job{ID: jobID}
 	if s.d.Jobs != nil {
-		if job := s.d.Jobs.Get(jobID); job != nil && job.SubtitlesS3Key != "" && s.d.Uploader != nil && s.d.Uploader.Enabled() {
-			data, err := s.d.Uploader.Download(ctx, job.SubtitlesS3Key)
-			return string(data), err
+		if stored := s.d.Jobs.Get(jobID); stored != nil {
+			job = stored
 		}
 	}
-	if dir := s.jobArtifactDir(jobID); dir != "" {
-		path := firstExistingNonEmpty(podcastSubtitlesPath(dir), legacyPodcastSubtitlesPath(dir))
-		if path != "" {
-			data, err := os.ReadFile(path)
-			return string(data), err
-		}
+	data, err := s.loadJobCaptionVTT(ctx, job, "")
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
 	}
-	return "", nil
+	return string(data), err
 }

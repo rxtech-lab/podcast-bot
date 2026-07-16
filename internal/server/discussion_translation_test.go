@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/storage"
 	"github.com/sirily11/debate-bot/internal/summarizer"
 )
 
@@ -86,6 +90,37 @@ func TestCollectVTTTranslationSlotsPreservesTiming(t *testing.T) {
 	}
 	if strings.Contains(vtt, "Hello world") || strings.Contains(vtt, "Next line") {
 		t.Fatalf("caption text was not replaced: %s", vtt)
+	}
+}
+
+func TestTranslationSourceVTTFindsDeterministicS3ObjectWithoutLoadedJob(t *testing.T) {
+	const source = "WEBVTT\n\n00:00:01.000 --> 00:00:02.500\nSource caption\n"
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/podcast-audio/job-captions.vtt") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(source)))
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(source))
+		}
+	}))
+	t.Cleanup(s3.Close)
+	uploader, err := storage.New(context.Background(), storage.Config{
+		Bucket: "test-bucket", Region: "auto", Endpoint: s3.URL,
+		AccessKeyID: "test-key", SecretAccessKey: "test-secret",
+	})
+	if err != nil {
+		t.Fatalf("new uploader: %v", err)
+	}
+
+	s := &Server{d: Deps{Uploader: uploader}}
+	got, err := s.translationSourceVTT(context.Background(), "job-captions")
+	if err != nil {
+		t.Fatalf("load captions: %v", err)
+	}
+	if got != source {
+		t.Fatalf("captions = %q, want deterministic S3 object", got)
 	}
 }
 
