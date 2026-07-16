@@ -127,8 +127,14 @@ type SpeakPrompt struct {
 	Instructions  string // host directive: "opening", "rebut:Linda", "closing", "address-user:<text>", ...
 	TopicTitle    string
 	TopicLanguage string
-	Side          string // for candidates only; convenience copy of agent's side
-	ToolResult    func(name, jsonArgs, result string)
+	// Background is the plan's background paragraphs; SourceDocuments is a
+	// digest of the user's uploaded reference documents. Both are set only
+	// for discussion runs and render as conditional prompt sections so the
+	// host can summarize the source material and discussants can quote it.
+	Background      string
+	SourceDocuments string
+	Side            string // for candidates only; convenience copy of agent's side
+	ToolResult      func(name, jsonArgs, result string)
 }
 
 // Agent is the OOP contract every participant satisfies.

@@ -41,9 +41,10 @@ func TestRenderMarkdownRoundTripDiscussion(t *testing.T) {
 			{Name: "Diego", Model: "openai/gpt-4o", Aspect: "economic"},
 			{Name: "Priya", Model: "openai/gpt-4o", Aspect: "cultural"},
 		},
-		Commander:  AgentSpec{Model: "openai/gpt-4o"},
-		Storage:    StoragePlaintext,
-		Background: "Remote work reshaped the economy.\n\nThis panel explores what comes next.",
+		Commander:       AgentSpec{Model: "openai/gpt-4o"},
+		Storage:         StoragePlaintext,
+		Background:      "Remote work reshaped the economy.\n\nThis panel explores what comes next.",
+		SourceDocuments: "--- report.pdf ---\nRemote workers report higher satisfaction.\n\n> ## An embedded heading, sanitized upstream\nMore content after the heading line.",
 	}
 	got := writeAndLoad(t, in)
 	if !reflect.DeepEqual(in, got) {

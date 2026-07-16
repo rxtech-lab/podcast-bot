@@ -219,13 +219,26 @@ func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*ll
 	parts := []string{
 		"# Topic",
 		p.TopicTitle,
-		"",
+	}
+
+	if bg := strings.TrimSpace(p.Background); bg != "" {
+		parts = append(parts, "", "# Background", bg)
+	}
+	if docs := strings.TrimSpace(p.SourceDocuments); docs != "" {
+		parts = append(parts, "",
+			"# Source documents (the user's original uploaded material)",
+			docs,
+			"When a passage directly supports a point, quote a short excerpt verbatim and name the document it comes from.",
+		)
+	}
+
+	parts = append(parts, "",
 		"# Your private memory (use to recall earlier moments)",
 		fallback(mem, "(empty)"),
 		"",
 		"# Recent transcript",
 		fallback(transcript, "(none yet)"),
-	}
+	)
 
 	if opp := latestOpposingLine(p.Recent, p.Side); opp != nil {
 		parts = append(parts, "",

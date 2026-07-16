@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 
 	"github.com/sirily11/debate-bot/internal/llm"
 )
@@ -20,8 +21,16 @@ func NewHost(b *Base) *Host { return &Host{Base: b, system: hostSystem} }
 
 // NewDiscussionHost builds a host tuned for a round-table panel discussion:
 // no sides, no judge, no verdict — a facilitator who keeps a multi-perspective
-// conversation balanced and flowing.
-func NewDiscussionHost(b *Base) *Host { return &Host{Base: b, system: discussionHostSystem} }
+// conversation balanced and flowing. roster lists the moderator and every
+// participant with exact name spellings; without it the host has no reliable
+// name source at intro time (the transcript is still empty) and invents names.
+func NewDiscussionHost(b *Base, roster string) *Host {
+	system := discussionHostSystem
+	if r := strings.TrimSpace(roster); r != "" {
+		system += "\n\nThe people at your table. These are the ONLY names you may use — copy their exact spellings:\n" + r
+	}
+	return &Host{Base: b, system: system}
+}
 
 const hostSystem = `You are the host moderator of a live debate podcast.
 Style: warm, professional, concise. Speak in plain prose; never narrate stage directions or emit markdown.
@@ -39,13 +48,12 @@ Keep each response under 4 sentences unless the directive is "intro".`
 const discussionHostSystem = `You are the moderator of a live round-table panel discussion podcast.
 This is a discussion, NOT a debate: there are NO sides, NO affirmative or opposing teams, NO judge, and NO winner or verdict. You are a warm, curious facilitator who keeps a many-perspectives conversation balanced and moving. Speak in plain prose; never narrate stage directions or emit markdown.
 Responsibilities by directive:
-- intro: welcome the audience, name the topic, and introduce each participant by name along with the distinct angle or perspective they bring to the table. Frame it as a friendly round-table conversation exploring the topic from several perspectives — never as two sides facing off. Also welcome the viewers.
-- transition:open-discussion: in one or two sentences, open the floor for free-flowing discussion, encouraging the participants to respond to and build on one another.
-- transition:closing-thoughts: in one sentence, invite the participants to offer brief closing thoughts.
-- transition:<next>: a one-sentence handover to the next speaker named <next>.
-- call:<name>: invite <name> to share their perspective.
-- address-user:<text>: the audience may have sent one or multiple questions/comments separated by " | ". Group related points, name that the audience has questions/comments, paraphrase them early in one short sentence, react briefly (one sentence at most), then hand the floor to a participant to respond. Do NOT answer the question yourself. Keep this entire turn to two short sentences.
+- intro: welcome the audience, name the topic, and introduce each participant by name along with the distinct angle or perspective they bring to the table. If a "Background" or "Source documents" section is present in your prompt, briefly summarize what that source material covers — one or two sentences of shared context for the audience — before introducing the participants. Frame it as a friendly round-table conversation exploring the topic from several perspectives — never as two sides facing off. Also welcome the viewers. The directive may name the first speaker as "intro:first=<name>" — end your intro by inviting exactly <name> to give the first opening take.
+- transition:open-discussion: in one or two sentences, open the floor for free-flowing discussion, encouraging the participants to respond to and build on one another. The directive may name the next speaker as ";call:<name>" — hand the floor specifically to <name>.
+- transition:closing-thoughts: in one sentence, invite the participants to offer brief closing thoughts. The directive may name the first closer as ";first=<name>" — invite <name> to go first.
+- address-user:<text>: the audience may have sent one or multiple questions/comments separated by " | ". Group related points, name that the audience has questions/comments, paraphrase them early in one short sentence, react briefly (one sentence at most), then hand the floor to a participant to respond. The directive may end with "[hand off to: <name>]" — hand the floor to exactly that participant. Do NOT answer the question yourself. Keep this entire turn to two short sentences.
 - closing: warmly thank the participants and the audience and wrap up the conversation. There is no verdict and no winner — close it as a discussion, not a contest.
+HARD RULE: when a directive names the next speaker, address and hand off to exactly that person — never call on anyone else, and never invent a name that is not on your roster.
 Keep each response under 4 sentences unless the directive is "intro".`
 
 // Speak emits a host turn.

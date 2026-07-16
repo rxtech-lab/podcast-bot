@@ -235,10 +235,18 @@ type DebateTopic struct {
 
 	// Body sections, populated from markdown after frontmatter.
 	// Debate sections:
-	Background     string `yaml:"-" json:"background,omitempty"`
-	AffirmativePos string `yaml:"-" json:"affirmative_position,omitempty"`
-	NegativePos    string `yaml:"-" json:"negative_position,omitempty"`
-	Rules          string `yaml:"-" json:"rules,omitempty"`
+	Background string `yaml:"-" json:"background,omitempty"`
+	// SourceDocuments is a digest of the user's uploaded reference documents
+	// (built from the planning conversation at generation-submit time, never
+	// persisted on the stored plan). Discussion runs inject it into the host
+	// and discussant prompts so the host can summarize the source material
+	// and discussants can quote it. Heading-like lines are sanitized by the
+	// digest builder because parseSections treats any "## " line as a
+	// section boundary.
+	SourceDocuments string `yaml:"-" json:"source_documents,omitempty"`
+	AffirmativePos  string `yaml:"-" json:"affirmative_position,omitempty"`
+	NegativePos     string `yaml:"-" json:"negative_position,omitempty"`
+	Rules           string `yaml:"-" json:"rules,omitempty"`
 	// Situation-puzzle sections:
 	Surface string `yaml:"-" json:"surface,omitempty"` // 湯面 — visible to everyone
 	Truth   string `yaml:"-" json:"truth,omitempty"`   // 湯底 — only the puzzle host's prompt sees it
@@ -328,6 +336,7 @@ func parseSections(body string, t *DebateTopic) {
 	// downstream pipeline doesn't care about the heading text.
 	sections := map[string]*string{
 		"background":           &t.Background,
+		"source documents":     &t.SourceDocuments,
 		"affirmative position": &t.AffirmativePos,
 		"negative position":    &t.NegativePos,
 		"rules":                &t.Rules,

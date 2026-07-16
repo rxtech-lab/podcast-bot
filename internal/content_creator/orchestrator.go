@@ -398,7 +398,7 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 		// Discussions reuse the generic host role but need a facilitator
 		// prompt with no sides / judge / verdict; debate keeps the default.
 		if o.Topic.Type == config.ContentTypeDiscussion {
-			return agent.NewDiscussionHost(base)
+			return agent.NewDiscussionHost(base, discussionRoster(o.Topic))
 		}
 		return agent.NewHost(base)
 	case agent.RoleAffirmative, agent.RoleNegative:
@@ -410,7 +410,7 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	case agent.RolePlayer:
 		return agent.NewPlayer(base)
 	case agent.RoleDiscussant:
-		return agent.NewDiscussant(base, spec.Aspect)
+		return agent.NewDiscussant(base, spec.Aspect, discussionRoster(o.Topic))
 	case agent.RoleCommander:
 		return agent.NewCommander(base, o.Topic.Title, o.discussionMusicMoods)
 	case agent.RoleJudgement:
@@ -541,7 +541,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 		o.startDiscussionDirector(ctx)
 	}
-	pipe := NewPipeline(Deps{
+	deps := Deps{
 		Planner: planner, Tracker: o.Tracker, Registry: o.Registry,
 		TTS: o.TTS, OutDir: o.Env.OutDir,
 		Send: o.Send, Log: o.Log,
@@ -560,7 +560,15 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		AudioBookImageURLs:         o.audioBookImageURLs(),
 		AudioBookImageCaptions:     o.audioBookImageCaptions(),
 		RecordAudioBookImageOffset: o.recordAudioBookImageOffset,
-	})
+	}
+	// Ground discussion agents in the plan background and the uploaded
+	// source documents. Gated to the discussion type: other formats reuse
+	// Background for their own flows and must not see new prompt sections.
+	if o.Topic.Type == config.ContentTypeDiscussion {
+		deps.Background = o.Topic.Background
+		deps.SourceDocuments = o.Topic.SourceDocuments
+	}
+	pipe := NewPipeline(deps)
 	o.liveMu.Lock()
 	o.livePipe = pipe
 	o.liveMu.Unlock()

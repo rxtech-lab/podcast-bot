@@ -231,6 +231,11 @@ struct PlanSnapshotCard: View {
     /// When set, a "Models" button is shown in the Panelists header that opens
     /// the per-speaker model editor. nil hides it (e.g. read-only previews).
     var onEditModels: (() -> Void)? = nil
+    /// Documents/audio the user attached while planning. Supplied by callers
+    /// that fetch the planning conversation (the post-start plan sheet); the
+    /// section is hidden when empty so other callers are unaffected.
+    var attachments: [Attachment] = []
+    var onAttachmentTapped: ((Attachment) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -341,8 +346,47 @@ struct PlanSnapshotCard: View {
                     }
                 }
             }
+
+            if !attachments.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Attachments")
+                        .font(.headline)
+                    ForEach(attachments, id: \.self) { attachment in
+                        if let onAttachmentTapped {
+                            Button {
+                                onAttachmentTapped(attachment)
+                            } label: {
+                                attachmentRow(attachment)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            attachmentRow(attachment)
+                        }
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func attachmentRow(_ attachment: Attachment) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: attachment.iconName)
+                .foregroundStyle(Theme.accent)
+                .frame(width: 20)
+            Text(attachment.displayName)
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondaryText)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if onAttachmentTapped != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
     }
 
     private var peopleHeading: String {
