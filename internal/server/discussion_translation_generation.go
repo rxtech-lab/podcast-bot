@@ -197,6 +197,7 @@ func (s *Server) translationBundle(ctx context.Context, d *Discussion, target st
 	}
 	bundle.Lines = append([]DiscussionLine(nil), d.Lines...)
 	for i := range bundle.Lines {
+		add(fmt.Sprintf("line.%d.speaker", i), &bundle.Lines[i].Speaker)
 		add(fmt.Sprintf("line.%d.text", i), &bundle.Lines[i].Text)
 		add(fmt.Sprintf("line.%d.judgement", i), &bundle.Lines[i].JudgementComment)
 	}
@@ -277,22 +278,39 @@ func collectScriptTranslationSlots(script *config.DebateTopic, add func(string, 
 	} {
 		add("plan."+id, field)
 	}
+	addAgent := func(id string, agent *config.AgentSpec) {
+		add(id+".name", &agent.Name)
+		add(id+".aspect", &agent.Aspect)
+	}
 	groups := [][]config.AgentSpec{script.Affirmative, script.Negative, script.Players, script.Discussants, script.Viewers}
 	for gi := range groups {
 		for i := range groups[gi] {
-			add(fmt.Sprintf("plan.agent.%d.%d.aspect", gi, i), &groups[gi][i].Aspect)
+			addAgent(fmt.Sprintf("plan.agent.%d.%d", gi, i), &groups[gi][i])
 		}
 	}
-	add("plan.host.aspect", &script.Host.Aspect)
-	add("plan.audiobook_host.aspect", &script.AudioBookHost.Aspect)
+	for id, agent := range map[string]*config.AgentSpec{
+		"judge": &script.Judge, "puzzle_host": &script.PuzzleHost,
+		"series_host": &script.SeriesHost, "host": &script.Host,
+		"commander": &script.Commander, "audiobook_host": &script.AudioBookHost,
+	} {
+		addAgent("plan."+id, agent)
+	}
 	for i := range script.AudioBookSpeakers {
+		add(fmt.Sprintf("plan.speaker.%d.name", i), &script.AudioBookSpeakers[i].Name)
 		add(fmt.Sprintf("plan.speaker.%d.description", i), &script.AudioBookSpeakers[i].Description)
 	}
 	for i := range script.AudioBookChapters {
 		add(fmt.Sprintf("plan.chapter.%d.title", i), &script.AudioBookChapters[i].Title)
 		add(fmt.Sprintf("plan.chapter.%d.summary", i), &script.AudioBookChapters[i].Summary)
+		for j := range script.AudioBookChapters[i].Speakers {
+			add(fmt.Sprintf("plan.chapter.%d.speaker.%d", i, j), &script.AudioBookChapters[i].Speakers[j])
+		}
+	}
+	for i := range script.UploadedAudioSpeakers {
+		add(fmt.Sprintf("plan.uploaded_speaker.%d", i), &script.UploadedAudioSpeakers[i])
 	}
 	for i := range script.TranscriptSegments {
+		add(fmt.Sprintf("plan.segment.%d.speaker", i), &script.TranscriptSegments[i].Speaker)
 		add(fmt.Sprintf("plan.segment.%d.text", i), &script.TranscriptSegments[i].Text)
 	}
 	for i := range script.Sources {
@@ -357,7 +375,7 @@ func translateSlots(ctx context.Context, client *llm.Client, target string, slot
 			items = append(items, translationItem{ID: slot.ID, Text: slot.Text})
 		}
 		payload, _ := json.Marshal(map[string]any{"target_language": podcastLanguageName(target), "items": items})
-		system := "Translate user-facing podcast text. Return strict JSON with a translations array of {id,text}. Preserve every id and item count exactly. Preserve Markdown structure, URLs, placeholders, proper names, and meaning. Never add commentary."
+		system := "Translate user-facing podcast text. Return strict JSON with a translations array of {id,text}. Preserve every id and item count exactly. Preserve Markdown structure, URLs, placeholders, and meaning. Translate or naturally transliterate speaker and character display names in fields whose id contains speaker or ends in .name; preserve other proper names. Never add commentary."
 		raw, err := client.JSON(ctx, system, string(payload))
 		if err != nil {
 			return err

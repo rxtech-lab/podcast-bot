@@ -116,7 +116,16 @@ func TestTranslationBundleSlotsMutateReturnedScalarFields(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	d, err := store.Create(context.Background(), "owner", "Source topic", planResponse{
-		Script:   &config.DebateTopic{Title: "Source script title", Language: "en-US"},
+		Script: &config.DebateTopic{
+			Title: "Source script title", Language: "en-US",
+			Host: config.AgentSpec{Name: "Source host", Aspect: "Source host aspect"},
+			AudioBookSpeakers: []config.AudioBookSpeaker{{
+				Name: "Source character", Description: "Source character description",
+			}},
+			TranscriptSegments: []config.TranscriptSegment{{
+				Speaker: "Source uploaded speaker", Text: "Source uploaded transcript",
+			}},
+		},
 		Markdown: "Source plan",
 	})
 	if err != nil {
@@ -145,6 +154,18 @@ func TestTranslationBundleSlotsMutateReturnedScalarFields(t *testing.T) {
 	}
 	if len(bundle.Lines) != 1 || bundle.Lines[0].Text != "translated:line.0.text" {
 		t.Fatalf("transcript was not translated: %+v", bundle.Lines)
+	}
+	if bundle.Lines[0].Speaker != "translated:line.0.speaker" {
+		t.Fatalf("transcript speaker = %q, want translated speaker", bundle.Lines[0].Speaker)
+	}
+	if bundle.Script.Host.Name != "translated:plan.host.name" {
+		t.Fatalf("host name = %q, want translated speaker", bundle.Script.Host.Name)
+	}
+	if bundle.Script.AudioBookSpeakers[0].Name != "translated:plan.speaker.0.name" {
+		t.Fatalf("character name = %q, want translated speaker", bundle.Script.AudioBookSpeakers[0].Name)
+	}
+	if bundle.Script.TranscriptSegments[0].Speaker != "translated:plan.segment.0.speaker" {
+		t.Fatalf("uploaded transcript speaker = %q, want translated speaker", bundle.Script.TranscriptSegments[0].Speaker)
 	}
 }
 
