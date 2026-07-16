@@ -21,6 +21,17 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Install SwiftLint
+        run: |
+          if command -v swiftlint >/dev/null 2>&1; then
+            echo "SwiftLint already present: $(swiftlint version)"
+          else
+            brew install swiftlint
+          fi
+
+      - name: Lint Swift
+        run: make lint
+
       - name: Setup Secrets.xcconfig from GitHub Secrets
         env:
           SECRETS_XCCONFIG_BASE64: ${{ secrets.SECRETS_XCCONFIG_BASE64 }}
@@ -104,6 +115,10 @@ jobs:
           xcrun simctl shutdown all 2>/dev/null || true
           echo "Erasing all simulators..."
           xcrun simctl erase all 2>/dev/null || true
+          # Parallel testing clones live in the separate "testing" device set,
+          # which "erase all" does not touch; reclaim leftovers from crashed runs.
+          echo "Deleting leftover test clones..."
+          xcrun simctl --set testing delete all 2>/dev/null || true
           echo "Simulators ready"
 
       # Builds the Go backend in hermetic E2E mode (fake LLM/TTS, local SQLite,
@@ -114,6 +129,8 @@ jobs:
         env:
           E2E_TEST_PLAN: iosUITestPlan
           E2E_SIMULATOR: iPhone 17 Pro
+          # Each booted simulator clone costs ~2-3 GB RAM on the runner.
+          E2E_WORKERS: "3"
 
       - name: Upload backend server log
         if: always()

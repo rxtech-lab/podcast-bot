@@ -19,6 +19,7 @@ const (
 	pointsReasonGenerationAdjustment = "generation_adjustment"
 	pointsReasonImageGeneration      = "image_generation"
 	pointsReasonSummary              = "summary"
+	pointsReasonTranscription        = "transcription"
 	pointsReasonSignup               = "signup_grant"
 	pointsReasonPurchase             = "purchase" // suffixed with the event type, e.g. "purchase:RENEWAL"
 	pointsReasonAdminTopup           = "admin_topup"
@@ -35,6 +36,7 @@ type PointsUsageDetail struct {
 	LLMCostKnown     bool
 	TTSCostUSD       float64
 	MusicCostUSD     float64
+	STTCostUSD       float64
 	// CostUSD is the real provider cost the charge was derived from.
 	CostUSD float64
 }
@@ -76,6 +78,7 @@ type DailyUsageSpend struct {
 	TTSCostUSD       float64
 	ImageCostUSD     float64
 	MusicCostUSD     float64
+	STTCostUSD       float64
 	OtherCostUSD     float64
 	TotalCostUSD     float64
 }
@@ -116,7 +119,7 @@ func (s *PointsStore) UsageSpendByDate(ctx context.Context, days int) (UsageSpen
 	now := time.Now().UTC()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -(days - 1))
 	rows, err := s.db.QueryContext(ctx, `SELECT reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
-			llm_cost_usd, tts_cost_usd, music_cost_usd, created_at
+			llm_cost_usd, tts_cost_usd, music_cost_usd, stt_cost_usd, created_at
 		FROM points_ledger
 		WHERE created_at >= ?
 		ORDER BY created_at ASC`, start.UnixMilli())
@@ -135,10 +138,10 @@ func (s *PointsStore) UsageSpendByDate(ctx context.Context, days int) (UsageSpen
 
 	for rows.Next() {
 		var reason string
-		var costUSD, llmCostUSD, ttsCostUSD, musicCostUSD float64
+		var costUSD, llmCostUSD, ttsCostUSD, musicCostUSD, sttCostUSD float64
 		var promptTokens, completionTokens, totalTokens int64
 		var createdAt int64
-		if err := rows.Scan(&reason, &costUSD, &promptTokens, &completionTokens, &totalTokens, &llmCostUSD, &ttsCostUSD, &musicCostUSD, &createdAt); err != nil {
+		if err := rows.Scan(&reason, &costUSD, &promptTokens, &completionTokens, &totalTokens, &llmCostUSD, &ttsCostUSD, &musicCostUSD, &sttCostUSD, &createdAt); err != nil {
 			return UsageSpendSummary{}, err
 		}
 		date := time.UnixMilli(createdAt).UTC().Format("2006-01-02")
@@ -152,11 +155,12 @@ func (s *PointsStore) UsageSpendByDate(ctx context.Context, days int) (UsageSpen
 		day.LLMCostUSD += llmCostUSD
 		day.TTSCostUSD += ttsCostUSD
 		day.MusicCostUSD += musicCostUSD
+		day.STTCostUSD += sttCostUSD
 		day.TotalCostUSD += costUSD
 		if reason == pointsReasonImageGeneration {
 			day.ImageCostUSD += costUSD
 		}
-		knownCost := llmCostUSD + ttsCostUSD + musicCostUSD + dayCostForReason(reason, costUSD, pointsReasonImageGeneration)
+		knownCost := llmCostUSD + ttsCostUSD + musicCostUSD + sttCostUSD + dayCostForReason(reason, costUSD, pointsReasonImageGeneration)
 		if other := costUSD - knownCost; other > 0 {
 			day.OtherCostUSD += other
 		}
@@ -199,6 +203,7 @@ func (s *PointsStore) ensureSchema(ctx context.Context) error {
 			llm_cost_usd REAL NOT NULL DEFAULT 0,
 			tts_cost_usd REAL NOT NULL DEFAULT 0,
 			music_cost_usd REAL NOT NULL DEFAULT 0,
+			stt_cost_usd REAL NOT NULL DEFAULT 0,
 			rc_event_id TEXT NOT NULL DEFAULT '',
 			balance_after INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL
@@ -230,7 +235,9 @@ func (s *PointsStore) ensureSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	// Migrate pre-existing databases created before the column was added to the
+	// CREATE TABLE above.
+	return s.db.ensureColumn(ctx, "points_ledger", "stt_cost_usd", "stt_cost_usd REAL NOT NULL DEFAULT 0")
 }
 
 // UserBalance is one row of the admin user-management list: a user id, their
@@ -868,7 +875,8 @@ func (s *PointsStore) matchingReserves(ctx context.Context, userID string, raw [
 
 func collapsibleSettlementReason(reason string) bool {
 	return reason == pointsReasonPlanning || reason == pointsReasonGeneration ||
-		reason == pointsReasonImageGeneration || reason == pointsReasonSummary
+		reason == pointsReasonImageGeneration || reason == pointsReasonSummary ||
+		reason == pointsReasonTranscription
 }
 
 func collapsibleReserveKind(reason string) (string, bool) {
@@ -881,6 +889,8 @@ func collapsibleReserveKind(reason string) (string, bool) {
 		return pointsReasonImageGeneration, true
 	case "reserve:" + pointsReasonSummary:
 		return pointsReasonSummary, true
+	case "reserve:" + pointsReasonTranscription:
+		return pointsReasonTranscription, true
 	default:
 		return "", false
 	}
@@ -1519,21 +1529,21 @@ func insertLedger(ctx context.Context, tx *sqlTx, row ledgerRow) (int64, error) 
 		var id int64
 		err := tx.QueryRowContext(ctx, `INSERT INTO points_ledger
 			(user_id, discussion_id, delta, reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
-			 llm_cost_usd, tts_cost_usd, music_cost_usd, rc_event_id, balance_after, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			 llm_cost_usd, tts_cost_usd, music_cost_usd, stt_cost_usd, rc_event_id, balance_after, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			row.userID, row.discussionID, row.delta, row.reason, row.detail.CostUSD,
 			row.detail.PromptTokens, row.detail.CompletionTokens, row.detail.TotalTokens,
-			row.detail.LLMCostUSD, row.detail.TTSCostUSD, row.detail.MusicCostUSD,
+			row.detail.LLMCostUSD, row.detail.TTSCostUSD, row.detail.MusicCostUSD, row.detail.STTCostUSD,
 			row.rcEventID, row.balanceAfter, row.createdAt).Scan(&id)
 		return id, err
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO points_ledger
 		(user_id, discussion_id, delta, reason, cost_usd, prompt_tokens, completion_tokens, total_tokens,
-		 llm_cost_usd, tts_cost_usd, music_cost_usd, rc_event_id, balance_after, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 llm_cost_usd, tts_cost_usd, music_cost_usd, stt_cost_usd, rc_event_id, balance_after, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.userID, row.discussionID, row.delta, row.reason, row.detail.CostUSD,
 		row.detail.PromptTokens, row.detail.CompletionTokens, row.detail.TotalTokens,
-		row.detail.LLMCostUSD, row.detail.TTSCostUSD, row.detail.MusicCostUSD,
+		row.detail.LLMCostUSD, row.detail.TTSCostUSD, row.detail.MusicCostUSD, row.detail.STTCostUSD,
 		row.rcEventID, row.balanceAfter, row.createdAt)
 	if err != nil {
 		return 0, err

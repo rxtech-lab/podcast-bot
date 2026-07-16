@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/server"
 )
 
@@ -39,6 +40,22 @@ func TestStagePodcastSubtitlesMovesLegacySidecar(t *testing.T) {
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatalf("legacy subtitles still present: %v", err)
+	}
+}
+
+func TestSupportsSoftSubtitles(t *testing.T) {
+	for _, contentType := range []string{
+		config.ContentTypeSeries,
+		config.ContentTypeDiscussion,
+		config.ContentTypeAudioBook,
+		config.ContentTypeUploadedAudio,
+	} {
+		if !supportsSoftSubtitles(contentType) {
+			t.Errorf("supportsSoftSubtitles(%q) = false, want true", contentType)
+		}
+	}
+	if supportsSoftSubtitles(config.ContentTypeDebate) {
+		t.Error("supportsSoftSubtitles(debate) = true, want false")
 	}
 }
 

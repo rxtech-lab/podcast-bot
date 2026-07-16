@@ -110,7 +110,7 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 	// The mindmap exists only for discussion-type podcasts (other types have
 	// no back-and-forth to map). No terminal "unavailable" item: absence of
 	// meta means the type doesn't support it or the podcast isn't ready yet.
-	if discussionIsDiscussion(d) {
+	if discussionSupportsMindmap(d) {
 		switch {
 		case d.Mindmap != nil && d.Mindmap.Available:
 			items = append(items, actionItem("open-mindmap", phrase(lang, "Mindmap", "思维导图", "心智圖"), "", "point.3.connected.trianglepath.dotted", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "mindmap")))
@@ -303,6 +303,17 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 			true, "request", homeActionLink("action", "sign-out")),
 	)
 
+	// Like every other create action, upload-own-audio is always listed; the
+	// per-tier entitlement gating (allowsAction → canUploadOwnAudio) grays it
+	// out for tiers without the permission.
+	createItems := []discussionUIActionItem{
+		actionItem("new-station", phrase(lang, "New Station", "新建频道", "新增頻道"), "", "waveform", "",
+			true, "open-sheet", homeActionLink("sheet", "new-station")),
+		actionItem("new-album", phrase(lang, "New Album", "新建专辑", "新增專輯"), "", "rectangle.stack.badge.plus", "",
+			true, "open-sheet", homeActionLink("sheet", "new-album")),
+		actionItem("upload-audio", phrase(lang, "Upload Own Audio", "上传音频", "上傳音訊"), "", "waveform.badge.plus", "",
+			true, "open-sheet", homeActionLink("sheet", "upload-audio")),
+	}
 	return []discussionUIActionItem{
 		actionItem("account", phrase(lang, "Account", "账号", "帳號"), "", "person.crop.circle", "",
 			true, "none", homeActionLink("toolbar", "account")).withPlacement("topBarLeading").withChildren(accountItems),
@@ -311,12 +322,7 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 		actionItem("market", phrase(lang, "Market", "市场", "市場"), "", "square.grid.2x2.fill", "",
 			true, "open-sheet", homeActionLink("sheet", "market")).withPlacement("topBarTrailing"),
 		actionItem("create", phrase(lang, "Create", "创建", "建立"), "", "plus", "",
-			true, "none", homeActionLink("toolbar", "create")).withPlacement("topBarTrailing").withChildren([]discussionUIActionItem{
-			actionItem("new-station", phrase(lang, "New Station", "新建频道", "新增頻道"), "", "waveform", "",
-				true, "open-sheet", homeActionLink("sheet", "new-station")),
-			actionItem("new-album", phrase(lang, "New Album", "新建专辑", "新增專輯"), "", "rectangle.stack.badge.plus", "",
-				true, "open-sheet", homeActionLink("sheet", "new-album")),
-		}),
+			true, "none", homeActionLink("toolbar", "create")).withPlacement("topBarTrailing").withChildren(createItems),
 	}
 }
 
@@ -399,6 +405,8 @@ func (p Permissions) allowsAction(id string) (gated bool, allowed bool) {
 		return true, p.Studios.Album
 	case "new-station":
 		return true, p.Studios.Discussion || p.Studios.AudioBook
+	case "upload-audio":
+		return true, p.Features.CanUploadOwnAudio
 	default:
 		return false, true
 	}

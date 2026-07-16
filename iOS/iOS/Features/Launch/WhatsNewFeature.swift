@@ -69,5 +69,17 @@ struct WhatsNewFeature: Identifiable, Equatable {
             subtitle: "Create albums from the + menu in your library and group \(AppStringLiteral.stationNameRaw)s into one collection with its own cover.",
             icon: "rectangle.stack.fill"
         ),
+        WhatsNewFeature(
+            id: "upload-own-audio",
+            title: "Upload Own Audio",
+            subtitle: "Upload an audio file, automatically transcribe its speakers, and publish it as a podcast.",
+            icon: "waveform.badge.plus"
+        ),
+        WhatsNewFeature(
+            id: "caption-timing-editor",
+            title: "Edit Caption Timing",
+            subtitle: "Edit transcript text and precisely retime every caption against your uploaded audio.",
+            icon: "captions.bubble.fill"
+        ),
     ]
 }

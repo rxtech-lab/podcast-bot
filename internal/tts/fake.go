@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"io"
+	"time"
 )
 
 // silenceMP3 is a ~0.8s clip of silence encoded as audio-24khz-48kbitrate-mono-mp3
@@ -14,6 +15,22 @@ import (
 //
 //go:embed silence.mp3
 var silenceMP3 []byte
+
+// SilenceMP3 returns the embedded silent clip byte-concatenated enough times
+// to cover at least minDuration. The clip is constant-bitrate mono MP3 with no
+// ID3 tag, so plain frame concatenation yields a valid longer stream — the
+// same property the pipeline's `ffmpeg -c copy` concat relies on. E2E mode
+// uses this to serve playable uploaded-audio fixtures of arbitrary length.
+func SilenceMP3(minDuration time.Duration) []byte {
+	// 48 kbit/s CBR = 6000 bytes per second of audio.
+	const bytesPerSecond = 6000
+	need := int(minDuration.Seconds()*bytesPerSecond) + 1
+	repeats := (need + len(silenceMP3) - 1) / len(silenceMP3)
+	if repeats < 1 {
+		repeats = 1
+	}
+	return bytes.Repeat(silenceMP3, repeats)
+}
 
 // FakeProvider is a Provider used only in E2E mode. It never calls a real speech
 // backend: FetchVoices returns a small fixed roster and every synthesis request

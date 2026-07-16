@@ -398,7 +398,9 @@ private extension QuestionSheetView {
 }
 
 private func triggerHaptic() {
+    #if !targetEnvironment(simulator)
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    #endif
 }
 
 // MARK: - Reusable components

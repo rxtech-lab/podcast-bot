@@ -516,6 +516,13 @@ func refreshedAttachments(atts []planner.Attachment, refreshURL func(key string)
 	return atts
 }
 
+func refreshedPlanningPartAttachments(parts []PlanningPart, refreshURL func(key string) string) []PlanningPart {
+	for i := range parts {
+		parts[i].Attachments = refreshedAttachments(parts[i].Attachments, refreshURL)
+	}
+	return parts
+}
+
 // planningConversationParts flattens turns into the ordered client display list.
 func planningConversationParts(rows []planningTurnRow) []PlanningPart {
 	resultByCall := map[string]planningTurnRow{}
@@ -597,6 +604,9 @@ func publicPlanningReferences(refs []planner.PodcastReference) []planner.Podcast
 func planningUserDisplayText(text string) string {
 	const topicPrefix = "Topic:"
 	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "Current plan settings:") {
+		return ""
+	}
 	if idx := strings.Index(trimmed, "\n\nCurrent plan settings:"); idx >= 0 {
 		return strings.TrimSpace(trimmed[:idx])
 	}

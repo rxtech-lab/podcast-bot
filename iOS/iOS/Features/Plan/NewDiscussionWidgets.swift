@@ -30,6 +30,21 @@ enum NewDiscussionFormUI {
         ]
     }
 
+    /// Widgets for the backend-driven Upload Own Audio form: the audio-file
+    /// picker plus the shared glass rows it reuses (stepper for max speakers).
+    @MainActor
+    static func uploadAudioWidgets(
+        rootFormData: Binding<FormData>,
+        audioCoordinator: UploadAudioCoordinator
+    ) -> [String: JSONSchemaFormWidget] {
+        [
+            "glassStepper": { context in AnyView(GlassStepperWidget(context: context)) },
+            "audioPicker": { context in
+                AnyView(AudioPickerWidget(context: context, rootFormData: rootFormData, coordinator: audioCoordinator))
+            },
+        ]
+    }
+
     /// Object templates: a grouped glass card (`card`) for the reference/settings
     /// groups, and a plain vertical stack as the default for the root and prompt.
     static func templates() -> JSONSchemaFormTemplates {
@@ -402,6 +417,215 @@ private struct DiscussionPickerWidget: View {
         if let reference = try? await APIClient(tokens: auth).parentPodcast(id: selectedID) {
             coordinator.cache(reference, for: context.id)
         }
+    }
+}
+
+/// Owns the upload-own-audio picker state: the file-importer presentation flag
+/// (the sheet must host `fileImporter`, a form widget can't) and the streaming
+/// upload of the picked file. Writes the finished `{key, filename, mime_type,
+/// size_bytes}` object into the form through the bound writer.
+@MainActor
+@Observable
+final class UploadAudioCoordinator {
+    enum Status: Equatable {
+        case idle
+        case uploading
+        case ready
+        case failed(String)
+    }
+
+    var showingImporter = false
+    private(set) var status: Status = .idle
+    private(set) var filename = ""
+    private(set) var sizeBytes: Int64 = 0
+
+    private var api: APIClient?
+    private var write: ((FormData) -> Void)?
+    private var maxBytes: Int64 = 0
+
+    func configure(api: APIClient) {
+        if self.api == nil { self.api = api }
+    }
+
+    func bind(maxBytes: Int64, write: @escaping (FormData) -> Void) {
+        self.maxBytes = maxBytes
+        self.write = write
+    }
+
+    var isUploading: Bool { status == .uploading }
+    var isReady: Bool { status == .ready }
+
+    /// Streams the picked file to storage and writes the audio object into the
+    /// form on success.
+    func importFile(_ url: URL) {
+        guard let api else { return }
+        let secured = url.startAccessingSecurityScopedResource()
+        let name = url.lastPathComponent
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        if maxBytes > 0, size > maxBytes {
+            if secured { url.stopAccessingSecurityScopedResource() }
+            status = .failed(String(localized: "This file is larger than your plan allows (\(Self.formatBytes(maxBytes)) max).",
+                                    comment: "Audio upload too large"))
+            return
+        }
+        filename = name
+        sizeBytes = size
+        status = .uploading
+        write?(.object(properties: [:]))
+        let mimeType = Self.mimeType(for: url)
+        Task {
+            defer { if secured { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let response = try await api.uploadPodcastAudio(fileURL: url, filename: name, mimeType: mimeType)
+                guard let key = response.key, !key.isEmpty else {
+                    status = .failed(String(localized: "The upload did not return a storage key.", comment: "Audio upload failure"))
+                    return
+                }
+                status = .ready
+                write?(.object(properties: [
+                    "key": .string(key),
+                    "filename": .string(name),
+                    "mime_type": .string(response.mimeType ?? mimeType),
+                    "size_bytes": .number(Double(sizeBytes)),
+                ]))
+            } catch {
+                status = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
+    }
+
+    func clear() {
+        status = .idle
+        filename = ""
+        sizeBytes = 0
+        write?(.object(properties: [:]))
+    }
+
+    static func mimeType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "mp3": return "audio/mpeg"
+        case "wav": return "audio/wav"
+        case "m4a", "mp4", "aac": return "audio/mp4"
+        case "ogg", "opus": return "audio/ogg"
+        case "flac": return "audio/flac"
+        case "aiff", "aif": return "audio/aiff"
+        default: return "audio/mpeg"
+        }
+    }
+
+    static func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+/// Audio-file row for the Upload Own Audio form: shows the picked file (or a
+/// prompt), streams the upload through the coordinator, and writes the ready
+/// audio object into the form value.
+struct AudioPickerWidget: View {
+    let context: JSONSchemaFormWidgetContext
+    let rootFormData: Binding<FormData>
+    let coordinator: UploadAudioCoordinator
+    @Environment(AuthManager.self) private var auth
+
+    private var maxBytes: Int64 {
+        let options = context.uiSchema?["ui:options"] as? [String: Any]
+        return (options?["max_bytes"] as? NSNumber)?.int64Value ?? 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(context.fieldTitle).font(.headline)
+            Button {
+                if !coordinator.isUploading { coordinator.showingImporter = true }
+            } label: {
+                pickerCard
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("uploadAudio.pick")
+            if case let .failed(message) = coordinator.status {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if let description = context.fieldDescription, !description.isEmpty, coordinator.status == .idle {
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .task {
+            coordinator.configure(api: APIClient(tokens: auth))
+            coordinator.bind(maxBytes: maxBytes) { audio in
+                writeAudio(audio)
+            }
+        }
+    }
+
+    private var pickerCard: some View {
+        HStack(spacing: 12) {
+            RowIcon(systemName: context.icon ?? "waveform")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(titleText)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(subtitleText)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+            }
+            Spacer()
+            switch coordinator.status {
+            case .uploading:
+                ProgressView().tint(Theme.accent)
+            case .ready:
+                Button {
+                    coordinator.clear()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove audio file")
+            default:
+                Image(systemName: "plus.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+        .padding(12)
+        .glassEffect(in: .rect(cornerRadius: 16))
+    }
+
+    private var titleText: String {
+        coordinator.filename.isEmpty
+            ? String(localized: "Choose audio file", comment: "Upload own audio picker prompt")
+            : coordinator.filename
+    }
+
+    private var subtitleText: String {
+        switch coordinator.status {
+        case .uploading:
+            return String(localized: "Uploading…", comment: "Audio upload in progress")
+        case .ready:
+            return UploadAudioCoordinator.formatBytes(coordinator.sizeBytes)
+        case .failed:
+            return String(localized: "Tap to try again", comment: "Audio upload retry prompt")
+        case .idle:
+            return maxBytes > 0
+                ? String(localized: "Up to \(UploadAudioCoordinator.formatBytes(maxBytes))", comment: "Audio upload size limit")
+                : String(localized: "MP3, M4A, WAV, and more", comment: "Audio upload formats")
+        }
+    }
+
+    private func writeAudio(_ audio: FormData) {
+        guard let propertyName = context.propertyName else {
+            context.formData.wrappedValue = audio
+            return
+        }
+        var root = rootFormData.wrappedValue.object ?? [:]
+        root[propertyName] = audio
+        rootFormData.wrappedValue = .object(properties: root)
     }
 }
 

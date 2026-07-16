@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/sirily11/debate-bot/internal/config"
 )
 
 // TestSeedE2EAudioBookFixtures verifies the seeded audiobook chain the iOS
@@ -77,6 +79,55 @@ func TestSeedE2EAudioBookFixtures(t *testing.T) {
 		}
 		if st.Status != want {
 			t.Fatalf("chapter %d status = %q, want %q", st.Index, st.Status, want)
+		}
+	}
+}
+
+// TestSeedE2EUploadedAudioFixture verifies the uploaded-audio fixture the
+// transcript-editor UI tests (TranscriptRetimeTests) rely on: a planning-stage
+// discussion whose script validates as type=uploaded-audio and carries the
+// five caption segments the tests retime and assert against.
+func TestSeedE2EUploadedAudioFixture(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	points, err := NewPointsStore(store)
+	if err != nil {
+		t.Fatalf("NewPointsStore: %v", err)
+	}
+	if err := store.SeedE2E(ctx, points); err != nil {
+		t.Fatalf("SeedE2E: %v", err)
+	}
+
+	d, err := store.Get(ctx, "test", "test-uploaded-audio")
+	if err != nil || d == nil {
+		t.Fatalf("load uploaded-audio fixture: %v", err)
+	}
+	if d.Status != DiscussionPlanning {
+		t.Fatalf("fixture status = %q, want planning (segment edits require it)", d.Status)
+	}
+	if d.Script == nil || d.Script.Type != config.ContentTypeUploadedAudio {
+		t.Fatalf("fixture script = %+v, want type uploaded-audio", d.Script)
+	}
+	if err := config.ValidateTopic(d.Script); err != nil {
+		t.Fatalf("fixture script does not validate: %v", err)
+	}
+	if got := len(d.Script.TranscriptSegments); got != 5 {
+		t.Fatalf("fixture segments = %d, want 5", got)
+	}
+	if d.Script.UploadedAudioDurationMS != 60_000 {
+		t.Fatalf("fixture audio duration = %d, want 60000", d.Script.UploadedAudioDurationMS)
+	}
+	for i, seg := range d.Script.TranscriptSegments {
+		if seg.OffsetMS != int64(i)*5000 || seg.DurationMS != 4000 {
+			t.Fatalf("segment %d timing = %d+%d, want %d+4000", i, seg.OffsetMS, seg.DurationMS, int64(i)*5000)
+		}
+		end := seg.OffsetMS + seg.DurationMS
+		if end > d.Script.UploadedAudioDurationMS {
+			t.Fatalf("segment %d ends at %d, past the audio duration", i, end)
 		}
 	}
 }

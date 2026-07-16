@@ -185,18 +185,16 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 	}
 
 	// Soft subs + translated tracks work for any type whose stage
-	// emits a subtitles.vtt sidecar — series and discussion. Burn-in
+	// emits a subtitles.vtt sidecar. Burn-in
 	// captions are painted only by the series renderer (discussion
 	// already burns its active-speaker caption natively), and the
 	// priors zip is a series-only continuity feature. Reject mismatched
 	// flags early with a clear message rather than silently ignoring
 	// them.
-	supportsSoftSubs := topic.Type == config.ContentTypeSeries ||
-		topic.Type == config.ContentTypeDiscussion ||
-		topic.Type == config.ContentTypeAudioBook
+	supportsSoftSubs := supportsSoftSubtitles(topic.Type)
 	if !supportsSoftSubs {
 		if sub.SoftSubs || len(sub.SubtitleLanguages) > 0 {
-			return errors.New("subtitle options (soft_subs) are only valid for type=series, type=discussion, or type=audio-book")
+			return errors.New("subtitle options (soft_subs) are only valid for type=series, type=discussion, type=audio-book, or type=uploaded-audio")
 		}
 	}
 	if topic.Type != config.ContentTypeSeries {
@@ -207,7 +205,7 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 			return errors.New("priors zip is only valid for type=series")
 		}
 	}
-	if topic.Type == config.ContentTypeAudioBook {
+	if topic.Type == config.ContentTypeAudioBook || topic.Type == config.ContentTypeUploadedAudio {
 		sub.AudioOnly = true
 	}
 	if len(sub.SubtitleLanguages) > 0 && !sub.SoftSubs {
@@ -293,6 +291,18 @@ func Submit(ctx context.Context, deps Deps, jobID string, sub server.JobSubmissi
 	return nil
 }
 
+func supportsSoftSubtitles(contentType string) bool {
+	switch contentType {
+	case config.ContentTypeSeries,
+		config.ContentTypeDiscussion,
+		config.ContentTypeAudioBook,
+		config.ContentTypeUploadedAudio:
+		return true
+	default:
+		return false
+	}
+}
+
 // RunFromTask executes one queued generation attempt on the consuming pod:
 // it materialises the payload back into local inputs (script.md, priors
 // zip), re-derives the validated topic, and runs the render pipeline. The
@@ -324,7 +334,7 @@ func RunFromTask(ctx context.Context, deps Deps, p PodcastGeneratePayload) error
 		BurnSubs:          p.BurnSubs,
 		Resolution:        p.Resolution,
 		SubtitleLanguages: p.SubtitleLanguages,
-		AudioOnly:         p.AudioOnly || topic.Type == config.ContentTypeAudioBook,
+		AudioOnly:         p.AudioOnly || topic.Type == config.ContentTypeAudioBook || topic.Type == config.ContentTypeUploadedAudio,
 		DiscussionID:      p.DiscussionID,
 	}
 	if p.PriorsZipS3Key != "" {
@@ -386,6 +396,11 @@ func discussionIDForJob(deps Deps, jobID string) string {
 func run(ctx context.Context, deps Deps, jobID string,
 	sub server.JobSubmission, topic *config.DebateTopic,
 ) error {
+	// Uploaded-audio podcasts skip the whole synthesis pipeline: the audio
+	// already exists, so publish is copy + captions + transcript + docs.
+	if topic.Type == config.ContentTypeUploadedAudio {
+		return runUploadedAudio(ctx, deps, jobID, topic)
+	}
 	logger := deps.Log.With("job", jobID, "type", topic.Type, "title", topic.Title)
 	audioOnly := sub.AudioOnly
 	// E2E mode always renders audio-only so the video encoder/stitch path (and its

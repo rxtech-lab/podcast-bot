@@ -1122,7 +1122,7 @@ func (s *Server) applyDiscussionMindmapMeta(ctx context.Context, d *Discussion) 
 	if d == nil || s.d.Discussions == nil {
 		return
 	}
-	if !discussionIsDiscussion(d) {
+	if !discussionSupportsMindmap(d) {
 		d.Mindmap = nil
 		return
 	}
@@ -1219,6 +1219,20 @@ func discussionIsAudioBook(d *Discussion) bool {
 
 func discussionIsDiscussion(d *Discussion) bool {
 	return d != nil && d.Script != nil && strings.TrimSpace(d.Script.Type) == config.ContentTypeDiscussion
+}
+
+// discussionSupportsMindmap gates the mindmap feature: panel discussions and
+// uploaded-audio podcasts have a transcript worth mapping; the other formats
+// don't get one.
+func discussionSupportsMindmap(d *Discussion) bool {
+	if d == nil || d.Script == nil {
+		return false
+	}
+	switch strings.TrimSpace(d.Script.Type) {
+	case config.ContentTypeDiscussion, config.ContentTypeUploadedAudio:
+		return true
+	}
+	return false
 }
 
 // handleDiscussionSummary serves the generated summary document's Markdown body

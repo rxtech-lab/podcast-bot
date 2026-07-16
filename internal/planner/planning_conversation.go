@@ -108,6 +108,9 @@ func conversationSystem(template string) string {
 }
 
 func conversationSystemForType(contentType, template string) string {
+	if contentType == config.ContentTypeUploadedAudio {
+		return conversationSystemBase + "\n" + uploadedAudioSystemContract
+	}
 	if contentType != config.ContentTypeAudioBook {
 		return conversationSystem(template)
 	}
@@ -169,13 +172,22 @@ func (p *Planner) RunConversationTurn(ctx context.Context, history []llm.Message
 	}
 	msgs := append([]llm.Message(nil), history...)
 
+	system := conversationSystemForType(opts.Type, opts.Template)
+	if opts.Type == config.ContentTypeUploadedAudio && opts.ExistingPlan != nil {
+		// The transcript was written server-side (no conversation turn carries
+		// it), so the review agent reads it from the system prompt instead.
+		if listing := renderUploadedAudioTranscript(opts.ExistingPlan); listing != "" {
+			system += "\n\n" + listing
+		}
+	}
+
 	for round := 0; round < maxConversationRounds; round++ {
 		if round == 0 {
 			p.emit("thinking", "Thinking…")
 		} else {
 			p.emit("thinking", "Working…")
 		}
-		stream, err := client.Stream(ctx, conversationSystemForType(opts.Type, opts.Template), msgs, conversationTools(opts.Type, opts.Template))
+		stream, err := client.Stream(ctx, system, msgs, conversationTools(opts.Type, opts.Template))
 		if err != nil {
 			return false, fmt.Errorf("planning conversation: %w", err)
 		}
@@ -367,6 +379,19 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 }
 
 func (s *conversationSession) assemblePlanFromToolArgs(args string) (*Result, error) {
+	if s.opts.Type == config.ContentTypeUploadedAudio {
+		d, err := decodeUploadedAudioDraft(args)
+		if err != nil {
+			return nil, err
+		}
+		// Merge onto the freshest saved plan so consecutive update_plan calls
+		// within one turn stack instead of each starting from the stored plan.
+		existing := s.opts.ExistingPlan
+		if s.currentPlan != nil && s.currentPlan.Script != nil {
+			existing = s.currentPlan.Script
+		}
+		return assembleUploadedAudioPlan(existing, d)
+	}
 	if s.opts.Type == config.ContentTypeAudioBook {
 		d, err := decodeAudioBookDraft(args)
 		if err != nil {

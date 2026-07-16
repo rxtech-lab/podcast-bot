@@ -46,6 +46,15 @@ var templateRegistry = map[string][]Template{
 			Schema:      defaultDiscussionPlanSchema(),
 		},
 	},
+	config.ContentTypeUploadedAudio: {
+		{
+			ID:          DefaultTemplateID,
+			Type:        config.ContentTypeUploadedAudio,
+			Name:        "Transcript review",
+			Description: "Proofread the transcript of an uploaded audio recording.",
+			Schema:      uploadedAudioPlanSchema(),
+		},
+	},
 	config.ContentTypeAudioBook: {
 		{
 			ID:          DefaultTemplateID,

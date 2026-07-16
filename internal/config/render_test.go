@@ -144,3 +144,28 @@ func TestRenderMarkdownRoundTripAudioBook(t *testing.T) {
 		t.Fatalf("round-trip mismatch:\nwant %+v\n got %+v", in, got)
 	}
 }
+
+func TestRenderMarkdownRoundTripUploadedAudio(t *testing.T) {
+	in := &DebateTopic{
+		Title:                    "My Uploaded Show",
+		Type:                     ContentTypeUploadedAudio,
+		Language:                 "zh-CN",
+		TotalMinutes:             12,
+		SegmentMaxSeconds:        60,
+		TTSProvider:              TTSProviderAzure,
+		Resolution:               Resolution1080p,
+		Channel:                  "default",
+		UploadedAudioKey:         "uploads/user-1/abc123.mp3",
+		UploadedAudioDurationMS:  695000,
+		UploadedAudioMaxSpeakers: 3,
+		UploadedAudioSpeakers:    []string{"Speaker 1", "Speaker 2", "Guest"},
+		TranscriptSegments: []TranscriptSegment{
+			{Speaker: "Speaker 1", OffsetMS: 10080, DurationMS: 24920, Text: "各位听众朋友们，"},
+			{Speaker: "Speaker 2", OffsetMS: 35000, DurationMS: 4000, Text: "Welcome to the show."},
+		},
+	}
+	got := writeAndLoad(t, in)
+	if !reflect.DeepEqual(in, got) {
+		t.Fatalf("round-trip mismatch:\nwant %+v\n got %+v", in, got)
+	}
+}

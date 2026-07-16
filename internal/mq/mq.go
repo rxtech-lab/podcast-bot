@@ -29,6 +29,7 @@ const (
 	TaskPodcastGenerate TaskType = "podcast-generate" // all content types via videojob
 	TaskVideoRender     TaskType = "video-render"     // audiobook slideshow mp4
 	TaskPlanningTurn    TaskType = "planning-turn"
+	TaskAudioTranscribe TaskType = "audio-transcribe" // uploaded-audio speech-to-text
 	TaskSummary         TaskType = "summary"
 	TaskMindmap         TaskType = "mindmap"
 	TaskPPTExport       TaskType = "ppt-export"
@@ -41,7 +42,7 @@ const (
 const (
 	QueueGeneration = "podcast.generation" // podcast-generate, video-render
 	QueueDocs       = "podcast.docs"       // summary, mindmap, ppt/pdf export
-	QueuePlanning   = "podcast.planning"   // planning-turn
+	QueuePlanning   = "podcast.planning"   // planning-turn, audio-transcribe
 )
 
 // RetryExchange is the shared direct exchange that routes retry messages

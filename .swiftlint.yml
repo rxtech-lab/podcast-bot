@@ -1,0 +1,15 @@
+only_rules:
+  - file_length
+
+included:
+  - iOS
+
+excluded:
+  - iOS/iOSTests
+
+file_length:
+  warning: 800
+  error: 800
+  ignore_comment_only_lines: false
+
+reporter: xcode

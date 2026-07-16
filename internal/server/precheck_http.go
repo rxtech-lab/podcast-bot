@@ -11,6 +11,9 @@ import (
 type precheckResponse struct {
 	NewDiscussion precheckNewDiscussion `json:"new_discussion"`
 	NewAlbum      precheckNewAlbum      `json:"new_album"`
+	// UploadAudio is present only when the upload-own-audio feature is globally
+	// enabled AND the caller's subscription tier grants it.
+	UploadAudio *precheckUploadAudio `json:"upload_audio,omitempty"`
 	// Maintenance is present while a maintenance window is active (Active=true)
 	// or upcoming (Active=false), so the client can pause with a message or warn
 	// users ahead of a scheduled pause.
@@ -22,6 +25,10 @@ type precheckNewDiscussion struct {
 }
 
 type precheckNewAlbum struct {
+	Form precheckForm `json:"form"`
+}
+
+type precheckUploadAudio struct {
 	Form precheckForm `json:"form"`
 }
 
@@ -53,7 +60,7 @@ type precheckOption struct {
 
 func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
-	writeJSON(w, precheckResponse{
+	resp := precheckResponse{
 		NewDiscussion: precheckNewDiscussion{
 			Form: newDiscussionPrecheckForm(lang),
 		},
@@ -61,7 +68,87 @@ func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 			Form: newAlbumPrecheckForm(lang),
 		},
 		Maintenance: s.relevantMaintenance(r),
-	})
+	}
+	user := s.requestUser(r)
+	if s.uploadAudioAllowedForUser(r.Context(), user.ID) {
+		resp.UploadAudio = &precheckUploadAudio{
+			Form: uploadAudioPrecheckForm(lang, s.uploadAudioCapBytes(r.Context(), user.ID)),
+		}
+	}
+	writeJSON(w, resp)
+}
+
+// uploadAudioPrecheckForm is the server-owned "Upload Own Audio" form. The
+// client uploads the audio through the audioPicker widget (presign →
+// direct-to-S3 PUT → complete, kind=podcast-audio) and then posts the form
+// values verbatim to POST /api/discussions/upload-audio.
+func uploadAudioPrecheckForm(lang contentcreator.Lang, capBytes int64) precheckForm {
+	return precheckForm{
+		Title:        phrase(lang, "Upload Own Audio", "上传音频", "上傳音訊"),
+		Description:  phrase(lang, "Turn your own recording into a station with transcript and captions.", "把你自己的录音变成带文稿和字幕的频道。", "把你自己的錄音變成帶文稿和字幕的頻道。"),
+		SubmitTitle:  phrase(lang, "Transcribe", "转写", "轉寫"),
+		CancelTitle:  phrase(lang, "Cancel", "取消", "取消"),
+		LoadingTitle: phrase(lang, "Starting transcription...", "正在开始转写…", "正在開始轉寫…"),
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"audio": map[string]any{
+					"type":        "object",
+					"title":       phrase(lang, "Audio file", "音频文件", "音訊檔案"),
+					"description": phrase(lang, "Pick the recording to transcribe.", "选择要转写的录音。", "選擇要轉寫的錄音。"),
+					"properties": map[string]any{
+						"key":        map[string]any{"type": "string", "minLength": 1},
+						"filename":   map[string]any{"type": "string"},
+						"mime_type":  map[string]any{"type": "string"},
+						"size_bytes": map[string]any{"type": "integer"},
+					},
+					"required": []any{"key"},
+				},
+				"settings": map[string]any{
+					"type":                 "object",
+					"title":                phrase(lang, "Settings", "设置", "設定"),
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"max_speakers": map[string]any{
+							"type":        "integer",
+							"title":       phrase(lang, "Max speakers", "最多说话人数", "最多說話人數"),
+							"description": phrase(lang, "The most voices the transcriber should tell apart.", "转写时最多区分的说话人数。", "轉寫時最多區分的說話人數。"),
+							"minimum":     2,
+							"maximum":     35,
+							"default":     2,
+						},
+					},
+					"required": []any{"max_speakers"},
+				},
+			},
+			"required": []any{"audio", "settings"},
+		},
+		UISchema: map[string]any{
+			"ui:order": []any{"audio", "settings"},
+			"audio": map[string]any{
+				"ui:widget": "audioPicker",
+				"ui:options": map[string]any{
+					"icon":      "waveform",
+					"max_bytes": capBytes,
+				},
+			},
+			"settings": map[string]any{
+				"ui:objectTemplate": "card",
+				"ui:order":          []any{"max_speakers"},
+				"max_speakers": map[string]any{
+					"ui:widget":  "glassStepper",
+					"ui:options": map[string]any{"icon": "person.2.fill"},
+				},
+			},
+		},
+		InitialData: map[string]any{
+			"audio": map[string]any{},
+			"settings": map[string]any{
+				"max_speakers": 2,
+			},
+		},
+	}
 }
 
 // newAlbumPrecheckForm is the server-owned "New Album" form. The client posts
