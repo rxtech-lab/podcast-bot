@@ -190,6 +190,9 @@ final class PlayerModel {
     /// nil means the source-language presentation. Audio is never replaced when
     /// this changes; only discussion text and caption cues are refreshed.
     var presentationLanguage: String?
+    /// Invalidates an in-flight initial hydration when the user explicitly
+    /// chooses a language, including choosing the source language (nil).
+    @ObservationIgnored var presentationRequestRevision = 0
     var uiActionsRefreshVersion = 0
     /// Exposed (read-only use) so views like the share sheet can reuse the same
     /// authenticated client instead of constructing another.

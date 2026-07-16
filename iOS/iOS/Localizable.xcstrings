@@ -2644,6 +2644,9 @@
         }
       }
     },
+    "Couldn’t Open Caption Editor" : {
+
+    },
     "Couldn't open link" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6905,6 +6908,28 @@
         }
       }
     },
+    "On save, gaps under 0.3 seconds are closed without changing subtitle end times." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存时，会消除小于 0.3 秒的间隔，且不会更改字幕结束时间。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存時，會消除少於 0.3 秒嘅間隔，而唔會更改字幕結束時間。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存時，會消除小於 0.3 秒的間隔，且不會變更字幕結束時間。"
+          }
+        }
+      }
+    },
     "Open image" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8863,6 +8888,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "從專輯移除"
+          }
+        }
+      }
+    },
+    "Remove Short Gaps" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除短间隔"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除短間隔"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除短間隔"
           }
         }
       }

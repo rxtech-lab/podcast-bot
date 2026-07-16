@@ -162,6 +162,7 @@ func (s *Server) RunPodcastTranslationTask(ctx context.Context, p TranslationTas
 	}); err != nil {
 		return err
 	}
+	s.notifyTranslationReady(ctx, d, p.TargetLanguage)
 	PublishDiscussionResourceUpdated(s.d.Bus, s.d.Env, d.JobID, d.ID, "Translation ready", "translations")
 	return nil
 }

@@ -19,7 +19,9 @@ extension PlayerModel {
     }
 
     func loadFinalCaptions(jobID: String) async {
-        if let vtt = try? await api.liveSubtitles(id: jobID, language: presentationLanguage) {
+        let requestedLanguage = presentationLanguage
+        if let vtt = try? await api.liveSubtitles(id: jobID, language: requestedLanguage) {
+            guard presentationLanguage == requestedLanguage else { return }
             cues = Self.parseVTT(vtt)
             // Seed the active lyric group so the list scrolls to the right place
             // on first appearance, before the periodic time observer fires.
@@ -34,23 +36,22 @@ extension PlayerModel {
         let normalized = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourceLanguage = discussion.mainLanguage ?? discussion.language
         let requested = (normalized?.isEmpty == false && normalized != sourceLanguage) ? normalized : nil
+        // A source-language choice must remain explicit. Omitting the query is
+        // reserved for initial hydration, where Accept-Language selects the
+        // device's preferred ready translation.
+        let requestLanguage = normalized?.isEmpty == false ? normalized : sourceLanguage
+        presentationRequestRevision += 1
+        let requestRevision = presentationRequestRevision
         let fresh: Discussion
         if let shareToken, !shareToken.isEmpty {
-            fresh = try await api.joinViaShare(token: shareToken, language: requested)
+            fresh = try await api.joinViaShare(token: shareToken, language: requestLanguage)
         } else {
-            fresh = try await api.playerDiscussion(id: discussion.id, language: requested)
+            fresh = try await api.playerDiscussion(id: discussion.id, language: requestLanguage)
         }
+        guard presentationRequestRevision == requestRevision else { return }
         presentationLanguage = requested
         discussion = fresh
-        lines = fresh.sortedLines.compactMap { dto in
-            guard Self.hasDisplayablePayload(dto) else { return nil }
-            return LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
-                            isUser: dto.isUser, done: true,
-                            senderUserID: dto.senderUserID, audioURL: dto.audioURL,
-                            imageURL: dto.imageURL,
-                            audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: dto.startMS),
-                            sources: dto.sources, judgementComment: dto.judgementComment)
-        }
+        lines = Self.presentationLines(from: fresh.sortedLines, preservingIdentitiesFrom: lines)
         if let jobID = fresh.jobID,
            let vtt = try? await api.liveSubtitles(id: jobID, language: requested) {
             cues = Self.parseVTT(vtt)
@@ -59,6 +60,56 @@ extension PlayerModel {
         uiActionsRefreshVersion += 1
         await refreshCoverAssets()
         updateNowPlayingInfo()
+    }
+
+    /// Replaces presentation text without replacing the SwiftUI identity of
+    /// transcript rows at the same position. Translation bundles preserve the
+    /// source transcript order, so keeping these ids prevents `MessageList` from
+    /// treating a language change as a new conversation and issuing a bottom scroll.
+    nonisolated static func presentationLines(
+        from persisted: [DiscussionLineDTO],
+        preservingIdentitiesFrom current: [LiveLine]
+    ) -> [LiveLine] {
+        persisted
+            .filter(hasDisplayablePayload)
+            .enumerated()
+            .map { index, dto in
+                guard current.indices.contains(index) else {
+                    return LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
+                                    isUser: dto.isUser, done: true,
+                                    senderUserID: dto.senderUserID, audioURL: dto.audioURL,
+                                    imageURL: dto.imageURL,
+                                    audioOffsetSeconds: audioOffsetSeconds(fromMS: dto.startMS),
+                                    sources: dto.sources, judgementComment: dto.judgementComment)
+                }
+
+                var line = current[index]
+                line.speaker = dto.speaker
+                line.role = dto.role
+                line.text = dto.text
+                line.isUser = dto.isUser
+                line.done = true
+                line.senderUserID = dto.senderUserID
+                line.audioURL = dto.audioURL
+                line.imageURL = dto.imageURL
+                line.audioOffsetSeconds = audioOffsetSeconds(fromMS: dto.startMS)
+                line.sources = dto.sources
+                line.judgementComment = dto.judgementComment
+                return line
+            }
+    }
+
+    /// Returns the translated presentation selected by the server for an
+    /// initial Accept-Language request. Equal source/presentation languages mean
+    /// the server fell back to the original podcast.
+    nonisolated static func initialPresentationLanguage(from discussion: Discussion) -> String? {
+        guard let source = discussion.mainLanguage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !source.isEmpty else { return nil }
+        let presented = discussion.language.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !presented.isEmpty, presented.caseInsensitiveCompare(source) != .orderedSame else {
+            return nil
+        }
+        return presented
     }
 
     // MARK: - Job status

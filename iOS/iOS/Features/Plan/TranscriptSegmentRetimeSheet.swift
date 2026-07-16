@@ -54,6 +54,8 @@ struct TranscriptRetimeState: Equatable {
 }
 
 struct TranscriptRetimeSequence: Equatable {
+    static let shortGapThresholdMs: Int64 = 300
+
     private var savedSegments: [TranscriptSegmentDTO]
     private(set) var segments: [TranscriptSegmentDTO]
     let orderedIndices: [Int]
@@ -110,6 +112,27 @@ struct TranscriptRetimeSequence: Equatable {
 
     mutating func markSaved(at index: Int) {
         savedSegments[index] = segments[index]
+    }
+
+    mutating func removeGaps(shorterThan thresholdMs: Int64) {
+        guard thresholdMs > 0, orderedIndices.count > 1 else { return }
+
+        for position in orderedIndices.indices.dropFirst() {
+            let previous = segments[orderedIndices[position - 1]]
+            let currentIndex = orderedIndices[position]
+            let current = segments[currentIndex]
+            let previousEndMs = previous.offsetMs + previous.durationMs
+            let currentEndMs = current.offsetMs + current.durationMs
+            let gapMs = current.offsetMs - previousEndMs
+
+            guard gapMs > 0, gapMs < thresholdMs else { continue }
+            segments[currentIndex] = TranscriptSegmentDTO(
+                speaker: current.speaker,
+                offsetMs: previousEndMs,
+                durationMs: currentEndMs - previousEndMs,
+                text: current.text
+            )
+        }
     }
 
     mutating func movePrevious() -> Bool {
@@ -201,6 +224,7 @@ struct TranscriptSegmentRetimeSheet: View {
     @State private var saveError: String?
     @State private var isSaving = false
     @State private var navigationDirection = TranscriptRetimeNavigationDirection.forward
+    @State private var removesShortGaps = true
 
     init(
         discussionID: String,
@@ -231,6 +255,7 @@ struct TranscriptSegmentRetimeSheet: View {
                 VStack(spacing: 22) {
                     timestampRange
                     captionCard
+                    gapRemovalToggle
                     audioControls
 
                     if let validationMessage {
@@ -473,6 +498,23 @@ struct TranscriptSegmentRetimeSheet: View {
         audioControlsContent
     }
 
+    private var gapRemovalToggle: some View {
+        Toggle(isOn: $removesShortGaps) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Remove Short Gaps")
+                    .font(.body.weight(.semibold))
+                Text("On save, gaps under 0.3 seconds are closed without changing subtitle end times.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .tint(Theme.accent)
+        .disabled(isSaving)
+        .accessibilityIdentifier("retime.removeShortGaps")
+        .padding(16)
+        .background(Theme.rowBackground, in: .rect(cornerRadius: 16))
+    }
+
     private var audioControlsContent: some View {
         VStack(spacing: 14) {
             Slider(
@@ -678,6 +720,9 @@ struct TranscriptSegmentRetimeSheet: View {
 
     private func save() {
         guard stageCurrentTiming() else { return }
+        if removesShortGaps {
+            sequence.removeGaps(shorterThan: TranscriptRetimeSequence.shortGapThresholdMs)
+        }
         // Freeze the payload before crossing the Task boundary. SwiftUI can
         // recreate this view while the async save is starting; the request
         // must still contain the exact edits present when Save was tapped.

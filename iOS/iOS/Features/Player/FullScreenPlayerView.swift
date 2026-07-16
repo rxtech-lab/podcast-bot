@@ -442,11 +442,11 @@ struct FullScreenPlayerView: View {
     /// Background tinted from the cover's two main colors (gradient hexes or
     /// colors sampled from the artwork), with a top-to-bottom dark scrim so the
     /// transcript and controls stay legible over bright covers. Falls back to
-    /// the accent gradient when no palette is available yet.
+    /// a dark purple gradient when no palette is available yet.
     private var background: some View {
         let palette = model.coverColors.count >= 2
             ? model.coverColors
-            : [Theme.accent.opacity(0.35), Theme.background]
+            : FullScreenPlayerStyle.defaultBackgroundColors
         return LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing)
             .overlay(
                 LinearGradient(
@@ -627,6 +627,7 @@ struct FullScreenPlayerView: View {
                 .glassEffect(in: .circle)
         }
         .accessibilityLabel(showingTranscript ? "Show cover" : "Show transcript")
+        .accessibilityIdentifier("player.lyrics")
         .popoverTip(FullScreenCaptionTip(), arrowEdge: .bottom)
     }
 

@@ -203,6 +203,9 @@ func (s *Server) podcastMenuActions(r *http.Request, d *Discussion, lang content
 	if d.IsOwner {
 		if d.Status == DiscussionReady {
 			items = append(items, actionItem("translate-podcast", phrase(lang, "Translate Podcast", "翻译播客", "翻譯 Podcast"), "", "globe", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "translation")))
+			if d.Script != nil && d.Script.Type == config.ContentTypeUploadedAudio && len(d.Script.TranscriptSegments) > 0 {
+				items = append(items, actionItem("edit-captions", phrase(lang, "Edit Captions", "编辑字幕", "編輯字幕"), phrase(lang, "Loading Captions", "正在加载字幕", "正在載入字幕"), "captions.bubble.fill", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "caption-editor")))
+			}
 		}
 		items = append(items, actionItem("edit-cover", phrase(lang, "Edit Cover", "编辑封面", "編輯封面"), "", "photo.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "cover")))
 		if d.Visibility == DiscussionPublic {

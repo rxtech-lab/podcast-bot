@@ -1851,6 +1851,9 @@ func (s *Server) prepareDiscussionDetail(r *http.Request, d *Discussion, include
 
 func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, timer *stationTimer) {
 	var coverDur, summaryDur, usageDur time.Duration
+	t0 := time.Now()
+	s.applyDiscussionListTitleTranslations(r, items)
+	timer.add("translations", time.Since(t0))
 	for i := range items {
 		// List rows skip resolving the presigned audio download URL — it is
 		// only needed on the detail screen and re-signing it per item is slow.
@@ -1869,7 +1872,7 @@ func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, 
 	timer.add("cover", coverDur)
 	timer.add("summary", summaryDur)
 	timer.add("usage", usageDur)
-	t0 := time.Now()
+	t0 = time.Now()
 	s.attachAlbumSummaries(r.Context(), s.requestUser(r).ID, items)
 	timer.add("albums", time.Since(t0))
 }

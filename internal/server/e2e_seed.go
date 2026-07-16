@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/summarizer"
 )
 
 // e2eSeedDiscussant is one panelist used to build a seed script.
@@ -224,6 +225,97 @@ func (s *DiscussionStore) seedTranscript(ctx context.Context, id string) error {
 	return nil
 }
 
+// seedTranslatedFixture attaches a ready zh-CN translation plus source summary,
+// text, and mindmap documents to an already-seeded ready discussion. The
+// bundle's lines mirror seedTranscript 1:1 (the player maps translated lines to
+// visible rows by index) and every field carries a distinctive Chinese marker
+// that appears nowhere in the English fixtures, so UI assertions can't match
+// stale source text.
+func (s *DiscussionStore) seedTranslatedFixture(ctx context.Context, id string) error {
+	translatedLines := []DiscussionLine{
+		{Speaker: "测试主持人", Role: "host", Text: "欢迎收听这期合成端到端测试讨论。", StartMS: 0},
+		{Speaker: "爱丽丝", Role: "discussant", Text: "从技术角度看，系统按设计运行。", StartMS: 5000},
+		{Speaker: "鲍勃", Role: "discussant", Text: "从经济角度看，这些取舍在测试中可以接受。", StartMS: 10000},
+		{Speaker: "卡罗尔", Role: "discussant", Text: "从伦理角度看，测试的透明度很重要。", StartMS: 15000},
+		{Speaker: "测试主持人", Role: "host", Text: "感谢各位，本次测试讨论到此结束。", StartMS: 20000},
+	}
+	var vtt strings.Builder
+	vtt.WriteString("WEBVTT\n")
+	for i, line := range translatedLines {
+		start := time.Duration(line.StartMS) * time.Millisecond
+		end := start + 4*time.Second
+		fmt.Fprintf(&vtt, "\n%d\n%02d:%02d:%02d.000 --> %02d:%02d:%02d.000\n%s\n",
+			i+1,
+			int(start.Hours()), int(start.Minutes())%60, int(start.Seconds())%60,
+			int(end.Hours()), int(end.Minutes())%60, int(end.Seconds())%60,
+			line.Text)
+	}
+	script := &config.DebateTopic{
+		Title:             "E2E 翻译播客",
+		Type:              config.ContentTypeDiscussion,
+		Language:          "zh-CN",
+		TotalMinutes:      1,
+		SegmentMaxSeconds: 60,
+		TTSProvider:       config.TTSProviderAzure,
+		Resolution:        config.Resolution1080p,
+		Channel:           "default",
+		Host:              config.AgentSpec{Name: "测试主持人", Model: "gpt-4o-mini"},
+		Discussants: []config.AgentSpec{
+			{Name: "爱丽丝", Model: "gpt-4o-mini", Aspect: "技术视角"},
+			{Name: "鲍勃", Model: "gpt-4o-mini", Aspect: "经济视角"},
+			{Name: "卡罗尔", Model: "gpt-4o-mini", Aspect: "伦理视角"},
+		},
+		Commander:  config.AgentSpec{Model: "gpt-4o-mini"},
+		Storage:    config.StoragePlaintext,
+		Background: "端到端测试播客的合成背景。",
+	}
+	bundle := DiscussionTranslationBundle{
+		Language:        "zh-CN",
+		Title:           "E2E 翻译播客",
+		Topic:           "E2E 翻译播客",
+		Markdown:        "# E2E 翻译播客\n\n合成计划的中文版本。",
+		Script:          script,
+		Lines:           translatedLines,
+		CaptionsVTT:     vtt.String(),
+		SummaryMarkdown: "# 摘要\n\n端到端翻译摘要。",
+		TextMarkdown:    "# 全文\n\n端到端翻译全文。",
+		Mindmap: &summarizer.MindmapSpec{Version: 1, Root: &summarizer.MindmapNode{
+			ID: "root", Title: "端到端思维导图",
+			Children: []*summarizer.MindmapNode{{ID: "n1", Title: "合成分支"}},
+		}},
+	}
+	if err := s.BeginTranslation(ctx, id, "zh-CN", "e2e/fake"); err != nil {
+		return err
+	}
+	if err := s.SaveTranslation(ctx, id, "zh-CN", bundle, "e2e/fake", SummaryUsage{}); err != nil {
+		return err
+	}
+
+	// Source-language documents so the summary/text/mindmap sheets open without
+	// a generation step (the translated versions come from the bundle above).
+	sourceDocs := []struct{ docType, markdown string }{
+		{SummaryDocTypeSummary, "# Summary\n\nSynthetic source summary for the translation fixture."},
+		{"text", "# Text\n\nSynthetic source text for the translation fixture."},
+	}
+	mindmapJSON, err := json.Marshal(&summarizer.MindmapSpec{Version: 1, Root: &summarizer.MindmapNode{
+		ID: "root", Title: "E2E Mindmap Root",
+		Children: []*summarizer.MindmapNode{{ID: "n1", Title: "Synthetic branch"}},
+	}})
+	if err != nil {
+		return err
+	}
+	sourceDocs = append(sourceDocs, struct{ docType, markdown string }{SummaryDocTypeMindmap, string(mindmapJSON)})
+	for _, doc := range sourceDocs {
+		if err := s.BeginSummary(ctx, id, doc.docType, "e2e/fake"); err != nil {
+			return err
+		}
+		if err := s.SaveSummary(ctx, id, doc.docType, doc.markdown, "e2e/fake", SummaryUsage{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SeedE2E populates the database with the fixtures the iOS XCUITest suite relies
 // on. It is idempotent (every insert is ON CONFLICT DO NOTHING) and only ever
 // called in E2E mode. Owner ids are the plain strings "test" (the acting test
@@ -254,6 +346,7 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 	fixtures := []fixture{
 		{"test-ready", "test", "E2E Ready Podcast", string(DiscussionReady), "private", true, false, true},
 		{"test-ready-summary", "test", "E2E Summary Podcast", string(DiscussionReady), "private", true, false, true},
+		{"test-translated", "test", "E2E Translated Podcast", string(DiscussionReady), "private", true, false, true},
 		{"test-ongoing", "test", "E2E Ongoing Podcast", string(DiscussionGenerating), "private", false, false, false},
 		{"test-plan", "test", "E2E Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
 		{"test-plan-voice", "test", "E2E Voice Plan Podcast", string(DiscussionPlanning), "private", false, false, false},
@@ -271,6 +364,15 @@ func (s *DiscussionStore) SeedE2E(ctx context.Context, points *PointsStore) erro
 				return fmt.Errorf("seed transcript %s: %w", f.id, err)
 			}
 		}
+	}
+
+	// Translation fixture: a ready podcast with a ready zh-CN translation
+	// covering every translated surface (title, plan script, transcript lines,
+	// captions, summary, text, mindmap) so the language-switch UI test can
+	// assert on distinctive Chinese markers. Read-only; private to
+	// PlayerLanguageTests.
+	if err := s.seedTranslatedFixture(ctx, "test-translated"); err != nil {
+		return fmt.Errorf("seed translated fixture: %w", err)
 	}
 
 	// Uploaded-audio fixture: a planning-stage station whose captions the

@@ -110,6 +110,34 @@ func (s *Server) notifySummaryReady(ctx context.Context, d *Discussion) {
 	})
 }
 
+func (s *Server) notifyTranslationReady(ctx context.Context, d *Discussion, targetLanguage string) {
+	if d == nil {
+		return
+	}
+	s.notifyUser(ctx, d.OwnerUserID, translationReadyNotification(
+		d,
+		targetLanguage,
+		s.discussionDeepLink(d.ID),
+	))
+}
+
+func translationReadyNotification(d *Discussion, targetLanguage, url string) PushNotification {
+	language := strings.TrimSpace(podcastLanguageName(targetLanguage))
+	body := pushDiscussionTitle(d, "Your podcast")
+	if language == "" {
+		body += " translation is ready."
+	} else {
+		body += " is ready in " + language + "."
+	}
+	return PushNotification{
+		Kind:         PushKindTranslationReady,
+		DiscussionID: d.ID,
+		Title:        "Translation ready",
+		Body:         body,
+		URL:          url,
+	}
+}
+
 func (s *Server) notifyMarketLike(ctx context.Context, ownerID string, d *Discussion, likerName string) {
 	if d == nil || strings.TrimSpace(ownerID) == "" {
 		return

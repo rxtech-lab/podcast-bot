@@ -74,6 +74,28 @@ func TestApplyTranslationBundleFallsBackFieldByField(t *testing.T) {
 	}
 }
 
+func TestDiscussionPresentationLanguageDefaultsToAcceptLanguage(t *testing.T) {
+	tests := []struct {
+		name   string
+		url    string
+		header string
+		want   string
+	}{
+		{name: "initial device language", url: "/api/discussions/one", header: "zh-Hans-HK,en;q=0.9", want: "zh-CN"},
+		{name: "explicit translated language", url: "/api/discussions/one?language=fr-FR", header: "zh-Hans", want: "fr-FR"},
+		{name: "explicit source language", url: "/api/discussions/one?language=en-US", header: "zh-Hans", want: "en-US"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			req.Header.Set("Accept-Language", tt.header)
+			if got := discussionPresentationLanguage(req); got != tt.want {
+				t.Fatalf("presentation language = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCollectVTTTranslationSlotsPreservesTiming(t *testing.T) {
 	vtt := "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\nHello world\n\n2\n00:00:03.000 --> 00:00:04.000\nNext line\n"
 	var slots []translationSlot
@@ -214,6 +236,27 @@ func TestSupportedPodcastLanguages(t *testing.T) {
 		if supportedPodcastLanguage(language) {
 			t.Errorf("expected %q to be rejected", language)
 		}
+	}
+}
+
+func TestTranslationReadyNotification(t *testing.T) {
+	d := &Discussion{ID: "discussion-1", Title: "A source podcast"}
+	n := translationReadyNotification(d, "fr-FR", "https://podcast.rxlab.app/d/discussion-1")
+
+	if n.Kind != PushKindTranslationReady {
+		t.Fatalf("kind = %q, want %q", n.Kind, PushKindTranslationReady)
+	}
+	if n.DiscussionID != d.ID {
+		t.Fatalf("discussion ID = %q, want %q", n.DiscussionID, d.ID)
+	}
+	if n.Title != "Translation ready" {
+		t.Fatalf("title = %q, want Translation ready", n.Title)
+	}
+	if n.Body != "A source podcast is ready in French." {
+		t.Fatalf("body = %q, want target language in notification", n.Body)
+	}
+	if n.URL != "https://podcast.rxlab.app/d/discussion-1" {
+		t.Fatalf("url = %q, want discussion deep link", n.URL)
 	}
 }
 

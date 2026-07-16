@@ -80,6 +80,28 @@ func (s *Server) handleJobCaptionDownload(w http.ResponseWriter, r *http.Request
 	}
 
 	id := r.PathValue("id")
+	serve := func(vtt []byte) {
+		body, err := format.render(vtt)
+		if err != nil {
+			s.logger().Error("caption format conversion failed", "job", id, "format", format.descriptor.ID, "err", err)
+			http.Error(w, "caption conversion failed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", format.descriptor.ContentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", id+"."+format.descriptor.FileExtension))
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}
+
+	// A ready translation serves the download even when the job row is gone
+	// (mirrors handleJobSubtitles/handleJobSubtitlesLive, which are keyed to
+	// the discussion, not the registry); the job gates only the original VTT.
+	if captions, ok := s.translatedCaptions(r.Context(), id, r.URL.Query().Get("language")); ok {
+		serve([]byte(captions))
+		return
+	}
+
 	job := s.d.Jobs.Get(id)
 	if job == nil {
 		job = s.recoverJob(id)
@@ -103,22 +125,14 @@ func (s *Server) handleJobCaptionDownload(w http.ResponseWriter, r *http.Request
 		http.Error(w, "caption download failed", http.StatusInternalServerError)
 		return
 	}
-	body, err := format.render(vtt)
-	if err != nil {
-		s.logger().Error("caption format conversion failed", "job", id, "format", format.descriptor.ID, "err", err)
-		http.Error(w, "caption conversion failed", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", format.descriptor.ContentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", id+"."+format.descriptor.FileExtension))
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	serve(vtt)
 }
 
 func (s *Server) loadJobCaptionVTT(ctx context.Context, job *Job, language string) ([]byte, error) {
 	if captions, ok := s.translatedCaptions(ctx, job.ID, language); ok {
+		return []byte(captions), nil
+	}
+	if captions, ok := s.uploadedAudioCaptionVTT(ctx, job.ID); ok {
 		return []byte(captions), nil
 	}
 

@@ -45,6 +45,9 @@ struct PodcastPlayerView: View {
     @State var showingCoverEditor = false
     @State var showingTranslationSettings = false
     @State var showingCaptionDownloadSheet = false
+    @State var selectedCaptionEditor: UploadedAudioTranscriptPresentation?
+    @State var isLoadingCaptionEditor = false
+    @State var captionEditorLoadError: String?
     @State var showingShareSheet = false
     @State var showingCreatorProfile = false
     @State var showingFollowUpForm = false
@@ -73,8 +76,6 @@ struct PodcastPlayerView: View {
     @State var transcriptIsAtBottom = true
     @State var transcriptShouldScrollToBottom = false
     @State var transcriptScrollRequestTask: Task<Void, Never>?
-    @State var selectedPresentationLanguage = ""
-    @State var didChooseInitialPresentationLanguage = false
     @State var isSwitchingLanguage = false
     @State var languageSwitchError: String?
 
@@ -109,7 +110,7 @@ struct PodcastPlayerView: View {
         .modifier(MindmapGenerateErrorAlert(error: $mindmapGenerateError))
         .modifier(VideoGenerateErrorAlert(error: $videoGenerateError))
         .sheet(isPresented: $showingPlan) {
-            PlanSheetView(discussion: currentDiscussion)
+            PlanSheetView(discussion: currentDiscussion, language: model?.presentationLanguage)
         }
         .sheet(isPresented: $showingSummary) {
             summarySheet
@@ -168,6 +169,13 @@ struct PodcastPlayerView: View {
                 )
             }
         }
+        .sheet(item: $selectedCaptionEditor) { presentation in
+            UploadedAudioTranscriptSheet(
+                discussionID: currentDiscussion.id,
+                presentation: presentation,
+                onUpdated: { _ in refreshAfterCaptionEdit() }
+            )
+        }
         .sheet(isPresented: $showingShareSheet) {
             shareSheet
         }
@@ -201,9 +209,6 @@ struct PodcastPlayerView: View {
         .task(id: uiActionsRefreshKey) {
             await loadUIActions()
         }
-        .task(id: translationAvailabilityKey) {
-            await chooseInitialPresentationLanguageIfNeeded()
-        }
         .onDisappear {
             stopPlayerIfNeeded()
         }
@@ -230,6 +235,14 @@ struct PodcastPlayerView: View {
         } message: {
             Text(languageSwitchError ?? "")
         }
+        .alert("Couldn’t Open Caption Editor", isPresented: Binding(
+            get: { captionEditorLoadError != nil },
+            set: { if !$0 { captionEditorLoadError = nil } }
+        )) {
+            Button("OK", role: .cancel) { captionEditorLoadError = nil }
+        } message: {
+            Text(captionEditorLoadError ?? "")
+        }
         .preventsIdleSleep()
     }
 
@@ -243,12 +256,14 @@ struct PodcastPlayerView: View {
                     } label: {
                         languageMenuLabel(sourceLanguage)
                     }
+                    .accessibilityIdentifier("player.language.\(sourceLanguage)")
                     ForEach(readyTranslationLanguages, id: \.self) { language in
                         Button {
                             Task { await switchPresentationLanguage(to: language) }
                         } label: {
                             languageMenuLabel(language)
                         }
+                        .accessibilityIdentifier("player.language.\(language)")
                     }
                 } label: {
                     if isSwitchingLanguage {
@@ -333,40 +348,12 @@ struct PodcastPlayerView: View {
             .sorted()
     }
 
-    var translationAvailabilityKey: String {
-        ([sourceLanguage] + readyTranslationLanguages).joined(separator: "|")
-            + "|\(model == nil ? "loading" : "loaded")"
-    }
-
     @ViewBuilder
     func languageMenuLabel(_ language: String) -> some View {
-        if selectedPresentationLanguage == language || (selectedPresentationLanguage.isEmpty && language == sourceLanguage) {
+        if (model?.presentationLanguage ?? sourceLanguage).caseInsensitiveCompare(language) == .orderedSame {
             Label(TranslationLanguageOption.name(for: language), systemImage: "checkmark")
         } else {
             Text(TranslationLanguageOption.name(for: language))
-        }
-    }
-
-    func chooseInitialPresentationLanguageIfNeeded() async {
-        guard model != nil, !didChooseInitialPresentationLanguage else { return }
-        guard !readyTranslationLanguages.isEmpty else {
-            selectedPresentationLanguage = sourceLanguage
-            return
-        }
-        didChooseInitialPresentationLanguage = true
-        let preferred = Locale.preferredLanguages
-        let match = readyTranslationLanguages.first { candidate in
-            let normalized = candidate.replacingOccurrences(of: "_", with: "-").lowercased()
-            let base = normalized.split(separator: "-").first.map(String.init) ?? normalized
-            return preferred.contains { value in
-                let preferredValue = value.replacingOccurrences(of: "_", with: "-").lowercased()
-                return preferredValue == normalized || preferredValue.split(separator: "-").first.map(String.init) == base
-            }
-        }
-        if let match {
-            await switchPresentationLanguage(to: match)
-        } else {
-            selectedPresentationLanguage = sourceLanguage
         }
     }
 
@@ -376,7 +363,6 @@ struct PodcastPlayerView: View {
         defer { isSwitchingLanguage = false }
         do {
             try await model.switchPresentationLanguage(to: language)
-            selectedPresentationLanguage = language
         } catch {
             languageSwitchError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -540,6 +526,8 @@ struct PodcastPlayerView: View {
             showingTranslationSettings = true
         case ["sheet", "captions"]:
             showingCaptionDownloadSheet = true
+        case ["sheet", "caption-editor"]:
+            openCaptionEditor()
         case ["sheet", "share"]:
             showingShareSheet = true
         case ["sheet", "follow-up"]:
@@ -612,6 +600,8 @@ struct PodcastPlayerView: View {
             return model?.isDownloadingPodcast == true
         case "force-stop":
             return model?.isForceStopping == true
+        case "edit-captions":
+            return isLoadingCaptionEditor
         default:
             return false
         }
@@ -619,6 +609,40 @@ struct PodcastPlayerView: View {
 
     func podcastActionTitle(_ item: DiscussionUIActionItem) -> String? {
         item.id == "points" ? pointsMenuLabel : nil
+    }
+
+    func openCaptionEditor() {
+        guard !isLoadingCaptionEditor else { return }
+        isLoadingCaptionEditor = true
+        captionEditorLoadError = nil
+        Task { @MainActor in
+            defer { isLoadingCaptionEditor = false }
+            do {
+                let source = try await APIClient(tokens: auth).discussion(
+                    id: currentDiscussion.id,
+                    includeEditTurns: false,
+                    language: sourceLanguage
+                )
+                let snapshot = PlanSnapshot(discussion: source)
+                guard snapshot.isUploadedAudio, !snapshot.transcriptSegments.isEmpty else {
+                    throw APIError.invalidRequest("This podcast does not have editable captions.")
+                }
+                selectedCaptionEditor = UploadedAudioTranscriptPresentation(snapshot: snapshot)
+            } catch {
+                captionEditorLoadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    func refreshAfterCaptionEdit() {
+        guard let model else { return }
+        Task { @MainActor in
+            do {
+                try await model.switchPresentationLanguage(to: sourceLanguage)
+            } catch {
+                captionEditorLoadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 
     func podcastActionsTip(for model: PlayerModel) -> (any Tip)? {

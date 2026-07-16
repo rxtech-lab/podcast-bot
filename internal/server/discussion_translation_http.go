@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"golang.org/x/text/language"
 )
 
 type translationCreateRequest struct {
@@ -90,7 +92,7 @@ func (s *Server) applyDiscussionTranslationPresentation(r *http.Request, d *Disc
 	if err == nil {
 		d.Translations = items
 	}
-	target := normalizeTranslationLanguage(r.URL.Query().Get("language"))
+	target := discussionPresentationLanguage(r)
 	if target == "" || strings.EqualFold(target, d.MainLanguage) {
 		return
 	}
@@ -100,6 +102,83 @@ func (s *Server) applyDiscussionTranslationPresentation(r *http.Request, d *Disc
 	}
 	applyTranslationBundle(d, translation.Bundle)
 	d.Translations = items
+}
+
+// discussionPresentationLanguage uses an explicit language selection when the
+// client has made one. The initial detail request has no language query, so it
+// follows the device preference already carried by Accept-Language.
+func discussionPresentationLanguage(r *http.Request) string {
+	if target := normalizeTranslationLanguage(r.URL.Query().Get("language")); target != "" {
+		return target
+	}
+	return podcastLanguageFromAcceptLanguage(r.Header.Get("Accept-Language"))
+}
+
+// podcastLanguageFromAcceptLanguage maps the request's preferred presentation
+// language to the canonical language codes used by podcast translations. Only
+// the highest-priority language is considered: if that translation is not
+// ready, list endpoints must fall back to the podcast's original title.
+func podcastLanguageFromAcceptLanguage(header string) string {
+	tags, _, err := language.ParseAcceptLanguage(strings.TrimSpace(header))
+	if err != nil || len(tags) == 0 {
+		return ""
+	}
+	tag := strings.ToLower(tags[0].String())
+	switch {
+	case strings.HasPrefix(tag, "en"):
+		return "en-US"
+	case strings.HasPrefix(tag, "zh"):
+		if strings.Contains(tag, "hant") {
+			return "zh-TW"
+		}
+		if strings.Contains(tag, "hans") {
+			return "zh-CN"
+		}
+		if strings.Contains(tag, "-tw") ||
+			strings.Contains(tag, "-hk") || strings.Contains(tag, "-mo") {
+			return "zh-TW"
+		}
+		return "zh-CN"
+	case strings.HasPrefix(tag, "ja"):
+		return "ja-JP"
+	case strings.HasPrefix(tag, "ko"):
+		return "ko-KR"
+	case strings.HasPrefix(tag, "es"):
+		return "es-ES"
+	case strings.HasPrefix(tag, "fr"):
+		return "fr-FR"
+	case strings.HasPrefix(tag, "de"):
+		return "de-DE"
+	default:
+		return ""
+	}
+}
+
+func (s *Server) applyDiscussionListTitleTranslations(r *http.Request, items []Discussion) {
+	if len(items) == 0 || s.d.Discussions == nil {
+		return
+	}
+	target := podcastLanguageFromAcceptLanguage(r.Header.Get("Accept-Language"))
+	if target == "" {
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		if !strings.EqualFold(target, items[i].Language) {
+			ids = append(ids, items[i].ID)
+		}
+	}
+	bundles, err := s.d.Discussions.ReadyTranslationBundles(r.Context(), ids, target)
+	if err != nil {
+		s.logger().Warn("discussion list translation lookup failed", "language", target, "err", err)
+		return
+	}
+	for i := range items {
+		bundle := bundles[items[i].ID]
+		if title := strings.TrimSpace(bundle.Title); title != "" {
+			items[i].Title = title
+		}
+	}
 }
 
 func (s *Server) translatedDocumentMarkdown(r *http.Request, discussionID, docType, original string) string {
@@ -138,4 +217,19 @@ func (s *Server) translatedCaptions(ctx context.Context, jobID, language string)
 		return "", false
 	}
 	return t.Bundle.CaptionsVTT, true
+}
+
+// translatedTranscriptLines returns the ready translation's transcript lines
+// for a job when the requested presentation language has one; callers fall
+// back to the original transcript otherwise.
+func (s *Server) translatedTranscriptLines(ctx context.Context, jobID, language string) ([]DiscussionLine, bool) {
+	target := normalizeTranslationLanguage(language)
+	if target == "" || s.d.Discussions == nil {
+		return nil, false
+	}
+	t, err := s.d.Discussions.TranslationForJob(ctx, jobID, target)
+	if err != nil || t == nil || t.Status != DiscussionTranslationReady || len(t.Bundle.Lines) == 0 {
+		return nil, false
+	}
+	return t.Bundle.Lines, true
 }

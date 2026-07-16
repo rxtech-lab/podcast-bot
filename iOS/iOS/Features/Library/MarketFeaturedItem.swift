@@ -17,10 +17,6 @@ struct MarketFeaturedItem: View {
                         Text(discussion.displayTitle)
                             .font(.title3.weight(.semibold))
                             .lineLimit(2)
-                        Text(discussion.topic)
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.secondaryText)
-                            .lineLimit(2)
                         MarketStatusLabel(discussion: discussion)
                         HStack {
                             Label("\(discussion.likeCount ?? 0)", systemImage: "heart")
@@ -59,5 +55,3 @@ struct MarketFeaturedItem: View {
         .accessibilityIdentifier(item.accessibilityIdentifier)
     }
 }
-
-

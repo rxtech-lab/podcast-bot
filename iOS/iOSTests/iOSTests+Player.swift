@@ -56,6 +56,41 @@ extension iOSTests {
         XCTAssertEqual(before.count, afterTextUpdate.count)
     }
 
+    func testPresentationLanguageSwapPreservesTranscriptRowIdentities() {
+        let source = [
+            LiveLine(speaker: "Host", role: "host", text: "Welcome", isUser: false, done: true),
+            LiveLine(speaker: "Guest", role: "discussant", text: "Thank you", isUser: false, done: true)
+        ]
+        let translated = [
+            DiscussionLineDTO(speaker: "主持人", role: "host", side: nil,
+                              text: "歡迎", startMS: 0, isUser: false),
+            DiscussionLineDTO(speaker: "嘉賓", role: "discussant", side: nil,
+                              text: "謝謝", startMS: 1_000, isUser: false)
+        ]
+
+        let result = PlayerModel.presentationLines(
+            from: translated,
+            preservingIdentitiesFrom: source
+        )
+
+        XCTAssertEqual(result.map(\.id), source.map(\.id))
+        XCTAssertEqual(result.map(\.speaker), ["主持人", "嘉賓"])
+        XCTAssertEqual(result.map(\.text), ["歡迎", "謝謝"])
+        XCTAssertNil(result[0].audioOffsetSeconds)
+        XCTAssertEqual(result[1].audioOffsetSeconds, 1)
+    }
+
+    func testInitialPresentationLanguageAdoptsServerSelectedTranslation() throws {
+        var discussion = try decodeDiscussion(status: "ready", pointsCharged: 0)
+        discussion.language = "zh-CN"
+        discussion.mainLanguage = "en-US"
+
+        XCTAssertEqual(PlayerModel.initialPresentationLanguage(from: discussion), "zh-CN")
+
+        discussion.language = "en-US"
+        XCTAssertNil(PlayerModel.initialPresentationLanguage(from: discussion))
+    }
+
     func testPodcastTranscriptReadinessIgnoresUserOnlyLines() {
         let userOnly = [
             LiveLine(speaker: "Qiwei", role: "user", text: "Are we ready?", isUser: true, done: true),

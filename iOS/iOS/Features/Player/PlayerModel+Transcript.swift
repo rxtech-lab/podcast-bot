@@ -134,9 +134,13 @@ extension PlayerModel {
     func refreshPodcastFromServer() {
         tasks.append(Task { [weak self] in
             guard let self else { return }
+            let requestRevision = self.presentationRequestRevision
+            let sourceLanguage = self.discussion.mainLanguage ?? self.discussion.language
+            let requestLanguage = self.presentationLanguage ?? sourceLanguage
             guard let fresh = try? await self.api.discussion(id: self.discussion.id,
                                                              includeEditTurns: false,
-                                                             language: self.presentationLanguage) else { return }
+                                                             language: requestLanguage),
+                  self.presentationRequestRevision == requestRevision else { return }
             self.discussion = Self.mergingLocalDiscussionState(current: self.discussion, fresh: fresh)
             self.listenForJobUpdatesIfNeeded()
         })
@@ -297,6 +301,7 @@ extension PlayerModel {
     /// re-persist the utterance as a duplicate plain-text row.
     func hydratePersistedLines() async {
         let requestedLanguage = presentationLanguage
+        let requestRevision = presentationRequestRevision
         let fresh: Discussion
         if let shareToken, !shareToken.isEmpty {
             guard let loaded = try? await api.joinViaShare(token: shareToken,
@@ -308,15 +313,24 @@ extension PlayerModel {
                                                                includeEditTurns: false) else { return }
             fresh = loaded
         }
-        guard presentationLanguage == requestedLanguage else { return }
+        guard presentationLanguage == requestedLanguage,
+              presentationRequestRevision == requestRevision else { return }
 
         let persisted = fresh.sortedLines
+        if requestedLanguage == nil {
+            presentationLanguage = Self.initialPresentationLanguage(from: fresh)
+        }
         discussion = Self.mergingLocalDiscussionState(current: discussion, fresh: fresh)
         if let url = discussion.downloadURLString, !url.isEmpty {
             downloadURL = URL(string: url)
         }
         listenForJobUpdatesIfNeeded()
         updateNowPlayingInfo()
+        if presentationLanguage != requestedLanguage,
+           discussion.status == .ready,
+           let jobID = discussion.jobID {
+            await loadFinalCaptions(jobID: jobID)
+        }
         guard !persisted.isEmpty else {
             await refreshCoverAssets()
             return

@@ -149,6 +149,57 @@ func (s *DiscussionStore) TranslationFor(ctx context.Context, discussionID, lang
 	return scanDiscussionTranslation(row)
 }
 
+// ReadyTranslationBundles returns the ready presentation bundles for one
+// language across a page of discussions. List endpoints use this instead of
+// issuing one translation query per row.
+func (s *DiscussionStore) ReadyTranslationBundles(ctx context.Context, discussionIDs []string, language string) (map[string]DiscussionTranslationBundle, error) {
+	out := make(map[string]DiscussionTranslationBundle)
+	language = normalizeTranslationLanguage(language)
+	if s == nil || language == "" {
+		return out, nil
+	}
+
+	ids := make([]string, 0, len(discussionIDs))
+	seen := make(map[string]bool, len(discussionIDs))
+	for _, id := range discussionIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, language, string(DiscussionTranslationReady))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT discussion_id, bundle_json
+		FROM native_discussion_translations
+		WHERE language = ? AND status = ? AND discussion_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var discussionID, bundleJSON string
+		if err := rows.Scan(&discussionID, &bundleJSON); err != nil {
+			return nil, err
+		}
+		var bundle DiscussionTranslationBundle
+		if err := json.Unmarshal([]byte(bundleJSON), &bundle); err != nil {
+			return nil, err
+		}
+		out[discussionID] = bundle
+	}
+	return out, rows.Err()
+}
+
 func (s *DiscussionStore) TranslationForJob(ctx context.Context, jobID, language string) (*DiscussionTranslation, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT t.discussion_id, t.language, t.status, t.bundle_json, t.model, t.error,
 		t.prompt_tokens, t.completion_tokens, t.total_tokens, t.llm_cost_usd, t.attempts, t.claimed_at,

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -8,10 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
+	contentcreator "github.com/sirily11/debate-bot/internal/content_creator"
 	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/planner"
 	"github.com/sirily11/debate-bot/internal/stt"
+	"github.com/sirily11/debate-bot/internal/subtitleutil"
 	"github.com/sirily11/debate-bot/internal/tts"
 )
 
@@ -198,21 +202,11 @@ func (s *Server) handleE2EUploadedAudio(w http.ResponseWriter, r *http.Request) 
 
 // handleUploadedAudioSegmentUpdate persists a user's direct correction to one
 // uploaded-audio transcript segment. Unlike the AI proofreading tools, this
-// endpoint deliberately permits timing edits, but only while the plan is still
-// editable and only within the known source-audio duration.
+// endpoint deliberately permits timing edits while reviewing the plan and
+// after publication, always bounded by the known source-audio duration.
 func (s *Server) handleUploadedAudioSegmentUpdate(w http.ResponseWriter, r *http.Request) {
-	user := s.requestUser(r)
-	d, err := s.d.Discussions.Get(r.Context(), user.ID, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if d == nil || d.Script == nil || d.Script.Type != config.ContentTypeUploadedAudio {
-		http.NotFound(w, r)
-		return
-	}
-	if d.Status != DiscussionPlanning {
-		http.Error(w, "the transcript can only be edited before generation", http.StatusConflict)
+	d, ok := s.editableUploadedAudioDiscussion(w, r)
+	if !ok {
 		return
 	}
 	index, err := strconv.Atoi(r.PathValue("index"))
@@ -243,34 +237,7 @@ func (s *Server) handleUploadedAudioSegmentUpdate(w http.ResponseWriter, r *http
 	next.TranscriptSegments = append([]config.TranscriptSegment(nil), d.Script.TranscriptSegments...)
 	next.TranscriptSegments[index] = segment
 	next.UploadedAudioSpeakers = config.UploadedAudioSpeakerNames(&next)
-	if err := config.ValidateTopic(&next); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	markdown, err := next.RenderMarkdown()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	resp := planResponse{
-		Script:     &next,
-		Markdown:   markdown,
-		Sources:    d.Sources,
-		Researched: d.Researched,
-	}
-	updated, err := s.d.Discussions.UpdateUploadedAudioPlan(
-		r.Context(), user.ID, d.ID, "Edited transcript", resp,
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if updated == nil {
-		http.NotFound(w, r)
-		return
-	}
-	s.sanitizeDiscussionUsage(updated)
-	writeJSON(w, updated)
+	s.writeUploadedAudioPlanUpdate(w, r, d, &next, "Edited transcript")
 }
 
 // handleUploadedAudioSegmentBatchUpdate applies every caption correction to
@@ -416,8 +383,8 @@ func (s *Server) editableUploadedAudioDiscussion(w http.ResponseWriter, r *http.
 		http.NotFound(w, r)
 		return nil, false
 	}
-	if d.Status != DiscussionPlanning {
-		http.Error(w, "the uploaded-audio plan can only be edited before generation", http.StatusConflict)
+	if d.Status != DiscussionPlanning && d.Status != DiscussionReady {
+		http.Error(w, "the uploaded-audio transcript can only be edited before generation or after publishing", http.StatusConflict)
 		return nil, false
 	}
 	return d, true
@@ -460,8 +427,101 @@ func (s *Server) writeUploadedAudioPlanUpdate(
 		http.NotFound(w, r)
 		return
 	}
+	if d.Status == DiscussionReady {
+		lines := uploadedAudioEditedTranscriptLines(next.TranscriptSegments, d.CreatedAt)
+		if err := s.d.Discussions.ReplaceTranscript(r.Context(), d.ID, lines); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if refreshed, err := s.d.Discussions.Get(r.Context(), user.ID, d.ID); err == nil && refreshed != nil {
+			updated = refreshed
+		}
+		PublishDiscussionResourceUpdated(s.d.Bus, s.d.Env, d.JobID, d.ID, "Captions updated", "captions")
+	}
 	s.sanitizeDiscussionUsage(updated)
 	writeJSON(w, updated)
+}
+
+// uploadedAudioCaptionVTT renders published uploaded-audio captions from the
+// durable transcript plan. This keeps post-publication edits authoritative
+// without relying on the immutable sidecar produced by the original job run.
+func (s *Server) uploadedAudioCaptionVTT(ctx context.Context, jobID string) (string, bool) {
+	if s.d.Discussions == nil || strings.TrimSpace(jobID) == "" {
+		return "", false
+	}
+	d, err := s.d.Discussions.GetByJobID(ctx, jobID)
+	if err != nil || d == nil || d.Status != DiscussionReady || d.Script == nil ||
+		d.Script.Type != config.ContentTypeUploadedAudio || len(d.Script.TranscriptSegments) == 0 {
+		return "", false
+	}
+	cues := make([]contentcreator.SubtitleCue, 0, len(d.Script.TranscriptSegments))
+	for _, segment := range d.Script.TranscriptSegments {
+		text := subtitleutil.StripPunct(segment.Text)
+		if text == "" || segment.DurationMS <= 0 {
+			continue
+		}
+		start := time.Duration(segment.OffsetMS) * time.Millisecond
+		cues = append(cues, contentcreator.SubtitleCue{
+			Start: start,
+			End:   start + time.Duration(segment.DurationMS)*time.Millisecond,
+			Text:  text,
+		})
+	}
+	return contentcreator.FormatSubtitleCues(cues), true
+}
+
+func uploadedAudioEditedTranscriptLines(segments []config.TranscriptSegment, createdAt time.Time) []agent.TranscriptLine {
+	base := createdAt
+	if base.IsZero() {
+		base = time.Now()
+	}
+	lines := make([]agent.TranscriptLine, 0, len(segments))
+	for _, segment := range segments {
+		text := strings.TrimSpace(segment.Text)
+		if text == "" {
+			continue
+		}
+		if n := len(lines); n > 0 && lines[n-1].Speaker == segment.Speaker {
+			lines[n-1].Text = joinUploadedAudioTranscriptText(lines[n-1].Text, text)
+			continue
+		}
+		lines = append(lines, agent.TranscriptLine{
+			Speaker:       segment.Speaker,
+			Role:          agent.RoleDiscussant,
+			Text:          text,
+			At:            base.Add(time.Duration(segment.OffsetMS) * time.Millisecond),
+			AudioOffsetMS: segment.OffsetMS,
+		})
+	}
+	return lines
+}
+
+func joinUploadedAudioTranscriptText(a, b string) string {
+	if a == "" {
+		return b
+	}
+	var last rune
+	for _, r := range a {
+		last = r
+	}
+	var first rune
+	for _, r := range b {
+		first = r
+		break
+	}
+	if uploadedAudioCJKRune(last) || uploadedAudioCJKRune(first) {
+		return a + b
+	}
+	return a + " " + b
+}
+
+func uploadedAudioCJKRune(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) ||
+		(r >= 0x3400 && r <= 0x4DBF) ||
+		(r >= 0x3000 && r <= 0x303F) ||
+		(r >= 0xFF00 && r <= 0xFFEF) ||
+		(r >= 0x3040 && r <= 0x30FF) ||
+		(r >= 0xAC00 && r <= 0xD7AF)
 }
 
 func validateUploadedAudioSegmentEdit(segment config.TranscriptSegment, audioDurationMS int64) error {

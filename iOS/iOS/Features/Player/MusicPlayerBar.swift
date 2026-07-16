@@ -53,6 +53,7 @@ struct MusicPlayerBar: View {
             }
             .contentShape(.rect)
             .onTapGesture(perform: onExpand)
+            .accessibilityIdentifier("player.expand")
             if model.canDownloadPodcast {
                 Button {
                     model.downloadPodcast()

@@ -80,6 +80,42 @@ func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 	if !hasAction(resp.Items, "points") {
 		t.Fatalf("points action missing when supports_points=true: %+v", resp.Items)
 	}
+	if hasAction(resp.Items, "edit-captions") {
+		t.Fatalf("edit-captions must stay hidden for non-uploaded podcasts: %+v", resp.Items)
+	}
+}
+
+func TestDiscussionUIActionsOffersCaptionEditorForReadyUploadedAudio(t *testing.T) {
+	srv, store := newUIActionsTestServer(t)
+	ctx := context.Background()
+	plan := &config.DebateTopic{
+		Title:                   "Editable captions",
+		Type:                    config.ContentTypeUploadedAudio,
+		Language:                "en-US",
+		TotalMinutes:            1,
+		Channel:                 "default",
+		UploadedAudioKey:        "uploads/anonymous/audio.mp3",
+		UploadedAudioDurationMS: 10_000,
+		TranscriptSegments: []config.TranscriptSegment{
+			{Speaker: "Host", OffsetMS: 0, DurationMS: 2_000, Text: "Hello"},
+		},
+	}
+	d, err := store.Create(ctx, "anonymous", plan.Title, planResponse{Script: plan})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetJob(ctx, "anonymous", d.ID, "job-edit-captions"); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.SetJobResult(ctx, d.ID, DiscussionReady, "https://audio.example/ready.mp3"); err != nil {
+		t.Fatalf("SetJobResult: %v", err)
+	}
+
+	resp := getUIActions(t, srv, d.ID, "podcast-actions")
+	edit := findAction(t, resp.Items, "edit-captions")
+	if edit.Action.Link != "debatepod://discussion/"+d.ID+"/sheet/caption-editor" {
+		t.Fatalf("edit-captions link = %q", edit.Action.Link)
+	}
 }
 
 func TestDiscussionUIActionsSummaryActionsIncludeRealIDExports(t *testing.T) {

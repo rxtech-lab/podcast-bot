@@ -467,6 +467,61 @@ func TestUploadedAudioTranscriptSegmentBatchUpdateAPI(t *testing.T) {
 	}
 }
 
+func TestPublishedUploadedAudioCaptionEditRefreshesCaptionsAndTranscript(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "published-caption-edit.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	srv := New(Deps{Discussions: store})
+	plan := &config.DebateTopic{
+		Title:                   "Published interview",
+		Type:                    config.ContentTypeUploadedAudio,
+		Language:                "en-US",
+		TotalMinutes:            1,
+		Channel:                 "default",
+		UploadedAudioKey:        "uploads/anonymous/audio.mp3",
+		UploadedAudioDurationMS: 10_000,
+		TranscriptSegments: []config.TranscriptSegment{
+			{Speaker: "Host", OffsetMS: 0, DurationMS: 2_000, Text: "Original"},
+		},
+	}
+	discussion, err := store.Create(ctx, "anonymous", plan.Title, planResponse{Script: plan})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	const jobID = "job-published-caption-edit"
+	if _, err := store.SetJob(ctx, "anonymous", discussion.ID, jobID); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.SetJobResult(ctx, discussion.ID, DiscussionReady, "https://audio.example/ready.mp3"); err != nil {
+		t.Fatalf("SetJobResult: %v", err)
+	}
+
+	body := `{"speaker":"Host","offset_ms":500,"duration_ms":2500,"text":"Corrected caption."}`
+	req := httptest.NewRequest(http.MethodPatch,
+		"/api/discussions/"+discussion.ID+"/transcript/segments/0", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	vtt, ok := srv.uploadedAudioCaptionVTT(ctx, jobID)
+	if !ok || !strings.Contains(vtt, "00:00:00.500 --> 00:00:03.000") || !strings.Contains(vtt, "Corrected caption") {
+		t.Fatalf("updated captions = %q, ok=%v", vtt, ok)
+	}
+	lines, err := store.LinesByJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("LinesByJob: %v", err)
+	}
+	if len(lines) != 1 || lines[0].Text != "Corrected caption." || lines[0].StartMS != 500 {
+		t.Fatalf("updated transcript lines = %+v", lines)
+	}
+}
+
 func TestTranscriptLanguageMajority(t *testing.T) {
 	tr := &stt.Transcript{Phrases: []stt.Phrase{
 		{Locale: "zh-CN"}, {Locale: "zh-CN"}, {Locale: "en-US"}, {Locale: ""},

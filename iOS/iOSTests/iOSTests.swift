@@ -99,6 +99,24 @@ final class iOSTests: XCTestCase {
         XCTAssertTrue(sequence.pendingIndices.isEmpty)
     }
 
+    func testTranscriptRetimeSequenceRemovesOnlyGapsShorterThanThreshold() {
+        let segments = [
+            TranscriptSegmentDTO(speaker: "A", offsetMs: 0, durationMs: 1_200, text: "First"),
+            TranscriptSegmentDTO(speaker: "B", offsetMs: 1_499, durationMs: 501, text: "Second"),
+            TranscriptSegmentDTO(speaker: "C", offsetMs: 2_300, durationMs: 500, text: "Third"),
+            TranscriptSegmentDTO(speaker: "D", offsetMs: 2_700, durationMs: 500, text: "Fourth")
+        ]
+        var sequence = TranscriptRetimeSequence(segments: segments, initialIndex: 0)
+
+        sequence.removeGaps(shorterThan: TranscriptRetimeSequence.shortGapThresholdMs)
+
+        XCTAssertEqual(sequence.segments[1].offsetMs, 1_200)
+        XCTAssertEqual(sequence.segments[1].durationMs, 800)
+        XCTAssertEqual(sequence.segments[2], segments[2], "a gap of exactly 0.3 seconds must remain")
+        XCTAssertEqual(sequence.segments[3], segments[3], "overlapping captions must remain unchanged")
+        XCTAssertEqual(sequence.pendingIndices, [1])
+    }
+
     func testTranscriptBatchUpdateUsesOneRequest() async throws {
         var capturedRequest: URLRequest?
         var capturedBody: Data?
