@@ -467,7 +467,7 @@ func (s *Server) uploadedAudioCaptionVTT(ctx context.Context, jobID string) (str
 			Text:  text,
 		})
 	}
-	return contentcreator.FormatSubtitleCues(cues), true
+	return contentcreator.FormatSubtitleCues(contentcreator.ClampSubtitleCueOverlaps(cues)), true
 }
 
 func uploadedAudioEditedTranscriptLines(segments []config.TranscriptSegment, createdAt time.Time) []agent.TranscriptLine {
@@ -566,9 +566,14 @@ func uploadedAudioReviewPrompt(segmentCount, speakerCount int, durationMS int64)
 		"The audio has been transcribed: %d segments, %d speaker(s), %s. "+
 			"Review the transcript for likely transcription errors — misheard words, wrong homophones, "+
 			"garbled names or terms, and segments attributed to the wrong speaker. "+
+			"Keep every correction inside that segment's fixed time range; never move, split, or redistribute clauses or sentences between segment indices. "+
 			"Propose fixes by calling update_plan with only the segments you change, then call show_plan. "+
-			"If everything looks correct, say so and show the plan unchanged. "+
-			"You may also suggest a better title and friendlier speaker names.",
+			"The current title is derived from the uploaded file's name — always replace it with a generated episode title "+
+			"describing the audio content, fewer than 10 words, in the transcript's language. "+
+			"Also make sure the plan's language is the audio's spoken language (BCP-47, e.g. \"en-US\" or \"zh-CN\"); "+
+			"set it in update_plan if it is missing or wrong. "+
+			"If the transcript itself looks correct, still set the generated title and language, then show the plan. "+
+			"You may also suggest friendlier speaker names.",
 		segmentCount, speakerCount, formatClockDuration(durationMS))
 }
 

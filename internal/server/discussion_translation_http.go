@@ -35,6 +35,9 @@ func (s *Server) handleDiscussionTranslations(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	for i := range items {
+		s.refreshCoverArtURL(r.Context(), id, items[i].Cover)
+	}
 	writeJSON(w, translationsResponse{MainLanguage: d.Language, Translations: items})
 }
 
@@ -92,6 +95,7 @@ func (s *Server) applyDiscussionTranslationPresentation(r *http.Request, d *Disc
 	if err == nil {
 		d.Translations = items
 	}
+	s.refreshTranslationMetaCoverURLs(r.Context(), d)
 	target := discussionPresentationLanguage(r)
 	if target == "" || strings.EqualFold(target, d.MainLanguage) {
 		return
@@ -101,6 +105,11 @@ func (s *Server) applyDiscussionTranslationPresentation(r *http.Request, d *Disc
 		return
 	}
 	applyTranslationBundle(d, translation.Bundle)
+	// The language-dedicated cover lives outside the bundle; every caller
+	// re-signs the cover URL after this overlay.
+	if translation.Cover.Valid() {
+		d.Cover = translation.Cover
+	}
 	d.Translations = items
 }
 
@@ -174,9 +183,12 @@ func (s *Server) applyDiscussionListTitleTranslations(r *http.Request, items []D
 		return
 	}
 	for i := range items {
-		bundle := bundles[items[i].ID]
-		if title := strings.TrimSpace(bundle.Title); title != "" {
+		rt := bundles[items[i].ID]
+		if title := strings.TrimSpace(rt.Bundle.Title); title != "" {
 			items[i].Title = title
+		}
+		if rt.Cover.Valid() {
+			items[i].Cover = rt.Cover
 		}
 	}
 }

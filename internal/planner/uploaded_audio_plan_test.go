@@ -36,6 +36,7 @@ func TestAssembleUploadedAudioPlanMergesByIndex(t *testing.T) {
 	existing := uploadedAudioFixture()
 	draft := mustDraft(t, `{
 		"title": "Corrected Show",
+		"language": "zh-CN",
 		"segments": [{"index": 0, "text": "Hello there, welcome."}],
 		"speaker_renames": [{"from": "Speaker 2", "to": "Alice"}]
 	}`)
@@ -46,6 +47,9 @@ func TestAssembleUploadedAudioPlanMergesByIndex(t *testing.T) {
 	got := res.Script
 	if got.Title != "Corrected Show" {
 		t.Fatalf("title = %q", got.Title)
+	}
+	if got.Language != "zh-CN" {
+		t.Fatalf("language = %q", got.Language)
 	}
 	if got.TranscriptSegments[0].Text != "Hello there, welcome." {
 		t.Fatalf("segment 0 text = %q", got.TranscriptSegments[0].Text)
@@ -82,6 +86,14 @@ func TestAssembleUploadedAudioPlanRejectsBadEdits(t *testing.T) {
 	if _, err := assembleUploadedAudioPlan(&config.DebateTopic{Type: config.ContentTypeDiscussion}, mustDraft(t, `{}`)); err == nil {
 		t.Fatal("non-uploaded-audio plan must be rejected")
 	}
+	if _, err := assembleUploadedAudioPlan(existing, mustDraft(t, `{"language":"Chinese (Mandarin)"}`)); err == nil {
+		t.Fatal("non-BCP-47 language must be rejected")
+	}
+	if res, err := assembleUploadedAudioPlan(existing, mustDraft(t, `{"language":"  "}`)); err != nil {
+		t.Fatalf("blank language must keep the current one: %v", err)
+	} else if res.Script.Language != "en-US" {
+		t.Fatalf("language = %q, want existing en-US", res.Script.Language)
+	}
 }
 
 func TestRenderUploadedAudioTranscript(t *testing.T) {
@@ -90,8 +102,9 @@ func TestRenderUploadedAudioTranscript(t *testing.T) {
 		t.Fatal("listing must not be empty")
 	}
 	for _, want := range []string{
-		"0 | Speaker 1 | 0:00:00 | Hello their, welcome.",
-		"1 | Speaker 2 | 0:00:02 | Thanks for having me.",
+		"language: en-US",
+		"0 | Speaker 1 | 0:00:00.000-0:00:02.000 | Hello their, welcome.",
+		"1 | Speaker 2 | 0:00:02.000-0:00:05.000 | Thanks for having me.",
 	} {
 		if !strings.Contains(listing, want) {
 			t.Fatalf("listing missing %q:\n%s", want, listing)

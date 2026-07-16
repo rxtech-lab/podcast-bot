@@ -334,7 +334,9 @@ final class PlayerModel {
     /// auto-scroll the lyrics list. Falls back to the last cue already passed.
     var activeCueIndex: Int? {
         let t = captionLookupTime(playbackTime: currentTime)
-        return cues.firstIndex(where: { t >= $0.start && t <= $0.end })
+        // Last match, not first: overlapping cues (see `captionCue`) would
+        // otherwise pin the highlight to an earlier line past its real end.
+        return cues.lastIndex(where: { t >= $0.start && t <= $0.end })
             ?? cues.lastIndex(where: { $0.start <= t })
     }
 

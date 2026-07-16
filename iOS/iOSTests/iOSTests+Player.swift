@@ -528,6 +528,23 @@ extension iOSTests {
         XCTAssertEqual(PlayerModel.captionText(in: cues, at: 3.5), "")
     }
 
+    func testCaptionCuePrefersLatestOverlappingCue() {
+        // Stored segments can overlap (an STT phrase may overrun the next
+        // one); cue starts stay monotonic, so the latest-starting cue
+        // containing the time is the line actually being spoken.
+        let cues = [
+            VTTCue(start: 13, end: 35, text: "Overruns the next two"),
+            VTTCue(start: 22, end: 26, text: "Second"),
+            VTTCue(start: 26, end: 31, text: "Third")
+        ]
+
+        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 15), "Overruns the next two")
+        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 23), "Second")
+        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 27), "Third")
+        // Inside only the overlapping long cue again after its successors end.
+        XCTAssertEqual(PlayerModel.captionText(in: cues, at: 33), "Overruns the next two")
+    }
+
     func testCaptionSpeakerMatchesCaptionTextIgnoringPunctuation() {
         let lines = [
             LiveLine(speaker: "建國兄",

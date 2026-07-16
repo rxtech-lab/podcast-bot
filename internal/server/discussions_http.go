@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -501,10 +502,23 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	updated, err := s.d.Discussions.SetCover(r.Context(), s.requestUser(r).ID, r.PathValue("id"), req.Cover)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	var updated *Discussion
+	if language := normalizeTranslationLanguage(req.Language); language != "" {
+		var err error
+		updated, err = s.setDiscussionTranslationCover(r.Context(), user.ID, id, language, req.Cover)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		var err error
+		updated, err = s.d.Discussions.SetCover(r.Context(), user.ID, id, req.Cover)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if updated == nil {
 		http.NotFound(w, r)
@@ -512,9 +526,28 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 	}
 	s.applyDiscussionJobStatus(r, updated, true)
 	s.applyDiscussionProgress(r.Context(), updated)
+	s.applyDiscussionTranslationPresentation(r, updated)
 	s.refreshDiscussionCoverURL(r.Context(), updated)
 	s.sanitizeDiscussionUsage(updated)
 	writeJSON(w, updated)
+}
+
+// setDiscussionTranslationCover persists a cover on one translation row of an
+// owned discussion. A language matching the podcast's main language falls back
+// to the default cover, since the default cover is that language's cover.
+func (s *Server) setDiscussionTranslationCover(ctx context.Context, owner, id, language string, cover DiscussionCover) (*Discussion, error) {
+	d, err := s.d.Discussions.Get(ctx, owner, id)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	if strings.EqualFold(language, d.Language) {
+		return s.d.Discussions.SetCover(ctx, owner, id, cover)
+	}
+	translation, err := s.d.Discussions.SetTranslationCover(ctx, owner, id, language, cover)
+	if err != nil || translation == nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // handleUpdateSpeakerModel changes the LLM model for one speaker, matched by
@@ -1717,6 +1750,73 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		s.refundGeneration(r.Context(), user.ID, id, reserved)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.sanitizeDiscussionUsage(updated)
+	writeJSON(w, updated)
+}
+
+// discussionLanguageRequest is the body of PUT /api/discussions/{id}/language.
+type discussionLanguageRequest struct {
+	Language string `json:"language"`
+}
+
+// discussionLanguageRe accepts BCP-47-shaped tags ("en", "zh-CN",
+// "zh-Hant-TW") so an arbitrary client string can't be persisted as the plan
+// language.
+var discussionLanguageRe = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$`)
+
+// handleDiscussionLanguageUpdate persists the plan-view language selection the
+// moment the user picks it, instead of only baking it into the plan when
+// generation starts.
+func (s *Server) handleDiscussionLanguageUpdate(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil || d.Script == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req discussionLanguageRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	lang := strings.TrimSpace(req.Language)
+	if !discussionLanguageRe.MatchString(lang) {
+		http.Error(w, `language must be a BCP-47 tag such as "en-US" or "zh-CN"`, http.StatusBadRequest)
+		return
+	}
+	if lang == d.Script.Language {
+		s.sanitizeDiscussionUsage(d)
+		writeJSON(w, d)
+		return
+	}
+	next := *d.Script
+	next.Language = lang
+	md, err := next.RenderMarkdown()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sources := d.Sources
+	if len(sources) == 0 {
+		sources = next.Sources
+	}
+	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, d.ID, planResponse{
+		Script:     &next,
+		Markdown:   md,
+		Sources:    sources,
+		Researched: d.Researched,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
 		return
 	}
 	s.sanitizeDiscussionUsage(updated)

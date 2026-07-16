@@ -113,7 +113,9 @@ extension PlayerModel {
         }
         let groups = lyricCueGroups
         let t = captionLookupTime(playbackTime: time)
-        let index = groups.firstIndex(where: { t >= $0.start && t <= $0.end })
+        // Last match, not first: overlapping cues (see `captionCue`) would
+        // otherwise pin the highlight to an earlier group past its real end.
+        let index = groups.lastIndex(where: { t >= $0.start && t <= $0.end })
             ?? groups.lastIndex(where: { $0.start <= t })
         let id = index.map { groups[$0].id }
         if id != activeLyricGroupID { activeLyricGroupID = id }

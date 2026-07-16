@@ -90,10 +90,7 @@ func (s *Server) sttProvider(ctx context.Context) (stt.Provider, error) {
 	}
 	switch id := s.resolvedSTTProvider(ctx); id {
 	case stt.ProviderAzure:
-		if s.d.Env.AzureSpeechKey == "" || (s.d.Env.AzureSpeechEndpoint == "" && s.d.Env.AzureSpeechRegion == "") {
-			return nil, fmt.Errorf("stt: azure selected but AZURE_SPEECH_KEY / AZURE_SPEECH_ENDPOINT (or _REGION) not set")
-		}
-		return stt.NewAzureFast(s.d.Env.AzureSpeechEndpoint, s.d.Env.AzureSpeechRegion, s.d.Env.AzureSpeechKey), nil
+		return s.azureSTTProvider()
 	case stt.ProviderGemini:
 		if s.d.Env.GeminiAPIKey == "" {
 			return nil, fmt.Errorf("stt: gemini selected but GEMINI_API_KEY not set")
@@ -102,6 +99,14 @@ func (s *Server) sttProvider(ctx context.Context) (stt.Provider, error) {
 	default:
 		return nil, fmt.Errorf("stt: unknown provider %q", id)
 	}
+}
+
+func (s *Server) azureSTTProvider() (stt.Provider, error) {
+	if s.d.Env == nil || s.d.Env.AzureSpeechKey == "" ||
+		(s.d.Env.AzureSpeechEndpoint == "" && s.d.Env.AzureSpeechRegion == "") {
+		return nil, fmt.Errorf("stt: azure selected but AZURE_SPEECH_KEY / AZURE_SPEECH_ENDPOINT (or _REGION) not set")
+	}
+	return stt.NewAzureFast(s.d.Env.AzureSpeechEndpoint, s.d.Env.AzureSpeechRegion, s.d.Env.AzureSpeechKey), nil
 }
 
 // geminiSTTModelOptions fetches the audio-capable Gemini model catalog for the

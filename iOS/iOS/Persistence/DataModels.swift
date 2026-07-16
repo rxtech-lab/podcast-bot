@@ -118,11 +118,14 @@ struct DiscussionTranslationMeta: Codable, Hashable, Sendable, Identifiable {
     var pending: Bool?
     var error: String?
     var generatedAt: String?
+    /// Language-dedicated cover art; nil means viewers of this language fall
+    /// back to the podcast's default cover.
+    var cover: DiscussionCover?
 
     var id: String { language }
 
     enum CodingKeys: String, CodingKey {
-        case language, status, available, pending, error
+        case language, status, available, pending, error, cover
         case generatedAt = "generated_at"
     }
 }

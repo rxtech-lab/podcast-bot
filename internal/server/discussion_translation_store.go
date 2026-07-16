@@ -30,6 +30,9 @@ type DiscussionTranslationMeta struct {
 	Pending     bool                        `json:"pending,omitempty"`
 	Error       string                      `json:"error,omitempty"`
 	GeneratedAt *time.Time                  `json:"generated_at,omitempty"`
+	// Cover is the language-dedicated cover art, present only when one has been
+	// set; viewers fall back to the podcast's default cover otherwise.
+	Cover *DiscussionCover `json:"cover,omitempty"`
 }
 
 // DiscussionTranslationBundle is a presentation-only copy. Stable identifiers,
@@ -53,14 +56,17 @@ type DiscussionTranslation struct {
 	Language     string
 	Status       DiscussionTranslationStatus
 	Bundle       DiscussionTranslationBundle
-	Model        string
-	Error        string
-	Usage        SummaryUsage
-	Attempts     int
-	ClaimedAt    time.Time
-	GeneratedAt  time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Cover is stored in dedicated columns, not in bundle_json, so re-running a
+	// translation (which rewrites the bundle) can never clobber the cover art.
+	Cover       DiscussionCover
+	Model       string
+	Error       string
+	Usage       SummaryUsage
+	Attempts    int
+	ClaimedAt   time.Time
+	GeneratedAt time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 func (t *DiscussionTranslation) Meta() DiscussionTranslationMeta {
@@ -75,6 +81,10 @@ func (t *DiscussionTranslation) Meta() DiscussionTranslationMeta {
 		v := t.GeneratedAt
 		meta.GeneratedAt = &v
 	}
+	if t.Cover.Valid() {
+		cover := t.Cover
+		meta.Cover = &cover
+	}
 	return meta
 }
 
@@ -82,6 +92,8 @@ func normalizeTranslationLanguage(language string) string {
 	return strings.TrimSpace(language)
 }
 
+// BeginTranslation resets the row for a fresh run. The cover_* columns are
+// deliberately left untouched: re-translating a language keeps its cover art.
 func (s *DiscussionStore) BeginTranslation(ctx context.Context, discussionID, language, model string) error {
 	language = normalizeTranslationLanguage(language)
 	if language == "" {
@@ -140,20 +152,54 @@ func (s *DiscussionStore) FailTranslation(ctx context.Context, discussionID, lan
 	return err
 }
 
+// SetTranslationCover persists (or, given an empty cover, clears) the
+// language-dedicated cover art on an existing translation row of an owned
+// discussion. It returns (nil, nil) when the translation does not exist or the
+// caller does not own the discussion.
+func (s *DiscussionStore) SetTranslationCover(ctx context.Context, owner, discussionID, language string, cover DiscussionCover) (*DiscussionTranslation, error) {
+	language = normalizeTranslationLanguage(language)
+	if language == "" {
+		return nil, errors.New("translation language is required")
+	}
+	res, err := s.exec(ctx, `UPDATE native_discussion_translations SET
+		cover_type = ?, cover_image_url = ?, cover_image_key = ?,
+		cover_gradient_start = ?, cover_gradient_end = ?, cover_prompt = ?, updated_at = ?
+		WHERE discussion_id = ? AND language = ?
+		AND EXISTS (SELECT 1 FROM native_discussions WHERE id = ? AND owner_user_id = ?)`,
+		strings.TrimSpace(cover.Type), storedCoverImageURL(cover), strings.TrimSpace(cover.ImageKey),
+		strings.TrimSpace(cover.GradientStart), strings.TrimSpace(cover.GradientEnd), strings.TrimSpace(cover.Prompt),
+		time.Now().UnixMilli(), discussionID, language, discussionID, owner)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	return s.TranslationFor(ctx, discussionID, language)
+}
+
 func (s *DiscussionStore) TranslationFor(ctx context.Context, discussionID, language string) (*DiscussionTranslation, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT discussion_id, language, status, bundle_json, model, error,
 		prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, attempts, claimed_at,
-		generated_at, created_at, updated_at
+		generated_at, created_at, updated_at,
+		cover_type, cover_image_url, cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt
 		FROM native_discussion_translations WHERE discussion_id = ? AND language = ?`,
 		discussionID, normalizeTranslationLanguage(language))
 	return scanDiscussionTranslation(row)
 }
 
-// ReadyTranslationBundles returns the ready presentation bundles for one
-// language across a page of discussions. List endpoints use this instead of
-// issuing one translation query per row.
-func (s *DiscussionStore) ReadyTranslationBundles(ctx context.Context, discussionIDs []string, language string) (map[string]DiscussionTranslationBundle, error) {
-	out := make(map[string]DiscussionTranslationBundle)
+// ReadyTranslation pairs a ready translation's presentation bundle with its
+// language-dedicated cover art (zero-valued when the language has none).
+type ReadyTranslation struct {
+	Bundle DiscussionTranslationBundle
+	Cover  DiscussionCover
+}
+
+// ReadyTranslationBundles returns the ready presentation bundles (and their
+// language covers) for one language across a page of discussions. List
+// endpoints use this instead of issuing one translation query per row.
+func (s *DiscussionStore) ReadyTranslationBundles(ctx context.Context, discussionIDs []string, language string) (map[string]ReadyTranslation, error) {
+	out := make(map[string]ReadyTranslation)
 	language = normalizeTranslationLanguage(language)
 	if s == nil || language == "" {
 		return out, nil
@@ -179,7 +225,8 @@ func (s *DiscussionStore) ReadyTranslationBundles(ctx context.Context, discussio
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT discussion_id, bundle_json
+	rows, err := s.db.QueryContext(ctx, `SELECT discussion_id, bundle_json,
+		cover_type, cover_image_url, cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt
 		FROM native_discussion_translations
 		WHERE language = ? AND status = ? AND discussion_id IN (`+placeholders+`)`, args...)
 	if err != nil {
@@ -188,14 +235,16 @@ func (s *DiscussionStore) ReadyTranslationBundles(ctx context.Context, discussio
 	defer rows.Close()
 	for rows.Next() {
 		var discussionID, bundleJSON string
-		if err := rows.Scan(&discussionID, &bundleJSON); err != nil {
+		var rt ReadyTranslation
+		if err := rows.Scan(&discussionID, &bundleJSON,
+			&rt.Cover.Type, &rt.Cover.ImageURL, &rt.Cover.ImageKey,
+			&rt.Cover.GradientStart, &rt.Cover.GradientEnd, &rt.Cover.Prompt); err != nil {
 			return nil, err
 		}
-		var bundle DiscussionTranslationBundle
-		if err := json.Unmarshal([]byte(bundleJSON), &bundle); err != nil {
+		if err := json.Unmarshal([]byte(bundleJSON), &rt.Bundle); err != nil {
 			return nil, err
 		}
-		out[discussionID] = bundle
+		out[discussionID] = rt
 	}
 	return out, rows.Err()
 }
@@ -203,7 +252,8 @@ func (s *DiscussionStore) ReadyTranslationBundles(ctx context.Context, discussio
 func (s *DiscussionStore) TranslationForJob(ctx context.Context, jobID, language string) (*DiscussionTranslation, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT t.discussion_id, t.language, t.status, t.bundle_json, t.model, t.error,
 		t.prompt_tokens, t.completion_tokens, t.total_tokens, t.llm_cost_usd, t.attempts, t.claimed_at,
-		t.generated_at, t.created_at, t.updated_at
+		t.generated_at, t.created_at, t.updated_at,
+		t.cover_type, t.cover_image_url, t.cover_image_key, t.cover_gradient_start, t.cover_gradient_end, t.cover_prompt
 		FROM native_discussion_translations t JOIN native_discussions d ON d.id = t.discussion_id
 		WHERE d.job_id = ? AND t.language = ?`, jobID, normalizeTranslationLanguage(language))
 	return scanDiscussionTranslation(row)
@@ -212,7 +262,8 @@ func (s *DiscussionStore) TranslationForJob(ctx context.Context, jobID, language
 func (s *DiscussionStore) ListTranslations(ctx context.Context, discussionID string) ([]DiscussionTranslationMeta, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT discussion_id, language, status, bundle_json, model, error,
 		prompt_tokens, completion_tokens, total_tokens, llm_cost_usd, attempts, claimed_at,
-		generated_at, created_at, updated_at
+		generated_at, created_at, updated_at,
+		cover_type, cover_image_url, cover_image_key, cover_gradient_start, cover_gradient_end, cover_prompt
 		FROM native_discussion_translations WHERE discussion_id = ? ORDER BY language`, discussionID)
 	if err != nil {
 		return nil, err
@@ -237,7 +288,9 @@ func scanDiscussionTranslation(row translationScanner) (*DiscussionTranslation, 
 	var claimedAt, generatedAt, createdAt, updatedAt int64
 	err := row.Scan(&t.DiscussionID, &t.Language, &status, &bundleJSON, &t.Model, &t.Error,
 		&t.Usage.PromptTokens, &t.Usage.CompletionTokens, &t.Usage.TotalTokens, &t.Usage.LLMCostUSD,
-		&t.Attempts, &claimedAt, &generatedAt, &createdAt, &updatedAt)
+		&t.Attempts, &claimedAt, &generatedAt, &createdAt, &updatedAt,
+		&t.Cover.Type, &t.Cover.ImageURL, &t.Cover.ImageKey,
+		&t.Cover.GradientStart, &t.Cover.GradientEnd, &t.Cover.Prompt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

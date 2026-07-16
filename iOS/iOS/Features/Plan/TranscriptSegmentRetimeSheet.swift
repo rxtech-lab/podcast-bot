@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 struct TranscriptRetimeState: Equatable {
     var startTimestampMs: Int64
@@ -143,6 +144,12 @@ struct TranscriptRetimeSequence: Equatable {
         move(positionDelta: 1)
     }
 
+    mutating func select(index: Int) -> Bool {
+        guard orderedIndices.contains(index) else { return false }
+        currentIndex = index
+        return true
+    }
+
     private func adjacentSegment(positionDelta: Int) -> TranscriptSegmentDTO? {
         guard let index = adjacentIndex(positionDelta: positionDelta) else { return nil }
         return segments[index]
@@ -159,19 +166,6 @@ struct TranscriptRetimeSequence: Equatable {
         guard let index = adjacentIndex(positionDelta: positionDelta) else { return false }
         currentIndex = index
         return true
-    }
-}
-
-private enum TranscriptRetimeNavigationDirection {
-    case forward
-    case backward
-
-    var insertionEdge: Edge {
-        self == .forward ? .bottom : .top
-    }
-
-    var removalEdge: Edge {
-        self == .forward ? .top : .bottom
     }
 }
 
@@ -223,8 +217,8 @@ struct TranscriptSegmentRetimeSheet: View {
     @State private var playbackError: String?
     @State private var saveError: String?
     @State private var isSaving = false
-    @State private var navigationDirection = TranscriptRetimeNavigationDirection.forward
     @State private var removesShortGaps = true
+    @State private var showsConfiguration = false
 
     init(
         discussionID: String,
@@ -251,21 +245,20 @@ struct TranscriptSegmentRetimeSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            ZStack(alignment: .bottom) {
                 VStack(spacing: 22) {
                     timestampRange
                     captionCard
-                    gapRemovalToggle
-                    audioControls
-
-                    if let validationMessage {
-                        Text(validationMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
                 }
                 .padding(20)
+
+                VStack(spacing: 0) {
+                    if let message = inlineErrorMessage {
+                        errorBanner(message)
+                    }
+                    playerOverlay
+                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: inlineErrorMessage)
             }
             .background(Theme.background)
             .navigationTitle("Subtitle Timing")
@@ -287,12 +280,17 @@ struct TranscriptSegmentRetimeSheet: View {
                     .disabled(isSaving || validationMessage != nil)
                     .accessibilityIdentifier("retime.save")
                 }
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                setBoundaryButton
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(.ultraThinMaterial)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showsConfiguration = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .disabled(isSaving)
+                    .accessibilityLabel("Timing Settings")
+                    .accessibilityIdentifier("retime.settings")
+                    .popoverTip(TranscriptRetimeSettingsTip(), arrowEdge: .top)
+                }
             }
         }
         .interactiveDismissDisabled(isSaving)
@@ -315,6 +313,27 @@ struct TranscriptSegmentRetimeSheet: View {
             ) { timestampMs in
                 timing.set(boundary, to: timestampMs)
             }
+        }
+        .sheet(isPresented: $showsConfiguration) {
+            NavigationStack {
+                VStack {
+                    gapRemovalToggle
+                    Spacer()
+                }
+                .padding(20)
+                .background(Theme.background)
+                .navigationTitle("Timing Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showsConfiguration = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .alert("Could not save transcript", isPresented: saveErrorBinding) {
             Button("OK", role: .cancel) { saveError = nil }
@@ -383,119 +402,112 @@ struct TranscriptSegmentRetimeSheet: View {
     }
 
     private var captionCard: some View {
-        VStack(spacing: 12) {
-            captionSequence
-
-            HStack(spacing: 12) {
-                Button(action: movePrevious) {
-                    Label("Previous Subtitle", systemImage: "chevron.left")
-                        .frame(maxWidth: .infinity)
+        GeometryReader { geometry in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 12) {
+                    ForEach(sequence.orderedIndices, id: \.self) { index in
+                        captionWheelRow(
+                            segment: sequence.segments[index],
+                            isCurrent: index == sequence.currentIndex
+                        )
+                        .frame(height: captionWheelRowHeight)
+                        .id(index)
+                        .scrollTransition(.interactive, axis: .vertical) { content, phase in
+                            content
+                                .scaleEffect(phase.isIdentity ? 1 : 0.94)
+                                .opacity(phase.isIdentity ? 1 : 0.62)
+                        }
+                        .accessibilityIdentifier("retime.subtitle.\(index)")
+                    }
                 }
-                .disabled(!sequence.canMovePrevious || isSaving)
-                .accessibilityIdentifier("retime.previous")
-
-                Button(action: moveNext) {
-                    Label("Next Subtitle", systemImage: "chevron.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .disabled(!sequence.canMoveNext || isSaving)
-                .accessibilityIdentifier("retime.next")
+                .scrollTargetLayout()
             }
-            .buttonStyle(.bordered)
-        }
-    }
-
-    private var captionSequence: some View {
-        VStack(spacing: 12) {
-            if let previous = sequence.previousSegment {
-                captionContextButton(
-                    title: "Previous Subtitle",
-                    segment: previous,
-                    systemImage: "chevron.up",
-                    action: movePrevious
-                )
-            }
-
-            captionContextRow(
-                title: "Current Subtitle",
-                segment: sequence.currentSegment,
-                isCurrent: true
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+            .scrollPosition(id: subtitleScrollPosition, anchor: captionWheelAnchor)
+            .contentMargins(
+                .top,
+                max(
+                    (geometry.size.height - captionWheelRowHeight) * captionWheelAnchor.y,
+                    0
+                ),
+                for: .scrollContent
             )
+            .contentMargins(
+                .bottom,
+                max(
+                    (geometry.size.height - captionWheelRowHeight) * (1 - captionWheelAnchor.y),
+                    0
+                ),
+                for: .scrollContent
+            )
+            .disabled(isSaving)
+            .clipped()
+            .accessibilityLabel("Subtitle")
+            .accessibilityIdentifier("retime.subtitleWheel")
+        }
+        .frame(minHeight: 282)
+    }
 
-            if let next = sequence.nextSegment {
-                captionContextButton(
-                    title: "Next Subtitle",
-                    segment: next,
-                    systemImage: "chevron.down",
-                    action: moveNext
-                )
+    private var captionWheelRowHeight: CGFloat { 106 }
+    private var captionWheelAnchor: UnitPoint { UnitPoint(x: 0.5, y: 0.32) }
+
+    private func captionWheelRow(segment: TranscriptSegmentDTO, isCurrent: Bool) -> some View {
+        Text(segment.text)
+            .font(.body)
+            .fontWeight(.regular)
+            .foregroundStyle(isCurrent ? .primary : Theme.secondaryText)
+            .lineLimit(4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .background(
+                isCurrent ? Theme.accent.opacity(0.10) : Theme.rowBackground,
+                in: .rect(cornerRadius: 14)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isCurrent ? Theme.accent : Theme.divider, lineWidth: 1)
             }
-        }
-        .id(sequence.currentIndex)
-        .transition(.asymmetric(
-            insertion: .move(edge: navigationDirection.insertionEdge).combined(with: .opacity),
-            removal: .move(edge: navigationDirection.removalEdge).combined(with: .opacity)
-        ))
-        .clipped()
-    }
-
-    private func captionContextButton(
-        title: LocalizedStringKey,
-        segment: TranscriptSegmentDTO,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-                    .padding(.top, 3)
-                captionContextContent(title: title, segment: segment, isCurrent: false)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .disabled(isSaving)
-    }
-
-    private func captionContextRow(
-        title: LocalizedStringKey,
-        segment: TranscriptSegmentDTO,
-        isCurrent: Bool
-    ) -> some View {
-        captionContextContent(title: title, segment: segment, isCurrent: isCurrent)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func captionContextContent(
-        title: LocalizedStringKey,
-        segment: TranscriptSegmentDTO,
-        isCurrent: Bool
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(isCurrent ? Theme.accent : Theme.secondaryText)
-            Text(segment.text)
-                .font(isCurrent ? .body : .subheadline)
-                .foregroundStyle(isCurrent ? .primary : Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(isCurrent ? "retime.currentSubtitle" : "retime.contextSubtitle")
-        }
-        .frame(maxWidth: .infinity, minHeight: isCurrent ? 72 : 44, alignment: .topLeading)
-        .padding(14)
-        .background(
-            isCurrent ? Theme.accent.opacity(0.10) : Theme.rowBackground,
-            in: .rect(cornerRadius: 14)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isCurrent ? Theme.accent : Theme.divider, lineWidth: 1)
-        }
+            .animation(.snappy(duration: 0.2), value: isCurrent)
+            .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 
     private var audioControls: some View {
         audioControlsContent
+    }
+
+    private var playerOverlay: some View {
+        VStack(spacing: 12) {
+            audioControls
+            setBoundaryButton
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.subheadline.weight(.semibold))
+            Text(message)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.red.opacity(0.5), in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.red.opacity(0.28), lineWidth: 1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .accessibilityIdentifier("retime.error")
     }
 
     private var gapRemovalToggle: some View {
@@ -519,7 +531,7 @@ struct TranscriptSegmentRetimeSheet: View {
         VStack(spacing: 14) {
             Slider(
                 value: scrubberBinding,
-                in: 0...Double(max(timing.maximumTimestampMs, 1)),
+                in: 0 ... Double(max(timing.maximumTimestampMs, 1)),
                 onEditingChanged: scrubberEditingChanged
             )
             .disabled(audioPlayer?.isLoading == true)
@@ -535,9 +547,9 @@ struct TranscriptSegmentRetimeSheet: View {
 
             HStack(spacing: 32) {
                 Button { nudgeAudio(by: -1_000) } label: {
-                    Text(verbatim: "-1s")
-                        .font(.headline.monospacedDigit())
-                        .frame(minWidth: 48, minHeight: 44)
+                    Label("1s", systemImage: "gobackward")
+                        .font(.subheadline)
+                        .frame(minWidth: 36, minHeight: 32)
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Back 1 Second")
@@ -549,7 +561,7 @@ struct TranscriptSegmentRetimeSheet: View {
                             .frame(width: 44, height: 44)
                     } else {
                         Image(systemName: audioPlayer?.isPlaying == true
-                              ? "pause.circle.fill" : "play.circle.fill")
+                            ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 44))
                     }
                 }
@@ -559,22 +571,15 @@ struct TranscriptSegmentRetimeSheet: View {
                 .accessibilityIdentifier("retime.play")
 
                 Button { nudgeAudio(by: 1_000) } label: {
-                    Text(verbatim: "+1s")
-                        .font(.headline.monospacedDigit())
-                        .frame(minWidth: 48, minHeight: 44)
+                    Label("1s", systemImage: "goforward")
+                        .font(.subheadline)
+                        .frame(minWidth: 36, minHeight: 32)
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Forward 1 Second")
                 .accessibilityIdentifier("retime.plus1s")
             }
             .disabled(audioPlayer?.isLoading == true)
-
-            if let playbackError {
-                Text(playbackError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
         .padding(16)
         .background(Theme.rowBackground, in: .rect(cornerRadius: 16))
@@ -602,6 +607,17 @@ struct TranscriptSegmentRetimeSheet: View {
         )
     }
 
+    private var subtitleScrollPosition: Binding<Int?> {
+        Binding(
+            get: { sequence.currentIndex },
+            set: { index in
+                if let index {
+                    selectSubtitle(at: index)
+                }
+            }
+        )
+    }
+
     private var currentAudioTimestampMs: Int64 {
         isScrubbingAudio ? scrubberTimestampMs : (audioPlayer?.playbackTimestampMs ?? scrubberTimestampMs)
     }
@@ -624,6 +640,10 @@ struct TranscriptSegmentRetimeSheet: View {
             )
         }
         return nil
+    }
+
+    private var inlineErrorMessage: String? {
+        validationMessage ?? playbackError
     }
 
     private var saveErrorBinding: Binding<Bool> {
@@ -683,28 +703,22 @@ struct TranscriptSegmentRetimeSheet: View {
         }
     }
 
-    private func movePrevious() {
-        guard stageCurrentTiming(), sequence.canMovePrevious else { return }
-        TranscriptRetimeHaptic.movePrevious()
-        navigationDirection = .backward
-        withAnimation(.snappy(duration: 0.28)) {
-            _ = sequence.movePrevious()
+    private func selectSubtitle(at index: Int) {
+        guard index != sequence.currentIndex, stageCurrentTiming() else { return }
+        let currentPosition = sequence.orderedIndices.firstIndex(of: sequence.currentIndex)
+        let selectedPosition = sequence.orderedIndices.firstIndex(of: index)
+        guard sequence.select(index: index) else { return }
+        if let currentPosition, let selectedPosition, selectedPosition < currentPosition {
+            TranscriptRetimeHaptic.movePrevious()
+        } else {
+            TranscriptRetimeHaptic.moveNext()
         }
         loadCurrentSegment(shouldSeekAudio: true)
     }
 
-    private func moveNext() {
-        guard stageCurrentTiming(), sequence.canMoveNext else { return }
-        TranscriptRetimeHaptic.moveNext()
-        animateToNextSubtitle(shouldSeekAudio: true)
-    }
-
     private func animateToNextSubtitle(shouldSeekAudio: Bool) {
         guard sequence.canMoveNext else { return }
-        navigationDirection = .forward
-        withAnimation(.snappy(duration: 0.28)) {
-            _ = sequence.moveNext()
-        }
+        _ = sequence.moveNext()
         loadCurrentSegment(shouldSeekAudio: shouldSeekAudio)
     }
 
@@ -736,7 +750,9 @@ struct TranscriptSegmentRetimeSheet: View {
         Task { @MainActor in
             do {
                 try await onSave(updates)
-                for update in updates { sequence.markSaved(at: update.index) }
+                for update in updates {
+                    sequence.markSaved(at: update.index)
+                }
                 isSaving = false
                 dismiss()
             } catch {
@@ -753,65 +769,31 @@ struct TranscriptSegmentRetimeSheet: View {
     }
 }
 
-private struct TranscriptTimestampPickerSheet: View {
-    @Environment(\.dismiss) private var dismiss
+#if DEBUG
+private let previewSegments: [TranscriptSegmentDTO] = [
+    TranscriptSegmentDTO(speaker: "Alice", offsetMs: 0, durationMs: 3_200, text: "Welcome to today's debate on artificial intelligence policy."),
+    TranscriptSegmentDTO(speaker: "Bob", offsetMs: 3_500, durationMs: 4_800, text: "Thank you Alice. I believe strong regulation is essential to ensure public safety."),
+    TranscriptSegmentDTO(speaker: "Alice", offsetMs: 8_400, durationMs: 3_900, text: "While I agree oversight matters, overly strict rules could stifle innovation."),
+    TranscriptSegmentDTO(speaker: "Bob", offsetMs: 12_500, durationMs: 5_100, text: "Innovation without guardrails has historically led to unforeseen consequences."),
+]
 
-    let boundary: TranscriptTimestampBoundary
-    let maximumMs: Int64
-    let onApply: (Int64) -> Void
-
-    @State private var draftMilliseconds: Int64
-
-    init(
-        boundary: TranscriptTimestampBoundary,
-        milliseconds: Int64,
-        maximumMs: Int64,
-        onApply: @escaping (Int64) -> Void
-    ) {
-        self.boundary = boundary
-        self.maximumMs = maximumMs
-        self.onApply = onApply
-        _draftMilliseconds = State(initialValue: milliseconds)
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 12) {
-                Text(transcriptRetimeTimestamp(draftMilliseconds))
-                    .font(.title3.monospacedDigit().weight(.semibold))
-
-                TranscriptTimestampWheel(
-                    milliseconds: $draftMilliseconds,
-                    maximumMs: maximumMs
-                )
-            }
-            .padding(.horizontal, 16)
-            .navigationTitle(boundary.adjustmentTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .accessibilityIdentifier("retime.picker.cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        onApply(min(max(draftMilliseconds, 0), maximumMs))
-                        dismiss()
-                    }
-                    .accessibilityIdentifier("retime.picker.done")
-                }
-            }
-        }
-        .presentationDetents([.medium])
-    }
+#Preview("Subtitle Timing · middle segment") {
+    TranscriptSegmentRetimeSheet(
+        discussionID: "preview-discussion",
+        segments: previewSegments,
+        initialIndex: 1,
+        audioDurationMs: 18_000
+    ) { _ in }
+    .environment(AuthManager())
 }
 
-func transcriptRetimeTimestamp(_ milliseconds: Int64) -> String {
-    let clamped = max(milliseconds, 0)
-    let totalSeconds = clamped / 1_000
-    let hours = totalSeconds / 3_600
-    let minutes = (totalSeconds % 3_600) / 60
-    let seconds = totalSeconds % 60
-    let fraction = clamped % 1_000
-    return String(format: "%02d:%02d:%02d:%03d", hours, minutes, seconds, fraction)
+#Preview("Subtitle Timing · first segment") {
+    TranscriptSegmentRetimeSheet(
+        discussionID: "preview-discussion",
+        segments: previewSegments,
+        initialIndex: 0,
+        audioDurationMs: 18_000
+    ) { _ in }
+    .environment(AuthManager())
 }
+#endif

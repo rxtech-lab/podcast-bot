@@ -499,6 +499,9 @@
         }
       }
     },
+    "1s" : {
+
+    },
     "2 days" : {
       "comment" : "Share-link duration option",
       "localizations" : {
@@ -1931,6 +1934,9 @@
         }
       }
     },
+    "Choose whether short gaps between subtitles are removed when you save." : {
+
+    },
     "Clear parent discussion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2826,6 +2832,9 @@
         }
       }
     },
+    "Cover · %@" : {
+
+    },
     "Create" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3206,6 +3215,7 @@
       }
     },
     "Current Subtitle" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -6277,6 +6287,7 @@
       }
     },
     "Next Subtitle" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8267,6 +8278,7 @@
       }
     },
     "Previous Subtitle" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -10660,6 +10672,9 @@
         }
       }
     },
+    "Subtitle" : {
+
+    },
     "Subtitle Timing" : {
       "localizations" : {
         "zh-Hans" : {
@@ -11308,6 +11323,9 @@
         }
       }
     },
+    "This cover is shown only to %@ listeners. Everyone else keeps seeing the default cover." : {
+
+    },
     "This creator profile is not available." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11607,6 +11625,9 @@
           }
         }
       }
+    },
+    "Timing Settings" : {
+
     },
     "Tip: paste a link in the topic and the agent will read it." : {
       "extractionState" : "stale",

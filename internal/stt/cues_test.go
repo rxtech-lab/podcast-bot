@@ -17,17 +17,14 @@ func TestSentenceCuesFromWordsEnglish(t *testing.T) {
 		},
 	}}}
 	cues := SentenceCues(tr)
-	if len(cues) != 3 {
-		t.Fatalf("expected 3 cues, got %d: %#v", len(cues), cues)
+	if len(cues) != 2 {
+		t.Fatalf("expected 2 sentence cues, got %d: %#v", len(cues), cues)
 	}
-	if cues[0].Text != "Good afternoon," || cues[0].StartMS != 100 || cues[0].EndMS != 600 {
+	if cues[0].Text != "Good afternoon, everyone." || cues[0].StartMS != 100 || cues[0].EndMS != 1100 {
 		t.Fatalf("cue 0 wrong: %#v", cues[0])
 	}
-	if cues[1].Text != "everyone." || cues[1].StartMS != 700 || cues[1].EndMS != 1100 {
+	if cues[1].Text != "Welcome!" || cues[1].StartMS != 1200 || cues[1].EndMS != 1700 {
 		t.Fatalf("cue 1 wrong: %#v", cues[1])
-	}
-	if cues[2].Text != "Welcome!" || cues[2].StartMS != 1200 || cues[2].EndMS != 1700 {
-		t.Fatalf("cue 2 wrong: %#v", cues[2])
 	}
 }
 
@@ -41,19 +38,16 @@ func TestSentenceCuesFromWordsCJK(t *testing.T) {
 	}
 	tr := &Transcript{Phrases: []Phrase{{Speaker: 2, OffsetMS: 0, DurationMS: offset, Text: text, Words: words}}}
 	cues := SentenceCues(tr)
-	if len(cues) != 2 {
-		t.Fatalf("expected 2 cues, got %d: %#v", len(cues), cues)
+	if len(cues) != 1 {
+		t.Fatalf("expected one complete-sentence cue, got %d: %#v", len(cues), cues)
 	}
-	if cues[0].Text != "欢迎来到今天的讨论，" {
+	if cues[0].Text != text {
 		t.Fatalf("cue 0 text wrong (no spaces expected): %q", cues[0].Text)
 	}
 	if strings.Contains(cues[0].Text, " ") {
 		t.Fatalf("CJK cue must not contain spaces: %q", cues[0].Text)
 	}
-	if cues[1].Text != "我们开始。" {
-		t.Fatalf("cue 1 text wrong: %q", cues[1].Text)
-	}
-	if cues[0].Speaker != 2 || cues[1].Speaker != 2 {
+	if cues[0].Speaker != 2 {
 		t.Fatalf("speaker not preserved: %#v", cues)
 	}
 }
@@ -61,7 +55,7 @@ func TestSentenceCuesFromWordsCJK(t *testing.T) {
 func TestSentenceCuesTextFallbackProportional(t *testing.T) {
 	tr := &Transcript{Phrases: []Phrase{{
 		Speaker: 1, OffsetMS: 1000, DurationMS: 3000,
-		Text: "各位听众朋友们，欢迎来到今天的圆桌讨论。",
+		Text: "各位听众朋友们。欢迎来到今天的圆桌讨论。",
 	}}}
 	cues := SentenceCues(tr)
 	if len(cues) != 2 {
@@ -99,6 +93,24 @@ func TestSentenceCuesSpeakerBoundary(t *testing.T) {
 	}
 }
 
+func TestSentenceCuesMergeCommaSeparatedProviderPhrases(t *testing.T) {
+	tr := &Transcript{Phrases: []Phrase{
+		{Speaker: 1, OffsetMS: 22_000, DurationMS: 3_000, Text: "这是一个每天都在各大科技公司上演的真实故事，"},
+		{Speaker: 1, OffsetMS: 25_000, DurationMS: 2_000, Text: "当 AI 既能写代码又能画原型，"},
+		{Speaker: 1, OffsetMS: 27_000, DurationMS: 4_000, Text: "这两个角色的边界会发生什么变化？"},
+	}}
+	cues := SentenceCues(tr)
+	if len(cues) != 1 {
+		t.Fatalf("expected one complete sentence, got %d: %#v", len(cues), cues)
+	}
+	if cues[0].StartMS != 22_000 || cues[0].EndMS != 31_000 {
+		t.Fatalf("merged sentence timing wrong: %#v", cues[0])
+	}
+	if cues[0].Text != "这是一个每天都在各大科技公司上演的真实故事，当 AI 既能写代码又能画原型，这两个角色的边界会发生什么变化？" {
+		t.Fatalf("merged sentence text wrong: %q", cues[0].Text)
+	}
+}
+
 func TestSentenceCuesLongUnpunctuatedSplits(t *testing.T) {
 	tr := &Transcript{Phrases: []Phrase{{
 		Speaker: 1, OffsetMS: 0, DurationMS: 10_000,
@@ -121,6 +133,42 @@ func TestSentenceCuesEmptyAndNil(t *testing.T) {
 	}
 	if got := SentenceCues(&Transcript{Phrases: []Phrase{{Speaker: 1, Text: "   "}}}); len(got) != 0 {
 		t.Fatalf("blank phrase should give no cues: %#v", got)
+	}
+}
+
+func TestSentenceCuesClampOverlappingPhrases(t *testing.T) {
+	// Timing validation only requires monotonic offsets, so a provider can
+	// report a duration that overruns the next phrase (real Gemini output:
+	// a 13s–35s phrase over a 22s–25s successor).
+	tr := &Transcript{Phrases: []Phrase{
+		{Speaker: 1, OffsetMS: 13_000, DurationMS: 22_000, Text: "我们今天的主题是思维对决。"},
+		{Speaker: 1, OffsetMS: 22_000, DurationMS: 3_000, Text: "这是一个每天都在上演的真实故事。"},
+	}}
+	cues := SentenceCues(tr)
+	if len(cues) != 2 {
+		t.Fatalf("expected 2 cues, got %d: %#v", len(cues), cues)
+	}
+	if cues[0].EndMS != 22_000 {
+		t.Fatalf("overlapping cue end must clamp to next start: %#v", cues[0])
+	}
+	if cues[0].Text != "我们今天的主题是思维对决。" || cues[1].StartMS != 22_000 || cues[1].EndMS != 25_000 {
+		t.Fatalf("clamp must not disturb text or the successor: %#v", cues)
+	}
+}
+
+func TestSentenceCuesClampCollapsedCueMergesTextForward(t *testing.T) {
+	// Pathological same-offset phrases: the first cue's clamped range
+	// collapses, but its words must survive into the transcript.
+	tr := &Transcript{Phrases: []Phrase{
+		{Speaker: 1, OffsetMS: 5_000, DurationMS: 2_000, Text: "前半句。"},
+		{Speaker: 1, OffsetMS: 5_000, DurationMS: 3_000, Text: "后半句。"},
+	}}
+	cues := SentenceCues(tr)
+	if len(cues) != 1 {
+		t.Fatalf("collapsed cue should merge into successor, got %d: %#v", len(cues), cues)
+	}
+	if cues[0].Text != "前半句。后半句。" || cues[0].StartMS != 5_000 || cues[0].EndMS != 8_000 {
+		t.Fatalf("merged cue wrong: %#v", cues[0])
 	}
 }
 

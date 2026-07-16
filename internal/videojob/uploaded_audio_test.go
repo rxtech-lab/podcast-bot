@@ -36,6 +36,22 @@ func TestUploadedAudioSubtitleCues(t *testing.T) {
 	}
 }
 
+func TestUploadedAudioSubtitleCuesClampOverlaps(t *testing.T) {
+	cues := uploadedAudioSubtitleCues([]config.TranscriptSegment{
+		{Speaker: "Speaker 1", OffsetMS: 13_000, DurationMS: 22_000, Text: "我们今天的主题"},
+		{Speaker: "Speaker 1", OffsetMS: 22_000, DurationMS: 3_000, Text: "这是一个真实故事"},
+	})
+	if len(cues) != 2 {
+		t.Fatalf("cues = %d, want 2: %+v", len(cues), cues)
+	}
+	if cues[0].End != 22*time.Second {
+		t.Fatalf("overlapping segment must clamp to next cue start: %+v", cues[0])
+	}
+	if cues[1].Start != 22*time.Second || cues[1].End != 25*time.Second {
+		t.Fatalf("successor cue must be untouched: %+v", cues[1])
+	}
+}
+
 func TestUploadedAudioTranscriptLinesMergeSpeakerTurns(t *testing.T) {
 	lines := uploadedAudioTranscriptLines(uploadedSegments())
 	if len(lines) != 2 {

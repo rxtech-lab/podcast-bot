@@ -65,9 +65,16 @@ func TestDiscussionAndMarketplaceListsTranslateTitleFromAcceptLanguage(t *testin
 	}, "test/model", SummaryUsage{}); err != nil {
 		t.Fatalf("save translation: %v", err)
 	}
+	frCover := DiscussionCover{Type: "gradient", GradientStart: "#ff0000", GradientEnd: "#0000ff"}
+	if translation, err := store.SetTranslationCover(ctx, "cookie:Owner", d.ID, "fr-FR", frCover); err != nil || translation == nil || translation.Cover != frCover {
+		t.Fatalf("set translation cover = %+v, err=%v", translation, err)
+	}
 	bundles, err := store.ReadyTranslationBundles(ctx, []string{d.ID, d.ID, "missing"}, "fr-FR")
-	if err != nil || len(bundles) != 1 || bundles[d.ID].Title != "Titre traduit" {
+	if err != nil || len(bundles) != 1 || bundles[d.ID].Bundle.Title != "Titre traduit" {
 		t.Fatalf("ready translation bundles = %+v, err=%v", bundles, err)
+	}
+	if bundles[d.ID].Cover != frCover {
+		t.Fatalf("ready translation cover = %+v, want %+v", bundles[d.ID].Cover, frCover)
 	}
 
 	srv := New(Deps{Discussions: store})
@@ -90,9 +97,14 @@ func TestDiscussionAndMarketplaceListsTranslateTitleFromAcceptLanguage(t *testin
 		return rows
 	}
 
+	defaultCover := DiscussionCover{Type: "gradient", GradientStart: "#111111", GradientEnd: "#777777"}
+
 	owned := requestList("/api/discussions", "Owner", "fr-CA,en;q=0.9")
 	if len(owned) != 1 || owned[0].Title != "Titre traduit" {
 		t.Fatalf("translated discussion list = %+v", owned)
+	}
+	if owned[0].Cover != frCover {
+		t.Fatalf("translated discussion list cover = %+v, want %+v", owned[0].Cover, frCover)
 	}
 	if owned[0].Script != nil || owned[0].Markdown != "" {
 		t.Fatalf("translated discussion list leaked heavy bundle fields: %+v", owned[0])
@@ -102,13 +114,22 @@ func TestDiscussionAndMarketplaceListsTranslateTitleFromAcceptLanguage(t *testin
 	if len(market) != 1 || market[0].Title != "Titre traduit" {
 		t.Fatalf("translated marketplace list = %+v", market)
 	}
+	if market[0].Cover != frCover {
+		t.Fatalf("translated marketplace cover = %+v, want %+v", market[0].Cover, frCover)
+	}
 
 	fallback := requestList("/api/market/stations", "Viewer", "ja-JP,fr-FR;q=0.9")
 	if len(fallback) != 1 || fallback[0].Title != "Source title" {
 		t.Fatalf("marketplace fallback list = %+v", fallback)
 	}
+	if fallback[0].Cover != defaultCover {
+		t.Fatalf("marketplace fallback cover = %+v, want %+v", fallback[0].Cover, defaultCover)
+	}
 	original := requestList("/api/market/stations", "Viewer", "")
 	if len(original) != 1 || original[0].Title != "Source title" {
 		t.Fatalf("marketplace original list = %+v", original)
+	}
+	if original[0].Cover != defaultCover {
+		t.Fatalf("marketplace original cover = %+v, want %+v", original[0].Cover, defaultCover)
 	}
 }

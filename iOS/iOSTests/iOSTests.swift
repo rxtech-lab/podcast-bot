@@ -95,6 +95,10 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(sequence.currentSegment.text, "First")
         XCTAssertTrue(sequence.moveNext())
         XCTAssertEqual(sequence.currentSegment.offsetMs, 4_500)
+        XCTAssertTrue(sequence.select(index: 0))
+        XCTAssertEqual(sequence.currentSegment.text, "Third")
+        XCTAssertFalse(sequence.select(index: 99))
+        XCTAssertEqual(sequence.currentSegment.text, "Third")
         sequence.markSaved(at: 2)
         XCTAssertTrue(sequence.pendingIndices.isEmpty)
     }

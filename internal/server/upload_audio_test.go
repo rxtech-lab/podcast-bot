@@ -230,6 +230,9 @@ func TestUploadedAudioReviewTurnDisplaysOriginalAudioAttachment(t *testing.T) {
 	if !strings.Contains(turn.Text, "The audio has been transcribed: 42 segments, 2 speaker(s), 2:00") {
 		t.Fatalf("model review instruction missing from %q", turn.Text)
 	}
+	if !strings.Contains(turn.Text, "never move, split, or redistribute clauses or sentences between segment indices") {
+		t.Fatalf("model review timing guard missing from %q", turn.Text)
+	}
 	if len(turn.Attachments) != 1 {
 		t.Fatalf("attachments = %+v, want one", turn.Attachments)
 	}
@@ -381,6 +384,57 @@ func TestUploadedAudioTranscriptSegmentUpdateAPI(t *testing.T) {
 	srv.Handler().ServeHTTP(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest || !strings.Contains(badRec.Body.String(), "exceeds") {
 		t.Fatalf("invalid range status = %d body=%s", badRec.Code, badRec.Body.String())
+	}
+}
+
+func TestUploadedAudioCaptionVTTClampsOverlappingSegments(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "caption-clamp.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	srv := New(Deps{Discussions: store})
+
+	plan := &config.DebateTopic{
+		Title:                   "Uploaded interview",
+		Type:                    config.ContentTypeUploadedAudio,
+		Language:                "zh-CN",
+		TotalMinutes:            1,
+		Channel:                 "default",
+		UploadedAudioKey:        "uploads/anonymous/audio.mp3",
+		UploadedAudioDurationMS: 60_000,
+		// Stored before the stt-side clamp existed: the first segment's
+		// duration overruns the next segment's offset.
+		TranscriptSegments: []config.TranscriptSegment{
+			{Speaker: "Speaker 1", OffsetMS: 13_000, DurationMS: 22_000, Text: "我们今天的主题"},
+			{Speaker: "Speaker 1", OffsetMS: 22_000, DurationMS: 3_000, Text: "这是一个真实故事"},
+		},
+	}
+	discussion, err := store.Create(ctx, "anonymous", plan.Title, planResponse{Script: plan})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	const jobID = "job-caption-clamp"
+	if _, err := store.SetJob(ctx, "anonymous", discussion.ID, jobID); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
+	if err := store.SetJobResult(ctx, discussion.ID, DiscussionReady, ""); err != nil {
+		t.Fatalf("SetJobResult: %v", err)
+	}
+
+	vtt, ok := srv.uploadedAudioCaptionVTT(ctx, jobID)
+	if !ok {
+		t.Fatalf("uploadedAudioCaptionVTT not ok")
+	}
+	if !strings.Contains(vtt, "00:00:13.000 --> 00:00:22.000") {
+		t.Fatalf("overlapping segment must render clamped to next start:\n%s", vtt)
+	}
+	if strings.Contains(vtt, "00:00:35.000") {
+		t.Fatalf("stale overlapping end must not be served:\n%s", vtt)
+	}
+	if !strings.Contains(vtt, "00:00:22.000 --> 00:00:25.000") {
+		t.Fatalf("successor cue timing wrong:\n%s", vtt)
 	}
 }
 
@@ -583,5 +637,62 @@ func TestPointsLedgerSTTColumnMigration(t *testing.T) {
 	}
 	if _, err := ps.UsageSpendByDate(ctx, 1); err != nil {
 		t.Fatalf("usage read after migration: %v", err)
+	}
+}
+
+func TestDiscussionLanguageUpdateAPI(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "language-update.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	srv := New(Deps{Discussions: store})
+
+	plan := &config.DebateTopic{
+		Title:                   "生成的节目标题",
+		Type:                    config.ContentTypeUploadedAudio,
+		Language:                "en-US",
+		TotalMinutes:            1,
+		Channel:                 "default",
+		UploadedAudioKey:        "uploads/anonymous/audio.mp3",
+		UploadedAudioDurationMS: 30_000,
+		TranscriptSegments: []config.TranscriptSegment{
+			{Speaker: "Speaker 1", OffsetMS: 0, DurationMS: 4_000, Text: "你好，欢迎收听。"},
+		},
+	}
+	discussion, err := store.Create(ctx, "anonymous", "podcast file name", planResponse{Script: plan})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut,
+		"/api/discussions/"+discussion.ID+"/language", strings.NewReader(`{"language":"zh-CN"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("language update status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updated Discussion
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if updated.Language != "zh-CN" || updated.Script == nil || updated.Script.Language != "zh-CN" {
+		t.Fatalf("language = %q script language = %+v", updated.Language, updated.Script)
+	}
+	// UpdatePlan syncs uploaded-audio topics to the plan title, so the raw
+	// filename topic must be gone after any plan write.
+	if updated.Topic != plan.Title {
+		t.Fatalf("topic = %q, want plan title %q", updated.Topic, plan.Title)
+	}
+
+	badReq := httptest.NewRequest(http.MethodPut,
+		"/api/discussions/"+discussion.ID+"/language", strings.NewReader(`{"language":"Chinese (Mandarin)"}`))
+	badReq.Header.Set("Content-Type", "application/json")
+	badRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid language status = %d body=%s", badRec.Code, badRec.Body.String())
 	}
 }

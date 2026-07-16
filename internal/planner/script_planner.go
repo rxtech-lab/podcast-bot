@@ -192,7 +192,7 @@ Number of discussants: %d
 
 Return STRICT JSON with this exact shape:
 {
-  "title": "a concise, engaging title",
+  "title": "a concise, engaging title — fewer than 10 words",
   "background": "2-4 paragraphs of neutral background framing the discussion, in the requested language",
   "host": { "name": "moderator's display name" },
   "discussants": [ { "name": "display name", "aspect": "the distinct angle/perspective this person argues from" } ]
@@ -226,7 +226,7 @@ Language for all names and text: %s
 
 Return STRICT JSON with this exact shape:
 {
-  "title": "a concise audiobook title",
+  "title": "a concise audiobook title — fewer than 10 words",
   "style": "news" | "conversational" | "audiobook" | "podcast" | "meeting",
   "overall_summary": "Compact Markdown summary of the source and the proposed audiobook direction. Do not include the chapter list here.",
   "narrator": { "name": "narrator/main host display name", "gender": "REQUIRED: exactly \"male\" or \"female\"" },

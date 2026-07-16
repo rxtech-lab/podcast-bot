@@ -417,6 +417,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/stream", s.handleDiscussionAddSourcesStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
+		s.mux.HandleFunc("PUT /api/discussions/{id}/language", s.handleDiscussionLanguageUpdate)
 		s.mux.HandleFunc("GET /api/discussions/{id}/chapters", s.handleDiscussionChapters)
 		s.mux.HandleFunc("POST /api/discussions/{id}/chapters/generate", s.handleDiscussionChaptersGenerate)
 		s.mux.HandleFunc("GET /api/albums", s.handleAlbumList)

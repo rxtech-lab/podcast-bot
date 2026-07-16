@@ -18,8 +18,23 @@ func TestDecodeGeminiResponse(t *testing.T) {
 		t.Fatalf("gemini phrases must have no word timings")
 	}
 	cues := SentenceCues(tr)
-	if len(cues) != 4 {
-		t.Fatalf("expected 4 cues (comma splits), got %d: %#v", len(cues), cues)
+	if len(cues) != 2 {
+		t.Fatalf("expected one complete-sentence cue per phrase, got %d: %#v", len(cues), cues)
+	}
+}
+
+func TestValidateTranscriptTimingRejectsBackwardOffsets(t *testing.T) {
+	tr := &Transcript{
+		DurationMS: 120_000,
+		Phrases: []Phrase{
+			{OffsetMS: 22_000, DurationMS: 9_731, Text: "这是一个每天都在各大科技公司上演的真实故事，"},
+			{OffsetMS: 31_731, DurationMS: 6_024, Text: "当 AI 既能写代码又能画原型，"},
+			{OffsetMS: 53_047, DurationMS: 6_953, Text: "从各自独特的视角来探讨这个话题。"},
+			{OffsetMS: 38_000, DurationMS: 1_132, Text: "首先是李明，"},
+		},
+	}
+	if err := ValidateTranscriptTiming(tr); err == nil {
+		t.Fatal("backward Gemini timestamps must be rejected")
 	}
 }
 

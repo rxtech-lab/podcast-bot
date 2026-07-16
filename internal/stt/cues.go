@@ -22,13 +22,13 @@ type Cue struct {
 // to the 44-rune VTT wrap because the VTT writer re-wraps at render time.
 const cueMaxRunes = 80
 
-// cueBoundary reports whether r ends a sentence-level cue. Commas count as
-// boundaries by design: transcription phrases are paragraph-sized, and the
-// caption/plan granularity we want is "sentence separated by comma".
+// cueBoundary reports whether r ends a sentence-level cue. Commas deliberately
+// do not count: a comma-separated sentence must remain attached to one audio
+// range instead of becoming several independently timed transcript rows.
 func cueBoundary(r rune) bool {
 	switch r {
-	case '.', '!', '?', ';', ',',
-		'。', '！', '？', '；', '，', '、', '…':
+	case '.', '!', '?', ';',
+		'。', '！', '？', '；', '…':
 		return true
 	}
 	return false
@@ -55,11 +55,78 @@ func SentenceCues(t *Transcript) []Cue {
 			out = append(out, cuesFromText(p)...)
 		}
 	}
+	return clampCueOverlaps(mergeSentenceContinuations(out))
+}
+
+// clampCueOverlaps trims each cue that runs past the next cue's start. Timing
+// validation only requires monotonic phrase offsets, so a provider may report
+// a duration that overruns the following phrase; an overlapping cue makes
+// every containment-based caption lookup ambiguous. Runs after
+// mergeSentenceContinuations, whose gap check must see the raw ends. A cue
+// whose clamped range collapses merges its text into the successor instead of
+// dropping words — these cues become the editable transcript segments.
+func clampCueOverlaps(cues []Cue) []Cue {
+	if len(cues) < 2 {
+		return cues
+	}
+	work := append([]Cue(nil), cues...)
+	out := make([]Cue, 0, len(work))
+	for i := range work {
+		cue := work[i]
+		if i+1 < len(work) {
+			next := &work[i+1]
+			if cue.EndMS > next.StartMS {
+				cue.EndMS = next.StartMS
+			}
+			if cue.EndMS <= cue.StartMS {
+				if needsSpace(lastRune(cue.Text), firstRune(next.Text)) {
+					next.Text = cue.Text + " " + next.Text
+				} else {
+					next.Text = cue.Text + next.Text
+				}
+				if cue.StartMS < next.StartMS {
+					next.StartMS = cue.StartMS
+				}
+				continue
+			}
+		}
+		out = append(out, cue)
+	}
 	return out
 }
 
+// mergeSentenceContinuations joins provider phrases that were cut at clause
+// punctuation. Word-timed providers may choose phrase boundaries independently
+// of sentence boundaries; keeping the clauses as separate cues recreates the
+// exact subtitle drift this package is meant to prevent.
+func mergeSentenceContinuations(cues []Cue) []Cue {
+	out := make([]Cue, 0, len(cues))
+	for _, cue := range cues {
+		if n := len(out); n > 0 && out[n-1].Speaker == cue.Speaker &&
+			cue.StartMS >= out[n-1].EndMS && cue.StartMS-out[n-1].EndMS <= 1500 &&
+			cueContinuesSentence(out[n-1].Text) {
+			if needsSpace(lastRune(out[n-1].Text), firstRune(cue.Text)) {
+				out[n-1].Text += " "
+			}
+			out[n-1].Text += strings.TrimSpace(cue.Text)
+			out[n-1].EndMS = cue.EndMS
+			continue
+		}
+		out = append(out, cue)
+	}
+	return out
+}
+
+func cueContinuesSentence(text string) bool {
+	switch lastRune(strings.TrimSpace(text)) {
+	case ',', ':', '，', '、', '：':
+		return true
+	}
+	return false
+}
+
 // cuesFromWords walks a phrase's word timeline, closing a cue whenever a
-// word ends in boundary punctuation or the running text exceeds cueMaxRunes.
+// word ends in sentence punctuation or the running text exceeds cueMaxRunes.
 func cuesFromWords(p Phrase) []Cue {
 	var (
 		out     []Cue

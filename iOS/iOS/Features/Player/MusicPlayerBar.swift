@@ -15,56 +15,71 @@ struct MusicPlayerBar: View {
     var onExpand: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 14) {
-            Button(action: model.togglePlay) {
-                Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title3)
-                    .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .glassEffect(in: .circle)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Text(headerLine).font(.subheadline.weight(.medium)).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.up")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Theme.secondaryText)
-                }
-                if !model.caption.isEmpty {
-                    Text(model.caption)
-                        .font(.callout.weight(.medium))
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button(action: model.togglePlay) {
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.headline)
                         .foregroundStyle(.primary)
-                        .lineLimit(4)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 38, height: 38)
+                        .glassEffect(in: .circle)
                 }
-                ProgressView(value: progress)
-                    .tint(Theme.accent)
-                HStack {
-                    Text(timeString(progressTime)).font(.caption2).foregroundStyle(Theme.secondaryText)
-                    Spacer()
-                    if model.canDownloadPodcast {
-                        Label("Ready", systemImage: "checkmark.circle.fill")
-                            .font(.caption2).foregroundStyle(.green)
-                    } else {
-                        Text(timeString(progressDuration)).font(.caption2).foregroundStyle(Theme.secondaryText)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(headerLine)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.up")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    if !model.caption.isEmpty {
+                        Text(model.caption)
+                            .font(.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                            .lineLimit(1)
                     }
                 }
-            }
-            .contentShape(.rect)
-            .onTapGesture(perform: onExpand)
-            .accessibilityIdentifier("player.expand")
-            if model.canDownloadPodcast {
-                Button {
-                    model.downloadPodcast()
-                } label: {
-                    Image(systemName: "arrow.down.circle").font(.title3).foregroundStyle(Theme.accent)
+                .contentShape(.rect)
+                .onTapGesture(perform: onExpand)
+                .accessibilityIdentifier("player.expand")
+
+                if model.canDownloadPodcast {
+                    Button {
+                        model.downloadPodcast()
+                    } label: {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.body)
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .disabled(model.isDownloadingPodcast)
                 }
-                .disabled(model.isDownloadingPodcast)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+
+            thinProgressBar
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+        }
+        .glassEffect(in: .rect(cornerRadius: 18))
+    }
+
+    private var thinProgressBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(height: 3)
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: max(0, geo.size.width * progress), height: 3)
             }
         }
-        .padding(12)
-        .glassEffect(in: .rect(cornerRadius: 20))
+        .frame(height: 3)
     }
 
     private var titleLine: String {
@@ -93,11 +108,5 @@ struct MusicPlayerBar: View {
         if model.duration > 0 { return model.duration }
         let estimatedTotal = model.elapsedTime + model.remainingTime
         return estimatedTotal > 0 ? estimatedTotal : 0
-    }
-
-    private func timeString(_ s: Double) -> String {
-        guard s.isFinite, s >= 0 else { return "0:00" }
-        let total = Int(s)
-        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }

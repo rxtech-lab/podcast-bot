@@ -76,6 +76,10 @@ struct DiscussionGenerateRequest: Codable, Sendable {
     var chapters: [Int]?
 }
 
+struct DiscussionLanguageRequest: Codable, Sendable {
+    var language: String
+}
+
 // MARK: - Audiobook chapter batches
 
 /// One chapter of the root plan annotated with its generation progress

@@ -198,7 +198,7 @@ func uploadedAudioSubtitleCues(segments []config.TranscriptSegment) []contentcre
 			Text:  text,
 		})
 	}
-	return cues
+	return contentcreator.ClampSubtitleCueOverlaps(cues)
 }
 
 // uploadedAudioTranscriptLines merges consecutive same-speaker segments into

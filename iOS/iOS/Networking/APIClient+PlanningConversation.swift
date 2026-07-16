@@ -370,6 +370,13 @@ extension APIClient {
                        body: DiscussionGenerateRequest(language: language, chapters: chapters))
     }
 
+    /// Persists the plan-view language selection immediately, so the choice
+    /// survives leaving the plan without generating.
+    func updateDiscussionLanguage(id: String, language: String) async throws -> Discussion {
+        try await send("PUT", "/api/discussions/\(id)/language",
+                       body: DiscussionLanguageRequest(language: language))
+    }
+
     /// Fetches the root plan's full chapter list annotated with per-chapter
     /// generation progress, for the chapter-checklist sheet.
     func discussionChapters(id: String) async throws -> ChaptersResponse {

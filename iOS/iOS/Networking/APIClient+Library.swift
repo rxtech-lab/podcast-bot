@@ -93,11 +93,12 @@ extension APIClient {
 
     /// Persists a cover on a discussion without publishing it, so any discussion
     /// can carry cover art (set from the new-discussion sheet or cover editor).
-    func updateDiscussionCover(id: String, cover: DiscussionCover) async throws -> Discussion {
+    /// A language persists the cover on that translation instead of the default.
+    func updateDiscussionCover(id: String, cover: DiscussionCover, language: String? = nil) async throws -> Discussion {
         try await send(
             "PATCH",
             "/api/discussions/\(id)/cover",
-            body: CoverUpdateRequest(cover: cover)
+            body: CoverUpdateRequest(cover: cover, language: language)
         )
     }
 
@@ -210,11 +211,11 @@ extension APIClient {
         )
     }
 
-    func generateDiscussionCover(id: String, prompt: String) async throws -> DiscussionCover {
+    func generateDiscussionCover(id: String, prompt: String, language: String? = nil) async throws -> DiscussionCover {
         let response: CoverGenerateResponse = try await send(
             "POST",
             "/api/discussions/\(id)/cover/generate",
-            body: CoverGenerateRequest(prompt: prompt)
+            body: CoverGenerateRequest(prompt: prompt, language: language)
         )
         return response.cover
     }

@@ -23,9 +23,10 @@ extension PlayerModel {
         if let vtt = try? await api.liveSubtitles(id: jobID, language: requestedLanguage) {
             guard presentationLanguage == requestedLanguage else { return }
             cues = Self.parseVTT(vtt)
-            // Seed the active lyric group so the list scrolls to the right place
-            // on first appearance, before the periodic time observer fires.
-            updateActiveLyricGroup(at: currentTime)
+            // Seed the caption and active lyric group so both show the right
+            // place on first appearance, before the periodic time observer
+            // fires (which never happens while paused).
+            updateCaption(at: currentTime)
         }
     }
 
@@ -55,7 +56,7 @@ extension PlayerModel {
         if let jobID = fresh.jobID,
            let vtt = try? await api.liveSubtitles(id: jobID, language: requested) {
             cues = Self.parseVTT(vtt)
-            updateActiveLyricGroup(at: currentTime)
+            updateCaption(at: currentTime)
         }
         uiActionsRefreshVersion += 1
         await refreshCoverAssets()
@@ -343,6 +344,11 @@ extension PlayerModel {
             beginPlayback(item: item)
         } else {
             pause()
+            // Still route through beginPlayback so the pending resume seek is
+            // applied once the item is ready; replaceCurrentItem reset the
+            // playhead to 0, and a paused player never fires the time observer,
+            // so skipping this left the slider at 0:00 under stale captions.
+            beginPlayback(item: item, autoplay: false)
         }
     }
 

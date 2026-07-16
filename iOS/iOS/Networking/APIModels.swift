@@ -748,6 +748,8 @@ struct DiscussionVisibilityRequest: Codable, Sendable {
 
 struct CoverGenerateRequest: Codable, Sendable {
     var prompt: String
+    /// Targets a translation's dedicated cover; nil generates the default one.
+    var language: String?
 }
 
 struct CoverGenerateResponse: Codable, Sendable {
@@ -758,6 +760,8 @@ struct CoverGenerateResponse: Codable, Sendable {
 /// discussion without changing its visibility.
 struct CoverUpdateRequest: Codable, Sendable {
     var cover: DiscussionCover
+    /// Persists the cover on that translation row; nil sets the default cover.
+    var language: String?
 }
 
 /// POST /api/discussions/{id}/shares request body: how long the minted private
@@ -791,14 +795,3 @@ struct ShareLinkDTO: Codable, Sendable {
 struct DiscussionJoinRequest: Codable, Sendable {
     var token: String?
 }
-
-struct SourceSearchRequest: Codable, Sendable {
-    var query: String
-}
-
-struct SourceSearchResponse: Codable, Sendable {
-    var sources: [SourceDTO]
-}
-
-/// One coarse progress step streamed (SSE) while the planner drafts or revises a
-/// plan — e.g. "Searching the web…", "Reading example.com", "Writing the plan".
