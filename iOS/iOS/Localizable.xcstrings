@@ -4,6 +4,16 @@
     "" : {
 
     },
+    "%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
     "%@ (.%@)" : {
       "localizations" : {
         "en" : {
@@ -1332,6 +1342,9 @@
         }
       }
     },
+    "Audio you record in the app is saved here." : {
+      "comment" : "Empty recordings list description"
+    },
     "Audiobooks" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1608,6 +1621,7 @@
       }
     },
     "Cancel" : {
+      "comment" : "Cancel delete button\nCancel rename button",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1628,6 +1642,9 @@
           }
         }
       }
+    },
+    "Cancel recording" : {
+      "comment" : "Close button on the record audio sheet"
     },
     "Caption Download Failed" : {
 
@@ -1960,7 +1977,7 @@
       }
     },
     "Close" : {
-      "comment" : "Dismiss the voice recorder after an error",
+      "comment" : "Close recorder after failure\nDismiss the voice recorder after an error",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2072,6 +2089,9 @@
     },
     "Content" : {
 
+    },
+    "Continue Recording" : {
+      "comment" : "Resume recording from the review step"
     },
     "Copied User ID" : {
       "localizations" : {
@@ -2990,6 +3010,9 @@
         }
       }
     },
+    "Create Podcast" : {
+      "comment" : "Create podcast from recording\nCreate podcast from recording button\nCreate podcast from recording toolbar button"
+    },
     "Create share link" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3284,6 +3307,7 @@
       }
     },
     "Delete" : {
+      "comment" : "Delete recording\nDelete recording button\nDelete recording swipe action",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3327,6 +3351,9 @@
         }
       }
     },
+    "Delete this recording?" : {
+      "comment" : "Confirm deleting a recording"
+    },
     "Deselect source" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3350,7 +3377,7 @@
       }
     },
     "Discard" : {
-      "comment" : "Discards a recorded voice message before sending",
+      "comment" : "Discard finished recording button\nDiscard recording button\nDiscards a recorded voice message before sending",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3371,6 +3398,9 @@
           }
         }
       }
+    },
+    "Discard this recording?" : {
+      "comment" : "Confirm discarding an audio recording"
     },
     "Discover public podcasts, listen, like, and save stations from other creators." : {
       "localizations" : {
@@ -4475,6 +4505,9 @@
         }
       }
     },
+    "Finish recording" : {
+      "comment" : "Finish button"
+    },
     "Finishing up…" : {
       "comment" : "Progress text while polling for the persisted plan after the stream ended",
       "localizations" : {
@@ -5405,6 +5438,9 @@
         }
       }
     },
+    "Keep Recording" : {
+      "comment" : "Keep recording button"
+    },
     "Korean" : {
       "comment" : "Podcast language option",
       "extractionState" : "stale",
@@ -5993,6 +6029,9 @@
         }
       }
     },
+    "Microphone access is needed to record audio." : {
+      "comment" : "Shown when mic permission is denied for podcast recording"
+    },
     "Microphone and speech recognition access are needed to record a voice message." : {
       "comment" : "Shown when mic/speech permission is denied",
       "localizations" : {
@@ -6152,6 +6191,9 @@
           }
         }
       }
+    },
+    "My Recordings" : {
+      "comment" : "Recordings list title"
     },
     "New %@" : {
       "localizations" : {
@@ -6625,6 +6667,9 @@
         }
       }
     },
+    "No Recordings" : {
+      "comment" : "Empty recordings list title"
+    },
     "No Results" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6898,6 +6943,7 @@
       }
     },
     "OK" : {
+      "comment" : "Dismiss error button",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -7186,6 +7232,9 @@
         }
       }
     },
+    "Pause" : {
+      "comment" : "Pause recording playback button"
+    },
     "Pause audio" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7229,6 +7278,12 @@
           }
         }
       }
+    },
+    "Pause recording" : {
+      "comment" : "Pause button"
+    },
+    "Paused" : {
+      "comment" : "Recorder paused status"
     },
     "PDF, Word, slides, images" : {
       "localizations" : {
@@ -7721,6 +7776,9 @@
         }
       }
     },
+    "Play" : {
+      "comment" : "Play recording playback button"
+    },
     "Play audio" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7764,6 +7822,12 @@
           }
         }
       }
+    },
+    "Playback Failed" : {
+      "comment" : "Recording playback error alert title"
+    },
+    "Playback position" : {
+      "comment" : "Recording player seek slider"
     },
     "Please use the attached files." : {
       "comment" : "Fallback chat message when sending attachments without text",
@@ -7833,6 +7897,9 @@
           }
         }
       }
+    },
+    "Podcast created" : {
+      "comment" : "Recording already turned into a podcast"
     },
     "Podcast download is not ready yet." : {
       "comment" : "Shown when the user tries to download a podcast before it is available",
@@ -8276,6 +8343,9 @@
           }
         }
       }
+    },
+    "Preparing..." : {
+      "comment" : "Recorder preparing status"
     },
     "Previous Subtitle" : {
       "extractionState" : "stale",
@@ -8747,6 +8817,7 @@
       }
     },
     "Record Audio" : {
+      "comment" : "Record audio sheet title",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -8767,6 +8838,21 @@
           }
         }
       }
+    },
+    "Recording" : {
+      "comment" : "Recorder active status\nRecording player title"
+    },
+    "Recording %@" : {
+      "comment" : "Default title for a new audio recording; parameter is the date/time"
+    },
+    "Recording Ready" : {
+      "comment" : "Record audio review step title"
+    },
+    "Recording stopped because audio services were reset. The captured audio was kept." : {
+      "comment" : "Shown when the system audio daemon restarts mid-recording"
+    },
+    "Recording title" : {
+      "comment" : "Recording title field placeholder"
     },
     "Refresh" : {
       "localizations" : {
@@ -8949,6 +9035,7 @@
       }
     },
     "Rename" : {
+      "comment" : "Rename recording\nRename recording swipe action",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -9013,6 +9100,9 @@
           }
         }
       }
+    },
+    "Rename Recording" : {
+      "comment" : "Rename recording alert title"
     },
     "Rename Speaker" : {
       "localizations" : {
@@ -9157,6 +9247,9 @@
         }
       }
     },
+    "Resume recording" : {
+      "comment" : "Resume button"
+    },
     "Retry" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9247,6 +9340,7 @@
       }
     },
     "Save" : {
+      "comment" : "Save rename button",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -9399,6 +9493,9 @@
           }
         }
       }
+    },
+    "Saved to My Recordings. Create a podcast from it now, or keep it for later." : {
+      "comment" : "Recording review step hint"
     },
     "Scheduled from %@ to %@." : {
       "comment" : "Appended to an upcoming maintenance message; start and end are formatted date/times",
@@ -10043,6 +10140,7 @@
       }
     },
     "Share" : {
+      "comment" : "Share recording",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -11228,6 +11326,9 @@
         }
       }
     },
+    "The recording could not be played." : {
+      "comment" : "Recording playback start failure"
+    },
     "The selected model is used for this speaker when the plan is generated." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -11653,6 +11754,7 @@
       }
     },
     "Title" : {
+      "comment" : "Recording title field",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {

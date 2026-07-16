@@ -10,7 +10,8 @@ import RxAuthSwift
 final class AuthManager {
     static let keychainService = "app.rxlab.debate-bot.rxauth"
     let manager: OAuthManager
-    private let tokenStorage: KeychainTokenStorage
+    private let tokenStorage: SharedRxAuthTokenStorage
+    private let legacyTokenStorage: KeychainTokenStorage
 
     /// When true (XCUITest E2E mode) the OAuth flow is bypassed entirely: the
     /// app reports a fixed authenticated "test" user and a static bearer token,
@@ -26,8 +27,11 @@ final class AuthManager {
 
     init() {
         let keychainService = Self.keychainService
-        let storage = KeychainTokenStorage(serviceName: keychainService)
+        let legacyStorage = KeychainTokenStorage(serviceName: keychainService)
+        let storage = SharedRxAuthTokenStorage()
+        Self.migrateTokensIfNeeded(from: legacyStorage, to: storage)
         self.tokenStorage = storage
+        self.legacyTokenStorage = legacyStorage
         let config = RxAuthConfiguration(
             issuer: AppConfig.authIssuer,
             clientID: AppConfig.authClientID,
@@ -67,6 +71,7 @@ final class AuthManager {
     func signOut() async {
         guard !isE2E else { return }
         await manager.logout()
+        try? legacyTokenStorage.clearAll()
     }
 
     /// Refreshes the token if needed and returns the latest access token (or nil).
@@ -80,4 +85,43 @@ final class AuthManager {
 extension AuthManager: TokenProviding {
     nonisolated func token() async -> String? { await accessToken }
     nonisolated func refreshedToken() async -> String? { await refreshedAccessToken() }
+}
+
+private extension AuthManager {
+    static func migrateTokensIfNeeded(from legacy: KeychainTokenStorage,
+                                      to shared: SharedRxAuthTokenStorage) {
+        guard shared.getAccessToken() == nil, shared.getRefreshToken() == nil else { return }
+        if let token = legacy.getAccessToken() { try? shared.saveAccessToken(token) }
+        if let token = legacy.getRefreshToken() { try? shared.saveRefreshToken(token) }
+        if let expiry = legacy.getExpiresAt() { try? shared.saveExpiresAt(expiry) }
+    }
+}
+
+/// RxAuthSwift storage backed by the access-group keychain shared with the
+/// extension. Keeping the protocol adapter here lets the shared primitive stay
+/// independent from RxAuthSwift and compile in both targets.
+private final class SharedRxAuthTokenStorage: TokenStorageProtocol, @unchecked Sendable {
+    private let keychain = SharedTokenKeychain()
+
+    func saveAccessToken(_ token: String) throws { try keychain.save(token, account: .accessToken) }
+    func getAccessToken() -> String? { keychain.value(account: .accessToken) }
+    func deleteAccessToken() throws { try keychain.delete(account: .accessToken) }
+    func saveRefreshToken(_ token: String) throws { try keychain.save(token, account: .refreshToken) }
+    func getRefreshToken() -> String? { keychain.value(account: .refreshToken) }
+    func deleteRefreshToken() throws { try keychain.delete(account: .refreshToken) }
+
+    func saveExpiresAt(_ date: Date) throws {
+        try keychain.save(String(date.timeIntervalSince1970), account: .expiresAt)
+    }
+
+    func getExpiresAt() -> Date? {
+        keychain.value(account: .expiresAt).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
+    }
+
+    func isTokenExpired() -> Bool {
+        guard let expiry = getExpiresAt() else { return true }
+        return expiry.timeIntervalSinceNow < 600
+    }
+
+    func clearAll() throws { try keychain.clear() }
 }

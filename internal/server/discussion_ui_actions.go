@@ -176,59 +176,73 @@ func (s *Server) audioBookVideoRendering(d *Discussion) bool {
 }
 
 func (s *Server) podcastMenuActions(r *http.Request, d *Discussion, lang contentcreator.Lang) []discussionUIActionItem {
-	items := make([]discussionUIActionItem, 0, 8)
+	items := make([]discussionUIActionItem, 0, 16)
+	accountItems := make([]discussionUIActionItem, 0, 1)
 	if queryBool(r, "supports_points") {
-		items = append(items, actionItem("points", phrase(lang, "Points", "点数", "點數"), "", "sparkles", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "points")))
+		accountItems = append(accountItems, actionItem("points", phrase(lang, "Points", "点数", "點數"), "", "sparkles", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "points")))
 	}
+	items = append(items, accountItems...)
+
+	creationItems := make([]discussionUIActionItem, 0, 4)
 	pendingChapters := queryBool(r, "supports_chapter_batches") && d.IsOwner && discussionIsAudioBook(d) && d.Status == DiscussionReady && s.hasPendingChapters(r, d)
 	if pendingChapters {
-		items = append(items, actionItem("generate-more-chapters", phrase(lang, "Generate More Chapters", "继续生成章节", "繼續產生章節"), "", "text.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "generate-chapters")))
+		creationItems = append(creationItems, actionItem("generate-more-chapters", phrase(lang, "Generate More Chapters", "继续生成章节", "繼續產生章節"), "", "text.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "generate-chapters")))
 	}
 	// While an audiobook still has ungenerated chapters, continuing the book
 	// is the "Generate More Chapters" flow — offering a follow-up alongside it
 	// would fork the story before it's finished.
 	if queryBool(r, "supports_follow_up") && !pendingChapters {
-		items = append(items, actionItem("create-follow-up", phrase(lang, "Create Follow-up", "创建后续节目", "建立後續節目"), "", "arrow.triangle.branch", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "follow-up")))
+		creationItems = append(creationItems, actionItem("create-follow-up", phrase(lang, "Create Follow-up", "创建后续节目", "建立後續節目"), "", "arrow.triangle.branch", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "follow-up")))
 	}
 	if queryBool(r, "supports_albums") {
 		if strings.TrimSpace(d.AlbumID) != "" {
-			items = append(items, actionItem("view-album", phrase(lang, "View Album", "查看专辑", "查看專輯"), "", "rectangle.stack", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "album")))
+			creationItems = append(creationItems, actionItem("view-album", phrase(lang, "View Album", "查看专辑", "查看專輯"), "", "rectangle.stack", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "album")))
 		} else if d.IsOwner {
-			items = append(items, actionItem("add-to-album", phrase(lang, "Add to Album", "加入专辑", "加入專輯"), "", "plus.rectangle.on.folder", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "add-to-album")))
+			creationItems = append(creationItems, actionItem("add-to-album", phrase(lang, "Add to Album", "加入专辑", "加入專輯"), "", "plus.rectangle.on.folder", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "add-to-album")))
 		}
 	}
 	if queryBool(r, "supports_create_from_plan") {
-		items = append(items, actionItem("create-from-plan", phrase(lang, "Create from Plan", "从计划创建", "從計劃建立"), phrase(lang, "Creating", "正在创建", "正在建立"), "plus.circle", "", true, "request", discussionActionLink(d.ID, "action", "create-from-plan")))
+		creationItems = append(creationItems, actionItem("create-from-plan", phrase(lang, "Create from Plan", "从计划创建", "從計劃建立"), phrase(lang, "Creating", "正在创建", "正在建立"), "plus.circle", "", true, "request", discussionActionLink(d.ID, "action", "create-from-plan")))
 	}
+	items = appendActionGroup(items, "podcast-creation-divider", creationItems)
+
+	managementItems := make([]discussionUIActionItem, 0, 4)
 	if d.IsOwner {
 		if d.Status == DiscussionReady {
-			items = append(items, actionItem("translate-podcast", phrase(lang, "Translate Podcast", "翻译播客", "翻譯 Podcast"), "", "globe", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "translation")))
+			managementItems = append(managementItems, actionItem("translate-podcast", phrase(lang, "Translate Podcast", "翻译播客", "翻譯 Podcast"), "", "globe", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "translation")))
 			if d.Script != nil && d.Script.Type == config.ContentTypeUploadedAudio && len(d.Script.TranscriptSegments) > 0 {
-				items = append(items, actionItem("edit-captions", phrase(lang, "Edit Captions", "编辑字幕", "編輯字幕"), phrase(lang, "Loading Captions", "正在加载字幕", "正在載入字幕"), "captions.bubble.fill", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "caption-editor")))
+				managementItems = append(managementItems, actionItem("edit-captions", phrase(lang, "Edit Captions", "编辑字幕", "編輯字幕"), phrase(lang, "Loading Captions", "正在加载字幕", "正在載入字幕"), "captions.bubble.fill", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "caption-editor")))
 			}
 		}
-		items = append(items, actionItem("edit-cover", phrase(lang, "Edit Cover", "编辑封面", "編輯封面"), "", "photo.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "cover")))
+		managementItems = append(managementItems, actionItem("edit-cover", phrase(lang, "Edit Cover", "编辑封面", "編輯封面"), "", "photo.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "cover")))
 		if d.Visibility == DiscussionPublic {
-			items = append(items, actionItem("make-private", phrase(lang, "Make Private", "设为私密", "設為私密"), "", "lock", "destructive", true, "request", discussionActionLink(d.ID, "action", "make-private")))
+			managementItems = append(managementItems, actionItem("make-private", phrase(lang, "Make Private", "设为私密", "設為私密"), "", "lock", "destructive", true, "request", discussionActionLink(d.ID, "action", "make-private")))
 		} else {
-			items = append(items, actionItem("publish", phrase(lang, "Publish to Market", "发布到市场", "發佈到市場"), "", "globe", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "publish")))
+			managementItems = append(managementItems, actionItem("publish", phrase(lang, "Publish to Market", "发布到市场", "發佈到市場"), "", "globe", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "publish")))
 		}
 	}
+	items = appendActionGroup(items, "podcast-management-divider", managementItems)
+
+	transferItems := make([]discussionUIActionItem, 0, 3)
 	if d.Visibility == DiscussionPublic && strings.TrimSpace(d.ShareURL) != "" {
-		items = append(items, actionItem("share-public", phrase(lang, "Share", "分享", "分享"), "", "square.and.arrow.up", "", true, "share-link", d.ShareURL))
+		transferItems = append(transferItems, actionItem("share-public", phrase(lang, "Share", "分享", "分享"), "", "square.and.arrow.up", "", true, "share-link", d.ShareURL))
 	} else if d.IsOwner {
-		items = append(items, actionItem("share-private", phrase(lang, "Share Link", "分享链接", "分享連結"), "", "square.and.arrow.up", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "share")))
+		transferItems = append(transferItems, actionItem("share-private", phrase(lang, "Share Link", "分享链接", "分享連結"), "", "square.and.arrow.up", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "share")))
 	}
 	if d.Status == DiscussionReady && strings.TrimSpace(d.JobID) != "" {
-		items = append(items, actionItem("download-captions", phrase(lang, "Download Captions", "下载字幕", "下載字幕"), "", "captions.bubble", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "captions")))
+		transferItems = append(transferItems, actionItem("download-captions", phrase(lang, "Download Captions", "下载字幕", "下載字幕"), "", "captions.bubble", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "captions")))
 	}
 	if d.Status == DiscussionReady && (strings.TrimSpace(d.DownloadURL) != "" || strings.TrimSpace(d.JobID) != "") {
-		items = append(items, actionItem("download-podcast", phrase(lang, "Download Station", "下载电台", "下載電台"), phrase(lang, "Downloading", "正在下载", "正在下載"), "arrow.down.circle", "", true, "download", discussionActionLink(d.ID, "action", "download-podcast")))
+		transferItems = append(transferItems, actionItem("download-podcast", phrase(lang, "Download Station", "下载电台", "下載電台"), phrase(lang, "Downloading", "正在下载", "正在下載"), "arrow.down.circle", "", true, "download", discussionActionLink(d.ID, "action", "download-podcast")))
 	} else if d.IsOwner && d.Status == DiscussionGenerating && strings.TrimSpace(d.JobID) != "" {
-		items = append(items, actionItem("force-stop", phrase(lang, "Force Stop", "强制停止", "強制停止"), phrase(lang, "Finalising", "正在完成", "正在完成"), "stop.fill", "destructive", true, "request", discussionActionLink(d.ID, "action", "force-stop")))
+		transferItems = append(transferItems, actionItem("force-stop", phrase(lang, "Force Stop", "强制停止", "強制停止"), phrase(lang, "Finalising", "正在完成", "正在完成"), "stop.fill", "destructive", true, "request", discussionActionLink(d.ID, "action", "force-stop")))
 	}
+	items = appendActionGroup(items, "podcast-transfer-divider", transferItems)
+
 	if queryBool(r, "supports_sign_out") {
-		items = append(items, actionItem("sign-out", phrase(lang, "Sign Out", "退出登录", "登出"), "", "rectangle.portrait.and.arrow.right", "destructive", true, "request", discussionActionLink(d.ID, "action", "sign-out")))
+		items = appendActionGroup(items, "podcast-session-divider", []discussionUIActionItem{
+			actionItem("sign-out", phrase(lang, "Sign Out", "退出登录", "登出"), "", "rectangle.portrait.and.arrow.right", "destructive", true, "request", discussionActionLink(d.ID, "action", "sign-out")),
+		})
 	}
 	return items
 }
@@ -304,6 +318,8 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 	accountItems = append(accountItems,
 		actionItem("settings", phrase(lang, "Settings", "设置", "設定"), "", "gearshape", "",
 			true, "open-sheet", homeActionLink("sheet", "settings")),
+		actionItem("recordings", phrase(lang, "My Recordings", "我的录音", "我的錄音"), "", "recordingtape", "",
+			true, "open-sheet", homeActionLink("sheet", "recordings")),
 		actionItem("whats-new", phrase(lang, "What's New", "新功能", "新功能"), "", "sparkles.rectangle.stack", "",
 			true, "open-sheet", homeActionLink("sheet", "whats-new")),
 		actionItem("refresh", phrase(lang, "Refresh", "刷新", "重新整理"), "", "arrow.clockwise", "",
@@ -320,8 +336,14 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 			true, "open-sheet", homeActionLink("sheet", "new-station")),
 		actionItem("new-album", phrase(lang, "New Album", "新建专辑", "新增專輯"), "", "rectangle.stack.badge.plus", "",
 			true, "open-sheet", homeActionLink("sheet", "new-album")),
+		dividerItem("create-audio-divider"),
 		actionItem("upload-audio", phrase(lang, "Upload Own Audio", "上传音频", "上傳音訊"), "", "waveform.badge.plus", "",
 			true, "open-sheet", homeActionLink("sheet", "upload-audio")),
+		// Recording and keeping audio locally works for every tier; only the
+		// submit-as-podcast step needs canUploadOwnAudio, which the upload
+		// precheck form and checkUploadKind already enforce.
+		actionItem("record-audio", phrase(lang, "Record Audio", "录制音频", "錄製音訊"), "", "mic.badge.plus", "",
+			true, "open-sheet", homeActionLink("sheet", "record-audio")),
 	}
 	return []discussionUIActionItem{
 		actionItem("account", phrase(lang, "Account", "账号", "帳號"), "", "person.crop.circle", "",
@@ -359,6 +381,16 @@ func actionItem(id, title, loadingTitle, systemImage, role string, enabled bool,
 
 func dividerItem(id string) discussionUIActionItem {
 	return actionItem(id, "", "", "", "", false, "divider", "")
+}
+
+func appendActionGroup(items []discussionUIActionItem, dividerID string, group []discussionUIActionItem) []discussionUIActionItem {
+	if len(group) == 0 {
+		return items
+	}
+	if len(items) > 0 {
+		items = append(items, dividerItem(dividerID))
+	}
+	return append(items, group...)
 }
 
 func (item discussionUIActionItem) withPlacement(placement string) discussionUIActionItem {

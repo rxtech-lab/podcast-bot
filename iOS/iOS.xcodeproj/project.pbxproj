@@ -34,6 +34,7 @@
 		DF6AF75C2FEE6A380045484F /* JSONSchemaValidator in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF75B2FEE6A380045484F /* JSONSchemaValidator */; };
 		DF6AF9DE2FF0EB4D0045484F /* iosUITestPlan.xctestplan in Resources */ = {isa = PBXBuildFile; fileRef = DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */; };
 		DF6AF9DF2FF0EB4D0045484F /* iosUITestPlan.xctestplan in Resources */ = {isa = PBXBuildFile; fileRef = DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */; };
+		DF9822F63009306500BBB638 /* iOSShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF9822EC3009306500BBB638 /* iOSShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -74,6 +75,13 @@
 			remoteGlobalIDString = DF6ADD9D2FEAF2CB0045484F;
 			remoteInfo = iosClip;
 		};
+		DF9822F43009306500BBB638 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DF0DA3272FE8445500A02339 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF9822EB3009306500BBB638;
+			remoteInfo = iOSShareExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -88,6 +96,17 @@
 			name = "Embed App Clips";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF9822FB3009306500BBB638 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				DF9822F63009306500BBB638 /* iOSShareExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -99,6 +118,7 @@
 		DF6ADDB82FEAF2CC0045484F /* iosClipUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosClipUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF6AE8582FEBD09E0045484F /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = iosUITestPlan.xctestplan; sourceTree = "<group>"; };
+		DF9822EC3009306500BBB638 /* iOSShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = iOSShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DFF526A12FE852D0007BEF2A /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		DFF526A22FE852D0007BEF2A /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		DFF526A32FE852D0007BEF2A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -255,6 +275,11 @@
 				Features/Player/VideoGenerateErrorAlert.swift,
 				Features/Player/VoiceMessageRecorder.swift,
 				Features/Player/VoiceRecorderSheet.swift,
+				Features/Recording/CircularWaveformView.swift,
+				Features/Recording/MyRecordingsView.swift,
+				Features/Recording/PodcastRecorder.swift,
+				Features/Recording/RecordAudioSheet.swift,
+				Features/Recording/RecordingStore.swift,
 				Features/Share/ShareSheet.swift,
 				Features/Summary/MermaidBlock.swift,
 				Features/Summary/NotionExportSheet.swift,
@@ -292,9 +317,21 @@
 			);
 			target = DF6ADD9D2FEAF2CB0045484F /* iosClip */;
 		};
+		DF9822F73009306500BBB638 /* Exceptions for "iOSShareExtension" folder in "iOSShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = DF9822EB3009306500BBB638 /* iOSShareExtension */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		AA1100013009306500BBB638 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		DF0DA3312FE8445500A02339 /* iOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -329,6 +366,14 @@
 		DF6ADDBB2FEAF2CC0045484F /* iosClipUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = iosClipUITests;
+			sourceTree = "<group>";
+		};
+		DF9822ED3009306500BBB638 /* iOSShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DF9822F73009306500BBB638 /* Exceptions for "iOSShareExtension" folder in "iOSShareExtension" target */,
+			);
+			path = iOSShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -400,6 +445,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF9822E93009306500BBB638 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -415,6 +467,8 @@
 				DF6ADD9F2FEAF2CB0045484F /* iosClip */,
 				DF6ADDB12FEAF2CC0045484F /* iosClipTests */,
 				DF6ADDBB2FEAF2CC0045484F /* iosClipUITests */,
+				DF9822ED3009306500BBB638 /* iOSShareExtension */,
+				AA1100013009306500BBB638 /* Shared */,
 				DF6ADDF02FEB03A30045484F /* Frameworks */,
 				DF0DA3302FE8445500A02339 /* Products */,
 			);
@@ -429,6 +483,7 @@
 				DF6ADD9E2FEAF2CB0045484F /* iosClip.app */,
 				DF6ADDAE2FEAF2CC0045484F /* iosClipTests.xctest */,
 				DF6ADDB82FEAF2CC0045484F /* iosClipUITests.xctest */,
+				DF9822EC3009306500BBB638 /* iOSShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -462,13 +517,16 @@
 				DF0DA32C2FE8445500A02339 /* Frameworks */,
 				DF0DA32D2FE8445500A02339 /* Resources */,
 				DF6ADDC72FEAF2CC0045484F /* Embed App Clips */,
+				DF9822FB3009306500BBB638 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				DF6ADDC12FEAF2CC0045484F /* PBXTargetDependency */,
+				DF9822F53009306500BBB638 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+				AA1100013009306500BBB638 /* Shared */,
 				DF0DA3312FE8445500A02339 /* iOS */,
 			);
 			name = iOS;
@@ -552,6 +610,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+				AA1100013009306500BBB638 /* Shared */,
 				DF6ADD9F2FEAF2CB0045484F /* iosClip */,
 			);
 			name = iosClip;
@@ -616,6 +675,29 @@
 			productReference = DF6ADDB82FEAF2CC0045484F /* iosClipUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		DF9822EB3009306500BBB638 /* iOSShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF9822F83009306500BBB638 /* Build configuration list for PBXNativeTarget "iOSShareExtension" */;
+			buildPhases = (
+				DF9822E83009306500BBB638 /* Sources */,
+				DF9822E93009306500BBB638 /* Frameworks */,
+				DF9822EA3009306500BBB638 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA1100013009306500BBB638 /* Shared */,
+				DF9822ED3009306500BBB638 /* iOSShareExtension */,
+			);
+			name = iOSShareExtension;
+			packageProductDependencies = (
+			);
+			productName = iOSShareExtension;
+			productReference = DF9822EC3009306500BBB638 /* iOSShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -647,6 +729,9 @@
 					DF6ADDB72FEAF2CC0045484F = {
 						CreatedOnToolsVersion = 26.5;
 						TestTargetID = DF6ADD9D2FEAF2CB0045484F;
+					};
+					DF9822EB3009306500BBB638 = {
+						CreatedOnToolsVersion = 26.5;
 					};
 				};
 			};
@@ -682,6 +767,7 @@
 				DF6ADD9D2FEAF2CB0045484F /* iosClip */,
 				DF6ADDAD2FEAF2CC0045484F /* iosClipTests */,
 				DF6ADDB72FEAF2CC0045484F /* iosClipUITests */,
+				DF9822EB3009306500BBB638 /* iOSShareExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -733,6 +819,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF9822EA3009306500BBB638 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -778,6 +871,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF9822E83009306500BBB638 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -805,6 +905,11 @@
 			isa = PBXTargetDependency;
 			target = DF6ADD9D2FEAF2CB0045484F /* iosClip */;
 			targetProxy = DF6ADDC02FEAF2CC0045484F /* PBXContainerItemProxy */;
+		};
+		DF9822F53009306500BBB638 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF9822EB3009306500BBB638 /* iOSShareExtension */;
+			targetProxy = DF9822F43009306500BBB638 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1294,6 +1399,73 @@
 			};
 			name = Release;
 		};
+		DF9822F93009306500BBB638 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = DFF526A12FE852D0007BEF2A /* Debug.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = iOSShareExtension/iOSShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = T7GYB573Y6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iOSShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = PanelFM;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.rxlab.debate-bot.iOSShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		DF9822FA3009306500BBB638 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = DFF526A22FE852D0007BEF2A /* Release.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = iOSShareExtension/iOSShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = T7GYB573Y6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iOSShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = PanelFM;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.rxlab.debate-bot.iOSShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1356,6 +1528,15 @@
 			buildConfigurations = (
 				DF6ADDCC2FEAF2CC0045484F /* Debug */,
 				DF6ADDCD2FEAF2CC0045484F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF9822F83009306500BBB638 /* Build configuration list for PBXNativeTarget "iOSShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF9822F93009306500BBB638 /* Debug */,
+				DF9822FA3009306500BBB638 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

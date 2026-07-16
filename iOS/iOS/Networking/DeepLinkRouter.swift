@@ -23,9 +23,15 @@ final class DeepLinkRouter {
     var isResolving = false
 
     struct OpenedDiscussion: Identifiable {
-        let id = UUID()
+        let id: UUID
         let discussion: Discussion
         let shareToken: String?
+
+        init(id: UUID = UUID(), discussion: Discussion, shareToken: String?) {
+            self.id = id
+            self.discussion = discussion
+            self.shareToken = shareToken
+        }
     }
 
     /// Records an incoming URL as a pending deep link if it is one we handle.

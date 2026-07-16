@@ -4,6 +4,8 @@ import SwiftUI
 /// device stores the set of seen ids, so "new" = `all` minus seen. Changing a
 /// slug re-shows the card; appending a new entry surfaces it to existing users.
 struct WhatsNewFeature: Identifiable, Equatable {
+    private static let maximumFeaturesPerPage = 4
+
     let id: String
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey
@@ -11,6 +13,27 @@ struct WhatsNewFeature: Identifiable, Equatable {
 
     static func == (lhs: WhatsNewFeature, rhs: WhatsNewFeature) -> Bool {
         lhs.id == rhs.id
+    }
+
+    /// Keep the focused, one-feature cards for short updates. Once there are
+    /// more than four cards, distribute them across compact multi-feature
+    /// pages without leaving a single feature alone on the last page.
+    static func presentationPages(for features: [WhatsNewFeature]) -> [[WhatsNewFeature]] {
+        guard features.count > maximumFeaturesPerPage else {
+            return features.map { [$0] }
+        }
+
+        let pageCount = (features.count + maximumFeaturesPerPage - 1) / maximumFeaturesPerPage
+        let minimumPageSize = features.count / pageCount
+        let pagesWithExtraFeature = features.count % pageCount
+        var startIndex = features.startIndex
+
+        return (0..<pageCount).map { pageIndex in
+            let pageSize = minimumPageSize + (pageIndex < pagesWithExtraFeature ? 1 : 0)
+            let endIndex = features.index(startIndex, offsetBy: pageSize)
+            defer { startIndex = endIndex }
+            return Array(features[startIndex..<endIndex])
+        }
     }
 
     /// All shipped cards, oldest first. Append new cards with a fresh slug.

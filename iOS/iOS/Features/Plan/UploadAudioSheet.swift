@@ -15,6 +15,11 @@ struct UploadAudioSheet: View {
     @Environment(\.dismiss) private var dismiss
     /// Called once the discussion is created and transcription has started.
     var onCreated: (Discussion) -> Void = { _ in }
+    /// Pre-picked audio (e.g. an in-app recording) uploaded automatically
+    /// instead of the user choosing a file. `initialFilename` becomes the
+    /// server-side filename (it titles the episode).
+    var initialFileURL: URL?
+    var initialFilename: String?
 
     @State private var precheckForm: PrecheckFormDTO?
     @State private var formSchema: JSONSchema?
@@ -65,6 +70,9 @@ struct UploadAudioSheet: View {
         }
         .task {
             await loadPrecheck()
+            if let url = initialFileURL, !unavailable {
+                audioCoordinator.stageInitialFile(url: url, filename: initialFilename ?? url.lastPathComponent)
+            }
         }
     }
 

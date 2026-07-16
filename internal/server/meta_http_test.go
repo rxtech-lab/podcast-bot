@@ -324,6 +324,39 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 	}
 }
 
+func TestHandlePrecheckShareExtensionOmitsAttachmentPicker(t *testing.T) {
+	srv := New(Deps{Bus: eventbus.New(nil), Sessions: NewSessionRegistry(), Log: slog.Default()})
+	req := httptest.NewRequest(http.MethodGet, "/api/precheck?surface=share-extension", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out precheckResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	form := out.NewDiscussion.Form
+	props := form.Schema["properties"].(map[string]any)
+	if _, ok := props["attachments"]; ok {
+		t.Fatal("share-extension schema must not render attachments")
+	}
+	if _, ok := form.UISchema["attachments"]; ok {
+		t.Fatal("share-extension ui schema must not contain attachments widget")
+	}
+	if _, ok := form.InitialData["attachments"]; ok {
+		t.Fatal("share-extension initial data must not contain attachments")
+	}
+	if _, ok := props["settings"]; !ok {
+		t.Fatal("share-extension schema lost settings")
+	}
+	for _, field := range form.UISchema["ui:order"].([]any) {
+		if field == "attachments" {
+			t.Fatal("share-extension ui order still contains attachments")
+		}
+	}
+}
+
 func TestHandlePrecheckNewAlbumForm(t *testing.T) {
 	srv := New(Deps{Bus: eventbus.New(nil), Sessions: NewSessionRegistry(), Log: slog.Default()})
 	req := httptest.NewRequest(http.MethodGet, "/api/precheck", nil)

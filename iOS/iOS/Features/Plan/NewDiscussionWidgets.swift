@@ -442,6 +442,7 @@ final class UploadAudioCoordinator {
     private var api: APIClient?
     private var write: ((FormData) -> Void)?
     private var maxBytes: Int64 = 0
+    private var initialFile: (url: URL, filename: String)?
 
     func configure(api: APIClient) {
         if self.api == nil { self.api = api }
@@ -450,6 +451,24 @@ final class UploadAudioCoordinator {
     func bind(maxBytes: Int64, write: @escaping (FormData) -> Void) {
         self.maxBytes = maxBytes
         self.write = write
+        // A pre-picked file (e.g. an in-app recording) can only upload once the
+        // widget has bound the form writer; consume it now.
+        if let file = initialFile {
+            initialFile = nil
+            importFile(file.url, filenameOverride: file.filename)
+        }
+    }
+
+    /// Queues a file to upload as soon as the form widget binds — used when the
+    /// caller already has the audio (an in-app recording) instead of the user
+    /// picking one. `filename` is what the server sees (it titles the episode).
+    func stageInitialFile(url: URL, filename: String) {
+        guard status == .idle else { return }
+        if write != nil, api != nil {
+            importFile(url, filenameOverride: filename)
+        } else {
+            initialFile = (url, filename)
+        }
     }
 
     var isUploading: Bool { status == .uploading }
@@ -457,10 +476,10 @@ final class UploadAudioCoordinator {
 
     /// Streams the picked file to storage and writes the audio object into the
     /// form on success.
-    func importFile(_ url: URL) {
+    func importFile(_ url: URL, filenameOverride: String? = nil) {
         guard let api else { return }
         let secured = url.startAccessingSecurityScopedResource()
-        let name = url.lastPathComponent
+        let name = filenameOverride ?? url.lastPathComponent
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         if maxBytes > 0, size > maxBytes {

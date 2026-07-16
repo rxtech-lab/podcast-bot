@@ -40,6 +40,8 @@
 	<string>$(AppAuthScopes)</string>
 	<key>RevenueCatAPIKey</key>
 	<string>$(REVENUECAT_API_KEY)</string>
+	<key>SharedKeychainAccessGroup</key>
+	<string>$(AppIdentifierPrefix)app.rxlab.debate-bot.shared</string>
 
 	<!-- OAuth redirect custom URL scheme (debatepod://oauth-callback). -->
 	<key>CFBundleURLTypes</key>
