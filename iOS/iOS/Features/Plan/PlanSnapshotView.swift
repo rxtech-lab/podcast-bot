@@ -243,7 +243,7 @@ struct PlanSnapshotCard: View {
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.primary)
                 }
-                if !snapshot.topic.isEmpty {
+                if !snapshot.topic.isEmpty && snapshot.topic != snapshot.title {
                     Text("Topic: \(snapshot.topic)")
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondaryText)

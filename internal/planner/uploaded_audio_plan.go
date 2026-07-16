@@ -3,6 +3,7 @@ package planner
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/config"
@@ -12,6 +13,11 @@ import (
 // can't be persisted as the discussion title.
 const uploadedAudioMaxTitleRunes = 200
 
+// uploadedAudioLanguageRe accepts BCP-47-shaped tags ("en", "zh-CN",
+// "zh-Hant-TW") so an arbitrary model string can't be persisted as the plan
+// language.
+var uploadedAudioLanguageRe = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$`)
+
 // uploadedAudioSystemContract is appended to the base planning system prompt
 // for uploaded-audio conversations: the agent proofreads a real transcript, it
 // never authors content.
@@ -20,7 +26,11 @@ Uploaded-audio transcript review contract:
 - The plan is a transcript of the user's own uploaded audio recording, split into indexed segments with fixed timings. Your job is proofreading, NOT authoring.
 - Fix transcription errors only: misheard words, wrong homophones, garbled names or terms, missing or wrong punctuation, and segments attributed to the wrong speaker.
 - Never invent, add, remove, reorder, merge, or split segments, and never change what was actually said. Timings are server-owned and cannot be edited.
+- Every text correction must stay inside its existing segment's displayed start-end time range. Never move a clause, sentence, or other words into a neighboring segment, and never shorten one segment by redistributing the rest of its text across later indices.
+- If a correction would substantially rewrite a segment or change which words belong to its time range, leave that segment unchanged and tell the user to use the transcript editor.
 - update_plan takes only the segments you change (by their index), an optional corrected title, and optional speaker renames (e.g. "Speaker 1" → a real name the audio reveals). Unlisted segments stay exactly as they are.
+- The stored title was auto-derived from the uploaded file's name, so it is usually meaningless. On your first review, always call update_plan with a generated episode title that describes what the audio is actually about — short and punchy, FEWER THAN 10 WORDS, in the transcript's language. Never keep a filename-shaped title.
+- The plan's language must be the audio's spoken language as a BCP-47 tag (e.g. "en-US", "zh-CN", "ja-JP"). When the current language shown with the transcript is empty or does not match what the speakers actually speak, set "language" in update_plan.
 - You may rename speakers only when the audio content makes the mapping obvious, or when the user asks.
 - Reply in the same language as the transcript.`
 
@@ -32,7 +42,8 @@ func uploadedAudioPlanSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"title": map[string]any{"type": "string", "description": "Optional corrected episode title. Omit to keep the current title."},
+			"title": map[string]any{"type": "string", "description": "Generated episode title describing the audio content: fewer than 10 words, in the transcript's language. Always provide one on the first review (the stored title is just the uploaded filename); afterwards omit to keep the current title."},
+			"language": map[string]any{"type": "string", "description": "BCP-47 tag of the audio's spoken language, e.g. \"en-US\" or \"zh-CN\". Set it when the plan's current language is empty or does not match the transcript; omit to keep it."},
 			"speaker_renames": map[string]any{
 				"type":        "array",
 				"description": "Optional speaker renames applied across the whole transcript.",
@@ -47,12 +58,12 @@ func uploadedAudioPlanSchema() map[string]any {
 			},
 			"segments": map[string]any{
 				"type":        "array",
-				"description": "ONLY the transcript segments being corrected, identified by their zero-based index. Unlisted segments are kept unchanged.",
+				"description": "ONLY transcript segments receiving small proofreading corrections, identified by zero-based index. Keep every correction within that segment's existing time range; never redistribute text between indices. Unlisted segments stay unchanged.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"index":   map[string]any{"type": "integer", "description": "Zero-based index of the segment in the transcript."},
-						"text":    map[string]any{"type": "string", "description": "Corrected text for this segment. Omit to keep the text."},
+						"text":    map[string]any{"type": "string", "description": "A small in-segment proofreading correction. It must retain all speech belonging to this segment's fixed time range and must not borrow from or move text to adjacent segments. Omit to keep the text."},
 						"speaker": map[string]any{"type": "string", "description": "Corrected speaker label for this segment. Omit to keep the speaker."},
 					},
 					"required": []string{"index"},
@@ -71,20 +82,34 @@ func renderUploadedAudioTranscript(t *config.DebateTopic) string {
 	if t == nil || len(t.TranscriptSegments) == 0 {
 		return ""
 	}
+	lang := strings.TrimSpace(t.Language)
+	if lang == "" {
+		lang = "not set"
+	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Current transcript of %q (%d segments; format: index | speaker | start | text):\n",
-		t.Title, len(t.TranscriptSegments)))
+	sb.WriteString(fmt.Sprintf("Current transcript of %q (language: %s; %d segments; format: index | speaker | fixed start-end | text):\n",
+		t.Title, lang, len(t.TranscriptSegments)))
 	for i, seg := range t.TranscriptSegments {
-		total := seg.OffsetMS / 1000
-		sb.WriteString(fmt.Sprintf("%d | %s | %d:%02d:%02d | %s\n",
-			i, seg.Speaker, total/3600, (total%3600)/60, total%60, seg.Text))
+		sb.WriteString(fmt.Sprintf("%d | %s | %s-%s | %s\n",
+			i, seg.Speaker, uploadedAudioTimestamp(seg.OffsetMS),
+			uploadedAudioTimestamp(seg.OffsetMS+seg.DurationMS), seg.Text))
 	}
 	return sb.String()
+}
+
+func uploadedAudioTimestamp(ms int64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	totalSeconds := ms / 1000
+	return fmt.Sprintf("%d:%02d:%02d.%03d", totalSeconds/3600,
+		(totalSeconds%3600)/60, totalSeconds%60, ms%1000)
 }
 
 // uploadedAudioDraft mirrors uploadedAudioPlanSchema.
 type uploadedAudioDraft struct {
 	Title          string `json:"title"`
+	Language       string `json:"language"`
 	SpeakerRenames []struct {
 		From string `json:"from"`
 		To   string `json:"to"`
@@ -123,6 +148,12 @@ func assembleUploadedAudioPlan(existing *config.DebateTopic, d *uploadedAudioDra
 			title = string(runes[:uploadedAudioMaxTitleRunes])
 		}
 		merged.Title = title
+	}
+	if lang := strings.TrimSpace(d.Language); lang != "" {
+		if !uploadedAudioLanguageRe.MatchString(lang) {
+			return nil, fmt.Errorf("language %q is not a BCP-47 tag such as \"en-US\" or \"zh-CN\"", lang)
+		}
+		merged.Language = lang
 	}
 	for _, seg := range d.Segments {
 		if seg.Index == nil {

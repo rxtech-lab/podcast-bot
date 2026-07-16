@@ -38,6 +38,7 @@ const (
 	PushKindPodcastAudioReady PushNotificationKind = "podcast_audio_ready"
 	PushKindPodcastVideoReady PushNotificationKind = "podcast_video_ready"
 	PushKindSummaryReady      PushNotificationKind = "summary_ready"
+	PushKindTranslationReady  PushNotificationKind = "translation_ready"
 	PushKindMarketLike        PushNotificationKind = "market_like"
 )
 

@@ -30,6 +30,9 @@ type Env struct {
 	// that writes the Markdown summary document for a finished podcast. Falls back
 	// to HostModel when unset. Set via PODCAST_SUMMARY_MODEL.
 	PodcastSummaryModel string
+	// PodcastTranslationModel translates the durable, text-only presentation of
+	// a podcast. It falls back to PodcastSummaryModel, then HostModel.
+	PodcastTranslationModel string
 	// JudgementModel is the silent fact-checker used during discussion
 	// podcasts. Falls back to HostModel when unset. Set via
 	// JUDGEMENT_MODEL_NAME.
@@ -109,6 +112,9 @@ type Env struct {
 	// balance and never starts uncharged. Reconciled to actual usage on completion.
 	// Default $0.05. Override with POINTS_SUMMARY_EST_USD.
 	PointsSummaryEstUSD float64
+	// PointsTranslationEstUSD is reserved before a podcast translation and
+	// reconciled to actual metered LLM usage. Default $0.10.
+	PointsTranslationEstUSD float64
 
 	// PointsMinPerPodcast is the floor charged for a generation when its real
 	// cost can't be determined, so a podcast is never free. Default 1.
@@ -348,19 +354,20 @@ func LoadEnv() (*Env, error) {
 	pointsCostLeverage, pointsPerUSDCost := loadPointsCostConfig()
 
 	e := &Env{
-		OpenAIBaseURL:          strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
-		OpenAIKey:              strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
-		HostModel:              strings.TrimSpace(os.Getenv("HOST_MODEL")),
-		ScenePlannerModel:      strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
-		PodcastSummaryModel:    strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_MODEL")),
-		JudgementModel:         strings.TrimSpace(os.Getenv("JUDGEMENT_MODEL_NAME")),
-		PodcastSummaryPPTModel: strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
-		PPTXRendererScript:     strings.TrimSpace(os.Getenv("PPTX_RENDERER_SCRIPT")),
-		LibreOfficePath:        strings.TrimSpace(os.Getenv("LIBREOFFICE_PATH")),
-		CompressionBaseURL:     strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
-		CompressionKey:         strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
-		CompressionModel:       strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
-		TranscribeModel:        strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL")),
+		OpenAIBaseURL:           strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
+		OpenAIKey:               strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+		HostModel:               strings.TrimSpace(os.Getenv("HOST_MODEL")),
+		ScenePlannerModel:       strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
+		PodcastSummaryModel:     strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_MODEL")),
+		PodcastTranslationModel: strings.TrimSpace(os.Getenv("PODCAST_TRANSLATION_MODEL")),
+		JudgementModel:          strings.TrimSpace(os.Getenv("JUDGEMENT_MODEL_NAME")),
+		PodcastSummaryPPTModel:  strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
+		PPTXRendererScript:      strings.TrimSpace(os.Getenv("PPTX_RENDERER_SCRIPT")),
+		LibreOfficePath:         strings.TrimSpace(os.Getenv("LIBREOFFICE_PATH")),
+		CompressionBaseURL:      strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
+		CompressionKey:          strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
+		CompressionModel:        strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
+		TranscribeModel:         strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL")),
 		LLMInputCostPerMillion: parseFloatEnv(
 			"LLM_INPUT_COST_PER_MILLION",
 		),
@@ -378,6 +385,7 @@ func LoadEnv() (*Env, error) {
 		PointsEstCostPerMinuteUSD:        parseFloatEnvDefault("POINTS_EST_COST_PER_MINUTE_USD", 0.02),
 		PointsPlanGateUSD:                parseFloatEnvDefault("POINTS_PLAN_GATE_USD", 0.05),
 		PointsSummaryEstUSD:              parseFloatEnvDefault("POINTS_SUMMARY_EST_USD", 0.05),
+		PointsTranslationEstUSD:          parseFloatEnvDefault("POINTS_TRANSLATION_EST_USD", 0.10),
 		PointsMinPerPodcast:              parseIntEnvDefault("POINTS_MIN_PER_PODCAST", 1),
 		PointsMinPerPlanningConversation: parseIntEnvDefault("POINTS_MIN_PER_PLANNING_CONVERSATION", 1),
 		PointsSignupGrant:                parseIntEnvDefault("POINTS_SIGNUP_GRANT", 0),
@@ -455,6 +463,9 @@ func LoadEnv() (*Env, error) {
 	if e.PodcastSummaryModel == "" {
 		e.PodcastSummaryModel = e.HostModel
 	}
+	if e.PodcastTranslationModel == "" {
+		e.PodcastTranslationModel = e.PodcastSummaryModel
+	}
 	if e.JudgementModel == "" {
 		e.JudgementModel = e.HostModel
 	}
@@ -531,7 +542,7 @@ func LoadEnv() (*Env, error) {
 		if e.OpenAIKey == "" {
 			e.OpenAIKey = "e2e"
 		}
-		for _, m := range []*string{&e.HostModel, &e.CompressionModel, &e.ScenePlannerModel, &e.PodcastSummaryModel, &e.JudgementModel, &e.PodcastSummaryPPTModel} {
+		for _, m := range []*string{&e.HostModel, &e.CompressionModel, &e.ScenePlannerModel, &e.PodcastSummaryModel, &e.PodcastTranslationModel, &e.JudgementModel, &e.PodcastSummaryPPTModel} {
 			if *m == "" {
 				*m = "e2e-fake-model"
 			}

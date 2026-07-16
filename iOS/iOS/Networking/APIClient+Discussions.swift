@@ -37,7 +37,8 @@ extension APIClient {
         return try await get("/api/discussions", query: queryItems)
     }
 
-    func discussion(id: String, editLimit: Int? = nil, editBefore: Int64? = nil, includeEditTurns: Bool? = nil) async throws -> Discussion {
+    func discussion(id: String, editLimit: Int? = nil, editBefore: Int64? = nil,
+                    includeEditTurns: Bool? = nil, language: String? = nil) async throws -> Discussion {
         var query: [URLQueryItem] = []
         if let editLimit {
             query.append(URLQueryItem(name: "edit_limit", value: String(editLimit)))
@@ -48,17 +49,22 @@ extension APIClient {
         if let includeEditTurns {
             query.append(URLQueryItem(name: "include_edit_turns", value: includeEditTurns ? "true" : "false"))
         }
+        if let language, !language.isEmpty {
+            query.append(URLQueryItem(name: "language", value: language))
+        }
         return try await get("/api/discussions/\(id)", query: query)
     }
 
     /// Opens a web-player/deep-link discussion ID. Private owner podcasts are
     /// only visible through the authenticated detail endpoint; public podcasts
     /// remain available through the market endpoint.
-    func playerDiscussion(id: String) async throws -> Discussion {
+    func playerDiscussion(id: String, language: String? = nil,
+                          includeEditTurns: Bool? = nil) async throws -> Discussion {
         do {
-            return try await discussion(id: id)
+            return try await discussion(id: id, includeEditTurns: includeEditTurns,
+                                        language: language)
         } catch APIError.http(404, _) {
-            let discussion = try await marketStation(id: id)
+            let discussion = try await marketStation(id: id, language: language)
             try? await joinDiscussion(id: id, token: nil)
             return discussion
         }
@@ -84,10 +90,13 @@ extension APIClient {
     /// detail payload only carries a content-free `summary` descriptor; this is
     /// the separate endpoint the summary view calls on mount. Throws (404) when no
     /// summary exists yet.
-    func summary(id: String, docType: String = "summary") async throws -> SummaryDocument {
+    func summary(id: String, docType: String = "summary", language: String? = nil) async throws -> SummaryDocument {
         var query: [URLQueryItem] = []
         if docType != "summary" {
             query.append(URLQueryItem(name: "doc_type", value: docType))
+        }
+        if let language, !language.isEmpty {
+            query.append(URLQueryItem(name: "language", value: language))
         }
         return try await get("/api/discussions/\(id)/summary", query: query)
     }
@@ -107,8 +116,18 @@ extension APIClient {
     /// detail payload only carries a content-free `mindmap` descriptor; this is
     /// the separate endpoint the mindmap view calls on mount. Throws (404) when
     /// no mindmap exists yet.
-    func mindmap(id: String) async throws -> MindmapDocument {
-        try await get("/api/discussions/\(id)/mindmap")
+    func mindmap(id: String, language: String? = nil) async throws -> MindmapDocument {
+        let query = language.map { [URLQueryItem(name: "language", value: $0)] } ?? []
+        return try await get("/api/discussions/\(id)/mindmap", query: query)
+    }
+
+    func discussionTranslations(id: String) async throws -> DiscussionTranslationsResponse {
+        try await get("/api/discussions/\(id)/translations")
+    }
+
+    func translateDiscussion(id: String, targetLanguage: String) async throws -> DiscussionTranslationMeta {
+        try await send("POST", "/api/discussions/\(id)/translations",
+                       body: DiscussionTranslationRequest(targetLanguage: targetLanguage))
     }
 
     /// Starts or retries mindmap generation for an owned, finished discussion
@@ -177,10 +196,14 @@ extension APIClient {
     /// diagrams) and writes it to a temporary file, returning the local URL ready
     /// to share/export. Throws 404 when no summary exists, 503 when PDF export
     /// isn't configured on the server.
-    func downloadSummaryPDF(id: String, docType: String = "summary", title: String) async throws -> URL {
+    func downloadSummaryPDF(id: String, docType: String = "summary", title: String,
+                            language: String? = nil) async throws -> URL {
         var query: [URLQueryItem] = []
         if docType != "summary" {
             query.append(URLQueryItem(name: "doc_type", value: docType))
+        }
+        if let language, !language.isEmpty {
+            query.append(URLQueryItem(name: "language", value: language))
         }
         var req = request(method: "GET",
                           path: "/api/discussions/\(id)/summary/pdf",

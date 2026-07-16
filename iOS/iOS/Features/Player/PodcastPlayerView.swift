@@ -43,6 +43,11 @@ struct PodcastPlayerView: View {
     @State var showingPointsHistory = false
     @State var showingPublishSheet = false
     @State var showingCoverEditor = false
+    @State var showingTranslationSettings = false
+    @State var showingCaptionDownloadSheet = false
+    @State var selectedCaptionEditor: UploadedAudioTranscriptPresentation?
+    @State var isLoadingCaptionEditor = false
+    @State var captionEditorLoadError: String?
     @State var showingShareSheet = false
     @State var showingCreatorProfile = false
     @State var showingFollowUpForm = false
@@ -71,6 +76,8 @@ struct PodcastPlayerView: View {
     @State var transcriptIsAtBottom = true
     @State var transcriptShouldScrollToBottom = false
     @State var transcriptScrollRequestTask: Task<Void, Never>?
+    @State var isSwitchingLanguage = false
+    @State var languageSwitchError: String?
 
     /// Stable id for the optional points-summary accessory row so it doesn't
     /// churn its identity across renders.
@@ -94,7 +101,7 @@ struct PodcastPlayerView: View {
                 ProgressView().tint(Theme.accent)
             }
         }
-        .navigationTitle(discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : discussion.displayTitle)
+        .navigationTitle(currentDiscussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : currentDiscussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { podcastToolbar }
         .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
@@ -103,7 +110,7 @@ struct PodcastPlayerView: View {
         .modifier(MindmapGenerateErrorAlert(error: $mindmapGenerateError))
         .modifier(VideoGenerateErrorAlert(error: $videoGenerateError))
         .sheet(isPresented: $showingPlan) {
-            PlanSheetView(discussion: currentDiscussion)
+            PlanSheetView(discussion: currentDiscussion, language: model?.presentationLanguage)
         }
         .sheet(isPresented: $showingSummary) {
             summarySheet
@@ -134,6 +141,40 @@ struct PodcastPlayerView: View {
         }
         .sheet(isPresented: $showingCoverEditor) {
             coverEditorSheet
+        }
+        .sheet(isPresented: $showingTranslationSettings) {
+            TranslationSettingsSheet(
+                discussionID: currentDiscussion.id,
+                sourceLanguage: sourceLanguage,
+                initialTranslations: currentDiscussion.translations ?? [],
+                api: APIClient(tokens: auth),
+                onTranslationsChanged: { translations in
+                    model?.discussion.translations = translations
+                },
+                onReady: { language in
+                    Task {
+                        await switchPresentationLanguage(to: language)
+                        await purchases.refreshBalance()
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showingCaptionDownloadSheet) {
+            if let jobID = currentDiscussion.jobID {
+                CaptionDownloadSheet(
+                    jobID: jobID,
+                    title: currentDiscussion.displayTitle,
+                    language: model?.presentationLanguage,
+                    api: APIClient(tokens: auth)
+                )
+            }
+        }
+        .sheet(item: $selectedCaptionEditor) { presentation in
+            UploadedAudioTranscriptSheet(
+                discussionID: currentDiscussion.id,
+                presentation: presentation,
+                onUpdated: { _ in refreshAfterCaptionEdit() }
+            )
         }
         .sheet(isPresented: $showingShareSheet) {
             shareSheet
@@ -186,11 +227,55 @@ struct PodcastPlayerView: View {
         } message: {
             Text("The current generation will stop after finalising audio that has already been created. New turns will not be generated.")
         }
+        .alert("Couldn’t change language", isPresented: Binding(
+            get: { languageSwitchError != nil },
+            set: { if !$0 { languageSwitchError = nil } }
+        )) {
+            Button("OK", role: .cancel) { languageSwitchError = nil }
+        } message: {
+            Text(languageSwitchError ?? "")
+        }
+        .alert("Couldn’t Open Caption Editor", isPresented: Binding(
+            get: { captionEditorLoadError != nil },
+            set: { if !$0 { captionEditorLoadError = nil } }
+        )) {
+            Button("OK", role: .cancel) { captionEditorLoadError = nil }
+        } message: {
+            Text(captionEditorLoadError ?? "")
+        }
         .preventsIdleSleep()
     }
 
     @ToolbarContentBuilder
     var podcastToolbar: some ToolbarContent {
+        if !readyTranslationLanguages.isEmpty {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        Task { await switchPresentationLanguage(to: sourceLanguage) }
+                    } label: {
+                        languageMenuLabel(sourceLanguage)
+                    }
+                    .accessibilityIdentifier("player.language.\(sourceLanguage)")
+                    ForEach(readyTranslationLanguages, id: \.self) { language in
+                        Button {
+                            Task { await switchPresentationLanguage(to: language) }
+                        } label: {
+                            languageMenuLabel(language)
+                        }
+                        .accessibilityIdentifier("player.language.\(language)")
+                    }
+                } label: {
+                    if isSwitchingLanguage {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "globe")
+                    }
+                }
+                .accessibilityLabel("Podcast language")
+                .accessibilityIdentifier("player.languagePicker")
+            }
+        }
         if currentCreator != nil {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -239,24 +324,6 @@ struct PodcastPlayerView: View {
         }
     }
 
-    var currentCreator: CreatorProfile? {
-        model?.discussion.creator ?? discussion.creator
-    }
-
-    var model: PlayerModel? {
-        playerSession?.model
-    }
-
-    var currentDiscussion: Discussion {
-        model?.discussion ?? discussion
-    }
-
-    /// Whether the Summary menu item is enabled — true only once the server has
-    /// generated the podcast's summary document (status `ready`).
-    var summaryAvailable: Bool {
-        currentDiscussion.hasSummary
-    }
-
     var summaryPending: Bool {
         currentDiscussion.summaryPending
     }
@@ -303,6 +370,7 @@ struct PodcastPlayerView: View {
         SummaryView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
                     mindmapEditable: currentDiscussion.isOwner == true,
+                    language: model?.presentationLanguage,
                     api: APIClient(tokens: auth))
     }
 
@@ -312,6 +380,7 @@ struct PodcastPlayerView: View {
     var textSheet: some View {
         TextContentView(discussionID: currentDiscussion.id,
                         title: currentDiscussion.displayTitle,
+                        language: model?.presentationLanguage,
                         api: APIClient(tokens: auth))
     }
 
@@ -320,7 +389,8 @@ struct PodcastPlayerView: View {
     var mindmapSheet: some View {
         MindmapView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
-                    isEditable: currentDiscussion.isOwner == true,
+                    isEditable: currentDiscussion.isOwner == true && model?.presentationLanguage == nil,
+                    language: model?.presentationLanguage,
                     api: APIClient(tokens: auth))
     }
 
@@ -402,6 +472,12 @@ struct PodcastPlayerView: View {
             showingPublishSheet = true
         case ["sheet", "cover"]:
             showingCoverEditor = true
+        case ["sheet", "translation"]:
+            showingTranslationSettings = true
+        case ["sheet", "captions"]:
+            showingCaptionDownloadSheet = true
+        case ["sheet", "caption-editor"]:
+            openCaptionEditor()
         case ["sheet", "share"]:
             showingShareSheet = true
         case ["sheet", "follow-up"]:
@@ -474,6 +550,8 @@ struct PodcastPlayerView: View {
             return model?.isDownloadingPodcast == true
         case "force-stop":
             return model?.isForceStopping == true
+        case "edit-captions":
+            return isLoadingCaptionEditor
         default:
             return false
         }
@@ -481,6 +559,40 @@ struct PodcastPlayerView: View {
 
     func podcastActionTitle(_ item: DiscussionUIActionItem) -> String? {
         item.id == "points" ? pointsMenuLabel : nil
+    }
+
+    func openCaptionEditor() {
+        guard !isLoadingCaptionEditor else { return }
+        isLoadingCaptionEditor = true
+        captionEditorLoadError = nil
+        Task { @MainActor in
+            defer { isLoadingCaptionEditor = false }
+            do {
+                let source = try await APIClient(tokens: auth).discussion(
+                    id: currentDiscussion.id,
+                    includeEditTurns: false,
+                    language: sourceLanguage
+                )
+                let snapshot = PlanSnapshot(discussion: source)
+                guard snapshot.isUploadedAudio, !snapshot.transcriptSegments.isEmpty else {
+                    throw APIError.invalidRequest("This podcast does not have editable captions.")
+                }
+                selectedCaptionEditor = UploadedAudioTranscriptPresentation(snapshot: snapshot)
+            } catch {
+                captionEditorLoadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    func refreshAfterCaptionEdit() {
+        guard let model else { return }
+        Task { @MainActor in
+            do {
+                try await model.switchPresentationLanguage(to: sourceLanguage)
+            } catch {
+                captionEditorLoadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 
     func podcastActionsTip(for model: PlayerModel) -> (any Tip)? {

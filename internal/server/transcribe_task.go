@@ -68,14 +68,30 @@ func (s *Server) RunAudioTranscribeTask(ctx context.Context, pl AudioTranscribeP
 		Phase: "transcribing",
 		Text:  fmt.Sprintf("Transcribing audio with %s…", provider.Name()),
 	})
-	tr, err := provider.Transcribe(ctx, stt.Request{
+	request := stt.Request{
 		AudioURL:    audioURL,
 		MIME:        pl.MIMEType,
 		SizeBytes:   pl.SizeBytes,
 		MaxSpeakers: pl.MaxSpeakers,
-	})
+	}
+	var timingFallback stt.Provider
+	if provider.Name() == stt.ProviderGemini {
+		// Gemini is useful for transcription quality but its generated timestamp
+		// sequence can jump backwards. Azure's word-timed result is the safe
+		// fallback when both providers are configured.
+		timingFallback, _ = s.azureSTTProvider()
+	}
+	primaryProvider := provider
+	tr, usedProvider, err := transcribeWithTimingFallback(ctx, provider, timingFallback, request)
 	if err != nil {
-		return fmt.Errorf("transcribe (%s): %w", provider.Name(), err)
+		return fmt.Errorf("transcribe (%s): %w", primaryProvider.Name(), err)
+	}
+	provider = usedProvider
+	if provider.Name() != primaryProvider.Name() {
+		s.recordDiscussionProgress(ctx, d.ID, "transcribe", planner.ProgressEvent{
+			Phase: "transcribing",
+			Text:  fmt.Sprintf("%s returned invalid timestamps; retranscribed with %s…", primaryProvider.Name(), provider.Name()),
+		})
 	}
 	cues := stt.SentenceCues(tr)
 	if len(cues) == 0 {
@@ -123,6 +139,11 @@ func (s *Server) RunAudioTranscribeTask(ctx context.Context, pl AudioTranscribeP
 
 	hours := float64(durationMS) / 3_600_000
 	costUSD := hours * s.sttCostPerHour(provider.Name())
+	if provider.Name() != primaryProvider.Name() {
+		// Both providers processed the audio, so usage must include the rejected
+		// Gemini pass as well as the accepted word-timed fallback.
+		costUSD += hours * s.sttCostPerHour(primaryProvider.Name())
+	}
 	s.settleTranscription(ctx, pl.UserID, d.ID, pl.Reserved, pl.ReserveLedgerID, costUSD)
 
 	// Seed the AI review turn: with the newest turn authored by the user the
@@ -150,6 +171,30 @@ func (s *Server) RunAudioTranscribeTask(ctx context.Context, pl AudioTranscribeP
 		"elapsed_ms", time.Since(started).Milliseconds(),
 	)
 	return nil
+}
+
+// transcribeWithTimingFallback accepts a provider result only when its timeline
+// can safely own subtitles. A fallback is used exclusively for invalid timing;
+// ordinary provider/network failures keep the queue's existing retry behavior.
+func transcribeWithTimingFallback(ctx context.Context, primary, fallback stt.Provider, req stt.Request) (*stt.Transcript, stt.Provider, error) {
+	tr, err := primary.Transcribe(ctx, req)
+	if err != nil {
+		return nil, primary, err
+	}
+	if timingErr := stt.ValidateTranscriptTiming(tr); timingErr == nil {
+		return tr, primary, nil
+	} else if fallback == nil {
+		return nil, primary, fmt.Errorf("invalid transcript timing: %w", timingErr)
+	}
+
+	fallbackTranscript, err := fallback.Transcribe(ctx, req)
+	if err != nil {
+		return nil, fallback, fmt.Errorf("timing fallback %s: %w", fallback.Name(), err)
+	}
+	if err := stt.ValidateTranscriptTiming(fallbackTranscript); err != nil {
+		return nil, fallback, fmt.Errorf("timing fallback %s returned invalid transcript timing: %w", fallback.Name(), err)
+	}
+	return fallbackTranscript, fallback, nil
 }
 
 // AudioTranscribeRetrying surfaces a pending retry on the discussion progress

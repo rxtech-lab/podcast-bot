@@ -15,6 +15,10 @@ struct PlanDetailView: View {
 
     @State private var instruction = ""
     @State private var selectedLanguage: String
+    /// The last language the plan itself carried; used to tell a plan-driven
+    /// language change apart from a manual picker choice, which must never be
+    /// overridden.
+    @State private var planLanguageCode: String
     @State private var isImproving = false
     @State private var isGenerating = false
     @State private var errorMessage: String?
@@ -48,7 +52,9 @@ struct PlanDetailView: View {
          onGenerated: @escaping (Discussion) -> Void = { _ in })
     {
         _discussion = State(initialValue: discussion)
-        _selectedLanguage = State(initialValue: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language))
+        let planLanguage = PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language)
+        _selectedLanguage = State(initialValue: planLanguage)
+        _planLanguageCode = State(initialValue: planLanguage)
         self.initialPlan = initialPlan
         self.onGenerated = onGenerated
     }
@@ -83,6 +89,18 @@ struct PlanDetailView: View {
         .task {
             await purchases.refreshBalance()
             await loadLanguageOptions()
+        }
+        .onChange(of: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language)) { _, newCode in
+            // Follow plan-driven language changes (e.g. the agent detecting an
+            // uploaded audio's spoken language) while the picker still shows
+            // the previous plan language; a manual selection stays put.
+            if selectedLanguage == planLanguageCode {
+                selectedLanguage = newCode
+            }
+            planLanguageCode = newCode
+        }
+        .onChange(of: selectedLanguage) { _, newCode in
+            persistLanguageSelection(newCode)
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -214,30 +232,7 @@ struct PlanDetailView: View {
     }
 
     private var initialHistoryLoadingView: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Theme.accent.opacity(0.12))
-                    .frame(width: 52, height: 52)
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-            }
-            VStack(spacing: 4) {
-                Text("Loading \(AppStringLiteral.stationNameRaw)...")
-                    .font(.headline)
-                Text("Fetching latest messages")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondaryText)
-            }
-            ProgressView()
-                .tint(Theme.accent)
-                .controlSize(.small)
-        }
-        .multilineTextAlignment(.center)
-        .glassCard(cornerRadius: 20)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Loading \(AppStringLiteral.stationNameRaw)")
+        PlanInitialHistoryLoadingView()
     }
 
     /// Streaming is in effect whenever a loading row is present — the user just
@@ -429,23 +424,7 @@ struct PlanDetailView: View {
     }
 
     private func rows(from history: [DiscussionEditTurnDTO]) -> [PlanEditTurn] {
-        history.compactMap { turn in
-            switch turn.role {
-            case "user":
-                let text = (turn.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                return text.isEmpty ? nil : .user(text, id: turn.planEditTurnID)
-            case "plan":
-                let snapshot = turn.script != nil
-                    ? PlanSnapshot(turn: turn, topic: discussion.topic)
-                    : PlanSnapshot(discussion: discussion)
-                let label = (turn.text?.isEmpty == false)
-                    ? turn.text!
-                    : String(localized: "Plan", comment: "Default label for a plan history card with no stored label")
-                return .plan(label: label, snapshot: snapshot, id: turn.planEditTurnID)
-            default:
-                return nil
-            }
-        }
+        planEditRows(from: history, discussion: discussion)
     }
 
     private func mergeHistoryRows(from loaded: Discussion) {
@@ -510,11 +489,7 @@ struct PlanDetailView: View {
     }
 
     private func sourceUpdateText(urls: [String]) -> String {
-        let count = urls.count
-        let header = count == 1
-            ? String(localized: "Added \(count) source:", comment: "User bubble header when one source is added; followed by the URL list")
-            : String(localized: "Added \(count) sources:", comment: "User bubble header when multiple sources are added; followed by the URL list")
-        return ([header] + urls).joined(separator: "\n")
+        planSourceUpdateText(urls: urls)
     }
 
     private var editBar: some View {
@@ -578,6 +553,24 @@ struct PlanDetailView: View {
             languageOptions = form.languageOptions
         } catch {
             languageOptions = []
+        }
+    }
+
+    /// Persists a manual language pick to the discussion right away, so the
+    /// choice sticks even if the user leaves without generating. Plan-driven
+    /// syncs (selectedLanguage set back to the plan's own language) are no-ops
+    /// against planLanguageCode and are skipped.
+    private func persistLanguageSelection(_ code: String) {
+        guard code != planLanguageCode, discussion.script != nil else { return }
+        Task {
+            do {
+                let updated = try await APIClient(tokens: auth).updateDiscussionLanguage(id: discussion.id, language: code)
+                discussion = updated
+            } catch {
+                // Revert the picker so it never shows a language the plan
+                // doesn't actually have.
+                selectedLanguage = planLanguageCode
+            }
         }
     }
 

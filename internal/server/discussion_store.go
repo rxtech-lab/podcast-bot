@@ -201,7 +201,11 @@ type Discussion struct {
 	// mindmap document. Only present for discussion-type podcasts; the JSON
 	// tree body is fetched separately from the mindmap endpoint. Populated
 	// lazily on the detail path only.
-	Mindmap             *SummaryMeta `json:"mindmap,omitempty"`
+	Mindmap *SummaryMeta `json:"mindmap,omitempty"`
+	// MainLanguage is the immutable source language. Language becomes the
+	// selected presentation language when a ready translation is applied.
+	MainLanguage        string                      `json:"main_language,omitempty"`
+	Translations        []DiscussionTranslationMeta `json:"translations,omitempty"`
 	summaryMetaLoaded   bool
 	joinedJob           *Job
 	AllowSendingMessage bool      `json:"allowSendingMessage"`
@@ -431,6 +435,31 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			PRIMARY KEY(discussion_id, doc_type),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_translations (
+			discussion_id TEXT NOT NULL,
+			language TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'generating',
+			bundle_json TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			llm_cost_usd REAL NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			claimed_at INTEGER NOT NULL DEFAULT 0,
+			generated_at INTEGER NOT NULL DEFAULT 0,
+			cover_type TEXT NOT NULL DEFAULT '',
+			cover_image_url TEXT NOT NULL DEFAULT '',
+			cover_image_key TEXT NOT NULL DEFAULT '',
+			cover_gradient_start TEXT NOT NULL DEFAULT '',
+			cover_gradient_end TEXT NOT NULL DEFAULT '',
+			cover_prompt TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, language),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS user_push_tokens (
 			user_id TEXT NOT NULL,
 			token TEXT NOT NULL,
@@ -569,6 +598,23 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 		{"claimed_at", "claimed_at INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, "native_discussion_summaries", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	// Per-language cover art on translations is newer than the table; backfill
+	// the cover columns on databases created before language covers existed.
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"cover_type", "cover_type TEXT NOT NULL DEFAULT ''"},
+		{"cover_image_url", "cover_image_url TEXT NOT NULL DEFAULT ''"},
+		{"cover_image_key", "cover_image_key TEXT NOT NULL DEFAULT ''"},
+		{"cover_gradient_start", "cover_gradient_start TEXT NOT NULL DEFAULT ''"},
+		{"cover_gradient_end", "cover_gradient_end TEXT NOT NULL DEFAULT ''"},
+		{"cover_prompt", "cover_prompt TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, "native_discussion_translations", col.name, col.def); err != nil {
 			return err
 		}
 	}
@@ -1744,10 +1790,16 @@ func (s *DiscussionStore) UpdatePlan(ctx context.Context, owner, id string, resp
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.exec(ctx, `UPDATE native_discussions SET
-		title = ?, language = ?, script_json = ?, markdown = ?, sources_json = ?, researched = ?, updated_at = ?
-		WHERE owner_user_id = ? AND id = ?`,
-		title, language, scriptJSON, resp.Markdown, sourcesJSON, boolInt(resp.Researched), time.Now().UnixMilli(), owner, id)
+	set := `title = ?, language = ?, script_json = ?, markdown = ?, sources_json = ?, researched = ?, updated_at = ?`
+	args := []any{title, language, scriptJSON, resp.Markdown, sourcesJSON, boolInt(resp.Researched), time.Now().UnixMilli()}
+	if resp.Script != nil && resp.Script.Type == config.ContentTypeUploadedAudio && strings.TrimSpace(title) != "" {
+		// An uploaded-audio topic starts as the raw upload filename; once the
+		// plan carries a generated title, the visible topic follows it.
+		set += `, topic = ?`
+		args = append(args, title)
+	}
+	args = append(args, owner, id)
+	res, err := s.exec(ctx, `UPDATE native_discussions SET `+set+` WHERE owner_user_id = ? AND id = ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1794,11 +1846,17 @@ func (s *DiscussionStore) UpdateUploadedAudioPlan(
 			return err
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(ctx, `UPDATE native_discussions SET
-			title = ?, language = ?, script_json = ?, markdown = ?, sources_json = ?, researched = ?, updated_at = ?
-			WHERE owner_user_id = ? AND id = ?`,
-			resp.Script.Title, resp.Script.Language, scriptJSON, resp.Markdown, sourcesJSON,
-			boolInt(resp.Researched), now, owner, id)
+		set := `title = ?, language = ?, script_json = ?, markdown = ?, sources_json = ?, researched = ?, updated_at = ?`
+		args := []any{resp.Script.Title, resp.Script.Language, scriptJSON, resp.Markdown, sourcesJSON,
+			boolInt(resp.Researched), now}
+		if strings.TrimSpace(resp.Script.Title) != "" {
+			// Keep the filename-seeded topic in step with the transcript title
+			// (see UpdatePlan).
+			set += `, topic = ?`
+			args = append(args, resp.Script.Title)
+		}
+		args = append(args, owner, id)
+		res, err := tx.ExecContext(ctx, `UPDATE native_discussions SET `+set+` WHERE owner_user_id = ? AND id = ?`, args...)
 		if err != nil {
 			return err
 		}

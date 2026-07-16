@@ -226,3 +226,21 @@ struct TranscriptEditingTip: Tip {
         Tips.MaxDisplayCount(1)
     }
 }
+
+struct TranscriptRetimeSettingsTip: Tip {
+    var title: Text {
+        Text("Timing Settings")
+    }
+
+    var message: Text? {
+        Text("Choose whether short gaps between subtitles are removed when you save.")
+    }
+
+    var image: Image? {
+        Image(systemName: "gearshape")
+    }
+
+    var options: [any TipOption] {
+        Tips.MaxDisplayCount(1)
+    }
+}

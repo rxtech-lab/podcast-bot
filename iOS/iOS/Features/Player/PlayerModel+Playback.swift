@@ -343,6 +343,7 @@ extension PlayerModel {
         playerLog.debug("applyPendingResume: seeking to \(target, privacy: .public) (requested \(resume, privacy: .public), dur \(dur, privacy: .public))")
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
         currentTime = target
+        updateCaption(at: target)
     }
 
     func startConfirmedPlayback() {
@@ -402,8 +403,11 @@ extension PlayerModel {
         captionCue(in: cues, at: time)?.text ?? ""
     }
 
+    /// Prefers the latest-starting cue containing `time`: stored segments can
+    /// overlap (an STT phrase may overrun the next one), and cue starts are
+    /// monotonic, so the latest match is the line actually being spoken.
     nonisolated static func captionCue(in cues: [VTTCue], at time: Double) -> VTTCue? {
-        cues.first(where: { time >= $0.start && time <= $0.end })
+        cues.last(where: { time >= $0.start && time <= $0.end })
     }
 
     nonisolated static func groupLyricCues(_ cues: [VTTCue],

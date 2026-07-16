@@ -12,6 +12,10 @@ struct SpeakerModelsSheet: View {
     @Binding var discussion: Discussion
     var allowsEditing = true
     var visibleSpeakerNames: Set<String>?
+    /// Presentation language of the discussion being shown (nil = source).
+    /// Read-only presentations from the player pass this so the refresh fetch
+    /// doesn't clobber the translated plan with the source-language bundle.
+    var language: String?
 
     @State private var models: [ModelInfoDTO] = []
     @State private var isLoadingModels = true
@@ -443,7 +447,7 @@ struct SpeakerModelsSheet: View {
     /// re-fetches the discussion after navigation.
     private func refreshDiscussion() async {
         guard let fresh = try? await APIClient(tokens: auth)
-            .discussion(id: discussion.id, includeEditTurns: false),
+            .discussion(id: discussion.id, includeEditTurns: false, language: language),
             fresh.script != nil,
             updatingSpeaker == nil
         else { return }

@@ -32,6 +32,7 @@ const (
 	TaskAudioTranscribe TaskType = "audio-transcribe" // uploaded-audio speech-to-text
 	TaskSummary         TaskType = "summary"
 	TaskMindmap         TaskType = "mindmap"
+	TaskTranslation     TaskType = "translation"
 	TaskPPTExport       TaskType = "ppt-export"
 	TaskPDFExport       TaskType = "pdf-export"
 )

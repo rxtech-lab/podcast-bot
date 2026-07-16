@@ -141,7 +141,7 @@ func defaultDiscussionPlanSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"title":      map[string]any{"type": "string"},
+			"title":      map[string]any{"type": "string", "description": "Concise, engaging discussion title; fewer than 10 words."},
 			"background": map[string]any{"type": "string", "description": "Two to four neutral paragraphs grounding the discussion."},
 			"host": map[string]any{
 				"type":       "object",
@@ -168,7 +168,7 @@ func defaultAudioBookPlanSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"title":           map[string]any{"type": "string"},
+			"title":           map[string]any{"type": "string", "description": "Concise audiobook title; fewer than 10 words."},
 			"style":           map[string]any{"type": "string", "enum": []string{config.AudioBookStyleNews, config.AudioBookStyleConversational, config.AudioBookStyleAudioBook, config.AudioBookStylePodcast, config.AudioBookStyleMeeting}, "description": "The high-level production style the agent selected for this audiobook."},
 			"overall_summary": map[string]any{"type": "string", "description": "A concise Markdown summary of the full source material and audiobook direction."},
 			"narrator": map[string]any{

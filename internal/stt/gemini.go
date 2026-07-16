@@ -54,9 +54,10 @@ func (g *Gemini) Name() string { return ProviderGemini }
 // geminiSTTPrompt asks for the exact JSON shape geminiSTTSchema enforces.
 const geminiSTTPrompt = `Transcribe this audio with speaker diarization. Rules:
 - Identify distinct speakers and number them 1, 2, 3, ... in order of first appearance. Use at most %d speakers.
-- Split the transcript into phrases (one speaker turn or sentence group each).
-- For each phrase give the speaker number, the start offset and duration in milliseconds, and the verbatim text with natural punctuation.
-- Offsets must be non-decreasing and within the audio's real duration.
+- Split the transcript into complete sentences or complete speaker turns. Never split one sentence at a comma, colon, or other clause punctuation.
+- For each phrase, listen for the first and last spoken word and give its exact start offset and duration in milliseconds. Do not estimate timestamps from text length.
+- Offsets must be non-decreasing and every phrase must end within the audio's real duration. Before responding, verify that no later phrase starts earlier than a preceding phrase.
+- Keep the verbatim text with natural punctuation.
 - Also report the total audio duration in milliseconds as durationMs.
 Output only the JSON.`
 

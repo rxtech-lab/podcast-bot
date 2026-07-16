@@ -19,6 +19,7 @@ import (
 type notionExportRequest struct {
 	ParentPageID string `json:"parent_page_id"`
 	DocType      string `json:"doc_type,omitempty"`
+	Language     string `json:"language,omitempty"`
 }
 
 // notionExportResponse returns the URL of the newly-created Notion page so the
@@ -70,6 +71,17 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 		http.NotFound(w, r)
 		return
 	}
+	if language := normalizeTranslationLanguage(req.Language); language != "" {
+		translation, err := s.d.Discussions.TranslationFor(r.Context(), id, language)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if translation != nil && translation.Status == DiscussionTranslationReady {
+			applyTranslationBundle(visible, translation.Bundle)
+		}
+		doc.Markdown = s.translatedDocumentMarkdownFor(r.Context(), id, docType, language, doc.Markdown)
+	}
 
 	title := strings.TrimSpace(visible.Title)
 	if title == "" {
@@ -85,7 +97,7 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 	// (uploaded to the workspace on the fly) — richer than the in-app deep link,
 	// which would be dead inside Notion. Best-effort: an embed failure must not
 	// fail the summary export.
-	blocks = append(blocks, s.notionMindmapBlocks(r.Context(), conn.AccessToken, visible, docType)...)
+	blocks = append(blocks, s.notionMindmapBlocks(r.Context(), conn.AccessToken, visible, docType, req.Language)...)
 
 	pageURL, pageID, err := s.createNotionPage(r.Context(), conn.AccessToken, parentPageID, title, blocks)
 	if err != nil {
@@ -100,18 +112,23 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 // heading + image block to append to the exported summary. Only applies to the
 // summary document of a discussion-type podcast. Returns nil (with a warning
 // log) on any failure so the export proceeds without the image.
-func (s *Server) notionMindmapBlocks(ctx context.Context, token string, d *Discussion, docType string) []map[string]any {
+func (s *Server) notionMindmapBlocks(ctx context.Context, token string, d *Discussion, docType, language string) []map[string]any {
 	if docType != SummaryDocTypeSummary || !discussionIsDiscussion(d) {
 		return nil
 	}
-	doc, err := s.d.Discussions.SummaryDocumentFor(ctx, d.ID, SummaryDocTypeMindmap)
-	if err != nil || doc == nil || doc.Status != SummaryReadyState {
-		return nil
-	}
 	var spec summarizer.MindmapSpec
-	if err := json.Unmarshal([]byte(doc.Markdown), &spec); err != nil {
-		s.logger().Warn("notion mindmap embed: stored mindmap corrupted", "discussion", d.ID, "err", err)
-		return nil
+	translation, err := s.d.Discussions.TranslationFor(ctx, d.ID, normalizeTranslationLanguage(language))
+	if err == nil && translation != nil && translation.Status == DiscussionTranslationReady && translation.Bundle.Mindmap != nil {
+		spec = *translation.Bundle.Mindmap
+	} else {
+		doc, err := s.d.Discussions.SummaryDocumentFor(ctx, d.ID, SummaryDocTypeMindmap)
+		if err != nil || doc == nil || doc.Status != SummaryReadyState {
+			return nil
+		}
+		if err := json.Unmarshal([]byte(doc.Markdown), &spec); err != nil {
+			s.logger().Warn("notion mindmap embed: stored mindmap corrupted", "discussion", d.ID, "err", err)
+			return nil
+		}
 	}
 	svg := mindmapSVG(&spec)
 	if len(svg) == 0 {

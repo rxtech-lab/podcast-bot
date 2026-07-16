@@ -132,6 +132,7 @@ func TestJobRouteTarget(t *testing.T) {
 		{"/api/jobs/abc/ws", "", "abc", "ws", true},
 		{"/api/jobs/abc/hls/seg.ts", "", "abc", "hls/seg.ts", true},
 		{"/api/jobs/abc/subtitles/live", "", "abc", "subtitles/live", true},
+		{"/api/jobs/abc/captions/srt", "", "abc", "captions/srt", true},
 		{"/api/events", "channel=abc", "abc", "events", true},
 		{"/api/events", "", "", "", false},   // no channel -> not routable
 		{"/api/jobs/abc", "", "", "", false}, // bare detail -> local
@@ -156,6 +157,7 @@ func TestOwnerLocalWhenDone(t *testing.T) {
 	}{
 		{"subtitles", &Job{}, true},
 		{"subtitles/live", &Job{}, true},
+		{"captions/srt", &Job{}, true},
 		{"archive", &Job{}, true},
 		{"transcript", &Job{}, true},
 		{"hls/index.m3u8", &Job{}, true},

@@ -221,6 +221,25 @@ func FormatSubtitleCues(cues []SubtitleCue) string {
 	return sb.String()
 }
 
+// ClampSubtitleCueOverlaps trims cues that run past the next cue's start so a
+// rendered track never has two cues claiming the same instant. Stored
+// uploaded-audio segments may overlap (transcriptions saved before the
+// stt-side clamp, or user edits); this cleans render surfaces without touching
+// the transcript itself. Cues whose clamped range collapses are dropped.
+func ClampSubtitleCueOverlaps(cues []SubtitleCue) []SubtitleCue {
+	out := make([]SubtitleCue, 0, len(cues))
+	for i, c := range cues {
+		if i+1 < len(cues) && c.End > cues[i+1].Start {
+			c.End = cues[i+1].Start
+		}
+		if c.End <= c.Start {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func exportVTTCues(cues []vttCue, mapper func(time.Duration) time.Duration) []SubtitleCue {
 	out := make([]SubtitleCue, len(cues))
 	for i, c := range cues {

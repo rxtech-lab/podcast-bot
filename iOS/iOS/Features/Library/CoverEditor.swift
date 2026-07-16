@@ -143,6 +143,8 @@ struct CoverEditor: View {
                 switch target {
                 case .discussion(let id):
                     cover = try await APIClient(tokens: auth).generateDiscussionCover(id: id, prompt: prompt)
+                case .discussionTranslation(let id, let language):
+                    cover = try await APIClient(tokens: auth).generateDiscussionCover(id: id, prompt: prompt, language: language)
                 case .album(let id):
                     cover = try await APIClient(tokens: auth).generateAlbumCover(id: id, prompt: prompt)
                 }
@@ -270,6 +272,10 @@ struct CoverEditor: View {
 /// differs (and bills against) the discussion or the album.
 enum CoverGenerationTarget {
     case discussion(id: String)
+    /// A translation's language-dedicated cover; the server seeds the prompt
+    /// from the translated title and viewers of other languages keep seeing
+    /// the default cover.
+    case discussionTranslation(id: String, language: String)
     case album(id: String)
 }
 

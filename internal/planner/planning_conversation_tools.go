@@ -66,7 +66,7 @@ func conversationTools(contentType, template string) []openai.ChatCompletionTool
 	}
 	updatePlanDesc := "Replace the current saved plan with a revised one. Provide the FULL updated plan, not a diff. This does not show the plan to the user; call show_plan after this when the revised plan is ready to display."
 	if contentType == config.ContentTypeUploadedAudio {
-		updatePlanDesc = "Apply transcript corrections: pass only the segments you change (by index), plus an optional corrected title and speaker renames. Unlisted segments stay unchanged. This does not show the plan to the user; call show_plan after this when the corrections are ready to display."
+		updatePlanDesc = "Apply transcript corrections: pass only the segments you change (by index), plus an optional corrected title, the audio's spoken language, and speaker renames. Unlisted segments stay unchanged. This does not show the plan to the user; call show_plan after this when the corrections are ready to display."
 	}
 	tools = append(tools,
 		toolDef("write_plan", "Write and save the initial plan internally. This does not show the plan to the user; call show_plan after this when the plan is ready to display.", conversationPlanSchema(contentType, template)),

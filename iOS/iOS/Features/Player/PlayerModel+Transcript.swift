@@ -116,7 +116,8 @@ extension PlayerModel {
         let resourceType = data.resource_type?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
-        if !resourceType.isEmpty && resourceType != "podcast" && resourceType != "discussion" {
+        if !resourceType.isEmpty && resourceType != "podcast" && resourceType != "discussion"
+            && resourceType != "translations" {
             return false
         }
         let resourceID = data.resource_id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -133,7 +134,13 @@ extension PlayerModel {
     func refreshPodcastFromServer() {
         tasks.append(Task { [weak self] in
             guard let self else { return }
-            guard let fresh = try? await self.api.discussion(id: self.discussion.id, includeEditTurns: false) else { return }
+            let requestRevision = self.presentationRequestRevision
+            let sourceLanguage = self.discussion.mainLanguage ?? self.discussion.language
+            let requestLanguage = self.presentationLanguage ?? sourceLanguage
+            guard let fresh = try? await self.api.discussion(id: self.discussion.id,
+                                                             includeEditTurns: false,
+                                                             language: requestLanguage),
+                  self.presentationRequestRevision == requestRevision else { return }
             self.discussion = Self.mergingLocalDiscussionState(current: self.discussion, fresh: fresh)
             self.listenForJobUpdatesIfNeeded()
         })
@@ -280,31 +287,50 @@ extension PlayerModel {
         }
     }
 
-    /// Loads the full discussion detail on entry and adopts its persisted lines.
+    /// Loads the full discussion detail on entry and adopts its server-owned
+    /// metadata plus persisted lines.
     ///
     /// The library opens the player from a lightweight list row that omits
     /// `native_discussion_lines`, so a re-entered discussion starts with no voice
     /// lines. The detail endpoint returns them with freshly re-signed `audioURL`s.
-    /// Adopting them here (a) restores the replay control, (b) refreshes playback
-    /// URLs that expire ~1h after the last fetch, and (c) gives the subsequent
-    /// text-only job-transcript snapshot an existing audio line to recognize, so it
-    /// won't re-persist the utterance as a duplicate plain-text row.
+    /// Adopting the complete detail payload here also keeps fields omitted from
+    /// list rows, including translation metadata, on the same request. That
+    /// response (a) restores the replay control, (b) refreshes playback URLs that
+    /// expire ~1h after the last fetch, and (c) gives the subsequent text-only
+    /// job-transcript snapshot an existing audio line to recognize, so it won't
+    /// re-persist the utterance as a duplicate plain-text row.
     func hydratePersistedLines() async {
-        guard let fresh = try? await api.discussion(id: discussion.id, includeEditTurns: false) else { return }
-        // The library/market list responses omit the presigned audio download
-        // URL (it is resolved only on the detail endpoint to keep lists fast), so
-        // adopt it here to give the export/share action a direct link. Playback
-        // and the download fallback already work from the jobID regardless.
-        if let url = fresh.downloadURLString, !url.isEmpty {
-            discussion.downloadURLString = url
+        let requestedLanguage = presentationLanguage
+        let requestRevision = presentationRequestRevision
+        let fresh: Discussion
+        if let shareToken, !shareToken.isEmpty {
+            guard let loaded = try? await api.joinViaShare(token: shareToken,
+                                                          language: requestedLanguage) else { return }
+            fresh = loaded
+        } else {
+            guard let loaded = try? await api.playerDiscussion(id: discussion.id,
+                                                               language: requestedLanguage,
+                                                               includeEditTurns: false) else { return }
+            fresh = loaded
+        }
+        guard presentationLanguage == requestedLanguage,
+              presentationRequestRevision == requestRevision else { return }
+
+        let persisted = fresh.sortedLines
+        if requestedLanguage == nil {
+            presentationLanguage = Self.initialPresentationLanguage(from: fresh)
+        }
+        discussion = Self.mergingLocalDiscussionState(current: discussion, fresh: fresh)
+        if let url = discussion.downloadURLString, !url.isEmpty {
             downloadURL = URL(string: url)
         }
-        discussion.summary = fresh.summary
-        if let cover = fresh.cover, cover.hasImage || cover.hasGradient {
-            discussion.cover = cover
-        }
         listenForJobUpdatesIfNeeded()
-        let persisted = fresh.sortedLines
+        updateNowPlayingInfo()
+        if presentationLanguage != requestedLanguage,
+           discussion.status == .ready,
+           let jobID = discussion.jobID {
+            await loadFinalCaptions(jobID: jobID)
+        }
         guard !persisted.isEmpty else {
             await refreshCoverAssets()
             return

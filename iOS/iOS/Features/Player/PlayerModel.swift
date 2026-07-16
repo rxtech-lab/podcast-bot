@@ -187,6 +187,12 @@ final class PlayerModel {
     nonisolated static let minimumTranscriptLoadingSeconds = 1.0
 
     var discussion: Discussion
+    /// nil means the source-language presentation. Audio is never replaced when
+    /// this changes; only discussion text and caption cues are refreshed.
+    var presentationLanguage: String?
+    /// Invalidates an in-flight initial hydration when the user explicitly
+    /// chooses a language, including choosing the source language (nil).
+    @ObservationIgnored var presentationRequestRevision = 0
     var uiActionsRefreshVersion = 0
     /// Exposed (read-only use) so views like the share sheet can reuse the same
     /// authenticated client instead of constructing another.
@@ -304,6 +310,7 @@ final class PlayerModel {
     init(discussion: Discussion, api: APIClient, username: String, userID: String = "",
          shareToken: String? = nil) {
         self.discussion = discussion
+        self.presentationLanguage = nil
         self.api = api
         self.username = username
         self.currentUserID = userID
@@ -327,7 +334,9 @@ final class PlayerModel {
     /// auto-scroll the lyrics list. Falls back to the last cue already passed.
     var activeCueIndex: Int? {
         let t = captionLookupTime(playbackTime: currentTime)
-        return cues.firstIndex(where: { t >= $0.start && t <= $0.end })
+        // Last match, not first: overlapping cues (see `captionCue`) would
+        // otherwise pin the highlight to an earlier line past its real end.
+        return cues.lastIndex(where: { t >= $0.start && t <= $0.end })
             ?? cues.lastIndex(where: { $0.start <= t })
     }
 

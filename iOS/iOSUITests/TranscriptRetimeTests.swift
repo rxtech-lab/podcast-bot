@@ -216,29 +216,25 @@ final class TranscriptRetimeTests: E2ETestCase {
         app.buttons["retime.cancel"].tap()
     }
 
-    // MARK: - 5. Prev/next navigate between captions
+    // MARK: - 5. The subtitle wheel shows captions in order
 
-    func testPrevNextNavigatesCaptions() throws {
+    func testSubtitleWheelShowsCaptionsInOrder() throws {
         let app = launch()
         openRetimeSheet(app)
 
-        let startField = app.buttons["retime.selectStart"]
-        XCTAssertTrue(startField.waitForExistence(timeout: 10),
-                      "editor must open on the earliest caption")
-        XCTAssertFalse(app.buttons["retime.previous"].isEnabled,
-                       "previous must be disabled on the first caption")
+        XCTAssertTrue(app.scrollViews["retime.subtitleWheel"].waitForExistence(timeout: 10),
+                      "subtitle wheel not shown")
 
-        app.buttons["retime.next"].tap()
-        XCTAssertTrue(waitForState(startField, "value == %@", "00:00:05:000"),
-                      "next did not move to caption two")
-
-        app.buttons["retime.next"].tap()
-        XCTAssertTrue(waitForState(startField, "value == %@", "00:00:10:000"),
-                      "next did not move to caption three")
-
-        app.buttons["retime.previous"].tap()
-        XCTAssertTrue(waitForState(startField, "value == %@", "00:00:05:000"),
-                      "previous did not move back to caption two")
+        let first = app.staticTexts["retime.subtitle.0"]
+        let second = app.staticTexts["retime.subtitle.1"]
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "first subtitle row not shown")
+        XCTAssertTrue(second.waitForExistence(timeout: 5), "second subtitle row not shown")
+        XCTAssertEqual(first.label, "E2E caption one")
+        XCTAssertEqual(second.label, "E2E caption two")
+        XCTAssertLessThan(first.frame.minY, second.frame.minY,
+                          "subtitle wheel rows are not in chronological order")
+        XCTAssertTrue(first.isSelected, "editor must select the earliest caption initially")
+        XCTAssertFalse(second.isSelected, "only the current subtitle should be selected")
 
         app.buttons["retime.cancel"].tap()
     }

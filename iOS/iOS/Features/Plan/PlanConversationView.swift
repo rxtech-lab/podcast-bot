@@ -37,6 +37,10 @@ struct PlanConversationView: View {
     @State var shouldScrollToInitialBottom = false
     @State var didRequestInitialBottomScroll = false
     @State var selectedLanguage: String
+    /// The last language the plan itself carried; used to tell a plan-driven
+    /// language change (agent detected the audio's language) apart from a
+    /// manual picker choice, which must never be overridden.
+    @State var planLanguageCode: String
     @State var languageOptions: [PlanLanguageOption] = []
     @State var streamTask: Task<Void, Never>?
     @State var initialScrollTask: Task<Void, Never>?
@@ -49,7 +53,9 @@ struct PlanConversationView: View {
          onGenerated: @escaping (Discussion) -> Void = { _ in })
     {
         _discussion = State(initialValue: discussion)
-        _selectedLanguage = State(initialValue: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language))
+        let planLanguage = PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language)
+        _selectedLanguage = State(initialValue: planLanguage)
+        _planLanguageCode = State(initialValue: planLanguage)
         self.onGenerated = onGenerated
     }
 
@@ -154,12 +160,42 @@ struct PlanConversationView: View {
             await purchases.refreshBalance()
             await loadLanguageOptions()
         }
+        .onChange(of: PlanLanguageOption.initialCode(discussion.script?.language ?? discussion.language)) { _, newCode in
+            // Follow plan-driven language changes (e.g. the agent detecting an
+            // uploaded audio's spoken language) while the picker still shows
+            // the previous plan language; a manual selection stays put.
+            if selectedLanguage == planLanguageCode {
+                selectedLanguage = newCode
+            }
+            planLanguageCode = newCode
+        }
+        .onChange(of: selectedLanguage) { _, newCode in
+            persistLanguageSelection(newCode)
+        }
         .onAppear(perform: start)
         .onDisappear {
             streamTask?.cancel()
             initialScrollTask?.cancel()
             transcribePollTask?.cancel()
             showingPaywall = false
+        }
+    }
+
+    /// Persists a manual language pick to the discussion right away, so the
+    /// choice sticks even if the user leaves without generating. Plan-driven
+    /// syncs (selectedLanguage set back to the plan's own language) are no-ops
+    /// against planLanguageCode and are skipped.
+    func persistLanguageSelection(_ code: String) {
+        guard code != planLanguageCode, discussion.script != nil else { return }
+        Task {
+            do {
+                let updated = try await APIClient(tokens: auth).updateDiscussionLanguage(id: discussion.id, language: code)
+                discussion = updated
+            } catch {
+                // Revert the picker so it never shows a language the plan
+                // doesn't actually have.
+                selectedLanguage = planLanguageCode
+            }
         }
     }
 

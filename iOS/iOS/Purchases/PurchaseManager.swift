@@ -111,6 +111,7 @@ struct Entitlements: Codable, Sendable, Equatable {
         var canGeneratePPT = false
         var canGenerateMindmap = false
         var canGenerateCoverWithAI = false
+        var canTranslatePodcast = false
     }
 
     /// A catalog constraint. Mode "all" allows every entry; mode "only" allows
@@ -145,7 +146,7 @@ struct Entitlements: Codable, Sendable, Equatable {
         features: Features(
             canPublishPodcast: true, canSharePodcastPrivately: true, canGenerateVideo: true,
             canGenerateSummary: true, canExportToNotion: true, canGeneratePPT: true,
-            canGenerateMindmap: true, canGenerateCoverWithAI: true),
+            canGenerateMindmap: true, canGenerateCoverWithAI: true, canTranslatePodcast: true),
         models: Rule(mode: "all", allow: []),
         voices: Rule(mode: "all", allow: []))
 

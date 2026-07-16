@@ -13,6 +13,7 @@ import os
 struct TextContentView: View {
     let discussionID: String
     let title: String
+    var language: String? = nil
     let api: APIClient
 
     @Environment(\.dismiss) private var dismiss
@@ -56,7 +57,7 @@ struct TextContentView: View {
         isLoading = true
         errorText = nil
         do {
-            let doc = try await api.summary(id: discussionID, docType: "text")
+            let doc = try await api.summary(id: discussionID, docType: "text", language: language)
             logRawMarkdownForDebug(doc.markdown)
             markdown = doc.markdown
         } catch {

@@ -27,6 +27,7 @@ struct PodcastActionsMenu: View {
     let onCreateFollowUp: (() -> Void)?
     let isCreatingFromPlan: Bool
     let onCreateFromPlan: (() -> Void)?
+    var onDownloadCaptions: (() -> Void)? = nil
     var onSignOut: (() -> Void)?
 
     /// The plain, permanent public link for a published discussion. The server
@@ -121,6 +122,11 @@ struct PodcastActionsMenu: View {
                 }
                 .disabled(!model.canForceStop)
             }
+            if let onDownloadCaptions {
+                Button(action: onDownloadCaptions) {
+                    Label("Download Captions", systemImage: "captions.bubble")
+                }
+            }
             if let onSignOut {
                 if hasNonSignOutActions {
                     Divider()
@@ -156,6 +162,7 @@ struct PodcastActionsMenu: View {
             || model.discussion.isOwner != false
             || model.discussion.isPublic
             || model.canDownloadPodcast
+            || onDownloadCaptions != nil
             || model.showsForceStopAction
     }
 }

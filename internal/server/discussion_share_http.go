@@ -214,6 +214,7 @@ func (s *Server) handleShareJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.applyDiscussionJobStatus(r, d, true)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)

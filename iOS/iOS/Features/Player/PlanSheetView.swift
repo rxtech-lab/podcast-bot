@@ -20,9 +20,13 @@ struct PlanSheetView: View {
     @State private var selectedTranscript: UploadedAudioTranscriptPresentation?
     @State private var isLoadingFullPlan = false
     @State private var loadError: String?
+    /// Presentation language of the player (nil = source). Forwarded to every
+    /// re-fetch so the plan stays translated after loading the full script.
+    private let language: String?
 
-    init(discussion: Discussion) {
+    init(discussion: Discussion, language: String? = nil) {
         _discussion = State(initialValue: discussion)
+        self.language = language
     }
 
     var body: some View {
@@ -82,7 +86,7 @@ struct PlanSheetView: View {
                 )
             }
             .sheet(isPresented: $showingSpeakerModels) {
-                SpeakerModelsSheet(discussion: $discussion, allowsEditing: false)
+                SpeakerModelsSheet(discussion: $discussion, allowsEditing: false, language: language)
             }
             .sheet(item: $selectedChapters) { presentation in
                 AudioBookChaptersSheet(presentation: presentation)
@@ -102,7 +106,7 @@ struct PlanSheetView: View {
         isLoadingFullPlan = true
         defer { isLoadingFullPlan = false }
         do {
-            discussion = try await APIClient(tokens: auth).discussion(id: discussion.id)
+            discussion = try await APIClient(tokens: auth).discussion(id: discussion.id, language: language)
             loadError = nil
         } catch {
             guard !APIClient.isCancellation(error) else { return }

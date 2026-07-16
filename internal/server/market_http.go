@@ -30,10 +30,16 @@ type marketVisibilityRequest struct {
 
 type marketCoverGenerateRequest struct {
 	Prompt string `json:"prompt"`
+	// Language targets a translation's dedicated cover instead of the default
+	// one; it must name an existing, ready translation of the discussion.
+	Language string `json:"language,omitempty"`
 }
 
 type marketCoverSetRequest struct {
 	Cover DiscussionCover `json:"cover"`
+	// Language persists the cover on that translation row instead of the
+	// discussion itself; it must name an existing translation.
+	Language string `json:"language,omitempty"`
 }
 
 type marketCoverGenerateResponse struct {
@@ -98,6 +104,7 @@ func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
@@ -119,6 +126,7 @@ func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	s.applyDiscussionShareURL(d)
@@ -142,6 +150,7 @@ func (s *Server) handleMarketUnlike(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	s.applyDiscussionShareURL(d)
@@ -326,6 +335,26 @@ func (s *Server) handleDiscussionCoverGenerate(w http.ResponseWriter, r *http.Re
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)
+	// Validate the target language before reserving points so a bad request
+	// never touches the ledger.
+	if language := normalizeTranslationLanguage(req.Language); language != "" && !strings.EqualFold(language, d.Language) {
+		translation, err := s.d.Discussions.TranslationFor(r.Context(), id, language)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if translation == nil {
+			http.Error(w, "no translation exists for this language", http.StatusNotFound)
+			return
+		}
+		if translation.Status != DiscussionTranslationReady {
+			http.Error(w, "translation is not ready", http.StatusConflict)
+			return
+		}
+		if prompt == "" {
+			prompt = translationCoverPrompt(translation, d)
+		}
+	}
 	if prompt == "" {
 		prompt = "Square podcast cover artwork for " + d.DisplayTitle()
 	}
@@ -448,15 +477,35 @@ func userDisplayName(user requestUser) string {
 }
 
 func (s *Server) refreshDiscussionCoverURL(ctx context.Context, d *Discussion) {
-	if d == nil || strings.TrimSpace(d.Cover.ImageKey) == "" || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+	if d == nil {
 		return
 	}
-	url, err := s.d.Uploader.DownloadURL(ctx, d.Cover.ImageKey, stationCoverURLTTL)
+	s.refreshCoverArtURL(ctx, d.ID, &d.Cover)
+}
+
+// refreshCoverArtURL re-signs a cover's download URL from its durable image
+// key; gradient or key-less covers are left untouched.
+func (s *Server) refreshCoverArtURL(ctx context.Context, discussionID string, cover *DiscussionCover) {
+	if cover == nil || strings.TrimSpace(cover.ImageKey) == "" || s.d.Uploader == nil || !s.d.Uploader.Enabled() {
+		return
+	}
+	url, err := s.d.Uploader.DownloadURL(ctx, cover.ImageKey, stationCoverURLTTL)
 	if err != nil {
-		s.logger().Warn("cover download url failed", "discussion", d.ID, "err", err)
+		s.logger().Warn("cover download url failed", "discussion", discussionID, "err", err)
 		return
 	}
-	d.Cover.ImageURL = url
+	cover.ImageURL = url
+}
+
+// refreshTranslationMetaCoverURLs re-signs the per-language cover carried on
+// each translation meta so clients can render language cover thumbnails.
+func (s *Server) refreshTranslationMetaCoverURLs(ctx context.Context, d *Discussion) {
+	if d == nil {
+		return
+	}
+	for i := range d.Translations {
+		s.refreshCoverArtURL(ctx, d.ID, d.Translations[i].Cover)
+	}
 }
 
 // refreshDiscussionLineAudioURLs re-signs the playback URL of every voice-message
@@ -605,6 +654,17 @@ func (s *Server) generateStationCover(ctx context.Context, userID, discID, promp
 		ImageURL: url,
 		Prompt:   prompt,
 	}, nil
+}
+
+// translationCoverPrompt seeds the AI cover prompt from the translated title
+// so the generated art (including any typography) matches the target language,
+// falling back to the source title when the bundle carries none.
+func translationCoverPrompt(t *DiscussionTranslation, d *Discussion) string {
+	title := strings.TrimSpace(t.Bundle.Title)
+	if title == "" {
+		title = d.DisplayTitle()
+	}
+	return "Square podcast cover artwork for " + title
 }
 
 func stationCoverGenerationPrompt(subject string) string {

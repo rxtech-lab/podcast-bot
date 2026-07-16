@@ -29,6 +29,7 @@ func requireAdmin() func(context.Context, admin.Identity, admin.ActionType) erro
 
 type appConfigForm struct {
 	DefaultHostModel string `json:"default_host_model" jsonschema:"title=Default generation model"`
+	TranslationModel string `json:"translation_model" jsonschema:"title=Podcast translation model"`
 	STTProvider      string `json:"stt_provider" jsonschema:"title=Speech-to-text provider"`
 	STTGeminiModel   string `json:"stt_gemini_model" jsonschema:"title=Gemini transcription model"`
 }
@@ -51,6 +52,10 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			}
 			if p, ok := fs.Schema.Properties.Get("default_host_model"); ok {
 				p.Description = "The default model used when generating new content. Fetched live from the gateway."
+				p.OneOf = modelOptions(s.modelCatalog(ctx))
+			}
+			if p, ok := fs.Schema.Properties.Get("translation_model"); ok {
+				p.Description = "Model used for podcast title, plan, transcript, caption, summary, and mindmap translations."
 				p.OneOf = modelOptions(s.modelCatalog(ctx))
 			}
 			if p, ok := fs.Schema.Properties.Get("stt_provider"); ok {
@@ -98,7 +103,7 @@ func (s *Server) newAppConfigResource() admin.Resource {
 				}
 				// The wildcard lets RJSF accept the dependency-injected field
 				// without tripping its ui:order completeness check.
-				fs.UISchema["ui:order"] = []any{"default_host_model", "stt_provider", "*"}
+				fs.UISchema["ui:order"] = []any{"default_host_model", "translation_model", "stt_provider", "*"}
 			}
 			return fs, nil
 		},
@@ -106,6 +111,7 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			d := s.resolvedModelDefaults(ctx)
 			return admin.Detail(map[string]any{
 				"default_host_model": d.Host,
+				"translation_model":  s.resolvedTranslationModel(ctx),
 				"stt_provider":       s.resolvedSTTProvider(ctx),
 				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
 			}), nil
@@ -115,6 +121,11 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			model = strings.TrimSpace(model)
 			if model != "" && !s.modelExists(ctx, model) {
 				return nil, fmt.Errorf("%w: unknown model %q", admin.ErrBadInput, model)
+			}
+			translationModel, _ := data["translation_model"].(string)
+			translationModel = strings.TrimSpace(translationModel)
+			if translationModel != "" && !s.modelExists(ctx, translationModel) {
+				return nil, fmt.Errorf("%w: unknown translation model %q", admin.ErrBadInput, translationModel)
 			}
 			provider, _ := data["stt_provider"].(string)
 			provider = strings.ToLower(strings.TrimSpace(provider))
@@ -143,6 +154,9 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			if err := s.d.AppConfig.Set(ctx, appConfigKeyDefaultHostModel, model); err != nil {
 				return nil, err
 			}
+			if err := s.d.AppConfig.Set(ctx, appConfigKeyTranslationModel, translationModel); err != nil {
+				return nil, err
+			}
 			if provider != "" {
 				if err := s.d.AppConfig.Set(ctx, appConfigKeySTTProvider, provider); err != nil {
 					return nil, err
@@ -155,6 +169,7 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			}
 			return admin.Detail(map[string]any{
 				"default_host_model": model,
+				"translation_model":  s.resolvedTranslationModel(ctx),
 				"stt_provider":       s.resolvedSTTProvider(ctx),
 				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
 			}), nil

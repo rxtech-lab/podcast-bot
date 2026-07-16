@@ -3,6 +3,16 @@ import SwiftUI
 import TipKit
 import UIKit
 
+enum FullScreenPlayerStyle {
+    /// Opaque dark fallback used when a podcast has no cover palette yet.
+    /// Keeping this independent of the app's light-mode background preserves
+    /// contrast for white transcript text and playback controls.
+    static let defaultBackgroundColors = [
+        Color(red: 0.20, green: 0.13, blue: 0.35),
+        Color(red: 0.06, green: 0.05, blue: 0.10),
+    ]
+}
+
 struct FullScreenForegroundPalette {
     let primary: Color
     let secondary: Color
@@ -36,7 +46,7 @@ struct FullScreenForegroundPalette {
     }
 
     private static func averageScrimmedLuminance(for colors: [Color]) -> Double {
-        let source = colors.isEmpty ? [Theme.accent.opacity(0.35), Theme.background] : colors
+        let source = colors.isEmpty ? FullScreenPlayerStyle.defaultBackgroundColors : colors
         let values = source.compactMap(relativeLuminance)
         guard !values.isEmpty else { return 0 }
         let average = values.reduce(0, +) / Double(values.count)
@@ -184,5 +194,4 @@ private func fullScreenPreviewModel(withArtwork: Bool, colorOnly: Bool = false, 
     FullScreenPlayerView(model: fullScreenPreviewModel(withArtwork: false, colorOnly: true))
 }
 #endif
-
 

@@ -76,6 +76,10 @@ struct DiscussionGenerateRequest: Codable, Sendable {
     var chapters: [Int]?
 }
 
+struct DiscussionLanguageRequest: Codable, Sendable {
+    var language: String
+}
+
 // MARK: - Audiobook chapter batches
 
 /// One chapter of the root plan annotated with its generation progress
@@ -436,6 +440,27 @@ struct IllustrationCueDTO: Codable, Hashable, Sendable {
 
 struct IllustrationsResponseDTO: Decodable, Sendable {
     var illustrations: [IllustrationCueDTO]
+}
+
+struct CaptionDownloadFormatsResponse: Decodable, Sendable {
+    var formats: [CaptionDownloadFormat]
+}
+
+/// One caption export option supplied by the backend. The app deliberately
+/// does not switch on `id`, so newly registered server formats appear in the
+/// download sheet without an iOS release.
+struct CaptionDownloadFormat: Decodable, Sendable, Identifiable, Hashable {
+    var id: String
+    var displayName: String
+    var fileExtension: String
+    var contentType: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case fileExtension = "file_extension"
+        case contentType = "content_type"
+    }
 }
 
 /// One event from GET /api/jobs/{id}/ws: `{ "event": ..., "data": {...} }`.

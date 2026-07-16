@@ -8,6 +8,65 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 )
 
+// TestSeedE2ETranslatedFixture verifies the test-translated fixture the
+// language-switch UI test (PlayerLanguageTests) relies on: a ready podcast
+// with a ready zh-CN translation whose bundle mirrors the seeded transcript
+// and carries translated captions, plan script, summary, and mindmap, plus
+// ready source summary/text/mindmap documents.
+func TestSeedE2ETranslatedFixture(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "discussions.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+	points, err := NewPointsStore(store)
+	if err != nil {
+		t.Fatalf("NewPointsStore: %v", err)
+	}
+	if err := store.SeedE2E(ctx, points); err != nil {
+		t.Fatalf("SeedE2E: %v", err)
+	}
+	if err := store.SeedE2E(ctx, points); err != nil {
+		t.Fatalf("SeedE2E second run: %v", err)
+	}
+
+	translation, err := store.TranslationFor(ctx, "test-translated", "zh-CN")
+	if err != nil || translation == nil {
+		t.Fatalf("load seeded translation: %v", err)
+	}
+	if translation.Status != DiscussionTranslationReady {
+		t.Fatalf("translation status = %q, want ready", translation.Status)
+	}
+	bundle := translation.Bundle
+	if bundle.Title != "E2E 翻译播客" || bundle.Script == nil || bundle.Script.Host.Name != "测试主持人" {
+		t.Fatalf("bundle title/script = %q / %+v", bundle.Title, bundle.Script)
+	}
+	lines, err := store.Lines(ctx, "test", "test-translated")
+	if err != nil {
+		t.Fatalf("load source lines: %v", err)
+	}
+	if len(bundle.Lines) != len(lines) {
+		t.Fatalf("bundle lines = %d, want %d (must mirror seedTranscript 1:1)", len(bundle.Lines), len(lines))
+	}
+	if bundle.CaptionsVTT == "" || bundle.SummaryMarkdown == "" || bundle.Mindmap == nil {
+		t.Fatalf("bundle missing content: captions=%q summary=%q mindmap=%v",
+			bundle.CaptionsVTT, bundle.SummaryMarkdown, bundle.Mindmap)
+	}
+	// Translated captions must be reachable through the job-keyed lookup the
+	// subtitle/download endpoints use.
+	byJob, err := store.TranslationForJob(ctx, "e2e-job-test-translated", "zh-CN")
+	if err != nil || byJob == nil || byJob.Status != DiscussionTranslationReady {
+		t.Fatalf("translation by job = %+v, err=%v", byJob, err)
+	}
+	for _, docType := range []string{SummaryDocTypeSummary, "text", SummaryDocTypeMindmap} {
+		status, exists, err := store.SummaryStatusFor(ctx, "test-translated", docType)
+		if err != nil || !exists || status != SummaryReadyState {
+			t.Fatalf("source %s doc status = %q exists=%v err=%v", docType, status, exists, err)
+		}
+	}
+}
+
 // TestSeedE2EAudioBookFixtures verifies the seeded audiobook chain the iOS
 // XCUITest suite (AudiobookAlbumTests) relies on: a 12-chapter root with
 // chapters 1-3 generated, a batch child covering 4-5, and both grouped into

@@ -38,6 +38,48 @@ func decodeSummaryTask(t mq.Task) (server.SummaryTaskPayload, error) {
 	return p, nil
 }
 
+func (w *Worker) translationRunner() runner {
+	decode := func(t mq.Task) (server.TranslationTaskPayload, error) {
+		var p server.TranslationTaskPayload
+		if err := json.Unmarshal(t.Payload, &p); err != nil {
+			return p, mq.Permanent(fmt.Errorf("decode translation payload: %w", err))
+		}
+		if p.DiscussionID == "" || p.TargetLanguage == "" {
+			return p, mq.Permanent(fmt.Errorf("translation payload is missing discussion or language"))
+		}
+		return p, nil
+	}
+	return runner{
+		run: func(ctx context.Context, t mq.Task) error {
+			p, err := decode(t)
+			if err != nil {
+				return err
+			}
+			claimed, err := w.d.Discussions.ClaimTranslationRun(ctx, p.DiscussionID, p.TargetLanguage, t.Attempt, docsStaleClaim)
+			if err != nil {
+				return fmt.Errorf("claim translation run: %w", err)
+			}
+			if !claimed {
+				return nil
+			}
+			owner, err := w.d.Discussions.OwnerOf(ctx, p.DiscussionID)
+			if err != nil {
+				return err
+			}
+			if owner == "" {
+				return mq.Permanent(fmt.Errorf("translation discussion not found"))
+			}
+			return w.d.Srv.RunPodcastTranslationTask(ctx, p, owner)
+		},
+		terminal: func(_ context.Context, t mq.Task, err error) {
+			p, decodeErr := decode(t)
+			if decodeErr == nil {
+				w.d.Srv.FailPodcastTranslationTask(p, err)
+			}
+		},
+	}
+}
+
 // summaryExportRunner handles TaskPPTExport / TaskPDFExport: claim the
 // export doc row, then render + upload via the server's export task.
 func (w *Worker) summaryExportRunner() runner {

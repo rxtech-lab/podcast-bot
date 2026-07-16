@@ -201,6 +201,12 @@ func (s *Server) podcastMenuActions(r *http.Request, d *Discussion, lang content
 		items = append(items, actionItem("create-from-plan", phrase(lang, "Create from Plan", "从计划创建", "從計劃建立"), phrase(lang, "Creating", "正在创建", "正在建立"), "plus.circle", "", true, "request", discussionActionLink(d.ID, "action", "create-from-plan")))
 	}
 	if d.IsOwner {
+		if d.Status == DiscussionReady {
+			items = append(items, actionItem("translate-podcast", phrase(lang, "Translate Podcast", "翻译播客", "翻譯 Podcast"), "", "globe", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "translation")))
+			if d.Script != nil && d.Script.Type == config.ContentTypeUploadedAudio && len(d.Script.TranscriptSegments) > 0 {
+				items = append(items, actionItem("edit-captions", phrase(lang, "Edit Captions", "编辑字幕", "編輯字幕"), phrase(lang, "Loading Captions", "正在加载字幕", "正在載入字幕"), "captions.bubble.fill", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "caption-editor")))
+			}
+		}
 		items = append(items, actionItem("edit-cover", phrase(lang, "Edit Cover", "编辑封面", "編輯封面"), "", "photo.badge.plus", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "cover")))
 		if d.Visibility == DiscussionPublic {
 			items = append(items, actionItem("make-private", phrase(lang, "Make Private", "设为私密", "設為私密"), "", "lock", "destructive", true, "request", discussionActionLink(d.ID, "action", "make-private")))
@@ -212,6 +218,9 @@ func (s *Server) podcastMenuActions(r *http.Request, d *Discussion, lang content
 		items = append(items, actionItem("share-public", phrase(lang, "Share", "分享", "分享"), "", "square.and.arrow.up", "", true, "share-link", d.ShareURL))
 	} else if d.IsOwner {
 		items = append(items, actionItem("share-private", phrase(lang, "Share Link", "分享链接", "分享連結"), "", "square.and.arrow.up", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "share")))
+	}
+	if d.Status == DiscussionReady && strings.TrimSpace(d.JobID) != "" {
+		items = append(items, actionItem("download-captions", phrase(lang, "Download Captions", "下载字幕", "下載字幕"), "", "captions.bubble", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "captions")))
 	}
 	if d.Status == DiscussionReady && (strings.TrimSpace(d.DownloadURL) != "" || strings.TrimSpace(d.JobID) != "") {
 		items = append(items, actionItem("download-podcast", phrase(lang, "Download Station", "下载电台", "下載電台"), phrase(lang, "Downloading", "正在下载", "正在下載"), "arrow.down.circle", "", true, "download", discussionActionLink(d.ID, "action", "download-podcast")))
@@ -401,6 +410,8 @@ func (p Permissions) allowsAction(id string) (gated bool, allowed bool) {
 		return true, p.Features.CanPublishPodcast
 	case "edit-cover":
 		return true, p.Features.CanGenerateCoverWithAI
+	case "translate-podcast":
+		return true, p.Features.CanTranslatePodcast
 	case "new-album":
 		return true, p.Studios.Album
 	case "new-station":

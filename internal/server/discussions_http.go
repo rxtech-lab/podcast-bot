@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -501,10 +502,23 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	updated, err := s.d.Discussions.SetCover(r.Context(), s.requestUser(r).ID, r.PathValue("id"), req.Cover)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	var updated *Discussion
+	if language := normalizeTranslationLanguage(req.Language); language != "" {
+		var err error
+		updated, err = s.setDiscussionTranslationCover(r.Context(), user.ID, id, language, req.Cover)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		var err error
+		updated, err = s.d.Discussions.SetCover(r.Context(), user.ID, id, req.Cover)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if updated == nil {
 		http.NotFound(w, r)
@@ -512,9 +526,28 @@ func (s *Server) handleDiscussionCoverSet(w http.ResponseWriter, r *http.Request
 	}
 	s.applyDiscussionJobStatus(r, updated, true)
 	s.applyDiscussionProgress(r.Context(), updated)
+	s.applyDiscussionTranslationPresentation(r, updated)
 	s.refreshDiscussionCoverURL(r.Context(), updated)
 	s.sanitizeDiscussionUsage(updated)
 	writeJSON(w, updated)
+}
+
+// setDiscussionTranslationCover persists a cover on one translation row of an
+// owned discussion. A language matching the podcast's main language falls back
+// to the default cover, since the default cover is that language's cover.
+func (s *Server) setDiscussionTranslationCover(ctx context.Context, owner, id, language string, cover DiscussionCover) (*Discussion, error) {
+	d, err := s.d.Discussions.Get(ctx, owner, id)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	if strings.EqualFold(language, d.Language) {
+		return s.d.Discussions.SetCover(ctx, owner, id, cover)
+	}
+	translation, err := s.d.Discussions.SetTranslationCover(ctx, owner, id, language, cover)
+	if err != nil || translation == nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // handleUpdateSpeakerModel changes the LLM model for one speaker, matched by
@@ -1266,6 +1299,7 @@ func (s *Server) handleDiscussionSummary(w http.ResponseWriter, r *http.Request)
 	// Embed a "listen again" link on read so the Markdown download (and the
 	// in-app summary view, which renders this body) always link back to the
 	// original podcast with the current frontend URL.
+	doc.Markdown = s.translatedDocumentMarkdown(r, id, docType, doc.Markdown)
 	doc.Markdown = s.summaryMarkdownWithLink(id, doc.Markdown)
 	if normalizeDocType(docType) == SummaryDocTypeSummary {
 		doc.Markdown = s.summaryMarkdownWithMindmapLink(r.Context(), visible, doc.Markdown)
@@ -1299,13 +1333,15 @@ func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	s.applyDiscussionTranslationPresentation(r, visible)
+	doc.Markdown = s.translatedDocumentMarkdown(r, id, docType, doc.Markdown)
 
 	title := strings.TrimSpace(visible.Title)
 	if title == "" {
 		title = strings.TrimSpace(visible.Topic)
 	}
 
-	cacheKey := s.summaryPDFCacheKey(id, doc)
+	cacheKey := s.summaryPDFCacheKey(id, doc, r.URL.Query().Get("language"))
 
 	// Serve a previously-rendered PDF from object storage when available. The
 	// Cloudflare render is the expensive step, so we pay it only once per summary
@@ -1345,7 +1381,7 @@ func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Reque
 // summaryPDFCacheKey returns the object-storage key for a summary's rendered PDF,
 // or "" when uploads are disabled. The key embeds the summary's generated-at so a
 // regenerated summary produces a new key (old PDFs are orphaned, never stale).
-func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument) string {
+func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument, language ...string) string {
 	if s.d.Uploader == nil || !s.d.Uploader.Enabled() || doc == nil {
 		return ""
 	}
@@ -1357,8 +1393,16 @@ func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument) s
 	if doc.GeneratedAt != nil {
 		gen = doc.GeneratedAt.Unix()
 	}
-	return s.d.Uploader.Key(fmt.Sprintf("summary-pdf/%s/%s-v%s-%d.pdf",
-		discussionID, docType, summaryPDFTemplateVersion, gen))
+	languageSuffix := ""
+	if len(language) > 0 {
+		lang := normalizeTranslationLanguage(language[0])
+		if lang != "" {
+			lang = strings.NewReplacer("/", "-", "\\", "-", "..", "-").Replace(lang)
+			languageSuffix = "-" + lang
+		}
+	}
+	return s.d.Uploader.Key(fmt.Sprintf("summary-pdf/%s/%s-v%s-%d%s.pdf",
+		discussionID, docType, summaryPDFTemplateVersion, gen, languageSuffix))
 }
 
 // writeSummaryPDF streams the PDF bytes as a download attachment.
@@ -1712,6 +1756,73 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 	writeJSON(w, updated)
 }
 
+// discussionLanguageRequest is the body of PUT /api/discussions/{id}/language.
+type discussionLanguageRequest struct {
+	Language string `json:"language"`
+}
+
+// discussionLanguageRe accepts BCP-47-shaped tags ("en", "zh-CN",
+// "zh-Hant-TW") so an arbitrary client string can't be persisted as the plan
+// language.
+var discussionLanguageRe = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$`)
+
+// handleDiscussionLanguageUpdate persists the plan-view language selection the
+// moment the user picks it, instead of only baking it into the plan when
+// generation starts.
+func (s *Server) handleDiscussionLanguageUpdate(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil || d.Script == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req discussionLanguageRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	lang := strings.TrimSpace(req.Language)
+	if !discussionLanguageRe.MatchString(lang) {
+		http.Error(w, `language must be a BCP-47 tag such as "en-US" or "zh-CN"`, http.StatusBadRequest)
+		return
+	}
+	if lang == d.Script.Language {
+		s.sanitizeDiscussionUsage(d)
+		writeJSON(w, d)
+		return
+	}
+	next := *d.Script
+	next.Language = lang
+	md, err := next.RenderMarkdown()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sources := d.Sources
+	if len(sources) == 0 {
+		sources = next.Sources
+	}
+	updated, err := s.d.Discussions.UpdatePlan(r.Context(), user.ID, d.ID, planResponse{
+		Script:     &next,
+		Markdown:   md,
+		Sources:    sources,
+		Researched: d.Researched,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if updated == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.sanitizeDiscussionUsage(updated)
+	writeJSON(w, updated)
+}
+
 // discussionAppendLineRequest is the body of POST /api/discussions/{id}/lines.
 // audio_key is accepted from the client but validated against the sender before
 // persistence; audio_url is intentionally not accepted (the server derives the
@@ -1814,6 +1925,7 @@ func (s *Server) prepareDiscussionDetail(r *http.Request, d *Discussion, include
 	t0 = time.Now()
 	s.applyDiscussionSummaryMeta(r.Context(), d)
 	s.applyDiscussionMindmapMeta(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	if timer != nil {
 		timer.mark("summary", t0)
 	}
@@ -1839,6 +1951,9 @@ func (s *Server) prepareDiscussionDetail(r *http.Request, d *Discussion, include
 
 func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, timer *stationTimer) {
 	var coverDur, summaryDur, usageDur time.Duration
+	t0 := time.Now()
+	s.applyDiscussionListTitleTranslations(r, items)
+	timer.add("translations", time.Since(t0))
 	for i := range items {
 		// List rows skip resolving the presigned audio download URL — it is
 		// only needed on the detail screen and re-signing it per item is slow.
@@ -1857,7 +1972,7 @@ func (s *Server) prepareDiscussionListRows(r *http.Request, items []Discussion, 
 	timer.add("cover", coverDur)
 	timer.add("summary", summaryDur)
 	timer.add("usage", usageDur)
-	t0 := time.Now()
+	t0 = time.Now()
 	s.attachAlbumSummaries(r.Context(), s.requestUser(r).ID, items)
 	timer.add("albums", time.Since(t0))
 }

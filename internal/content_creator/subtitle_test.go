@@ -197,6 +197,36 @@ func TestVTTWriter_CuesSnapshotAndWriteSubtitleCues(t *testing.T) {
 	}
 }
 
+func TestClampSubtitleCueOverlaps(t *testing.T) {
+	cues := []SubtitleCue{
+		{Start: 13 * time.Second, End: 35 * time.Second, Text: "overruns the next two"},
+		{Start: 22 * time.Second, End: 25 * time.Second, Text: "second"},
+		{Start: 25 * time.Second, End: 31 * time.Second, Text: "third"},
+	}
+	got := ClampSubtitleCueOverlaps(cues)
+	if len(got) != 3 {
+		t.Fatalf("clamped cues = %d, want 3: %+v", len(got), got)
+	}
+	if got[0].End != 22*time.Second {
+		t.Errorf("overlapping cue end must clamp to next start: %+v", got[0])
+	}
+	if got[1].End != 25*time.Second || got[2].End != 31*time.Second {
+		t.Errorf("touching/sequential cues must be untouched: %+v", got[1:])
+	}
+	// Input must not be mutated (callers reuse the slice).
+	if cues[0].End != 35*time.Second {
+		t.Errorf("input slice was mutated: %+v", cues[0])
+	}
+
+	degenerate := ClampSubtitleCueOverlaps([]SubtitleCue{
+		{Start: 10 * time.Second, End: 12 * time.Second, Text: "collapses"},
+		{Start: 9 * time.Second, End: 11 * time.Second, Text: "keeper"},
+	})
+	if len(degenerate) != 1 || degenerate[0].Text != "keeper" {
+		t.Errorf("collapsed cue should be dropped from render output: %+v", degenerate)
+	}
+}
+
 // TestVTTWriter_StripsPunct asserts that CJK punctuation (the project's
 // primary content language) is removed from cue text so the sidecar
 // matches what drawHBOSubtitleBodyOutlined paints on the burned-in
