@@ -31,6 +31,13 @@ type Deps struct {
 	Log      *slog.Logger
 	Topic    string
 	Language string
+	// Background and SourceDocuments ground discussion agents in the plan's
+	// background paragraphs and the user's uploaded reference documents.
+	// Set only for the discussion content type (other formats use Background
+	// for their own purposes); both flow onto every SpeakPrompt and render
+	// as conditional prompt sections — empty means byte-identical prompts.
+	Background      string
+	SourceDocuments string
 	// ContentType is the topic.Type discriminator (config.ContentType*).
 	// Stamped onto PhaseMsg so the frontend can label phases without
 	// hardcoding the per-format mapping.
@@ -686,15 +693,17 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	// fits a full puzzle round (surface + ~15 Q&A pairs + a couple of
 	// audience interjections) without blowing the prompt budget.
 	prompt := agent.SpeakPrompt{
-		Phase:         t.Phase,
-		SegmentNo:     t.ID,
-		SecondsBudget: int(t.Budget / time.Second),
-		Recent:        p.d.Transcript.RecentN(40),
-		TopicTitle:    p.d.Topic,
-		TopicLanguage: p.d.Language,
-		Instructions:  t.Directive,
-		Side:          t.Speaker.Side(),
-		ToolResult:    t.RecordToolResult,
+		Phase:           t.Phase,
+		SegmentNo:       t.ID,
+		SecondsBudget:   int(t.Budget / time.Second),
+		Recent:          p.d.Transcript.RecentN(40),
+		TopicTitle:      p.d.Topic,
+		TopicLanguage:   p.d.Language,
+		Background:      p.d.Background,
+		SourceDocuments: p.d.SourceDocuments,
+		Instructions:    t.Directive,
+		Side:            t.Speaker.Side(),
+		ToolResult:      t.RecordToolResult,
 	}
 	if mr, ok := t.Speaker.(interface{ MemoryRead() string }); ok {
 		prompt.Memory = mr.MemoryRead()

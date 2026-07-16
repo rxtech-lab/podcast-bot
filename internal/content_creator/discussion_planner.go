@@ -29,6 +29,15 @@ type DiscussionPlanner struct {
 
 	state discussionState
 	turnN int
+
+	// pendingNext is the discussant pre-selected while emitting a host
+	// handoff directive (its name is embedded in that directive), so the
+	// next discussant turn goes to exactly the person the host named
+	// on-air instead of an independent round-robin pick.
+	pendingNext agent.Agent
+	// pendingAnswerAgent is the discussant named in the host's most recent
+	// address-user handoff; the following answer-user turn is routed to it.
+	pendingAnswerAgent agent.Agent
 }
 
 type discussionState struct {
@@ -68,15 +77,23 @@ func (p *DiscussionPlanner) Next(ctx context.Context) (*Turn, bool) {
 		p.state.endRequested = true
 	}
 
-	// A discussant must answer the question the host just paraphrased.
+	// A discussant must answer the question the host just paraphrased. The
+	// host's address-user directive already named this discussant on-air, so
+	// route the answer to exactly that agent.
 	if p.state.pendingAnswerUser {
 		text := p.state.pendingAnswerUserText
 		p.state.pendingAnswerUser = false
 		p.state.pendingAnswerUserText = ""
-		if ag := p.pickDiscussant(); ag != nil {
+		ag := p.pendingAnswerAgent
+		p.pendingAnswerAgent = nil
+		if ag == nil {
+			ag = p.commitNextDiscussant()
+		}
+		if ag != nil {
 			for _, q := range queued {
 				p.queue.push(q)
 			}
+			p.state.freeIdx++
 			return p.makeTurn(ag, "answer-user:"+text, p.segmentSeconds()), true
 		}
 	}
@@ -106,7 +123,21 @@ func (p *DiscussionPlanner) Next(ctx context.Context) (*Turn, bool) {
 		text := strings.Join(parts, " | ")
 		p.state.pendingAnswerUser = true
 		p.state.pendingAnswerUserText = text
-		return p.makeTurn(p.registry.Host, "address-user:"+text, p.budgetSeconds(20)), true
+		// Pick the answerer NOW and embed their name in the host directive,
+		// so the person the host hands the floor to is the one who answers.
+		// A pending named handoff (from a transition) is reused rather than
+		// skipped — the host already said that name on-air.
+		ans := p.pendingNext
+		p.pendingNext = nil
+		if ans == nil {
+			ans = p.commitNextDiscussant()
+		}
+		p.pendingAnswerAgent = ans
+		directive := "address-user:" + text
+		if ans != nil {
+			directive += "\n[hand off to: " + ans.Name() + "]"
+		}
+		return p.makeTurn(p.registry.Host, directive, p.budgetSeconds(20)), true
 	}
 
 	switch p.state.phase {
@@ -115,7 +146,12 @@ func (p *DiscussionPlanner) Next(ctx context.Context) (*Turn, bool) {
 	case agent.PhaseFreeSpeech:
 		if p.state.endRequested || p.tracker.Remaining() < 90*time.Second {
 			p.state.phase = agent.PhaseClosing
-			return p.makeTurn(p.registry.Host, "transition:closing-thoughts", p.budgetSeconds(15)), true
+			p.pendingNext = nil // a pending handoff is superseded by closing
+			directive := "transition:closing-thoughts"
+			if len(p.registry.Discussants) > 0 {
+				directive += ";first=" + p.registry.Discussants[0].Name()
+			}
+			return p.makeTurn(p.registry.Host, directive, p.budgetSeconds(15)), true
 		}
 		return p.planFree(ctx)
 	case agent.PhaseClosing:
@@ -129,11 +165,26 @@ func (p *DiscussionPlanner) Next(ctx context.Context) (*Turn, bool) {
 func (p *DiscussionPlanner) planOpening() (*Turn, bool) {
 	if !p.state.introSent {
 		p.state.introSent = true
-		return p.makeTurn(p.registry.Host, "intro", p.budgetSeconds(30)), true
+		// Opening takes run in roster order, so the first speaker is known
+		// now — embed the name so the host's intro hands off to exactly the
+		// person who actually speaks next.
+		directive := "intro"
+		if len(p.registry.Discussants) > 0 {
+			directive += ":first=" + p.registry.Discussants[0].Name()
+		}
+		return p.makeTurn(p.registry.Host, directive, p.budgetSeconds(30)), true
 	}
 	if p.state.openingIdx >= len(p.registry.Discussants) {
 		p.state.phase = agent.PhaseFreeSpeech
-		return p.makeTurn(p.registry.Host, "transition:open-discussion", p.budgetSeconds(15)), true
+		// Pre-select who opens the free round and embed their name in the
+		// host's handoff; planFree consumes pendingNext so the named person
+		// is guaranteed to speak next.
+		directive := "transition:open-discussion"
+		if ag := p.commitNextDiscussant(); ag != nil {
+			p.pendingNext = ag
+			directive += ";call:" + ag.Name()
+		}
+		return p.makeTurn(p.registry.Host, directive, p.budgetSeconds(15)), true
 	}
 	ag := p.registry.Discussants[p.state.openingIdx]
 	p.state.openingIdx++
@@ -141,6 +192,14 @@ func (p *DiscussionPlanner) planOpening() (*Turn, bool) {
 }
 
 func (p *DiscussionPlanner) planFree(ctx context.Context) (*Turn, bool) {
+	// A host handoff named this discussant on-air — honor it before anything
+	// else (including viewer probes) so the addressed person actually speaks.
+	if p.pendingNext != nil {
+		ag := p.pendingNext
+		p.pendingNext = nil
+		p.state.freeIdx++
+		return p.makeTurn(ag, "respond", p.segmentSeconds()), true
+	}
 	// Every 4th slot, give the audience a chance to interject.
 	if p.state.freeIdx > 0 && p.state.freeIdx%4 == 0 && len(p.registry.Viewers) > 0 {
 		if v, q := p.askAnyViewer(ctx); v != nil {
@@ -148,24 +207,28 @@ func (p *DiscussionPlanner) planFree(ctx context.Context) (*Turn, bool) {
 			return p.makeTurn(v, "ask:"+q, p.budgetSeconds(25)), true
 		}
 	}
-	ag := p.pickDiscussant()
+	ag := p.commitNextDiscussant()
 	if ag == nil {
 		return p.makeTurn(p.registry.Host, "transition:open-discussion", p.budgetSeconds(10)), true
 	}
+	p.state.freeIdx++
 	return p.makeTurn(ag, "respond", p.segmentSeconds()), true
 }
 
-// pickDiscussant advances the round-robin cursor across the discussants. Like
-// the debate planner it uses a cursor rather than least-spoken-time because
-// the planner runs ahead of the producer, so tracker.Used isn't updated yet.
-func (p *DiscussionPlanner) pickDiscussant() agent.Agent {
+// commitNextDiscussant advances the round-robin cursor across the discussants
+// and returns the pick. Like the debate planner it uses a cursor rather than
+// least-spoken-time because the planner runs ahead of the producer, so
+// tracker.Used isn't updated yet. Callers that emit a discussant speak turn
+// bump state.freeIdx themselves (freeIdx counts spoken slots and drives the
+// viewer-probe cadence, while rrIdx may advance early for a pre-selected
+// handoff).
+func (p *DiscussionPlanner) commitNextDiscussant() agent.Agent {
 	ds := p.registry.Discussants
 	if len(ds) == 0 {
 		return nil
 	}
 	ag := ds[p.state.rrIdx%len(ds)]
 	p.state.rrIdx++
-	p.state.freeIdx++
 	return ag
 }
 

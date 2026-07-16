@@ -2,11 +2,37 @@ package contentcreator
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/sirily11/debate-bot/internal/agent"
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/video/imagegen"
 )
+
+// discussionRoster renders the moderator and every discussant (with their
+// assigned angle) as a name list for the host's and discussants' system
+// prompts. Without it the host has no reliable source for participant names —
+// at intro time the transcript is still empty — so it invents or mangles them.
+func discussionRoster(t *config.DebateTopic) string {
+	if t == nil || len(t.Discussants) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	host := strings.TrimSpace(t.Host.Name)
+	if host == "" {
+		host = "Host"
+	}
+	fmt.Fprintf(&b, "Moderator: %s\nParticipants:\n", host)
+	for _, d := range t.Discussants {
+		if a := strings.TrimSpace(d.Aspect); a != "" {
+			fmt.Fprintf(&b, "- %s — angle: %s\n", d.Name, a)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", d.Name)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
 
 // buildDiscussionAgents constructs the moderator (host), the discussants, and
 // the silent commander for the panel-discussion format. Viewers are shared

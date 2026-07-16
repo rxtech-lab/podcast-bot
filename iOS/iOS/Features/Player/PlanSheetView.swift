@@ -18,6 +18,8 @@ struct PlanSheetView: View {
     @State private var showingSpeakerModels = false
     @State private var selectedChapters: PlanChaptersPresentation?
     @State private var selectedTranscript: UploadedAudioTranscriptPresentation?
+    @State private var planningAttachments: [Attachment] = []
+    @State private var selectedAttachment: AttachmentPreviewItem?
     @State private var isLoadingFullPlan = false
     @State private var loadError: String?
     /// Presentation language of the player (nil = source). Forwarded to every
@@ -47,7 +49,11 @@ struct PlanSheetView: View {
                                     selectedChapters = PlanChaptersPresentation(title: snapshot.title, chapters: snapshot.chapters)
                                 }
                             },
-                            onEditModels: { showingSpeakerModels = true }
+                            onEditModels: { showingSpeakerModels = true },
+                            attachments: planningAttachments,
+                            onAttachmentTapped: { attachment in
+                                selectedAttachment = AttachmentPreviewItem(attachment: attachment)
+                            }
                         )
                         if isLoadingFullPlan && discussion.script == nil {
                             ProgressView()
@@ -66,6 +72,7 @@ struct PlanSheetView: View {
             }
             .task(id: discussion.id) {
                 await fetchFullPlanIfNeeded()
+                await fetchPlanningAttachments()
             }
             .navigationTitle("Plan")
             .navigationBarTitleDisplayMode(.inline)
@@ -98,6 +105,9 @@ struct PlanSheetView: View {
                     allowsEditing: false
                 )
             }
+            .sheet(item: $selectedAttachment) { item in
+                AttachmentPreviewSheet(attachment: item.attachment)
+            }
         }
     }
 
@@ -112,6 +122,29 @@ struct PlanSheetView: View {
             guard !APIClient.isCancellation(error) else { return }
             loadError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    /// Loads the documents/audio the user attached while planning so the plan
+    /// stays inspectable after generation starts. Best-effort: a discussion
+    /// without a planning conversation (404) simply shows no section. The
+    /// server re-signs fresh attachment URLs on every fetch, so previews work
+    /// even long after the original presigned URLs expired.
+    private func fetchPlanningAttachments() async {
+        guard let view = try? await APIClient(tokens: auth).planningConversation(id: discussion.id) else { return }
+        var seen = Set<String>()
+        var collected: [Attachment] = []
+        for part in view.parts where part.kind == "text" && part.role == "user" {
+            for attachment in part.attachments ?? [] {
+                let hasContent = !(attachment.markdown ?? "").isEmpty
+                    || !(attachment.url ?? "").isEmpty
+                    || !(attachment.key ?? "").isEmpty
+                guard hasContent else { continue }
+                let dedupKey = attachment.key ?? attachment.filename
+                guard !dedupKey.isEmpty, seen.insert(dedupKey).inserted else { continue }
+                collected.append(attachment)
+            }
+        }
+        planningAttachments = collected
     }
 }
 

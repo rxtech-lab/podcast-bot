@@ -90,6 +90,7 @@ func (t *DebateTopic) RenderMarkdown() (string, error) {
 	// Body sections, in the order LoadTopic recognises them. Heading text is
 	// title-cased for readability; parseSections lowercases before matching.
 	writeSection(&b, "Background", t.Background)
+	writeSection(&b, "Source Documents", t.SourceDocuments)
 	writeSection(&b, "Affirmative Position", t.AffirmativePos)
 	writeSection(&b, "Negative Position", t.NegativePos)
 	writeSection(&b, "Rules", t.Rules)

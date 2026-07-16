@@ -1739,6 +1739,17 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 		http.Error(w, "chapter selection is only supported for audiobooks", http.StatusBadRequest)
 		return
 	}
+	// Discussions get a digest of the documents the user attached during
+	// planning, injected on a submit-only copy (never persisted via
+	// UpdatePlan) so the runtime host can summarize the source material and
+	// discussants can quote it.
+	if genScript.Type == config.ContentTypeDiscussion {
+		if digest := s.discussionSourceDocsDigest(r.Context(), user.ID, id); digest != "" {
+			genCopy := *genScript
+			genCopy.SourceDocuments = digest
+			genScript = &genCopy
+		}
+	}
 	// Atomically reserve enough points to cover a full podcast of this duration
 	// BEFORE submitting the job, so a run never starts uncharged and two
 	// concurrent requests can't overdraw. Reconciled to actual usage at job
