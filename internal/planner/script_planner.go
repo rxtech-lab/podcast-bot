@@ -371,7 +371,7 @@ func attachmentsPrompt(attachments []Attachment) string {
 		if a.isImage() {
 			continue
 		}
-		if strings.TrimSpace(a.Markdown) == "" {
+		if strings.TrimSpace(a.Markdown) == "" && strings.TrimSpace(a.URL) == "" {
 			continue
 		}
 		rendered = append(rendered, a)
@@ -386,7 +386,12 @@ func attachmentsPrompt(attachments []Attachment) string {
 		if name == "" {
 			name = fmt.Sprintf("document %d", i+1)
 		}
-		fmt.Fprintf(&sb, "\n--- %s ---\n%s\n", name, truncate(strings.TrimSpace(a.Markdown), 6000))
+		markdown := strings.TrimSpace(a.Markdown)
+		if markdown != "" {
+			fmt.Fprintf(&sb, "\n--- %s ---\n%s\n", name, truncate(markdown, 6000))
+			continue
+		}
+		fmt.Fprintf(&sb, "\n--- %s ---\nShared webpage: %s\nRead this URL before writing the plan.\n", name, strings.TrimSpace(a.URL))
 	}
 	return sb.String()
 }

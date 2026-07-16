@@ -51,6 +51,11 @@ func boolDefault(s string, def bool) bool {
 type discussionCreateRequest struct {
 	Form                  newDiscussionForm `json:"form"`
 	ReferenceDiscussionID string            `json:"reference_discussion_id,omitempty"`
+	// Attachments is used by surfaces (notably the share extension) where the
+	// incoming sources are fixed by the host app and therefore are not rendered
+	// as an editable field in the server form. Form.Attachments remains accepted
+	// for the ordinary in-app new-station sheet.
+	Attachments []planner.Attachment `json:"attachments,omitempty"`
 }
 
 // newDiscussionForm mirrors the structure produced by newDiscussionPrecheckForm:
@@ -328,7 +333,9 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 		s.startBackgroundCoverGeneration(user.ID, d.ID, "", topic)
 	}
 	if s.d.Planning != nil {
-		req.Form.Attachments = s.sanitizedAttachments(user.ID, req.Form.Attachments)
+		attachments := append([]planner.Attachment(nil), req.Form.Attachments...)
+		attachments = append(attachments, req.Attachments...)
+		attachments = s.sanitizedAttachments(user.ID, attachments)
 		plan := planner.PlanRequest{
 			Type:        contentType,
 			Topic:       topic,
@@ -337,7 +344,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			Template:    template,
 			Research:    true,
 			Reference:   reference,
-			Attachments: req.Form.Attachments,
+			Attachments: attachments,
 		}
 		conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, d.ID)
 		if err != nil {
@@ -352,7 +359,7 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 			Role:        "user",
 			Text:        planner.ConversationInitialText(plan),
 			References:  refs,
-			Attachments: req.Form.Attachments,
+			Attachments: attachments,
 			OpID:        "initial:" + d.ID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

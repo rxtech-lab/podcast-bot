@@ -78,8 +78,7 @@ struct RootView: View {
                     .task(id: deepLinkPendingKey) { await resolveDeepLink() }
                     .fullScreenCover(item: Bindable(deepLinks).opened) { opened in
                         NavigationStack {
-                            PodcastPlayerView(discussion: opened.discussion,
-                                              shareToken: opened.shareToken)
+                            deepLinkedDiscussion(opened)
                                 .toolbar {
                                     ToolbarItem(placement: .topBarLeading) {
                                         Button("Close") { deepLinks.opened = nil }
@@ -125,6 +124,25 @@ struct RootView: View {
     private func resolveDeepLink() async {
         guard deepLinks.pending != nil else { return }
         await deepLinks.resolvePending(api: APIClient(tokens: auth))
+    }
+
+    @ViewBuilder
+    private func deepLinkedDiscussion(_ opened: DeepLinkRouter.OpenedDiscussion) -> some View {
+        switch (opened.discussion.status, opened.shareToken) {
+        case (.planning, nil), (.failed, nil):
+            PlanConversationView(discussion: opened.discussion) { generated in
+                deepLinks.opened = DeepLinkRouter.OpenedDiscussion(
+                    id: opened.id,
+                    discussion: generated,
+                    shareToken: opened.shareToken
+                )
+            }
+        default:
+            PodcastPlayerView(
+                discussion: opened.discussion,
+                shareToken: opened.shareToken
+            )
+        }
     }
 
     /// Fetches the server bootstrap once at launch purely to detect a maintenance

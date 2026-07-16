@@ -60,9 +60,10 @@ type precheckOption struct {
 
 func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
+	shareExtension := r.URL.Query().Get("surface") == "share-extension"
 	resp := precheckResponse{
 		NewDiscussion: precheckNewDiscussion{
-			Form: newDiscussionPrecheckForm(lang),
+			Form: newDiscussionPrecheckFormForSurface(lang, shareExtension),
 		},
 		NewAlbum: precheckNewAlbum{
 			Form: newAlbumPrecheckForm(lang),
@@ -193,6 +194,13 @@ func newAlbumPrecheckForm(lang contentcreator.Lang) precheckForm {
 }
 
 func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
+	return newDiscussionPrecheckFormForSurface(lang, false)
+}
+
+// newDiscussionPrecheckFormForSurface keeps the same backend-owned creation
+// settings on every client surface. The share extension already owns the
+// incoming files/URLs, so it must not render a second "add attachments" picker.
+func newDiscussionPrecheckFormForSurface(lang contentcreator.Lang, shareExtension bool) precheckForm {
 	templateIDs, templateOptions, templateLabels := templateMetadata(config.ContentTypeDiscussion, lang)
 	audioBookTemplateIDs, audioBookTemplateOptions, _ := templateMetadata(config.ContentTypeAudioBook, lang)
 
@@ -228,7 +236,7 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 	templateSchema["x-enum-by-type"] = templateIDsByType
 	templateSchema["x-options-by-type"] = templateOptionsByType
 
-	return precheckForm{
+	form := precheckForm{
 		Title:        phrase(lang, "New Station", "新建频道", "新增頻道"),
 		Description:  phrase(lang, "Tell the planner what the conversation should explore.", "告诉规划器这场讨论要探索什么。", "告訴規劃器這場討論要探索什麼。"),
 		SubmitTitle:  phrase(lang, "Plan", "规划", "規劃"),
@@ -360,6 +368,21 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 			},
 		},
 	}
+	if shareExtension {
+		properties := form.Schema["properties"].(map[string]any)
+		delete(properties, "attachments")
+		uiOrder := form.UISchema["ui:order"].([]any)
+		filteredOrder := make([]any, 0, len(uiOrder)-1)
+		for _, field := range uiOrder {
+			if field != "attachments" {
+				filteredOrder = append(filteredOrder, field)
+			}
+		}
+		form.UISchema["ui:order"] = filteredOrder
+		delete(form.UISchema, "attachments")
+		delete(form.InitialData, "attachments")
+	}
+	return form
 }
 
 func templateMetadata(contentType string, lang contentcreator.Lang) (ids, options, labels []any) {

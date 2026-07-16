@@ -49,4 +49,12 @@ final class DeeplinkTests: E2ETestCase {
         XCTAssertTrue(playerOpened(app, timeout: 25),
                       "the user's own podcast should open via deep link")
     }
+
+    // MARK: - 9. Deep link to an owned planning podcast -> plan detail
+
+    func testDeepLinkOwnedPlanningPodcastOpensPlanDetail() throws {
+        let app = launch(deepLink: "debatepod://d/test-plan")
+        XCTAssertTrue(app.textFields["plan.input"].waitForExistence(timeout: 25),
+                      "an owned planning podcast should open its plan detail via deep link")
+    }
 }

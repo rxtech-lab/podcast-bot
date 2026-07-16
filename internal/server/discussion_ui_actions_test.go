@@ -65,7 +65,7 @@ func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 		t.Fatalf("SetJobResult: %v", err)
 	}
 
-	resp := getUIActions(t, srv, d.ID, "podcast-actions&supports_create_from_plan=true&supports_points=true")
+	resp := getUIActions(t, srv, d.ID, "podcast-actions&supports_create_from_plan=true&supports_points=true&supports_sign_out=true")
 	publish := findAction(t, resp.Items, "publish")
 	if publish.Action.Link != "debatepod://discussion/"+d.ID+"/sheet/publish" {
 		t.Fatalf("publish link = %q, want concrete publish sheet link", publish.Action.Link)
@@ -82,6 +82,25 @@ func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 	}
 	if hasAction(resp.Items, "edit-captions") {
 		t.Fatalf("edit-captions must stay hidden for non-uploaded podcasts: %+v", resp.Items)
+	}
+	assertActionOrder(t, resp.Items,
+		"points",
+		"podcast-creation-divider",
+		"create-from-plan",
+		"podcast-management-divider",
+		"translate-podcast",
+		"publish",
+		"podcast-transfer-divider",
+		"share-private",
+		"download-captions",
+		"download-podcast",
+		"podcast-session-divider",
+		"sign-out",
+	)
+	for _, id := range []string{"podcast-creation-divider", "podcast-management-divider", "podcast-transfer-divider", "podcast-session-divider"} {
+		if divider := findAction(t, resp.Items, id); divider.Action.Type != "divider" {
+			t.Fatalf("%s action type = %q, want divider", id, divider.Action.Type)
+		}
 	}
 }
 
@@ -215,9 +234,20 @@ func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
 	if !hasAction(account.Children, "points") {
 		t.Fatalf("points child missing when supports_points=true: %+v", account.Children)
 	}
+	if !hasAction(account.Children, "recordings") {
+		t.Fatalf("recordings child missing from account menu: %+v", account.Children)
+	}
 	create := findAction(t, out.Toolbars, "create")
 	if !hasAction(create.Children, "new-station") || !hasAction(create.Children, "new-album") {
 		t.Fatalf("create children missing station/album actions: %+v", create.Children)
+	}
+	if !hasAction(create.Children, "record-audio") {
+		t.Fatalf("record-audio child missing from create menu: %+v", create.Children)
+	}
+	assertActionOrder(t, create.Children, "new-album", "create-audio-divider", "upload-audio", "record-audio")
+	createDivider := findAction(t, create.Children, "create-audio-divider")
+	if createDivider.Action.Type != "divider" {
+		t.Fatalf("create divider action type = %q, want divider", createDivider.Action.Type)
 	}
 	filter := findAction(t, out.Toolbars, "filter")
 	publicFilter := findAction(t, filter.Children, "filter-public")
@@ -267,4 +297,19 @@ func hasAction(items []discussionUIActionItem, id string) bool {
 		}
 	}
 	return false
+}
+
+func assertActionOrder(t *testing.T, items []discussionUIActionItem, ids ...string) {
+	t.Helper()
+	positions := make(map[string]int, len(items))
+	for i, item := range items {
+		positions[item.ID] = i
+	}
+	for i := 1; i < len(ids); i++ {
+		previous, previousOK := positions[ids[i-1]]
+		current, currentOK := positions[ids[i]]
+		if !previousOK || !currentOK || previous >= current {
+			t.Fatalf("actions not in expected order %v: %+v", ids, items)
+		}
+	}
 }

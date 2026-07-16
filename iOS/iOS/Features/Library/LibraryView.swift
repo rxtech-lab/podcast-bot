@@ -15,6 +15,8 @@ struct LibraryView: View {
     @State var showingNew = false
     @State var showingNewAlbum = false
     @State var showingUploadAudio = false
+    @State var showingRecordAudio = false
+    @State var showingRecordings = false
     @State var showingPointsHistory = false
     @State var showingSettings = false
     @State var showingWhatsNew = false
@@ -73,6 +75,20 @@ struct LibraryView: View {
             .sheet(isPresented: $showingUploadAudio) {
                 UploadAudioSheet { discussion in
                     showingUploadAudio = false
+                    upsert(discussion)
+                    navigate(to: discussion)
+                }
+            }
+            .sheet(isPresented: $showingRecordAudio) {
+                RecordAudioSheet { discussion in
+                    showingRecordAudio = false
+                    upsert(discussion)
+                    navigate(to: discussion)
+                }
+            }
+            .sheet(isPresented: $showingRecordings) {
+                MyRecordingsView { discussion in
+                    showingRecordings = false
                     upsert(discussion)
                     navigate(to: discussion)
                 }
@@ -373,6 +389,10 @@ struct LibraryView: View {
             showingNewAlbum = true
         case ["sheet", "upload-audio"]:
             showingUploadAudio = true
+        case ["sheet", "record-audio"]:
+            showingRecordAudio = true
+        case ["sheet", "recordings"]:
+            showingRecordings = true
         case ["filter", "all"]:
             visibilityFilter = .all
         case ["filter", "public"]:
