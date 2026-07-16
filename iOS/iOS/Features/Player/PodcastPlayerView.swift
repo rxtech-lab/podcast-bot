@@ -43,6 +43,8 @@ struct PodcastPlayerView: View {
     @State var showingPointsHistory = false
     @State var showingPublishSheet = false
     @State var showingCoverEditor = false
+    @State var showingTranslationSettings = false
+    @State var showingCaptionDownloadSheet = false
     @State var showingShareSheet = false
     @State var showingCreatorProfile = false
     @State var showingFollowUpForm = false
@@ -71,6 +73,10 @@ struct PodcastPlayerView: View {
     @State var transcriptIsAtBottom = true
     @State var transcriptShouldScrollToBottom = false
     @State var transcriptScrollRequestTask: Task<Void, Never>?
+    @State var selectedPresentationLanguage = ""
+    @State var didChooseInitialPresentationLanguage = false
+    @State var isSwitchingLanguage = false
+    @State var languageSwitchError: String?
 
     /// Stable id for the optional points-summary accessory row so it doesn't
     /// churn its identity across renders.
@@ -94,7 +100,7 @@ struct PodcastPlayerView: View {
                 ProgressView().tint(Theme.accent)
             }
         }
-        .navigationTitle(discussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : discussion.displayTitle)
+        .navigationTitle(currentDiscussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : currentDiscussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { podcastToolbar }
         .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
@@ -135,6 +141,33 @@ struct PodcastPlayerView: View {
         .sheet(isPresented: $showingCoverEditor) {
             coverEditorSheet
         }
+        .sheet(isPresented: $showingTranslationSettings) {
+            TranslationSettingsSheet(
+                discussionID: currentDiscussion.id,
+                sourceLanguage: sourceLanguage,
+                initialTranslations: currentDiscussion.translations ?? [],
+                api: APIClient(tokens: auth),
+                onTranslationsChanged: { translations in
+                    model?.discussion.translations = translations
+                },
+                onReady: { language in
+                    Task {
+                        await switchPresentationLanguage(to: language)
+                        await purchases.refreshBalance()
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showingCaptionDownloadSheet) {
+            if let jobID = currentDiscussion.jobID {
+                CaptionDownloadSheet(
+                    jobID: jobID,
+                    title: currentDiscussion.displayTitle,
+                    language: model?.presentationLanguage,
+                    api: APIClient(tokens: auth)
+                )
+            }
+        }
         .sheet(isPresented: $showingShareSheet) {
             shareSheet
         }
@@ -168,6 +201,9 @@ struct PodcastPlayerView: View {
         .task(id: uiActionsRefreshKey) {
             await loadUIActions()
         }
+        .task(id: translationAvailabilityKey) {
+            await chooseInitialPresentationLanguageIfNeeded()
+        }
         .onDisappear {
             stopPlayerIfNeeded()
         }
@@ -186,11 +222,45 @@ struct PodcastPlayerView: View {
         } message: {
             Text("The current generation will stop after finalising audio that has already been created. New turns will not be generated.")
         }
+        .alert("Couldn’t change language", isPresented: Binding(
+            get: { languageSwitchError != nil },
+            set: { if !$0 { languageSwitchError = nil } }
+        )) {
+            Button("OK", role: .cancel) { languageSwitchError = nil }
+        } message: {
+            Text(languageSwitchError ?? "")
+        }
         .preventsIdleSleep()
     }
 
     @ToolbarContentBuilder
     var podcastToolbar: some ToolbarContent {
+        if !readyTranslationLanguages.isEmpty {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        Task { await switchPresentationLanguage(to: sourceLanguage) }
+                    } label: {
+                        languageMenuLabel(sourceLanguage)
+                    }
+                    ForEach(readyTranslationLanguages, id: \.self) { language in
+                        Button {
+                            Task { await switchPresentationLanguage(to: language) }
+                        } label: {
+                            languageMenuLabel(language)
+                        }
+                    }
+                } label: {
+                    if isSwitchingLanguage {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "globe")
+                    }
+                }
+                .accessibilityLabel("Podcast language")
+                .accessibilityIdentifier("player.languagePicker")
+            }
+        }
         if currentCreator != nil {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -251,6 +321,67 @@ struct PodcastPlayerView: View {
         model?.discussion ?? discussion
     }
 
+    var sourceLanguage: String {
+        currentDiscussion.mainLanguage ?? discussion.mainLanguage ?? discussion.language
+    }
+
+    var readyTranslationLanguages: [String] {
+        (currentDiscussion.translations ?? discussion.translations ?? [])
+            .filter { $0.available || $0.status == .ready }
+            .map(\.language)
+            .filter { $0 != sourceLanguage }
+            .sorted()
+    }
+
+    var translationAvailabilityKey: String {
+        ([sourceLanguage] + readyTranslationLanguages).joined(separator: "|")
+            + "|\(model == nil ? "loading" : "loaded")"
+    }
+
+    @ViewBuilder
+    func languageMenuLabel(_ language: String) -> some View {
+        if selectedPresentationLanguage == language || (selectedPresentationLanguage.isEmpty && language == sourceLanguage) {
+            Label(TranslationLanguageOption.name(for: language), systemImage: "checkmark")
+        } else {
+            Text(TranslationLanguageOption.name(for: language))
+        }
+    }
+
+    func chooseInitialPresentationLanguageIfNeeded() async {
+        guard model != nil, !didChooseInitialPresentationLanguage else { return }
+        guard !readyTranslationLanguages.isEmpty else {
+            selectedPresentationLanguage = sourceLanguage
+            return
+        }
+        didChooseInitialPresentationLanguage = true
+        let preferred = Locale.preferredLanguages
+        let match = readyTranslationLanguages.first { candidate in
+            let normalized = candidate.replacingOccurrences(of: "_", with: "-").lowercased()
+            let base = normalized.split(separator: "-").first.map(String.init) ?? normalized
+            return preferred.contains { value in
+                let preferredValue = value.replacingOccurrences(of: "_", with: "-").lowercased()
+                return preferredValue == normalized || preferredValue.split(separator: "-").first.map(String.init) == base
+            }
+        }
+        if let match {
+            await switchPresentationLanguage(to: match)
+        } else {
+            selectedPresentationLanguage = sourceLanguage
+        }
+    }
+
+    func switchPresentationLanguage(to language: String) async {
+        guard let model, !isSwitchingLanguage else { return }
+        isSwitchingLanguage = true
+        defer { isSwitchingLanguage = false }
+        do {
+            try await model.switchPresentationLanguage(to: language)
+            selectedPresentationLanguage = language
+        } catch {
+            languageSwitchError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     /// Whether the Summary menu item is enabled — true only once the server has
     /// generated the podcast's summary document (status `ready`).
     var summaryAvailable: Bool {
@@ -303,6 +434,7 @@ struct PodcastPlayerView: View {
         SummaryView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
                     mindmapEditable: currentDiscussion.isOwner == true,
+                    language: model?.presentationLanguage,
                     api: APIClient(tokens: auth))
     }
 
@@ -312,6 +444,7 @@ struct PodcastPlayerView: View {
     var textSheet: some View {
         TextContentView(discussionID: currentDiscussion.id,
                         title: currentDiscussion.displayTitle,
+                        language: model?.presentationLanguage,
                         api: APIClient(tokens: auth))
     }
 
@@ -320,7 +453,8 @@ struct PodcastPlayerView: View {
     var mindmapSheet: some View {
         MindmapView(discussionID: currentDiscussion.id,
                     title: currentDiscussion.displayTitle,
-                    isEditable: currentDiscussion.isOwner == true,
+                    isEditable: currentDiscussion.isOwner == true && model?.presentationLanguage == nil,
+                    language: model?.presentationLanguage,
                     api: APIClient(tokens: auth))
     }
 
@@ -402,6 +536,10 @@ struct PodcastPlayerView: View {
             showingPublishSheet = true
         case ["sheet", "cover"]:
             showingCoverEditor = true
+        case ["sheet", "translation"]:
+            showingTranslationSettings = true
+        case ["sheet", "captions"]:
+            showingCaptionDownloadSheet = true
         case ["sheet", "share"]:
             showingShareSheet = true
         case ["sheet", "follow-up"]:
@@ -682,4 +820,317 @@ struct PodcastPlayerView: View {
                       comment: "Podcast menu points label; first value is the formatted balance, second is the localized unit")
     }
 
+}
+
+private struct TranslationLanguageOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+
+    static let supported = [
+        TranslationLanguageOption(id: "en-US", name: "English (United States)"),
+        TranslationLanguageOption(id: "zh-CN", name: "简体中文"),
+        TranslationLanguageOption(id: "zh-TW", name: "繁體中文"),
+        TranslationLanguageOption(id: "ja-JP", name: "日本語"),
+        TranslationLanguageOption(id: "ko-KR", name: "한국어"),
+        TranslationLanguageOption(id: "es-ES", name: "Español"),
+        TranslationLanguageOption(id: "fr-FR", name: "Français"),
+        TranslationLanguageOption(id: "de-DE", name: "Deutsch"),
+    ]
+
+    static func name(for code: String) -> String {
+        supported.first(where: { $0.id == code })?.name ?? code
+    }
+}
+
+/// Owner-only sheet launched from the server-driven podcast menu. Generation
+/// is asynchronous; the sheet polls only while a selected translation is being
+/// produced, then lets the player adopt it without replacing the audio item.
+private struct TranslationSettingsSheet: View {
+    let discussionID: String
+    let sourceLanguage: String
+    let initialTranslations: [DiscussionTranslationMeta]
+    let api: APIClient
+    let onTranslationsChanged: ([DiscussionTranslationMeta]) -> Void
+    let onReady: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var targetLanguage = ""
+    @State private var translations: [DiscussionTranslationMeta]
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+
+    init(discussionID: String, sourceLanguage: String,
+         initialTranslations: [DiscussionTranslationMeta], api: APIClient,
+         onTranslationsChanged: @escaping ([DiscussionTranslationMeta]) -> Void,
+         onReady: @escaping (String) -> Void) {
+        self.discussionID = discussionID
+        self.sourceLanguage = sourceLanguage
+        self.initialTranslations = initialTranslations
+        self.api = api
+        self.onTranslationsChanged = onTranslationsChanged
+        self.onReady = onReady
+        _translations = State(initialValue: initialTranslations)
+    }
+
+    var availableTargets: [TranslationLanguageOption] {
+        TranslationLanguageOption.supported.filter { $0.id != sourceLanguage }
+    }
+
+    var selectedMeta: DiscussionTranslationMeta? {
+        translations.first(where: { $0.language == targetLanguage })
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Translate to") {
+                    Picker("Language", selection: $targetLanguage) {
+                        ForEach(availableTargets) { option in
+                            Text(option.name).tag(option.id)
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
+                }
+
+                Section("Included content") {
+                    Label("Title and plan", systemImage: "doc.text")
+                    Label("Transcript and captions", systemImage: "captions.bubble")
+                    Label("Summary and mindmap", systemImage: "brain.head.profile")
+                    Text("The original audio stays unchanged. Missing translated fields automatically use the podcast’s main language.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !translations.isEmpty {
+                    Section("Translations") {
+                        ForEach(translations) { translation in
+                            HStack {
+                                Text(TranslationLanguageOption.name(for: translation.language))
+                                Spacer()
+                                translationStatus(translation)
+                            }
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Translate Podcast")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(buttonTitle) {
+                        Task { await startTranslation() }
+                    }
+                    .disabled(targetLanguage.isEmpty || isSubmitting || selectedMeta?.status == .generating)
+                    .accessibilityIdentifier("translation.start")
+                }
+            }
+            .task {
+                if targetLanguage.isEmpty {
+                    targetLanguage = availableTargets.first?.id ?? ""
+                }
+                await refresh()
+            }
+        }
+    }
+
+    var buttonTitle: String {
+        if isSubmitting || selectedMeta?.status == .generating { return "Translating…" }
+        if selectedMeta?.status == .ready { return "Translate Again" }
+        if selectedMeta?.status == .failed { return "Retry" }
+        return "Translate"
+    }
+
+    @ViewBuilder
+    func translationStatus(_ translation: DiscussionTranslationMeta) -> some View {
+        switch translation.status {
+        case .generating:
+            ProgressView().controlSize(.small)
+        case .ready:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+        }
+    }
+
+    func refresh() async {
+        if let response = try? await api.discussionTranslations(id: discussionID) {
+            translations = response.translations
+            onTranslationsChanged(response.translations)
+        }
+    }
+
+    func startTranslation() async {
+        guard !targetLanguage.isEmpty else { return }
+        isSubmitting = true
+        errorMessage = nil
+        do {
+            let started = try await api.translateDiscussion(id: discussionID,
+                                                            targetLanguage: targetLanguage)
+            translations.removeAll(where: { $0.language == started.language })
+            translations.append(started)
+            for _ in 0..<300 {
+                try await Task.sleep(for: .seconds(2))
+                try Task.checkCancellation()
+                let response = try await api.discussionTranslations(id: discussionID)
+                translations = response.translations
+                onTranslationsChanged(response.translations)
+                guard let current = translations.first(where: { $0.language == targetLanguage }) else { continue }
+                if current.status == .ready {
+                    isSubmitting = false
+                    onReady(targetLanguage)
+                    return
+                }
+                if current.status == .failed {
+                    throw APIError.invalidRequest(current.error ?? "Translation failed.")
+                }
+            }
+            throw APIError.invalidRequest("Translation is taking longer than expected. You can close this sheet and return later.")
+        } catch is CancellationError {
+            isSubmitting = false
+        } catch {
+            isSubmitting = false
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
+struct CaptionDownloadSheet: View {
+    let jobID: String
+    let title: String
+    let language: String?
+    let api: APIClient
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var formats: [CaptionDownloadFormat] = []
+    @State private var selectedFormatID = ""
+    @State private var isLoading = true
+    @State private var downloadingFormatID: String?
+    @State private var downloadedFile: CaptionDownloadedFile?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading formats")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if formats.isEmpty {
+                    ContentUnavailableView(
+                        "No Caption Formats",
+                        systemImage: "captions.bubble",
+                        description: Text("No caption download formats are currently available.")
+                    )
+                } else {
+                    Form {
+                        Section("Format") {
+                            Picker("Caption Format", selection: $selectedFormatID) {
+                                ForEach(formats) { format in
+                                    Text("\(format.displayName) (.\(format.fileExtension.uppercased()))")
+                                        .tag(format.id)
+                                }
+                            }
+                            .pickerStyle(.navigationLink)
+                            .accessibilityIdentifier("captions.formatPicker")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Download Captions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !isLoading && !formats.isEmpty {
+                    Button {
+                        Task { await downloadSelectedFormat() }
+                    } label: {
+                        HStack {
+                            if downloadingFormatID != nil {
+                                ProgressView().controlSize(.small)
+                                Text("Downloading")
+                            } else {
+                                Label("Download", systemImage: "arrow.down.circle")
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(selectedFormat == nil || downloadingFormatID != nil)
+                    .accessibilityIdentifier("captions.download")
+                    .padding()
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .task { await loadFormats() }
+        .sheet(item: $downloadedFile) { file in
+            FileShareSheet(url: file.url)
+        }
+        .alert("Caption Download Failed", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    func loadFormats() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            formats = try await api.captionDownloadFormats()
+            if !formats.contains(where: { $0.id == selectedFormatID }) {
+                selectedFormatID = formats.first?.id ?? ""
+            }
+        } catch {
+            formats = []
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    var selectedFormat: CaptionDownloadFormat? {
+        formats.first(where: { $0.id == selectedFormatID })
+    }
+
+    func downloadSelectedFormat() async {
+        guard let selectedFormat else { return }
+        await download(selectedFormat)
+    }
+
+    func download(_ format: CaptionDownloadFormat) async {
+        guard downloadingFormatID == nil else { return }
+        downloadingFormatID = format.id
+        defer { downloadingFormatID = nil }
+        do {
+            let url = try await api.downloadCaptions(
+                jobID: jobID,
+                format: format,
+                title: title,
+                language: language
+            )
+            downloadedFile = CaptionDownloadedFile(url: url)
+        } catch {
+            errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
+private struct CaptionDownloadedFile: Identifiable {
+    let id = UUID()
+    let url: URL
 }

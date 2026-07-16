@@ -686,6 +686,12 @@ func (s *Server) handleJobSubtitles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitles not ready", http.StatusTooEarly)
 		return
 	}
+	if captions, ok := s.translatedCaptions(r.Context(), id, r.URL.Query().Get("language")); ok {
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = io.WriteString(w, captions)
+		return
+	}
 	if url := s.subtitlesS3URL(r.Context(), j); url != "" {
 		http.Redirect(w, r, url, http.StatusFound)
 		return
@@ -724,6 +730,10 @@ func (s *Server) handleJobSubtitlesLive(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	if captions, ok := s.translatedCaptions(r.Context(), id, r.URL.Query().Get("language")); ok {
+		_, _ = io.WriteString(w, captions)
+		return
+	}
 	if orch := s.d.Jobs.Orch(id); orch != nil {
 		_, _ = io.WriteString(w, contentcreator.FormatSubtitleCues(orch.LiveSubtitleCues()))
 		return

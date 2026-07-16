@@ -20,6 +20,7 @@ const (
 	pointsReasonImageGeneration      = "image_generation"
 	pointsReasonSummary              = "summary"
 	pointsReasonTranscription        = "transcription"
+	pointsReasonTranslationPrefix    = "translation:"
 	pointsReasonSignup               = "signup_grant"
 	pointsReasonPurchase             = "purchase" // suffixed with the event type, e.g. "purchase:RENEWAL"
 	pointsReasonAdminTopup           = "admin_topup"
@@ -876,10 +877,13 @@ func (s *PointsStore) matchingReserves(ctx context.Context, userID string, raw [
 func collapsibleSettlementReason(reason string) bool {
 	return reason == pointsReasonPlanning || reason == pointsReasonGeneration ||
 		reason == pointsReasonImageGeneration || reason == pointsReasonSummary ||
-		reason == pointsReasonTranscription
+		reason == pointsReasonTranscription || strings.HasPrefix(reason, pointsReasonTranslationPrefix)
 }
 
 func collapsibleReserveKind(reason string) (string, bool) {
+	if strings.HasPrefix(reason, "reserve:"+pointsReasonTranslationPrefix) {
+		return strings.TrimPrefix(reason, "reserve:"), true
+	}
 	switch reason {
 	case "reserve:" + pointsReasonPlanning:
 		return pointsReasonPlanning, true
@@ -1472,6 +1476,42 @@ func (s *PointsStore) SettleSummary(ctx context.Context, userID, discussionID st
 		return nil
 	}
 	_, err := s.SettleReserved(ctx, userID, discussionID, reserveLedgerID, reserved, actual, pointsReasonSummary, detail)
+	return err
+}
+
+func translationPointsReason(language string) string {
+	return pointsReasonTranslationPrefix + normalizeTranslationLanguage(language)
+}
+
+// ReserveTranslation returns reserved=-1 when the balance is insufficient.
+// The target-specific reason keeps simultaneous translations independently
+// collapsible in points history.
+func (s *PointsStore) ReserveTranslation(ctx context.Context, env *config.Env, userID, discussionID, language string) (reserved, reserveLedgerID int64, ok bool, err error) {
+	if s == nil {
+		return 0, 0, true, nil
+	}
+	required := int64(0)
+	if env != nil {
+		required = pointsForUSD(env, env.PointsTranslationEstUSD)
+	}
+	if required <= 0 {
+		return 0, 0, true, nil
+	}
+	accepted, _, ledgerID, err := s.ReserveWithLedgerID(ctx, userID, discussionID, required, translationPointsReason(language))
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if !accepted {
+		return -1, 0, false, nil
+	}
+	return required, ledgerID, true, nil
+}
+
+func (s *PointsStore) SettleTranslation(ctx context.Context, userID, discussionID, language string, reserveLedgerID, reserved, actual int64, detail PointsUsageDetail) error {
+	if s == nil || reserved <= 0 {
+		return nil
+	}
+	_, err := s.SettleReserved(ctx, userID, discussionID, reserveLedgerID, reserved, actual, translationPointsReason(language), detail)
 	return err
 }
 

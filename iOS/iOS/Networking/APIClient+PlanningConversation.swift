@@ -343,12 +343,13 @@ extension APIClient {
     /// Notion" action. A nil `parentPageID` creates a private root-level page.
     /// Throws 401 when Notion isn't connected, 404 when no summary exists.
     func exportSummaryToNotion(id: String, parentPageID: String?,
-                               docType: String = "summary") async throws -> NotionExportResponse {
+                               docType: String = "summary", language: String? = nil) async throws -> NotionExportResponse {
         try await send(
             "POST",
             "/api/discussions/\(id)/summary/notion",
             body: NotionExportRequest(parentPageID: parentPageID,
-                                      docType: docType == "summary" ? nil : docType)
+                                      docType: docType == "summary" ? nil : docType,
+                                      language: language)
         )
     }
 

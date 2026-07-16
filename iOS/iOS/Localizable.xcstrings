@@ -4,6 +4,16 @@
     "" : {
 
     },
+    "%@ (.%@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (.%2$@)"
+          }
+        }
+      }
+    },
     "%@ actions" : {
       "localizations" : {
         "zh-Hans" : {
@@ -670,50 +680,6 @@
         }
       }
     },
-    "Adjust End Time" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "调整结束时间"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "調整結束時間"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "調整結束時間"
-          }
-        }
-      }
-    },
-    "Adjust Start Time" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "调整开始时间"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "調整開始時間"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "調整開始時間"
-          }
-        }
-      }
-    },
     "Add" : {
       "localizations" : {
         "zh-Hans" : {
@@ -999,6 +965,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在新增來源"
+          }
+        }
+      }
+    },
+    "Adjust End Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整结束时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整結束時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整結束時間"
+          }
+        }
+      }
+    },
+    "Adjust Start Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整开始时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整開始時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整開始時間"
           }
         }
       }
@@ -1615,6 +1625,12 @@
           }
         }
       }
+    },
+    "Caption Download Failed" : {
+
+    },
+    "Caption Format" : {
+
     },
     "Chapter %lld" : {
       "localizations" : {
@@ -2493,6 +2509,9 @@
         }
       }
     },
+    "Couldn’t change language" : {
+
+    },
     "Couldn’t export" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3160,28 +3179,6 @@
         }
       }
     },
-    "Current Subtitle" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前字幕"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前字幕"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前字幕"
-          }
-        }
-      }
-    },
     "Current plan" : {
       "comment" : "Label for the plan card shown when there is no edit history",
       "localizations" : {
@@ -3201,6 +3198,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "目前計劃"
+          }
+        }
+      }
+    },
+    "Current Subtitle" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前字幕"
           }
         }
       }
@@ -3476,6 +3495,9 @@
         }
       }
     },
+    "Download" : {
+
+    },
     "Download %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3497,6 +3519,9 @@
           }
         }
       }
+    },
+    "Download Captions" : {
+
     },
     "Download did not produce a file." : {
       "comment" : "Shown when a podcast download completes without producing a file",
@@ -4592,6 +4617,9 @@
         }
       }
     },
+    "Format" : {
+
+    },
     "Forward 1 Second" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5269,6 +5297,9 @@
         }
       }
     },
+    "Included content" : {
+
+    },
     "Input" : {
       "comment" : "Tool detail sheet section for the tool's input",
       "localizations" : {
@@ -5384,6 +5415,9 @@
           }
         }
       }
+    },
+    "Language" : {
+
     },
     "Let the engine pick a fitting voice" : {
       "localizations" : {
@@ -5538,6 +5572,9 @@
           }
         }
       }
+    },
+    "Loading formats" : {
+
     },
     "Loading messages" : {
       "extractionState" : "stale",
@@ -6345,6 +6382,12 @@
           }
         }
       }
+    },
+    "No caption download formats are currently available." : {
+
+    },
+    "No Caption Formats" : {
+
     },
     "No Discussion %@" : {
       "localizations" : {
@@ -9738,28 +9781,6 @@
         }
       }
     },
-    "Select Start Time" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择开始时间"
-          }
-        },
-        "zh-Hant-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "選擇開始時間"
-          }
-        },
-        "zh-Hant-TW" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "選擇開始時間"
-          }
-        }
-      }
-    },
     "Select source" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9778,6 +9799,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇來源"
+          }
+        }
+      }
+    },
+    "Select Start Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择开始时间"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇開始時間"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇開始時間"
           }
         }
       }
@@ -10636,6 +10679,9 @@
         }
       }
     },
+    "Summary and mindmap" : {
+
+    },
     "Summary document" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -11023,6 +11069,9 @@
           }
         }
       }
+    },
+    "The original audio stays unchanged. Missing translated fields automatically use the podcast’s main language." : {
+
     },
     "The plan update failed. Please try again." : {
       "comment" : "Fallback error when an SSE error event carries no message",
@@ -11557,6 +11606,9 @@
         }
       }
     },
+    "Title and plan" : {
+
+    },
     "Tool" : {
       "comment" : "Generic tool card title",
       "localizations" : {
@@ -11695,8 +11747,20 @@
         }
       }
     },
+    "Transcript and captions" : {
+
+    },
     "Transcription failed. Please delete this %@ and try again." : {
       "comment" : "Shown when server-side audio transcription failed"
+    },
+    "Translate Podcast" : {
+
+    },
+    "Translate to" : {
+
+    },
+    "Translations" : {
+
     },
     "Turn sources into narrated audio books with chapters, voices, illustrations, and a rendered video." : {
       "localizations" : {

@@ -9,6 +9,7 @@ struct MindmapView: View {
     let discussionID: String
     var title: String = "Mindmap"
     let isEditable: Bool
+    var language: String? = nil
     let api: APIClient
 
     @Environment(\.dismiss) private var dismiss
@@ -109,7 +110,8 @@ struct MindmapView: View {
                 }
                 .task {
                     if model == nil {
-                        model = MindmapViewModel(discussionID: discussionID, isEditable: isEditable, api: api)
+                        model = MindmapViewModel(discussionID: discussionID, isEditable: isEditable,
+                                                 language: language, api: api)
                     }
                     await model?.load()
                 }

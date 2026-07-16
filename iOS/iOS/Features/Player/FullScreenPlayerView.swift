@@ -19,6 +19,7 @@ struct FullScreenPlayerView: View {
     @State private var showingTranscript = false
     @State private var showingCoverEditor = false
     @State private var showingShareSheet = false
+    @State private var showingCaptionDownloadSheet = false
 
     /// Landscape chrome visibility: like a video player, the header and
     /// transport controls fade out after a few idle seconds of playback and
@@ -126,6 +127,16 @@ struct FullScreenPlayerView: View {
         }
         .sheet(isPresented: $showingShareSheet) {
             ShareSheet(discussionID: model.discussion.id, api: model.api)
+        }
+        .sheet(isPresented: $showingCaptionDownloadSheet) {
+            if let jobID = model.discussion.jobID {
+                CaptionDownloadSheet(
+                    jobID: jobID,
+                    title: model.discussion.displayTitle,
+                    language: model.presentationLanguage,
+                    api: model.api
+                )
+            }
         }
         .task(id: artworkColorKey) {
             await model.adoptArtworkColors(from: currentIllustrationURL)
@@ -517,7 +528,8 @@ struct FullScreenPlayerView: View {
                 onShare: { showingShareSheet = true },
                 onCreateFollowUp: nil,
                 isCreatingFromPlan: false,
-                onCreateFromPlan: nil
+                onCreateFromPlan: nil,
+                onDownloadCaptions: downloadCaptionsAction
             )
                 .font(.title3)
                 .foregroundStyle(foregroundPalette.primary)
@@ -526,6 +538,11 @@ struct FullScreenPlayerView: View {
         } else {
             Color.clear.frame(width: 40, height: 40)
         }
+    }
+
+    private var downloadCaptionsAction: (() -> Void)? {
+        guard model.discussion.status == .ready, model.discussion.jobID != nil else { return nil }
+        return { showingCaptionDownloadSheet = true }
     }
 
     private var liveCaption: some View {

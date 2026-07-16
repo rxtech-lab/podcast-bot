@@ -105,6 +105,28 @@ struct MarketProfile: Codable, Hashable, Sendable {
     var following: [CreatorProfile]
 }
 
+enum DiscussionTranslationStatus: String, Codable, Hashable, Sendable {
+    case generating
+    case ready
+    case failed
+}
+
+struct DiscussionTranslationMeta: Codable, Hashable, Sendable, Identifiable {
+    var language: String
+    var status: DiscussionTranslationStatus
+    var available: Bool
+    var pending: Bool?
+    var error: String?
+    var generatedAt: String?
+
+    var id: String { language }
+
+    enum CodingKeys: String, CodingKey {
+        case language, status, available, pending, error
+        case generatedAt = "generated_at"
+    }
+}
+
 /// A planned + generated audio discussion. Durable storage now lives on the
 /// engine side; the app keeps only this in-memory snapshot from the API.
 struct Discussion: Identifiable, Codable, Hashable, Sendable {
@@ -113,6 +135,10 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
     var title: String
     var status: DiscussionStatus
     var language: String
+    /// The source language remains stable when this detail is presented through
+    /// a translated bundle. A nil value means this is an older/list payload.
+    var mainLanguage: String? = nil
+    var translations: [DiscussionTranslationMeta]? = nil
     var jobID: String?
     var downloadURLString: String?
     var durationSeconds: Double?
@@ -173,6 +199,8 @@ struct Discussion: Identifiable, Codable, Hashable, Sendable {
         case title
         case status
         case language
+        case mainLanguage = "main_language"
+        case translations
         case jobID = "job_id"
         case downloadURLString = "download_url"
         case durationSeconds = "duration_seconds"

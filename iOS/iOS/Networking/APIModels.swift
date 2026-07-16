@@ -1,4 +1,22 @@
 import Foundation
+
+struct DiscussionTranslationsResponse: Codable, Sendable {
+    var mainLanguage: String
+    var translations: [DiscussionTranslationMeta]
+
+    enum CodingKeys: String, CodingKey {
+        case mainLanguage = "main_language"
+        case translations
+    }
+}
+
+struct DiscussionTranslationRequest: Codable, Sendable {
+    var targetLanguage: String
+
+    enum CodingKeys: String, CodingKey {
+        case targetLanguage = "target_language"
+    }
+}
 import JSONSchemaForm
 
 /// DTOs mirroring the debate-bot engine JSON. Field names match the Go structs'
@@ -613,10 +631,12 @@ struct NotionPageAttachmentRequest: Codable, Sendable {
 struct NotionExportRequest: Codable, Sendable {
     var parentPageID: String?
     var docType: String?
+    var language: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case parentPageID = "parent_page_id"
         case docType = "doc_type"
+        case language
     }
 }
 

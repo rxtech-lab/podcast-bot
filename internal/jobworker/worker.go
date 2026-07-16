@@ -178,6 +178,7 @@ func (w *Worker) registerRunners() {
 	w.runners[mq.QueueGeneration][mq.TaskVideoRender] = w.videoRenderRunner()
 	w.runners[mq.QueueDocs][mq.TaskSummary] = w.summaryDocRunner(server.SummaryDocTypeSummary, server.RunSummaryGenerationTask)
 	w.runners[mq.QueueDocs][mq.TaskMindmap] = w.summaryDocRunner(server.SummaryDocTypeMindmap, server.RunMindmapGenerationTask)
+	w.runners[mq.QueueDocs][mq.TaskTranslation] = w.translationRunner()
 	w.runners[mq.QueueDocs][mq.TaskPPTExport] = w.summaryExportRunner()
 	w.runners[mq.QueueDocs][mq.TaskPDFExport] = w.summaryExportRunner()
 	w.runners[mq.QueuePlanning][mq.TaskPlanningTurn] = w.planningRunner()

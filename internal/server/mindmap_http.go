@@ -76,6 +76,22 @@ func (s *Server) handleDiscussionMindmap(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	target := normalizeTranslationLanguage(r.URL.Query().Get("language"))
+	if target != "" {
+		translation, err := s.d.Discussions.TranslationFor(r.Context(), id, target)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if translation != nil && translation.Status == DiscussionTranslationReady && translation.Bundle.Mindmap != nil {
+			generatedAt := translation.GeneratedAt
+			writeJSON(w, &MindmapDocument{
+				DocType: SummaryDocTypeMindmap, Status: SummaryReadyState,
+				Mindmap: translation.Bundle.Mindmap, GeneratedAt: &generatedAt,
+			})
+			return
+		}
+	}
 	doc, err := s.d.Discussions.SummaryDocumentFor(r.Context(), id, SummaryDocTypeMindmap)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

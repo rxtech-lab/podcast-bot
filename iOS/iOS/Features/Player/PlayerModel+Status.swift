@@ -11,7 +11,7 @@ extension PlayerModel {
 
     func pollCaptions(jobID: String) async {
         while !Task.isCancelled && !isFinished {
-            if let vtt = try? await api.liveSubtitles(id: jobID) {
+            if let vtt = try? await api.liveSubtitles(id: jobID, language: presentationLanguage) {
                 cues = Self.parseVTT(vtt)
             }
             try? await Task.sleep(for: .seconds(3))
@@ -19,12 +19,46 @@ extension PlayerModel {
     }
 
     func loadFinalCaptions(jobID: String) async {
-        if let vtt = try? await api.liveSubtitles(id: jobID) {
+        if let vtt = try? await api.liveSubtitles(id: jobID, language: presentationLanguage) {
             cues = Self.parseVTT(vtt)
             // Seed the active lyric group so the list scrolls to the right place
             // on first appearance, before the periodic time observer fires.
             updateActiveLyricGroup(at: currentTime)
         }
+    }
+
+    /// Switches the presentation bundle while leaving the AVPlayer item and
+    /// playback position untouched. The server performs field-level fallback
+    /// when a translated artifact is absent.
+    func switchPresentationLanguage(to language: String?) async throws {
+        let normalized = language?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceLanguage = discussion.mainLanguage ?? discussion.language
+        let requested = (normalized?.isEmpty == false && normalized != sourceLanguage) ? normalized : nil
+        let fresh: Discussion
+        if let shareToken, !shareToken.isEmpty {
+            fresh = try await api.joinViaShare(token: shareToken, language: requested)
+        } else {
+            fresh = try await api.playerDiscussion(id: discussion.id, language: requested)
+        }
+        presentationLanguage = requested
+        discussion = fresh
+        lines = fresh.sortedLines.compactMap { dto in
+            guard Self.hasDisplayablePayload(dto) else { return nil }
+            return LiveLine(speaker: dto.speaker, role: dto.role, text: dto.text,
+                            isUser: dto.isUser, done: true,
+                            senderUserID: dto.senderUserID, audioURL: dto.audioURL,
+                            imageURL: dto.imageURL,
+                            audioOffsetSeconds: Self.audioOffsetSeconds(fromMS: dto.startMS),
+                            sources: dto.sources, judgementComment: dto.judgementComment)
+        }
+        if let jobID = fresh.jobID,
+           let vtt = try? await api.liveSubtitles(id: jobID, language: requested) {
+            cues = Self.parseVTT(vtt)
+            updateActiveLyricGroup(at: currentTime)
+        }
+        uiActionsRefreshVersion += 1
+        await refreshCoverAssets()
+        updateNowPlayingInfo()
     }
 
     // MARK: - Job status

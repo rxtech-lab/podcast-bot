@@ -270,9 +270,15 @@ extension APIClient {
     /// Resolves a private share token, joins (enforcing the cap), and returns the
     /// discussion with its transcript so the client can open the player. Maps
     /// HTTP 409 to `.participantCapReached` and 410 to a clear "link expired".
-    func joinViaShare(token: String) async throws -> Discussion {
+    func joinViaShare(token: String, language: String? = nil) async throws -> Discussion {
         do {
-            return try await send("POST", "/api/share/\(pathComponent(token))/join", body: EmptyRequest())
+            let payload = try JSONEncoder().encode(EmptyRequest())
+            let query = language.map { [URLQueryItem(name: "language", value: $0)] } ?? []
+            let (data, _) = try await perform(request(method: "POST",
+                                                      path: "/api/share/\(pathComponent(token))/join",
+                                                      body: payload,
+                                                      query: query))
+            return try decode(data)
         } catch APIError.http(409, _) {
             throw APIError.participantCapReached
         } catch APIError.http(410, _) {
@@ -291,8 +297,9 @@ extension APIClient {
         try await marketList(path: "/api/market/stations/liked", limit: limit, offset: offset, query: query)
     }
 
-    func marketStation(id: String) async throws -> Discussion {
-        try await get("/api/market/stations/\(id)")
+    func marketStation(id: String, language: String? = nil) async throws -> Discussion {
+        let query = language.map { [URLQueryItem(name: "language", value: $0)] } ?? []
+        return try await get("/api/market/stations/\(id)", query: query)
     }
 
     func likeMarketStation(id: String) async throws -> Discussion {

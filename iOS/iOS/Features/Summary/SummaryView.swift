@@ -24,6 +24,7 @@ struct SummaryView: View {
     /// Whether the mindmap opened from the embedded summary link is editable
     /// (i.e. the viewer owns the discussion).
     var mindmapEditable: Bool = false
+    var language: String? = nil
     let api: APIClient
 
     @Environment(\.dismiss) private var dismiss
@@ -115,12 +116,14 @@ struct SummaryView: View {
                     FileShareSheet(url: file.url)
                 }
                 .sheet(isPresented: $showingNotionExport) {
-                    NotionExportSheet(api: api, discussionID: discussionID, docType: docType)
+                    NotionExportSheet(api: api, discussionID: discussionID,
+                                      docType: docType, language: language)
                 }
                 .sheet(isPresented: $showingMindmap) {
                     MindmapView(discussionID: discussionID,
                                 title: title,
-                                isEditable: mindmapEditable,
+                                isEditable: mindmapEditable && language == nil,
+                                language: language,
                                 api: api)
                 }
                 .alert("Couldn’t export", isPresented: Binding(
@@ -293,7 +296,8 @@ struct SummaryView: View {
         defer { isPreparingPDF = false }
         do {
             exportFile = try ExportedSummaryFile(
-                url: await api.downloadSummaryPDF(id: discussionID, docType: docType, title: title)
+                url: await api.downloadSummaryPDF(id: discussionID, docType: docType,
+                                                  title: title, language: language)
             )
         } catch {
             exportError = "Couldn’t export the PDF. Please try again."
@@ -370,7 +374,7 @@ struct SummaryView: View {
         }
         pptPreviewFile = nil
         do {
-            let loaded = try await api.summary(id: discussionID, docType: docType)
+            let loaded = try await api.summary(id: discussionID, docType: docType, language: language)
             logRawMarkdownForDebug(loaded.markdown, docType: docType, source: "SummaryView.load")
             document = loaded
             isLoading = false

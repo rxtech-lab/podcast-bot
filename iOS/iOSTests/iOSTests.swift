@@ -413,7 +413,9 @@ final class iOSTests: XCTestCase {
 
     func testPlayerDiscussionUsesOwnedDetailBeforeMarketFallback() async throws {
         var paths: [String] = []
+        var capturedRequest: URLRequest?
         URLProtocolStub.handler = { request in
+            capturedRequest = request
             paths.append(request.url?.path ?? "")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -430,11 +432,13 @@ final class iOSTests: XCTestCase {
                             tokens: StaticTokenProvider(token: "token-1"),
                             session: session)
 
-        let discussion = try await api.playerDiscussion(id: "discussion-1")
+        let discussion = try await api.playerDiscussion(id: "discussion-1",
+                                                        includeEditTurns: false)
 
         XCTAssertEqual(discussion.id, "discussion-1")
         XCTAssertEqual(discussion.visibility, .private)
         XCTAssertEqual(paths, ["/api/discussions/discussion-1"])
+        XCTAssertEqual(capturedRequest?.url?.queryItems["include_edit_turns"], "false")
     }
 
     func testPlayerDiscussionFallsBackToMarketAndJoinsWhenOwnedDetailMissing() async throws {
@@ -596,6 +600,60 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(cover["type"] as? String, "gradient")
         XCTAssertEqual(cover["gradient_start"] as? String, "#111111")
         XCTAssertEqual(cover["gradient_end"] as? String, "#777777")
+    }
+
+    func testTranslatedDiscussionRequestCarriesLanguageAndDecodesMetadata() async throws {
+        var capturedRequest: URLRequest?
+        URLProtocolStub.handler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                           httpVersion: nil, headerFields: nil)!
+            return (response, Data("""
+            {
+              "id":"discussion-1","topic":"Sujet","title":"Titre",
+              "status":"ready","language":"fr-FR","main_language":"en-US",
+              "translations":[{"language":"fr-FR","status":"ready","available":true}]
+            }
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: URLSession(configuration: config))
+
+        let discussion = try await api.discussion(id: "discussion-1", language: "fr-FR")
+
+        let components = try XCTUnwrap(URLComponents(url: capturedRequest!.url!,
+                                                     resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "language" })?.value, "fr-FR")
+        XCTAssertEqual(discussion.mainLanguage, "en-US")
+        XCTAssertEqual(discussion.title, "Titre")
+        XCTAssertEqual(discussion.translations?.first?.status, .ready)
+    }
+
+    func testTranslateDiscussionEncodesTargetLanguage() async throws {
+        var capturedBody: Data?
+        URLProtocolStub.handler = { request in
+            capturedBody = request.httpBodyStreamData ?? request.httpBody
+            let response = HTTPURLResponse(url: request.url!, statusCode: 202,
+                                           httpVersion: nil, headerFields: nil)!
+            return (response, Data("""
+            {"language":"ja-JP","status":"generating","available":false,"pending":true}
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: URLSession(configuration: config))
+
+        let meta = try await api.translateDiscussion(id: "discussion-1", targetLanguage: "ja-JP")
+
+        XCTAssertEqual(meta.status, .generating)
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json["target_language"], "ja-JP")
     }
 
 }

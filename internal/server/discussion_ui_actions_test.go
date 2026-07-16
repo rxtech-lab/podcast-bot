@@ -57,6 +57,10 @@ func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	const jobID = "job-captions"
+	if _, err := store.SetJob(ctx, "anonymous", d.ID, jobID); err != nil {
+		t.Fatalf("SetJob: %v", err)
+	}
 	if err := store.SetJobResult(ctx, d.ID, DiscussionReady, "https://audio.example/ready.mp3"); err != nil {
 		t.Fatalf("SetJobResult: %v", err)
 	}
@@ -68,6 +72,10 @@ func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 	}
 	if !hasAction(resp.Items, "download-podcast") {
 		t.Fatalf("download-podcast action missing from ready podcast actions: %+v", resp.Items)
+	}
+	captions := findAction(t, resp.Items, "download-captions")
+	if captions.Action.Link != "debatepod://discussion/"+d.ID+"/sheet/captions" {
+		t.Fatalf("download-captions link = %q, want concrete captions sheet link", captions.Action.Link)
 	}
 	if !hasAction(resp.Items, "points") {
 		t.Fatalf("points action missing when supports_points=true: %+v", resp.Items)

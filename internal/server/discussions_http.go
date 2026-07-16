@@ -1266,6 +1266,7 @@ func (s *Server) handleDiscussionSummary(w http.ResponseWriter, r *http.Request)
 	// Embed a "listen again" link on read so the Markdown download (and the
 	// in-app summary view, which renders this body) always link back to the
 	// original podcast with the current frontend URL.
+	doc.Markdown = s.translatedDocumentMarkdown(r, id, docType, doc.Markdown)
 	doc.Markdown = s.summaryMarkdownWithLink(id, doc.Markdown)
 	if normalizeDocType(docType) == SummaryDocTypeSummary {
 		doc.Markdown = s.summaryMarkdownWithMindmapLink(r.Context(), visible, doc.Markdown)
@@ -1299,13 +1300,15 @@ func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
+	s.applyDiscussionTranslationPresentation(r, visible)
+	doc.Markdown = s.translatedDocumentMarkdown(r, id, docType, doc.Markdown)
 
 	title := strings.TrimSpace(visible.Title)
 	if title == "" {
 		title = strings.TrimSpace(visible.Topic)
 	}
 
-	cacheKey := s.summaryPDFCacheKey(id, doc)
+	cacheKey := s.summaryPDFCacheKey(id, doc, r.URL.Query().Get("language"))
 
 	// Serve a previously-rendered PDF from object storage when available. The
 	// Cloudflare render is the expensive step, so we pay it only once per summary
@@ -1345,7 +1348,7 @@ func (s *Server) handleDiscussionSummaryPDF(w http.ResponseWriter, r *http.Reque
 // summaryPDFCacheKey returns the object-storage key for a summary's rendered PDF,
 // or "" when uploads are disabled. The key embeds the summary's generated-at so a
 // regenerated summary produces a new key (old PDFs are orphaned, never stale).
-func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument) string {
+func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument, language ...string) string {
 	if s.d.Uploader == nil || !s.d.Uploader.Enabled() || doc == nil {
 		return ""
 	}
@@ -1357,8 +1360,16 @@ func (s *Server) summaryPDFCacheKey(discussionID string, doc *SummaryDocument) s
 	if doc.GeneratedAt != nil {
 		gen = doc.GeneratedAt.Unix()
 	}
-	return s.d.Uploader.Key(fmt.Sprintf("summary-pdf/%s/%s-v%s-%d.pdf",
-		discussionID, docType, summaryPDFTemplateVersion, gen))
+	languageSuffix := ""
+	if len(language) > 0 {
+		lang := normalizeTranslationLanguage(language[0])
+		if lang != "" {
+			lang = strings.NewReplacer("/", "-", "\\", "-", "..", "-").Replace(lang)
+			languageSuffix = "-" + lang
+		}
+	}
+	return s.d.Uploader.Key(fmt.Sprintf("summary-pdf/%s/%s-v%s-%d%s.pdf",
+		discussionID, docType, summaryPDFTemplateVersion, gen, languageSuffix))
 }
 
 // writeSummaryPDF streams the PDF bytes as a download attachment.
@@ -1814,6 +1825,7 @@ func (s *Server) prepareDiscussionDetail(r *http.Request, d *Discussion, include
 	t0 = time.Now()
 	s.applyDiscussionSummaryMeta(r.Context(), d)
 	s.applyDiscussionMindmapMeta(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	if timer != nil {
 		timer.mark("summary", t0)
 	}

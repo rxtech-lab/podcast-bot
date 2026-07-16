@@ -49,6 +49,7 @@ type PermissionFeatures struct {
 	CanGenerateMindmap       bool `json:"canGenerateMindmap"`
 	CanGenerateCoverWithAI   bool `json:"canGenerateCoverWithAI"`
 	CanUploadOwnAudio        bool `json:"canUploadOwnAudio"`
+	CanTranslatePodcast      bool `json:"canTranslatePodcast"`
 }
 
 // PermissionRuleMode values for PermissionRule.Mode.

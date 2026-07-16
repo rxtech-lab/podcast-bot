@@ -201,7 +201,11 @@ type Discussion struct {
 	// mindmap document. Only present for discussion-type podcasts; the JSON
 	// tree body is fetched separately from the mindmap endpoint. Populated
 	// lazily on the detail path only.
-	Mindmap             *SummaryMeta `json:"mindmap,omitempty"`
+	Mindmap *SummaryMeta `json:"mindmap,omitempty"`
+	// MainLanguage is the immutable source language. Language becomes the
+	// selected presentation language when a ready translation is applied.
+	MainLanguage        string                      `json:"main_language,omitempty"`
+	Translations        []DiscussionTranslationMeta `json:"translations,omitempty"`
 	summaryMetaLoaded   bool
 	joinedJob           *Job
 	AllowSendingMessage bool      `json:"allowSendingMessage"`
@@ -429,6 +433,25 @@ func (s *DiscussionStore) ensureSchema(ctx context.Context) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY(discussion_id, doc_type),
+			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS native_discussion_translations (
+			discussion_id TEXT NOT NULL,
+			language TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'generating',
+			bundle_json TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			llm_cost_usd REAL NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			claimed_at INTEGER NOT NULL DEFAULT 0,
+			generated_at INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(discussion_id, language),
 			FOREIGN KEY(discussion_id) REFERENCES native_discussions(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS user_push_tokens (

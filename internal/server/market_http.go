@@ -98,6 +98,7 @@ func (s *Server) handleMarketGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.refreshDiscussionLineAudioURLs(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
@@ -119,6 +120,7 @@ func (s *Server) handleMarketLike(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	s.applyDiscussionShareURL(d)
@@ -142,6 +144,7 @@ func (s *Server) handleMarketUnlike(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDiscussionJobStatus(r, d, true)
 	s.applyDiscussionProgress(r.Context(), d)
+	s.applyDiscussionTranslationPresentation(r, d)
 	s.refreshDiscussionCoverURL(r.Context(), d)
 	s.sanitizeDiscussionUsage(d)
 	s.applyDiscussionShareURL(d)

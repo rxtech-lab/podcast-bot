@@ -31,6 +31,25 @@ func (s *Server) resolvedModelDefaults(ctx context.Context) config.ModelDefaults
 	return defaults
 }
 
+func (s *Server) resolvedTranslationModel(ctx context.Context) string {
+	model := ""
+	if s.d.Env != nil {
+		model = strings.TrimSpace(s.d.Env.PodcastTranslationModel)
+		if model == "" {
+			model = strings.TrimSpace(s.d.Env.PodcastSummaryModel)
+		}
+		if model == "" {
+			model = strings.TrimSpace(s.d.Env.HostModel)
+		}
+	}
+	if s.d.AppConfig != nil {
+		if v, ok, err := s.d.AppConfig.Get(ctx, appConfigKeyTranslationModel); err == nil && ok && strings.TrimSpace(v) != "" {
+			model = strings.TrimSpace(v)
+		}
+	}
+	return model
+}
+
 // resolvedSTTProvider returns the effective speech-to-text provider id: the
 // env default (STT_PROVIDER, "gemini" when unset) with the admin App Config
 // override overlaid.

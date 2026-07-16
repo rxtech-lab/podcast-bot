@@ -54,7 +54,7 @@ func ownerLocalWhenDone(sub string, j *Job) bool {
 		return j.S3Key == "" // shared mp4 in S3 -> any pod can serve it
 	case sub == "audio":
 		return j.AudioS3Key == "" // shared mp3 in S3 -> any pod can serve it
-	case sub == "subtitles" || strings.HasPrefix(sub, "subtitles/"):
+	case sub == "subtitles" || strings.HasPrefix(sub, "subtitles/") || strings.HasPrefix(sub, "captions/"):
 		return j.SubtitlesS3Key == "" // shared VTT in S3 -> any pod can serve it
 	case sub == "illustrations":
 		// Shared sidecar in S3 -> any pod; otherwise only the owner pod's

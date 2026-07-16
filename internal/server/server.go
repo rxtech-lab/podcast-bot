@@ -347,6 +347,7 @@ func New(d Deps) *Server {
 
 	// Job-pipeline routes (video + dashboard modes).
 	if jobsMode {
+		s.mux.HandleFunc("GET /api/caption-formats", s.handleCaptionDownloadFormats)
 		s.mux.HandleFunc("POST /api/jobs", s.handleJobSubmit)
 		s.mux.HandleFunc("POST /api/jobs/json", s.handleJobSubmitJSON)
 		s.mux.HandleFunc("GET /api/jobs", s.handleJobList)
@@ -356,6 +357,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/jobs/{id}/transcript", s.handleJobTranscript)
 		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles", s.handleJobSubtitles)
 		s.mux.HandleFunc("GET /api/jobs/{id}/subtitles/live", s.handleJobSubtitlesLive)
+		s.mux.HandleFunc("GET /api/jobs/{id}/captions/{format}", s.handleJobCaptionDownload)
 		s.mux.HandleFunc("GET /api/jobs/{id}/illustrations", s.handleJobIllustrations)
 		s.mux.HandleFunc("GET /api/jobs/{id}/archive", s.handleJobArchive)
 		s.mux.HandleFunc("GET /api/jobs/{id}/hls/{file}", s.handleJobHLS)
@@ -381,6 +383,8 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/transcript/speakers", s.handleUploadedAudioSpeakerAdd)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/transcript/speakers", s.handleUploadedAudioSpeakerRename)
 		s.mux.HandleFunc("GET /api/discussions/{id}/ui-actions", s.handleDiscussionUIActions)
+		s.mux.HandleFunc("GET /api/discussions/{id}/translations", s.handleDiscussionTranslations)
+		s.mux.HandleFunc("POST /api/discussions/{id}/translations", s.handleDiscussionTranslationCreate)
 		s.mux.HandleFunc("GET /api/discussions/{id}/parent-podcast", s.handleDiscussionParentPodcastGet)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary", s.handleDiscussionSummary)
 		s.mux.HandleFunc("GET /api/discussions/{id}/summary/pdf", s.handleDiscussionSummaryPDF)

@@ -21,6 +21,7 @@ final class MindmapViewModel {
 
     let discussionID: String
     let isEditable: Bool
+    let language: String?
 
     private(set) var phase: Phase = .loading
     var root: MindmapNode?
@@ -46,16 +47,17 @@ final class MindmapViewModel {
     private static let undoLimit = 20
     private static let autosaveDelay: Duration = .seconds(2)
 
-    init(discussionID: String, isEditable: Bool, api: APIClient) {
+    init(discussionID: String, isEditable: Bool, language: String? = nil, api: APIClient) {
         self.discussionID = discussionID
         self.isEditable = isEditable
+        self.language = language
         self.api = api
     }
 
     func load() async {
         phase = .loading
         do {
-            let document = try await api.mindmap(id: discussionID)
+            let document = try await api.mindmap(id: discussionID, language: language)
             guard let spec = document.mindmap else {
                 phase = .failed(String(localized: "The mindmap is not ready yet."))
                 return

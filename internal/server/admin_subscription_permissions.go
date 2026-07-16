@@ -39,6 +39,7 @@ type subscriptionPermissionForm struct {
 	CanGenerateMindmap       bool `json:"can_generate_mindmap" jsonschema:"title=Generate mindmap"`
 	CanGenerateCoverWithAI   bool `json:"can_generate_cover" jsonschema:"title=Generate cover art with AI"`
 	CanUploadOwnAudio        bool `json:"can_upload_own_audio" jsonschema:"title=Upload own audio as a podcast"`
+	CanTranslatePodcast      bool `json:"can_translate_podcast" jsonschema:"title=Translate podcast"`
 
 	MaxUploadAudioMB int64 `json:"max_upload_audio_mb" jsonschema:"title=Max audio upload size (MB)"`
 
@@ -146,6 +147,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 	setPropDescription(fs, "can_generate_mindmap", "Allow generating a mindmap of an episode's key points.")
 	setPropDescription(fs, "can_generate_cover", "Allow generating cover artwork for an episode or album with AI.")
 	setPropDescription(fs, "can_upload_own_audio", "Allow creating a podcast from the user's own uploaded audio (server-side transcription). Also requires the global App Config toggle.")
+	setPropDescription(fs, "can_translate_podcast", "Allow translating a finished podcast's title, plan, transcript, captions, summary, and mindmap.")
 	setPropDescription(fs, "max_upload_audio_mb", "Largest audio file this tier may upload, in MB. 0 uses the server-wide default cap.")
 
 	// The reflector marks every non-pointer bool as `required`, but the studio and
@@ -159,7 +161,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 		"studio_discussion", "studio_audio_book", "studio_album",
 		"can_publish_podcast", "can_share_privately", "can_generate_video",
 		"can_generate_summary", "can_export_notion", "can_generate_ppt",
-		"can_generate_mindmap", "can_generate_cover", "can_upload_own_audio",
+		"can_generate_mindmap", "can_translate_podcast", "can_generate_cover", "can_upload_own_audio",
 		"max_upload_audio_mb",
 	)
 
@@ -231,7 +233,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 		"studio_discussion", "studio_audio_book", "studio_album",
 		"can_publish_podcast", "can_share_privately", "can_generate_video",
 		"can_generate_summary", "can_export_notion", "can_generate_ppt",
-		"can_generate_mindmap", "can_generate_cover", "can_upload_own_audio",
+		"can_generate_mindmap", "can_translate_podcast", "can_generate_cover", "can_upload_own_audio",
 		"max_upload_audio_mb",
 		"models_mode",
 		"voices_mode",
@@ -301,7 +303,7 @@ func (r *subscriptionPermissionsResource) Fetch(ctx context.Context, req admin.R
 			"studio_discussion": true, "studio_audio_book": true, "studio_album": true,
 			"can_publish_podcast": true, "can_share_privately": true, "can_generate_video": true,
 			"can_generate_summary": true, "can_export_notion": true, "can_generate_ppt": true,
-			"can_generate_mindmap": true, "can_generate_cover": true, "can_upload_own_audio": true,
+			"can_generate_mindmap": true, "can_generate_cover": true, "can_upload_own_audio": true, "can_translate_podcast": true,
 			"max_upload_audio_mb": int64(0),
 			"models_mode":         PermissionModeAll, "voices_mode": PermissionModeAll,
 		}), nil
@@ -510,37 +512,38 @@ func permissionsSummary(p Permissions) string {
 	for _, on := range []bool{
 		p.Features.CanPublishPodcast, p.Features.CanSharePodcastPrivately, p.Features.CanGenerateVideo,
 		p.Features.CanGenerateSummary, p.Features.CanExportToNotion, p.Features.CanGeneratePPT,
-		p.Features.CanGenerateMindmap, p.Features.CanGenerateCoverWithAI,
+		p.Features.CanGenerateMindmap, p.Features.CanGenerateCoverWithAI, p.Features.CanTranslatePodcast,
 	} {
 		if on {
 			features++
 		}
 	}
-	return fmt.Sprintf("%d/8 features · models: %s · voices: %s", features, p.Models.Mode, p.Voices.Mode)
+	return fmt.Sprintf("%d/9 features · models: %s · voices: %s", features, p.Models.Mode, p.Voices.Mode)
 }
 
 // formFromRow flattens a stored row back into the form field map for editing.
 func formFromRow(row *SubscriptionPermission) map[string]any {
 	p := row.Permissions
 	return map[string]any{
-		"subscription_class":   encodeClassValue(row.ProductID, row.StoreEnvironment),
-		"studio_discussion":    p.Studios.Discussion,
-		"studio_audio_book":    p.Studios.AudioBook,
-		"studio_album":         p.Studios.Album,
-		"can_publish_podcast":  p.Features.CanPublishPodcast,
-		"can_share_privately":  p.Features.CanSharePodcastPrivately,
-		"can_generate_video":   p.Features.CanGenerateVideo,
-		"can_generate_summary": p.Features.CanGenerateSummary,
-		"can_export_notion":    p.Features.CanExportToNotion,
-		"can_generate_ppt":     p.Features.CanGeneratePPT,
-		"can_generate_mindmap": p.Features.CanGenerateMindmap,
-		"can_generate_cover":   p.Features.CanGenerateCoverWithAI,
-		"can_upload_own_audio": p.Features.CanUploadOwnAudio,
-		"max_upload_audio_mb":  p.Limits.MaxUploadAudioMB,
-		"models_mode":          p.Models.Mode,
-		"models_allow":         p.Models.Allow,
-		"voices_mode":          p.Voices.Mode,
-		"voices_allow":         p.Voices.Allow,
+		"subscription_class":    encodeClassValue(row.ProductID, row.StoreEnvironment),
+		"studio_discussion":     p.Studios.Discussion,
+		"studio_audio_book":     p.Studios.AudioBook,
+		"studio_album":          p.Studios.Album,
+		"can_publish_podcast":   p.Features.CanPublishPodcast,
+		"can_share_privately":   p.Features.CanSharePodcastPrivately,
+		"can_generate_video":    p.Features.CanGenerateVideo,
+		"can_generate_summary":  p.Features.CanGenerateSummary,
+		"can_export_notion":     p.Features.CanExportToNotion,
+		"can_generate_ppt":      p.Features.CanGeneratePPT,
+		"can_generate_mindmap":  p.Features.CanGenerateMindmap,
+		"can_generate_cover":    p.Features.CanGenerateCoverWithAI,
+		"can_upload_own_audio":  p.Features.CanUploadOwnAudio,
+		"can_translate_podcast": p.Features.CanTranslatePodcast,
+		"max_upload_audio_mb":   p.Limits.MaxUploadAudioMB,
+		"models_mode":           p.Models.Mode,
+		"models_allow":          p.Models.Allow,
+		"voices_mode":           p.Voices.Mode,
+		"voices_allow":          p.Voices.Allow,
 	}
 }
 
@@ -563,6 +566,7 @@ func permissionsFromForm(data map[string]any) Permissions {
 			CanGenerateMindmap:       boolField(data, "can_generate_mindmap", false),
 			CanGenerateCoverWithAI:   boolField(data, "can_generate_cover", false),
 			CanUploadOwnAudio:        boolField(data, "can_upload_own_audio", false),
+			CanTranslatePodcast:      boolField(data, "can_translate_podcast", false),
 		},
 		Models: PermissionRule{Mode: stringField(data, "models_mode"), Allow: stringSliceField(data, "models_allow")},
 		Voices: PermissionRule{Mode: stringField(data, "voices_mode"), Allow: stringSliceField(data, "voices_allow")},

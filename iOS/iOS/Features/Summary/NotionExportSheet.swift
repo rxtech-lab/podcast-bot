@@ -11,6 +11,7 @@ struct NotionExportSheet: View {
     let api: APIClient
     let discussionID: String
     var docType: String = "summary"
+    var language: String? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -226,7 +227,8 @@ struct NotionExportSheet: View {
         do {
             let resp = try await api.exportSummaryToNotion(id: discussionID,
                                                            parentPageID: parentPageID,
-                                                           docType: docType)
+                                                           docType: docType,
+                                                           language: language)
             createdURL = URL(string: resp.url)
             phase = .done
         } catch {

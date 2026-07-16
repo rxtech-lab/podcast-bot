@@ -187,6 +187,9 @@ final class PlayerModel {
     nonisolated static let minimumTranscriptLoadingSeconds = 1.0
 
     var discussion: Discussion
+    /// nil means the source-language presentation. Audio is never replaced when
+    /// this changes; only discussion text and caption cues are refreshed.
+    var presentationLanguage: String?
     var uiActionsRefreshVersion = 0
     /// Exposed (read-only use) so views like the share sheet can reuse the same
     /// authenticated client instead of constructing another.
@@ -304,6 +307,7 @@ final class PlayerModel {
     init(discussion: Discussion, api: APIClient, username: String, userID: String = "",
          shareToken: String? = nil) {
         self.discussion = discussion
+        self.presentationLanguage = nil
         self.api = api
         self.username = username
         self.currentUserID = userID

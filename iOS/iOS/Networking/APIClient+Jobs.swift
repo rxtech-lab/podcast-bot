@@ -61,9 +61,51 @@ extension APIClient {
     }
 
     /// Current captions (WebVTT text) for a running or finished job.
-    func liveSubtitles(id: String) async throws -> String {
-        let (data, _) = try await perform(request(method: "GET", path: "/api/jobs/\(id)/subtitles/live"))
+    func liveSubtitles(id: String, language: String? = nil) async throws -> String {
+        let query = language.map { [URLQueryItem(name: "language", value: $0)] } ?? []
+        let (data, _) = try await perform(request(method: "GET", path: "/api/jobs/\(id)/subtitles/live", query: query))
         return String(decoding: data, as: UTF8.self)
+    }
+
+    func captionDownloadFormats() async throws -> [CaptionDownloadFormat] {
+        let response: CaptionDownloadFormatsResponse = try await get("/api/caption-formats")
+        return response.formats
+    }
+
+    func downloadCaptions(jobID: String,
+                          format: CaptionDownloadFormat,
+                          title: String,
+                          language: String? = nil) async throws -> URL {
+        var query: [URLQueryItem] = []
+        if let language, !language.isEmpty {
+            query.append(URLQueryItem(name: "language", value: language))
+        }
+        let path = "/api/jobs/\(pathComponent(jobID))/captions/\(pathComponent(format.id))"
+        let (data, _) = try await perform(request(method: "GET", path: path, query: query))
+        return try writeCaptionFile(data: data, title: title, format: format)
+    }
+
+    func writeCaptionFile(data: Data, title: String, format: CaptionDownloadFormat) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CaptionDownloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let allowedNameCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+        let sanitizedTitle = title.unicodeScalars.map { allowedNameCharacters.contains($0) ? Character($0) : "-" }
+        let baseName = String(sanitizedTitle).trimmingCharacters(in: CharacterSet(charactersIn: " -_"))
+        let name = baseName.isEmpty ? "Captions" : String(baseName.prefix(80))
+        let allowedExtensionCharacters = CharacterSet.alphanumerics
+        let sanitizedExtension = format.fileExtension.unicodeScalars
+            .filter { allowedExtensionCharacters.contains($0) }
+            .map(String.init)
+            .joined()
+            .lowercased()
+        guard !sanitizedExtension.isEmpty else {
+            throw APIError.invalidRequest("The server returned an invalid caption file extension.")
+        }
+        let url = directory.appendingPathComponent(name).appendingPathExtension(sanitizedExtension)
+        try data.write(to: url, options: .atomic)
+        return url
     }
 
     // MARK: - Streaming URLs (consumed by AVPlayer; bearer set via asset headers)
