@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Q&A chat: ask questions about one finished podcast (transcript + sources)
 /// or, in global scope, about the whole library. The agent retrieves content
@@ -26,6 +27,7 @@ struct QAConversationView: View {
     @State var selectedTranscriptCard: QATranscriptCard?
     @State var selectedMindmapDocument: QADocumentCard?
     @State var selectedPPTDocument: QADocumentCard?
+    @State var selectedAgentDocument: QAAgentDocumentCard?
     @State var showingClearMessagesConfirmation = false
     @State var isClearingMessages = false
     @State var clearMessagesError: String?
@@ -106,6 +108,21 @@ struct QAConversationView: View {
                         language: language,
                         initialDocType: "ppt",
                         api: APIClient(tokens: auth))
+        }
+        .sheet(item: $selectedAgentDocument) { document in
+            NavigationStack {
+                AgentDocumentView(documentID: document.id,
+                                  initialTitle: document.title,
+                                  api: APIClient(tokens: auth)) { discussionID in
+                    selectedAgentDocument = nil
+                    openPodcast(id: discussionID)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { selectedAgentDocument = nil }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showingPaywall) { PaywallScreen() }
         .alert("Could not send the message", isPresented: errorAlertBinding) {
@@ -298,6 +315,12 @@ struct QAConversationView: View {
                         }
                     }
                 }
+            case "document":
+                if let document = card.agentDocument {
+                    QAAgentDocumentCardView(document: document) {
+                        selectedAgentDocument = document
+                    }
+                }
             default:
                 PlanningToolCard(part: part.asPlanningPart) { selectedToolPart = part }
             }
@@ -388,7 +411,13 @@ struct QAConversationView: View {
         }
         .padding(12)
         .glassEffect(in: .capsule)
+        .modifier(QAChatDocumentTipModifier(isGlobal: usesGlobalDocumentTip))
         .padding(16)
+    }
+
+    var usesGlobalDocumentTip: Bool {
+        if case .global = scope { return true }
+        return false
     }
 
     var inputPrompt: String {
@@ -408,5 +437,18 @@ struct QAConversationView: View {
                 if !$0 { clearError() }
             }
         )
+    }
+}
+
+private struct QAChatDocumentTipModifier: ViewModifier {
+    let isGlobal: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isGlobal {
+            content.popoverTip(GlobalChatDocumentTip(), arrowEdge: .bottom)
+        } else {
+            content.popoverTip(PodcastChatDocumentTip(), arrowEdge: .bottom)
+        }
     }
 }

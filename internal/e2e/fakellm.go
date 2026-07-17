@@ -396,6 +396,17 @@ const QAAnswerText = "E2E: Based on the podcast content, this is a synthetic gro
 func (f *FakeLLM) streamQAChat(sw *sseWriter, req fakeChatReq) {
 	tools := req.toolNames()
 	lower := strings.ToLower(req.latestUserText())
+	wantsDocument := tools["write_document"] &&
+		(strings.Contains(lower, "write a document") || strings.Contains(lower, "create a document"))
+	if wantsDocument && !req.toolMsgsContain("Document saved and shown") {
+		args, _ := json.Marshal(map[string]any{
+			"title":    "E2E Agent Document",
+			"markdown": "# E2E Agent Document\n\nThis document was written by the chat agent.\n\n```mermaid\nflowchart TD\n  A[Request] --> B[Document]\n  B --> C[Export]\n```\n",
+		})
+		sw.toolCall(0, "call_qa_write_document", "write_document", string(args))
+		sw.finish("tool_calls")
+		return
+	}
 	wantsHighlights := tools["show_highlight_lines"] &&
 		(strings.Contains(lower, "highlight") || strings.Contains(lower, "quote"))
 	wantsPodcastGrid := tools["display_podcasts"] && strings.Contains(lower, "show") &&

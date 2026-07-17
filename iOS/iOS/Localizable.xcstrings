@@ -11,6 +11,24 @@
             "state" : "new",
             "value" : "%1$@ · %2$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
         }
       }
     },
@@ -19,6 +37,24 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
+            "value" : "%1$@ (.%2$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (.%2$@)"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (.%2$@)"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
             "value" : "%1$@ (.%2$@)"
           }
         }
@@ -150,6 +186,24 @@
             "state" : "new",
             "value" : "%1$@–%2$@ · %3$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@–%2$@ · %3$@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@–%2$@ · %3$@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@–%2$@ · %3$@"
+          }
         }
       }
     },
@@ -249,7 +303,27 @@
       }
     },
     "%lld percent match" : {
-      "comment" : "Accessibility label for a search similarity score"
+      "comment" : "Accessibility label for a search similarity score",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匹配度 %lld%%"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配對度 %lld%%"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "符合度 %lld%%"
+          }
+        }
+      }
     },
     "%lld questions" : {
       "comment" : "Question card header; value is the question count",
@@ -399,7 +473,27 @@
       }
     },
     "+%lld more lines" : {
-      "comment" : "Transcript excerpt card footer; value is the hidden line count"
+      "comment" : "Transcript excerpt card footer; value is the hidden line count",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 行"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 行"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 行"
+          }
+        }
+      }
     },
     "+%lld more pending" : {
       "localizations" : {
@@ -516,10 +610,49 @@
       }
     },
     "1 source" : {
-      "comment" : "Sources card header for a single source"
+      "comment" : "Sources card header for a single source",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个来源"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 個來源"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 個來源"
+          }
+        }
+      }
     },
     "1s" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 秒"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 秒"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 秒"
+          }
+        }
+      }
     },
     "2 days" : {
       "comment" : "Share-link duration option",
@@ -1058,7 +1191,26 @@
       }
     },
     "AI cover generation isn't included in your plan." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的方案不包含 AI 封面生成。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的方案不包括 AI 封面生成。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的方案不包含 AI 封面生成。"
+          }
+        }
+      }
     },
     "Album creation is not available on this server." : {
       "localizations" : {
@@ -1195,19 +1347,207 @@
       }
     },
     "Ask" : {
-      "comment" : "Q&A chat title fallback for one podcast"
+      "comment" : "Q&A chat title fallback for one podcast",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提问"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提問"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提問"
+          }
+        }
+      }
     },
     "Ask about this podcast" : {
-      "comment" : "Q&A empty state title for one podcast\nQ&A input placeholder for one podcast"
+      "comment" : "Q&A empty state title for one podcast\nQ&A input placeholder for one podcast",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "询问此播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詢問此 Podcast"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詢問此 Podcast"
+          }
+        }
+      }
     },
     "Ask about your podcasts" : {
-      "comment" : "Global chat empty state title\nGlobal chat input placeholder"
+      "comment" : "Global chat empty state title\nGlobal chat input placeholder",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "询问你的播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詢問你的 Podcast"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詢問你的 Podcast"
+          }
+        }
+      }
     },
     "Ask anything about what was said, who said it, or the sources behind it." : {
-      "comment" : "Q&A empty state message for one podcast"
+      "comment" : "Q&A empty state message for one podcast",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "询问节目中说了什么、由谁说，或内容背后的来源。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查問節目中說了甚麼、由誰說，或內容背後的來源。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詢問節目中說了什麼、由誰說，或內容背後的來源。"
+          }
+        }
+      }
+    },
+    "Ask the chat agent to write a document and it will appear here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让聊天智能体编写文档，文档会显示在这里。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請聊天代理撰寫文件，文件便會顯示在這裡。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請聊天代理撰寫文件，文件就會顯示在這裡。"
+          }
+        }
+      }
+    },
+    "Ask this chat to turn the podcast transcript and sources into a document." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让此聊天将播客文字稿和来源整理成文档。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請此聊天將 Podcast 文字稿和來源整理成文件。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請此聊天將 Podcast 文字稿和來源整理成文件。"
+          }
+        }
+      }
     },
     "Ask Your Library" : {
-      "comment" : "Global chat title over all podcasts"
+      "comment" : "Global chat title over all podcasts",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "询问你的资料库"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查問你的資料庫"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詢問你的資料庫"
+          }
+        }
+      }
+    },
+    "Ask your library chat to create a document from your podcasts and sources." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让资料库聊天根据你的播客和来源创建文档。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請資料庫聊天根據你的 Podcast 和來源建立文件。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請資料庫聊天根據你的 Podcast 和來源建立文件。"
+          }
+        }
+      }
+    },
+    "Ask your library chat to create a document from your podcasts, then export it as PDF, Markdown, or Notion." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让资料库聊天根据你的播客创建文档，然后将其导出为 PDF、Markdown 或 Notion。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請資料庫聊天根據你的 Podcast 建立文件，然後匯出為 PDF、Markdown 或 Notion。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請資料庫聊天根據你的 Podcast 建立文件，然後匯出為 PDF、Markdown 或 Notion。"
+          }
+        }
+      }
     },
     "Assistant has a question" : {
       "localizations" : {
@@ -1389,7 +1729,27 @@
       }
     },
     "Audio you record in the app is saved here." : {
-      "comment" : "Empty recordings list description"
+      "comment" : "Empty recordings list description",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在 App 中录制的音频会保存在这里。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在 App 中錄製的音訊會儲存在這裡。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在 App 中錄製的音訊會儲存在這裡。"
+          }
+        }
+      }
     },
     "Audiobooks" : {
       "localizations" : {
@@ -1667,7 +2027,7 @@
       }
     },
     "Cancel" : {
-      "comment" : "Cancel delete button\nCancel rename button",
+      "comment" : "Cancel delete button\nCancel document deletion\nCancel rename button",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1690,13 +2050,71 @@
       }
     },
     "Cancel recording" : {
-      "comment" : "Close button on the record audio sheet"
+      "comment" : "Close button on the record audio sheet",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消录制"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消錄製"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消錄製"
+          }
+        }
+      }
     },
     "Caption Download Failed" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕下载失败"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕下載失敗"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕下載失敗"
+          }
+        }
+      }
     },
     "Caption Format" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕格式"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕格式"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕格式"
+          }
+        }
+      }
     },
     "Chapter %lld" : {
       "localizations" : {
@@ -1793,7 +2211,48 @@
       }
     },
     "Chat" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天"
+          }
+        }
+      }
+    },
+    "Chat Documents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天文件"
+          }
+        }
+      }
     },
     "Checking Notion" : {
       "localizations" : {
@@ -1910,7 +2369,27 @@
       }
     },
     "Choose audio file" : {
-      "comment" : "Upload own audio picker prompt"
+      "comment" : "Upload own audio picker prompt",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择音频文件"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇音訊檔案"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇音訊檔案"
+          }
+        }
+      }
     },
     "Choose File" : {
       "localizations" : {
@@ -2001,7 +2480,26 @@
       }
     },
     "Choose whether short gaps between subtitles are removed when you save." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择保存时是否移除字幕之间的短间隔。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇儲存時是否移除字幕之間的短間隔。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇儲存時是否移除字幕之間的短間隔。"
+          }
+        }
+      }
     },
     "Clear All Messages" : {
       "localizations" : {
@@ -2158,6 +2656,28 @@
         }
       }
     },
+    "Connect your Notion workspace to export this document." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接你的 Notion 工作区以导出此文档。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接你的 Notion 工作區以匯出此文件。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接你的 Notion 工作區以匯出此文件。"
+          }
+        }
+      }
+    },
     "Connect your Notion workspace to export this summary." : {
       "localizations" : {
         "zh-Hans" : {
@@ -2181,10 +2701,49 @@
       }
     },
     "Content" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内容"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內容"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內容"
+          }
+        }
+      }
     },
     "Continue Recording" : {
-      "comment" : "Resume recording from the review step"
+      "comment" : "Resume recording from the review step",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续录制"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續錄製"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續錄製"
+          }
+        }
+      }
     },
     "Copied User ID" : {
       "localizations" : {
@@ -2585,7 +3144,26 @@
       }
     },
     "Could not send the message" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法发送消息"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法傳送訊息"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法傳送訊息"
+          }
+        }
+      }
     },
     "Could not update the plan" : {
       "localizations" : {
@@ -2654,7 +3232,49 @@
       }
     },
     "Couldn’t change language" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更改语言"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更改語言"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更改語言"
+          }
+        }
+      }
+    },
+    "Couldn’t delete document" : {
+      "comment" : "Document deletion error title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法删除文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法刪除文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法刪除文件"
+          }
+        }
+      }
     },
     "Couldn’t export" : {
       "localizations" : {
@@ -2766,6 +3386,28 @@
         }
       }
     },
+    "Couldn’t load documents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入文件"
+          }
+        }
+      }
+    },
     "Couldn't load speakers" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2789,7 +3431,26 @@
       }
     },
     "Couldn’t Open Caption Editor" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开字幕编辑器"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開啟字幕編輯器"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開啟字幕編輯器"
+          }
+        }
+      }
     },
     "Couldn't open link" : {
       "localizations" : {
@@ -2971,7 +3632,26 @@
       }
     },
     "Cover · %@" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封面 · %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封面 · %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封面 · %@"
+          }
+        }
+      }
     },
     "Create" : {
       "localizations" : {
@@ -3129,7 +3809,27 @@
       }
     },
     "Create Podcast" : {
-      "comment" : "Create podcast from recording\nCreate podcast from recording button\nCreate podcast from recording toolbar button"
+      "comment" : "Create podcast from recording\nCreate podcast from recording button\nCreate podcast from recording toolbar button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立 Podcast"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立 Podcast"
+          }
+        }
+      }
     },
     "Create share link" : {
       "localizations" : {
@@ -3425,7 +4125,7 @@
       }
     },
     "Delete" : {
-      "comment" : "Delete recording\nDelete recording button\nDelete recording swipe action",
+      "comment" : "Delete document confirmation button\nDelete document swipe action\nDelete recording\nDelete recording button\nDelete recording swipe action",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3443,6 +4143,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "刪除"
+          }
+        }
+      }
+    },
+    "Delete this document?" : {
+      "comment" : "Confirm deleting an agent-authored document",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除此文档？"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除此文件？"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除此文件？"
           }
         }
       }
@@ -3470,7 +4193,27 @@
       }
     },
     "Delete this recording?" : {
-      "comment" : "Confirm deleting a recording"
+      "comment" : "Confirm deleting a recording",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除此录音？"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除此錄音？"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除此錄音？"
+          }
+        }
+      }
     },
     "Deselect source" : {
       "localizations" : {
@@ -3518,7 +4261,27 @@
       }
     },
     "Discard this recording?" : {
-      "comment" : "Confirm discarding an audio recording"
+      "comment" : "Confirm discarding an audio recording",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放弃此录音？"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捨棄此錄音？"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捨棄此錄音？"
+          }
+        }
+      }
     },
     "Discover public podcasts, listen, like, and save stations from other creators." : {
       "localizations" : {
@@ -3588,6 +4351,72 @@
         }
       }
     },
+    "Document" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件"
+          }
+        }
+      }
+    },
+    "Document actions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文档操作"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件操作"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件操作"
+          }
+        }
+      }
+    },
+    "Document exported to Notion." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文档已导出到 Notion。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件已匯出到 Notion。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件已匯出到 Notion。"
+          }
+        }
+      }
+    },
     "Document type" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3607,6 +4436,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文件類型"
+          }
+        }
+      }
+    },
+    "Document unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文档不可用"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件無法使用"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件無法使用"
           }
         }
       }
@@ -3657,7 +4508,26 @@
       }
     },
     "Download" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載"
+          }
+        }
+      }
     },
     "Download %@" : {
       "localizations" : {
@@ -3682,7 +4552,26 @@
       }
     },
     "Download Captions" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載字幕"
+          }
+        }
+      }
     },
     "Download did not produce a file." : {
       "comment" : "Shown when a podcast download completes without producing a file",
@@ -3933,7 +4822,27 @@
       }
     },
     "Earlier conversation summarized" : {
-      "comment" : "Chip shown where old chat history was compacted into a summary"
+      "comment" : "Chip shown where old chat history was compacted into a summary",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已总结较早的对话"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已摘要較早的對話"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已摘要較早的對話"
+          }
+        }
+      }
     },
     "Edit" : {
       "localizations" : {
@@ -4515,10 +5424,50 @@
       }
     },
     "Fetching the podcast…" : {
-      "comment" : "Progress while the chat agent loads a podcast card"
+      "comment" : "Progress while the chat agent loads a podcast card",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在获取播客…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取得 Podcast…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取得 Podcast…"
+          }
+        }
+      }
     },
     "Fetching the transcript…" : {
-      "comment" : "Progress while the chat agent loads a transcript excerpt"
+      "comment" : "Progress while the chat agent loads a transcript excerpt",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在获取文字稿…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取得文字稿…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取得文字稿…"
+          }
+        }
+      }
     },
     "Files" : {
       "localizations" : {
@@ -4633,16 +5582,95 @@
       }
     },
     "Find moments across your %@." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你的 %@ 中查找精彩片段。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你的 %@ 中尋找精彩片段。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你的 %@ 中尋找精彩片段。"
+          }
+        }
+      }
     },
     "Find moments and source passages by meaning, not just keywords." : {
-      "comment" : "In-podcast search initial state message"
+      "comment" : "In-podcast search initial state message",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按语义查找片段和来源段落，而不只是匹配关键词。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按語意尋找片段和來源段落，而不只是配對關鍵字。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "依語意尋找片段和來源段落，而不只是比對關鍵字。"
+          }
+        }
+      }
     },
     "Finding podcasts…" : {
-      "comment" : "Progress while the chat agent searches podcasts"
+      "comment" : "Progress while the chat agent searches podcasts",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查找播客…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在尋找 Podcast…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在尋找 Podcast…"
+          }
+        }
+      }
     },
     "Finish recording" : {
-      "comment" : "Finish button"
+      "comment" : "Finish button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成录制"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成錄製"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成錄製"
+          }
+        }
+      }
     },
     "Finishing up…" : {
       "comment" : "Progress text while polling for the persisted plan after the stream ended",
@@ -4800,7 +5828,26 @@
       }
     },
     "Format" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "格式"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "格式"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "格式"
+          }
+        }
+      }
     },
     "Forward 1 Second" : {
       "localizations" : {
@@ -5390,6 +6437,28 @@
         }
       }
     },
+    "Global Documents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全局文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全域文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全域文件"
+          }
+        }
+      }
+    },
     "Got it" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5435,7 +6504,26 @@
       }
     },
     "Home" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主页"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主頁"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首頁"
+          }
+        }
+      }
     },
     "Hours" : {
       "comment" : "Hours in transcript timestamp wheel",
@@ -5483,7 +6571,26 @@
       }
     },
     "Included content" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含的内容"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包括的內容"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含的內容"
+          }
+        }
+      }
     },
     "Input" : {
       "comment" : "Tool detail sheet section for the tool's input",
@@ -5578,7 +6685,27 @@
       }
     },
     "Keep Recording" : {
-      "comment" : "Keep recording button"
+      "comment" : "Keep recording button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留录音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留錄音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留錄音"
+          }
+        }
+      }
     },
     "Korean" : {
       "comment" : "Podcast language option",
@@ -5605,7 +6732,26 @@
       }
     },
     "Language" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语言"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "語言"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "語言"
+          }
+        }
+      }
     },
     "Let the engine pick a fitting voice" : {
       "localizations" : {
@@ -5762,7 +6908,26 @@
       }
     },
     "Loading formats" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载格式"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入格式"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入格式"
+          }
+        }
+      }
     },
     "Loading messages" : {
       "extractionState" : "stale",
@@ -6037,7 +7202,27 @@
       }
     },
     "Looking up sources…" : {
-      "comment" : "Progress while the chat agent fetches sources"
+      "comment" : "Progress while the chat agent fetches sources",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查找来源…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在尋找來源…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在尋找來源…"
+          }
+        }
+      }
     },
     "Make it public" : {
       "localizations" : {
@@ -6172,7 +7357,27 @@
       }
     },
     "Microphone access is needed to record audio." : {
-      "comment" : "Shown when mic permission is denied for podcast recording"
+      "comment" : "Shown when mic permission is denied for podcast recording",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录制音频需要麦克风权限。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄製音訊需要咪高峰權限。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄製音訊需要麥克風權限。"
+          }
+        }
+      }
     },
     "Microphone and speech recognition access are needed to record a voice message." : {
       "comment" : "Shown when mic/speech permission is denied",
@@ -6333,7 +7538,27 @@
       }
     },
     "MP3, M4A, WAV, and more" : {
-      "comment" : "Audio upload formats"
+      "comment" : "Audio upload formats",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MP3、M4A、WAV 等"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MP3、M4A、WAV 等"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MP3、M4A、WAV 等"
+          }
+        }
+      }
     },
     "My %@" : {
       "localizations" : {
@@ -6358,7 +7583,27 @@
       }
     },
     "My Recordings" : {
-      "comment" : "Recordings list title"
+      "comment" : "Recordings list title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的录音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的錄音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我的錄音"
+          }
+        }
+      }
     },
     "New %@" : {
       "localizations" : {
@@ -6605,10 +7850,48 @@
       }
     },
     "No caption download formats are currently available." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前没有可用的字幕下载格式。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前沒有可用的字幕下載格式。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前沒有可用的字幕下載格式。"
+          }
+        }
+      }
     },
     "No Caption Formats" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有字幕格式"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有字幕格式"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有字幕格式"
+          }
+        }
+      }
     },
     "No Discussion %@" : {
       "localizations" : {
@@ -6628,6 +7911,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有討論 %@"
+          }
+        }
+      }
+    },
+    "No Documents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫無文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫無文件"
           }
         }
       }
@@ -6677,7 +7982,27 @@
       }
     },
     "No Matches" : {
-      "comment" : "In-podcast search empty result title"
+      "comment" : "In-podcast search empty result title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配结果"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有配對結果"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合結果"
+          }
+        }
+      }
     },
     "No models available" : {
       "extractionState" : "stale",
@@ -6836,7 +8161,27 @@
       }
     },
     "No Recordings" : {
-      "comment" : "Empty recordings list title"
+      "comment" : "Empty recordings list title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无录音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫無錄音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫無錄音"
+          }
+        }
+      }
     },
     "No Results" : {
       "localizations" : {
@@ -7019,7 +8364,27 @@
       }
     },
     "Not available" : {
-      "comment" : "Upload own audio unavailable title"
+      "comment" : "Upload own audio unavailable title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不可用"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法使用"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法使用"
+          }
+        }
+      }
     },
     "Note (optional)" : {
       "localizations" : {
@@ -7044,7 +8409,27 @@
       }
     },
     "Nothing in this podcast matches your search." : {
-      "comment" : "In-podcast search empty result message"
+      "comment" : "In-podcast search empty result message",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此播客中没有与你的搜索匹配的内容。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Podcast 中沒有符合你搜尋的內容。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Podcast 中沒有符合你搜尋的內容。"
+          }
+        }
+      }
     },
     "Nothing to add" : {
       "localizations" : {
@@ -7404,7 +8789,27 @@
       }
     },
     "Pause" : {
-      "comment" : "Pause recording playback button"
+      "comment" : "Pause recording playback button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫停"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫停"
+          }
+        }
+      }
     },
     "Pause audio" : {
       "localizations" : {
@@ -7451,10 +8856,50 @@
       }
     },
     "Pause recording" : {
-      "comment" : "Pause button"
+      "comment" : "Pause button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停录制"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫停錄製"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫停錄製"
+          }
+        }
+      }
     },
     "Paused" : {
-      "comment" : "Recorder paused status"
+      "comment" : "Recorder paused status",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂停"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暫停"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暫停"
+          }
+        }
+      }
     },
     "PDF, Word, slides, images" : {
       "localizations" : {
@@ -7948,7 +9393,27 @@
       }
     },
     "Play" : {
-      "comment" : "Play recording playback button"
+      "comment" : "Play recording playback button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放"
+          }
+        }
+      }
     },
     "Play audio" : {
       "localizations" : {
@@ -7995,10 +9460,50 @@
       }
     },
     "Playback Failed" : {
-      "comment" : "Recording playback error alert title"
+      "comment" : "Recording playback error alert title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放失败"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放失敗"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放失敗"
+          }
+        }
+      }
     },
     "Playback position" : {
-      "comment" : "Recording player seek slider"
+      "comment" : "Recording player seek slider",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放位置"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放位置"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放位置"
+          }
+        }
+      }
     },
     "Please use the attached files." : {
       "comment" : "Fallback chat message when sending attachments without text",
@@ -8070,7 +9575,27 @@
       }
     },
     "Podcast created" : {
-      "comment" : "Recording already turned into a podcast"
+      "comment" : "Recording already turned into a podcast",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播客已创建"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Podcast 已建立"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Podcast 已建立"
+          }
+        }
+      }
     },
     "Podcast download is not ready yet." : {
       "comment" : "Shown when the user tries to download a podcast before it is available",
@@ -8608,7 +10133,27 @@
       }
     },
     "Preparing..." : {
-      "comment" : "Recorder preparing status"
+      "comment" : "Recorder preparing status",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备..."
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備..."
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備..."
+          }
+        }
+      }
     },
     "Presentation" : {
       "comment" : "Q&A generated PPT card title",
@@ -9126,19 +10671,119 @@
       }
     },
     "Recording" : {
-      "comment" : "Recorder active status\nRecording player title"
+      "comment" : "Recorder active status\nRecording player title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音"
+          }
+        }
+      }
     },
     "Recording %@" : {
-      "comment" : "Default title for a new audio recording; parameter is the date/time"
+      "comment" : "Default title for a new audio recording; parameter is the date/time",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音 %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音 %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音 %@"
+          }
+        }
+      }
     },
     "Recording Ready" : {
-      "comment" : "Record audio review step title"
+      "comment" : "Record audio review step title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音已就绪"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音已準備好"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音已準備好"
+          }
+        }
+      }
     },
     "Recording stopped because audio services were reset. The captured audio was kept." : {
-      "comment" : "Shown when the system audio daemon restarts mid-recording"
+      "comment" : "Shown when the system audio daemon restarts mid-recording",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由于音频服务重置，录制已停止。已保留录制的音频。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由於音訊服務重設，錄製已停止。已保留錄製的音訊。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由於音訊服務重設，錄製已停止。已保留錄製的音訊。"
+          }
+        }
+      }
     },
     "Recording title" : {
-      "comment" : "Recording title field placeholder"
+      "comment" : "Recording title field placeholder",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音标题"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音標題"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "錄音標題"
+          }
+        }
+      }
     },
     "Refresh" : {
       "localizations" : {
@@ -9252,7 +10897,26 @@
       }
     },
     "Remove audio file" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除音频文件"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除音訊檔案"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除音訊檔案"
+          }
+        }
+      }
     },
     "Remove from Album" : {
       "localizations" : {
@@ -9388,7 +11052,27 @@
       }
     },
     "Rename Recording" : {
-      "comment" : "Rename recording alert title"
+      "comment" : "Rename recording alert title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名录音"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名錄音"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名錄音"
+          }
+        }
+      }
     },
     "Rename Speaker" : {
       "localizations" : {
@@ -9534,7 +11218,27 @@
       }
     },
     "Resume recording" : {
-      "comment" : "Resume button"
+      "comment" : "Resume button",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续录制"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續錄製"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續錄製"
+          }
+        }
+      }
     },
     "Retry" : {
       "localizations" : {
@@ -9781,7 +11485,27 @@
       }
     },
     "Saved to My Recordings. Create a podcast from it now, or keep it for later." : {
-      "comment" : "Recording review step hint"
+      "comment" : "Recording review step hint",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存到“我的录音”。你可以立即用它创建播客，或留待以后使用。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存到「我的錄音」。你可以立即用它建立 Podcast，或留待日後使用。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存到「我的錄音」。你可以立即用它建立 Podcast，或留待日後使用。"
+          }
+        }
+      }
     },
     "Scheduled from %@ to %@." : {
       "comment" : "Appended to an upcoming maintenance message; start and end are formatted date/times",
@@ -9791,17 +11515,94 @@
             "state" : "new",
             "value" : "Scheduled from %1$@ to %2$@."
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划于 %1$@ 至 %2$@ 进行。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "計劃於 %1$@ 至 %2$@ 進行。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預定於 %1$@ 至 %2$@ 進行。"
+          }
         }
       }
     },
     "Scheduled maintenance" : {
-      "comment" : "Default title of the maintenance alert when the operator set no title"
+      "comment" : "Default title of the maintenance alert when the operator set no title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划维护"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "計劃維護"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排定維護"
+          }
+        }
+      }
     },
     "Scheduled to begin %@." : {
-      "comment" : "Appended to an upcoming maintenance message with no end time; 'start' is a formatted date/time"
+      "comment" : "Appended to an upcoming maintenance message with no end time; 'start' is a formatted date/time",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划于 %@ 开始。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "計劃於 %@ 開始。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預定於 %@ 開始。"
+          }
+        }
+      }
     },
     "Search" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋"
+          }
+        }
+      }
     },
     "Search %@" : {
       "localizations" : {
@@ -9826,13 +11627,95 @@
       }
     },
     "Search across every episode's content and sources — try “which episode talked about…”." : {
-      "comment" : "Global chat empty state message"
+      "comment" : "Global chat empty state message",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索每一期节目的内容和来源——试试“哪一期谈到了……”。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋每集節目的內容和來源——試試「哪一集談到……」。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋每集節目的內容和來源——試試「哪一集談到……」。"
+          }
+        }
+      }
+    },
+    "Search documents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋文件"
+          }
+        }
+      }
     },
     "Search Episode" : {
-      "comment" : "In-podcast semantic search sheet title"
+      "comment" : "In-podcast semantic search sheet title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索单集"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋單集"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋單集"
+          }
+        }
+      }
     },
     "Search Failed" : {
-      "comment" : "In-podcast search error state title"
+      "comment" : "In-podcast search error state title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索失败"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋失敗"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋失敗"
+          }
+        }
+      }
     },
     "Search models" : {
       "localizations" : {
@@ -9923,13 +11806,73 @@
       }
     },
     "Search This Episode" : {
-      "comment" : "In-podcast search initial state title"
+      "comment" : "In-podcast search initial state title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索本集"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋本集"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋本集"
+          }
+        }
+      }
     },
     "Search this podcast" : {
-      "comment" : "In-podcast search field prompt"
+      "comment" : "In-podcast search field prompt",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索此播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋此 Podcast"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋此 Podcast"
+          }
+        }
+      }
     },
     "Search Unavailable" : {
-      "comment" : "In-podcast search state when semantic search is unconfigured or still indexing"
+      "comment" : "In-podcast search state when semantic search is unconfigured or still indexing",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索不可用"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋無法使用"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋無法使用"
+          }
+        }
+      }
     },
     "Search voices" : {
       "localizations" : {
@@ -10067,7 +12010,27 @@
       }
     },
     "Searching the content…" : {
-      "comment" : "Progress while the chat agent searches podcast content"
+      "comment" : "Progress while the chat agent searches podcast content",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜索内容…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋內容…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋內容…"
+          }
+        }
+      }
     },
     "Searching the web…" : {
       "comment" : "Progress while searching sources",
@@ -10382,7 +12345,27 @@
       }
     },
     "Service should be back by %@." : {
-      "comment" : "Appended to an active maintenance message; 'when' is a formatted date/time"
+      "comment" : "Appended to an active maintenance message; 'when' is a formatted date/time",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务预计于 %@ 前恢复。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務預計於 %@ 前恢復。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務預計於 %@ 前恢復。"
+          }
+        }
+      }
     },
     "Set End to Current Time" : {
       "localizations" : {
@@ -10855,7 +12838,26 @@
       }
     },
     "Speaker" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说话人"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "講者"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "講者"
+          }
+        }
+      }
     },
     "Speaker Models" : {
       "localizations" : {
@@ -10968,7 +12970,27 @@
       }
     },
     "Starting transcription..." : {
-      "comment" : "Upload own audio submit progress"
+      "comment" : "Upload own audio submit progress",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在开始转写..."
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在開始轉錄..."
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在開始轉錄..."
+          }
+        }
+      }
     },
     "Station Visibility" : {
       "localizations" : {
@@ -11105,7 +13127,26 @@
       }
     },
     "Subtitle" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字幕"
+          }
+        }
+      }
     },
     "Subtitle Timing" : {
       "localizations" : {
@@ -11174,7 +13215,26 @@
       }
     },
     "Summary and mindmap" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要和思维导图"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要和心智圖"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "摘要和心智圖"
+          }
+        }
+      }
     },
     "Summary document" : {
       "extractionState" : "stale",
@@ -11335,7 +13395,27 @@
       }
     },
     "Tap to try again" : {
-      "comment" : "Audio upload retry prompt"
+      "comment" : "Audio upload retry prompt",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点以重试"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點按以再試一次"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點一下以重試"
+          }
+        }
+      }
     },
     "Tap to view details" : {
       "comment" : "Tool card hint to open the detail sheet",
@@ -11406,7 +13486,27 @@
       }
     },
     "The app is temporarily unavailable for scheduled maintenance. Please try again later." : {
-      "comment" : "Fallback maintenance message when the server sent no message text"
+      "comment" : "Fallback maintenance message when the server sent no message text",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App 因计划维护暂时不可用。请稍后再试。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App 因計劃維護暫時無法使用。請稍後再試。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App 因排定維護暫時無法使用。請稍後再試。"
+          }
+        }
+      }
     },
     "The app now speaks Simplified and Traditional Chinese, end to end." : {
       "localizations" : {
@@ -11565,7 +13665,26 @@
       }
     },
     "The original audio stays unchanged. Missing translated fields automatically use the podcast’s main language." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始音频保持不变。缺少翻译的字段会自动使用播客的主要语言。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始音訊保持不變。缺少翻譯的欄位會自動使用 Podcast 的主要語言。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始音訊保持不變。缺少翻譯的欄位會自動使用 Podcast 的主要語言。"
+          }
+        }
+      }
     },
     "The plan update failed. Please try again." : {
       "comment" : "Fallback error when an SSE error event carries no message",
@@ -11661,7 +13780,27 @@
       }
     },
     "The recording could not be played." : {
-      "comment" : "Recording playback start failure"
+      "comment" : "Recording playback start failure",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法播放此录音。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法播放此錄音。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法播放此錄音。"
+          }
+        }
+      }
     },
     "The selected model is used for this speaker when the plan is generated." : {
       "extractionState" : "stale",
@@ -11733,7 +13872,27 @@
       }
     },
     "The upload did not return a storage key." : {
-      "comment" : "Audio upload failure"
+      "comment" : "Audio upload failure",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传未返回存储密钥。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上載未傳回儲存索引鍵。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳未傳回儲存金鑰。"
+          }
+        }
+      }
     },
     "Thinking…" : {
       "comment" : "Default progress text while the chat agent works\nDefault progress text while the planning agent works\nProgress text while the planning agent works",
@@ -11759,7 +13918,26 @@
       }
     },
     "This cover is shown only to %@ listeners. Everyone else keeps seeing the default cover." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此封面仅向使用 %@ 的听众显示。其他人仍会看到默认封面。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此封面只會向使用 %@ 的聽眾顯示。其他人仍會看到預設封面。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此封面只會向使用 %@ 的聽眾顯示。其他人仍會看到預設封面。"
+          }
+        }
+      }
     },
     "This creator profile is not available." : {
       "localizations" : {
@@ -11807,7 +13985,27 @@
       }
     },
     "This file is larger than your plan allows (%@ max)." : {
-      "comment" : "Audio upload too large"
+      "comment" : "Audio upload too large",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此文件超过了你的方案允许的大小（最大 %@）。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此檔案超過你的方案允許的大小（最大 %@）。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此檔案超過你的方案允許的大小（上限 %@）。"
+          }
+        }
+      }
     },
     "This language isn't available for on-device transcription on this device." : {
       "comment" : "Shown when the chosen voice-message language has no on-device model",
@@ -11967,7 +14165,27 @@
       }
     },
     "This podcast's content is still being indexed. Try again in a moment." : {
-      "comment" : "In-podcast search unavailable message"
+      "comment" : "In-podcast search unavailable message",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此播客的内容仍在建立索引。请稍后再试。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Podcast 的內容仍在建立索引。請稍後再試。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Podcast 的內容仍在建立索引。請稍後再試。"
+          }
+        }
+      }
     },
     "This share link has expired or was revoked." : {
       "comment" : "Shown when opening an expired/revoked share link",
@@ -12109,7 +14327,26 @@
       }
     },
     "Timing Settings" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间设置"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間設定"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間設定"
+          }
+        }
+      }
     },
     "Tip: paste a link in the topic and the agent will read it." : {
       "extractionState" : "stale",
@@ -12158,7 +14395,26 @@
       }
     },
     "Title and plan" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题和计划"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標題和計劃"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標題和計劃"
+          }
+        }
+      }
     },
     "Tool" : {
       "comment" : "Generic tool card title",
@@ -12273,7 +14529,27 @@
       }
     },
     "Transcribing audio…" : {
-      "comment" : "Progress shown while an uploaded audio file is being transcribed"
+      "comment" : "Progress shown while an uploaded audio file is being transcribed",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在转写音频…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在轉錄音訊…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在轉錄音訊…"
+          }
+        }
+      }
     },
     "Transcript" : {
       "comment" : "Label above the reviewed voice-message transcript\nSearch match anchor label for a transcript passage\nTranscript excerpt sheet title",
@@ -12306,23 +14582,181 @@
             "state" : "new",
             "value" : "Transcript · %1$@–%2$@"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿 · %1$@–%2$@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿 · %1$@–%2$@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿 · %1$@–%2$@"
+          }
         }
       }
     },
     "Transcript and captions" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿和字幕"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿和字幕"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字稿和字幕"
+          }
+        }
+      }
     },
     "Transcription failed. Please delete this %@ and try again." : {
-      "comment" : "Shown when server-side audio transcription failed"
+      "comment" : "Shown when server-side audio transcription failed",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转写失败。请删除此 %@ 后重试。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉錄失敗。請刪除此 %@ 後再試一次。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉錄失敗。請刪除此 %@ 後重試。"
+          }
+        }
+      }
     },
     "Translate Podcast" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译播客"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯 Podcast"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯 Podcast"
+          }
+        }
+      }
     },
     "Translate to" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译为"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯成"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯成"
+          }
+        }
+      }
     },
     "Translations" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯"
+          }
+        }
+      }
+    },
+    "Try again later." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请稍后再试。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請稍後再試。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請稍後再試。"
+          }
+        }
+      }
+    },
+    "Turn a podcast transcript and sources into a document linked directly to that podcast." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将播客文字稿和来源整理成直接关联到该播客的文档。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將 Podcast 文字稿和來源整理成直接連結至該 Podcast 的文件。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將 Podcast 文字稿和來源整理成直接連結至該 Podcast 的文件。"
+          }
+        }
+      }
     },
     "Turn sources into narrated audio books with chapters, voices, illustrations, and a rendered video." : {
       "localizations" : {
@@ -12437,7 +14871,27 @@
       }
     },
     "Up to %@" : {
-      "comment" : "Audio upload size limit"
+      "comment" : "Audio upload size limit",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大 %@"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多 %@"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多 %@"
+          }
+        }
+      }
     },
     "Update" : {
       "localizations" : {
@@ -12598,10 +15052,50 @@
       }
     },
     "Uploading your own audio is not enabled for your account." : {
-      "comment" : "Upload own audio unavailable description"
+      "comment" : "Upload own audio unavailable description",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的账户尚未启用上传自有音频。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的帳戶尚未啟用上載自有音訊。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的帳號尚未啟用上傳自有音訊。"
+          }
+        }
+      }
     },
     "Uploading…" : {
-      "comment" : "Audio upload in progress"
+      "comment" : "Audio upload in progress",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在上传…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在上載…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在上傳…"
+          }
+        }
+      }
     },
     "Use Current Audio Time" : {
       "localizations" : {
@@ -12913,6 +15407,117 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在處理…"
+          }
+        }
+      }
+    },
+    "Write a document" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编写文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撰寫文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撰寫文件"
+          }
+        }
+      }
+    },
+    "Write a podcast document" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编写播客文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撰寫 Podcast 文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撰寫 Podcast 文件"
+          }
+        }
+      }
+    },
+    "Write documents in global chat" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在全局聊天中编写文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在全域聊天中撰寫文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在全域聊天中撰寫文件"
+          }
+        }
+      }
+    },
+    "Write documents in podcast chat" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在播客聊天中编写文档"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Podcast 聊天中撰寫文件"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Podcast 聊天中撰寫文件"
+          }
+        }
+      }
+    },
+    "Writing the document…" : {
+      "comment" : "Progress while the chat agent writes a persistent document",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在编写文档…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰寫文件…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰寫文件…"
           }
         }
       }

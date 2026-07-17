@@ -876,6 +876,12 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		cancel()
 		return nil, 1
 	}
+	agentDocuments, err := server.NewAgentDocumentStore(discussions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "agent documents db:", err)
+		cancel()
+		return nil, 1
+	}
 	if jobEnv.E2EMode {
 		if err := discussions.SeedE2E(ctx, points); err != nil {
 			fmt.Fprintln(os.Stderr, "e2e seed:", err)
@@ -958,6 +964,7 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		Planning:              planning,
 		Embeddings:            embeddings,
 		QA:                    qaStore,
+		AgentDocuments:        agentDocuments,
 		Progress:              server.NewDiscussionProgressStore(env.RedisURL, log),
 		PlanningStreams:       server.NewPlanningStreamStore(env.RedisURL, log),
 		ModelCatalog:          server.NewModelCatalogStore(env.RedisURL, log),

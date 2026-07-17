@@ -215,6 +215,7 @@ extension QAConversationView {
         case "show_podcast": return String(localized: "Fetching the podcast…", comment: "Progress while the chat agent loads a podcast card")
         case "display_mindmap": return String(localized: "Preparing the mindmap…", comment: "Progress while the chat agent prepares a mindmap card")
         case "display_ppt": return String(localized: "Preparing the presentation…", comment: "Progress while the chat agent prepares a PPT card")
+        case "write_document": return String(localized: "Writing the document…", comment: "Progress while the chat agent writes a persistent document")
         default: return String(localized: "Working…", comment: "Generic progress text")
         }
     }

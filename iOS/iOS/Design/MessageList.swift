@@ -171,6 +171,23 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                 scrollPhase = phase
             }
             .task {
+                // A reopened chat mounts with an already-completed history, so there
+                // is no new-message or streaming transition to establish its pin.
+                // Rehydrate the latest user turn before applying the initial scroll.
+                if pinning.pinnedUserMessageID == nil,
+                   let latestUserMessageID
+                {
+                    applyPinningAction(
+                        pinning.handleLastMessageChange(
+                            id: latestUserMessageID,
+                            isUserMessage: true,
+                            isStreaming: isStreaming,
+                            isAtBottom: isAnchoredAtBottom
+                        ),
+                        proxy: proxy
+                    )
+                    return
+                }
                 if shouldScrollToBottom {
                     scrollToBottom(proxy: proxy, animated: false, reason: "task.initial")
                 }
@@ -328,7 +345,8 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         MessageListChangeToken(
             ids: messages.map(\.id),
             latestContentID: latestContentItem?.id,
-            latestUserMessageID: latestUserMessageID
+            latestUserMessageID: latestUserMessageID,
+            isStreaming: isStreaming
         )
     }
 
@@ -388,6 +406,15 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         newToken: MessageListChangeToken<Message.ID>,
         proxy: ScrollViewProxy
     ) {
+        // Q&A replaces its optimistic `local-user-*` row with the persisted server
+        // row when the final conversation arrives. Carry the tracked pin across that
+        // identity handoff before the stale-id cleanup below can discard it.
+        pinning.handleUserMessageIDReplacement(
+            from: oldToken.latestUserMessageID,
+            to: newToken.latestUserMessageID,
+            streamWasFinishing: oldToken.isStreaming && !newToken.isStreaming
+        )
+
         // Drop a stale pin if its message is no longer present (e.g. switching
         // sessions or deleting messages). The persistent tail spacer is keyed off
         // `pinnedUserMessageID`, so a dangling id would otherwise reserve space for a
@@ -692,6 +719,7 @@ private nonisolated struct MessageListChangeToken<ID: Hashable & Sendable>: Equa
     var ids: [ID]
     var latestContentID: ID?
     var latestUserMessageID: ID?
+    var isStreaming: Bool
 }
 
 private nonisolated enum MessageListConstants {

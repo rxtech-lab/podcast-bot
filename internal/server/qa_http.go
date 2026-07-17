@@ -484,7 +484,7 @@ func (s *Server) compactQAHistory(ctx context.Context, conv *QAConversation, tur
 // qaOptions assembles the per-turn agent options for a conversation's scope.
 func (s *Server) qaOptions(ctx context.Context, userID string, conv *QAConversation, language string) (qa.Options, error) {
 	if conv.DiscussionID == "" {
-		return qa.Options{Scope: qa.ScopeGlobal, Language: language}, nil
+		return qa.Options{Scope: qa.ScopeGlobal, Language: language, ConversationID: conv.ID}, nil
 	}
 	d, err := s.d.Discussions.Get(ctx, userID, conv.DiscussionID)
 	if err != nil {
@@ -494,11 +494,12 @@ func (s *Server) qaOptions(ctx context.Context, userID string, conv *QAConversat
 		return qa.Options{}, fmt.Errorf("podcast %s not found", conv.DiscussionID)
 	}
 	opts := qa.Options{
-		Scope:        qa.ScopePodcast,
-		DiscussionID: d.ID,
-		Language:     language,
-		PodcastTitle: d.Title,
-		PodcastTopic: d.Topic,
+		Scope:          qa.ScopePodcast,
+		DiscussionID:   d.ID,
+		ConversationID: conv.ID,
+		Language:       language,
+		PodcastTitle:   d.Title,
+		PodcastTopic:   d.Topic,
 	}
 	if opts.Language == "" {
 		opts.Language = d.Language
@@ -801,6 +802,36 @@ func (r *qaRetriever) GetDocument(ctx context.Context, discussionID, documentTyp
 		return nil, nil
 	}
 	return &qa.DocumentInfo{DiscussionID: d.ID, Title: d.Title}, nil
+}
+
+func (r *qaRetriever) CreateAgentDocument(ctx context.Context, discussionID, conversationID,
+	toolCallID, title, markdown string) (*qa.AgentDocumentInfo, error) {
+	if r.s.d.AgentDocuments == nil {
+		return nil, errors.New("agent documents are unavailable")
+	}
+	var linked *string
+	if discussionID = strings.TrimSpace(discussionID); discussionID != "" {
+		// A global-chat model cannot attach a document to another user's or a
+		// merely-public podcast. Document linkage is always owner-scoped.
+		d, err := r.s.d.Discussions.Get(ctx, r.owner, discussionID)
+		if err != nil {
+			return nil, err
+		}
+		if d == nil {
+			return nil, errors.New("podcast not found")
+		}
+		linked = &d.ID
+	}
+	doc, err := r.s.d.AgentDocuments.Create(ctx, r.owner, linked, conversationID,
+		toolCallID, title, markdown)
+	if err != nil {
+		return nil, err
+	}
+	info := &qa.AgentDocumentInfo{ID: doc.ID, Title: doc.Title, PodcastTitle: doc.PodcastTitle}
+	if doc.DiscussionID != nil {
+		info.DiscussionID = *doc.DiscussionID
+	}
+	return info, nil
 }
 
 func qaPodcastInfo(d *Discussion) qa.PodcastInfo {

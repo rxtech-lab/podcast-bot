@@ -9,9 +9,24 @@ import os
 
 struct NotionExportSheet: View {
     let api: APIClient
-    let discussionID: String
+    let discussionID: String?
+    let documentID: String?
     var docType: String = "summary"
     var language: String? = nil
+
+    init(api: APIClient, discussionID: String, docType: String = "summary", language: String? = nil) {
+        self.api = api
+        self.discussionID = discussionID
+        documentID = nil
+        self.docType = docType
+        self.language = language
+    }
+
+    init(api: APIClient, documentID: String) {
+        self.api = api
+        discussionID = nil
+        self.documentID = documentID
+    }
 
     @Environment(\.dismiss) private var dismiss
 
@@ -83,7 +98,9 @@ struct NotionExportSheet: View {
             Image(systemName: "link.circle")
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
-            Text("Connect your Notion workspace to export this summary.")
+            Text(documentID == nil
+                 ? "Connect your Notion workspace to export this summary."
+                 : "Connect your Notion workspace to export this document.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -151,7 +168,7 @@ struct NotionExportSheet: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.largeTitle)
                 .foregroundStyle(.green)
-            Text("Summary exported to Notion.")
+            Text(documentID == nil ? "Summary exported to Notion." : "Document exported to Notion.")
                 .font(.headline)
             if let createdURL {
                 Link(destination: createdURL) {
@@ -225,10 +242,18 @@ struct NotionExportSheet: View {
         errorMessage = nil
         defer { isExporting = false }
         do {
-            let resp = try await api.exportSummaryToNotion(id: discussionID,
+            let resp: NotionExportResponse
+            if let documentID {
+                resp = try await api.exportAgentDocumentToNotion(id: documentID,
+                                                                 parentPageID: parentPageID)
+            } else if let discussionID {
+                resp = try await api.exportSummaryToNotion(id: discussionID,
                                                            parentPageID: parentPageID,
                                                            docType: docType,
                                                            language: language)
+            } else {
+                throw APIError.invalidRequest("Missing export target.")
+            }
             createdURL = URL(string: resp.url)
             phase = .done
         } catch {

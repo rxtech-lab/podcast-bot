@@ -104,5 +104,17 @@ struct WhatsNewFeature: Identifiable, Equatable {
             subtitle: "Edit transcript text and precisely retime every caption against your uploaded audio.",
             icon: "captions.bubble.fill"
         ),
+        WhatsNewFeature(
+            id: "global-chat-documents",
+            title: "Write documents in global chat",
+            subtitle: "Ask your library chat to create a document from your podcasts, then export it as PDF, Markdown, or Notion.",
+            icon: "doc.badge.plus"
+        ),
+        WhatsNewFeature(
+            id: "podcast-chat-documents",
+            title: "Write documents in podcast chat",
+            subtitle: "Turn a podcast transcript and sources into a document linked directly to that podcast.",
+            icon: "doc.text"
+        ),
     ]
 }

@@ -117,7 +117,7 @@ extension APIClient {
             if let p = decodeSSE(PlanningToolResultPayload.self, data) {
                 continuation.yield(.toolResult(p))
             }
-        case "podcast", "podcasts", "podcast_highlights", "highlight_lines", "transcript", "sources":
+        case "podcast", "podcasts", "podcast_highlights", "highlight_lines", "transcript", "sources", "mindmap", "ppt", "document":
             if let p = decodeSSE(QACardPayload.self, data) {
                 continuation.yield(.card(p))
             } else {
@@ -138,6 +138,56 @@ extension APIClient {
         default:
             break
         }
+    }
+
+    // MARK: - Agent documents
+
+    func agentDocuments(discussionID: String? = nil) async throws -> [AgentDocumentDTO] {
+        let path = discussionID.map { "/api/discussions/\($0)/documents" } ?? "/api/documents"
+        let response: AgentDocumentListResponse = try await get(path)
+        return response.documents
+    }
+
+    func allAgentDocuments(limit: Int = 20,
+                           offset: Int = 0,
+                           query: String = "") async throws -> AgentDocumentListResponse {
+        var queryItems = [
+            URLQueryItem(name: "scope", value: "all"),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedQuery.isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: trimmedQuery))
+        }
+        return try await get("/api/documents", query: queryItems)
+    }
+
+    func deleteAgentDocument(id: String) async throws {
+        _ = try await perform(request(method: "DELETE", path: "/api/documents/\(pathComponent(id))"))
+    }
+
+    func agentDocument(id: String) async throws -> AgentDocumentDTO {
+        try await get("/api/documents/\(id)")
+    }
+
+    func agentDocumentUIActions(id: String) async throws -> DiscussionUIActionsResponse {
+        try await get("/api/documents/\(id)/ui-actions")
+    }
+
+    func downloadAgentDocumentPDF(id: String, title: String) async throws -> URL {
+        var req = request(method: "GET", path: "/api/documents/\(id)/pdf")
+        req.timeoutInterval = Self.summaryExportTimeout
+        let (data, _) = try await perform(req)
+        return try writeSummaryFile(data: data, title: title, ext: "pdf")
+    }
+
+    func exportAgentDocumentToNotion(id: String, parentPageID: String?) async throws -> NotionExportResponse {
+        try await send(
+            "POST",
+            "/api/documents/\(id)/notion",
+            body: NotionExportRequest(parentPageID: parentPageID, docType: nil)
+        )
     }
 
     // MARK: - Semantic search

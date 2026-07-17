@@ -28,13 +28,15 @@ function discussion(overrides) {
     status: "ready",
     visibility: overrides.visibility,
     duration_seconds: 7,
+    like_count: overrides.like_count ?? 0,
+    download_url: `http://127.0.0.1:${port}/audio/${overrides.id}.mp3`,
     cover: {
       type: "gradient",
       gradient_start: "#14b8a6",
       gradient_end: "#f59e0b",
     },
     creator: {
-      id: "creator-1",
+      id: "oauth:creator-1",
       display_name: "PanelFM Creator",
     },
     lines: [
@@ -65,20 +67,100 @@ const privatePodcast = discussion({
   line: "This is the private podcast transcript.",
 });
 
+const mockAlbum = {
+  id: "album-1",
+  title: "Mock Album",
+  kind: "series",
+  cover: {
+    type: "gradient",
+    gradient_start: "#14b8a6",
+    gradient_end: "#f59e0b",
+  },
+  episode_count: 1,
+};
+
+const mockCreator = {
+  id: "oauth:creator-1",
+  display_name: "PanelFM Creator",
+  username: "panelfm",
+  follower_count: 2,
+};
+
+// The public marketplace listing. Only public podcasts appear here, matching
+// the Go backend's ListPublic behavior.
+const marketStations = [
+  { ...publicPodcast, like_count: 3 },
+  {
+    ...discussion({
+      id: "second-podcast",
+      title: "Second Podcast",
+      topic: "Another public mock podcast",
+      visibility: "public",
+      line: "This is the second podcast transcript.",
+      like_count: 1,
+    }),
+    album: mockAlbum,
+  },
+];
+
 Bun.serve({
   port,
   hostname: "127.0.0.1",
   fetch(request) {
     const url = new URL(request.url);
+    // The web app percent-encodes path segments (oauth%3Acreator-1), so
+    // compare against the decoded path like Go's ServeMux does.
+    const path = decodeURIComponent(url.pathname);
     const auth = request.headers.get("authorization") ?? "";
 
     if (url.pathname === "/healthz") {
       return new Response("ok");
     }
 
+    // Podcast audio is a public signed URL in production, so no auth here.
+    if (url.pathname.startsWith("/audio/")) {
+      return new Response(new Uint8Array(64), {
+        headers: { "Content-Type": "audio/mpeg" },
+      });
+    }
+
+    if (url.pathname === "/api/market/stations") {
+      if (auth !== serviceToken) return unauthorized();
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const limit = Number(url.searchParams.get("limit")) || 20;
+      const offset = Number(url.searchParams.get("offset")) || 0;
+      const matches = marketStations.filter(
+        (d) =>
+          !q ||
+          d.title.toLowerCase().includes(q) ||
+          d.topic.toLowerCase().includes(q)
+      );
+      return json(matches.slice(offset, offset + limit));
+    }
+
     if (url.pathname === "/api/market/stations/public-podcast") {
       if (auth !== serviceToken) return unauthorized();
       return json(publicPodcast);
+    }
+
+    if (url.pathname === "/api/market/stations/second-podcast") {
+      if (auth !== serviceToken) return unauthorized();
+      return json(marketStations[1]);
+    }
+
+    if (path === "/api/market/creators/oauth:creator-1") {
+      if (auth !== serviceToken) return unauthorized();
+      return json(mockCreator);
+    }
+
+    if (path === "/api/market/creators/oauth:creator-1/stations") {
+      if (auth !== serviceToken) return unauthorized();
+      return json(marketStations);
+    }
+
+    if (url.pathname === "/api/market/albums/album-1") {
+      if (auth !== serviceToken) return unauthorized();
+      return json({ album: mockAlbum, episodes: [marketStations[1]] });
     }
 
     if (url.pathname === "/api/market/stations/private-podcast") {

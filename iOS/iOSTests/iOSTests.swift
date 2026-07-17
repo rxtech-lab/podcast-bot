@@ -544,6 +544,64 @@ final class iOSTests: XCTestCase {
         XCTAssertEqual(profile.following.first?.displayName, "Creator Two")
     }
 
+    @MainActor
+    func testAllAgentDocumentsUsesAllScopeAndPagination() async throws {
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/documents")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value) })
+            XCTAssertEqual(query["scope"]!, "all")
+            XCTAssertEqual(query["limit"]!, "10")
+            XCTAssertEqual(query["offset"]!, "20")
+            XCTAssertEqual(query["q"]!, "Podcast One")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data("""
+            {
+              "documents":[
+                {"id":"global-1","title":"Global","created_at":"2026-07-17T00:00:00Z","updated_at":"2026-07-17T00:00:00Z"},
+                {"id":"linked-1","title":"Linked","discussion_id":"podcast-1","podcast_title":"Podcast One","created_at":"2026-07-17T00:00:00Z","updated_at":"2026-07-17T00:00:00Z"}
+              ],
+              "has_more":true
+            }
+            """.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: URLSession(configuration: config))
+
+        let page = try await api.allAgentDocuments(limit: 10, offset: 20, query: "  Podcast One  ")
+
+        XCTAssertEqual(page.documents.map(\.id), ["global-1", "linked-1"])
+        XCTAssertNil(page.documents[0].discussionID)
+        XCTAssertEqual(page.documents[1].podcastTitle, "Podcast One")
+        XCTAssertEqual(page.hasMore, true)
+    }
+
+    @MainActor
+    func testDeleteAgentDocumentUsesOwnedDocumentRoute() async throws {
+        URLProtocolStub.handler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.url?.path, "/api/documents/document-1")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 204,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, Data())
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolStub.self]
+        let api = APIClient(baseURL: URL(string: "https://engine.example")!,
+                            tokens: StaticTokenProvider(token: "token-1"),
+                            session: URLSession(configuration: config))
+
+        try await api.deleteAgentDocument(id: "document-1")
+    }
+
     func testCreatorAPIsUseCreatorRoutes() async throws {
         var captured: [(String, String)] = []
         URLProtocolStub.handler = { request in

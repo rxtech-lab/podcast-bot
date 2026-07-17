@@ -120,6 +120,13 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 			items = append(items, actionItem("generate-mindmap", phrase(lang, "Generate mindmap", "生成思维导图", "產生心智圖"), phrase(lang, "Generating mindmap", "正在生成思维导图", "正在產生心智圖"), "sparkles", "", true, "request", discussionActionLink(d.ID, "action", "mindmap-generate")))
 		}
 	}
+	if d.IsOwner && s.d.AgentDocuments != nil {
+		if count, err := s.d.AgentDocuments.CountForDiscussion(r.Context(), d.OwnerUserID, d.ID); err == nil && count > 0 {
+			items = append(items, actionItem("agent-documents",
+				phrase(lang, "Chat Documents", "聊天文档", "聊天文件"), "", "doc.on.doc", "", true,
+				"open-sheet", discussionActionLink(d.ID, "sheet", "documents")))
+		}
+	}
 	return appendActionGroup(items, "podcast-qa-divider", s.podcastQAActions(r, d, lang))
 }
 
@@ -336,24 +343,30 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 		actionItem("type-audio-book", phrase(lang, "Audio Book", "有声书", "有聲書"), "", filterSystemImage(contentType, config.ContentTypeAudioBook, "book.closed"), "",
 			true, "select", homeActionLink("type", config.ContentTypeAudioBook)),
 	}
-	accountItems := make([]discussionUIActionItem, 0, 5)
+	accountItems := make([]discussionUIActionItem, 0, 10)
 	if queryBool(r, "supports_points") {
 		accountItems = append(accountItems, actionItem("points",
 			phrase(lang, "Points", "点数", "點數"), "", "sparkles", "",
 			true, "open-sheet", homeActionLink("sheet", "points")))
 	}
-	accountItems = append(accountItems,
+	accountItems = appendActionGroup(accountItems, "account-content-divider", []discussionUIActionItem{
+		actionItem("documents", phrase(lang, "Documents", "文档", "文件"), "", "doc.on.doc", "",
+			s.d.AgentDocuments != nil, "open-sheet", homeActionLink("sheet", "documents")),
 		actionItem("settings", phrase(lang, "Settings", "设置", "設定"), "", "gearshape", "",
 			true, "open-sheet", homeActionLink("sheet", "settings")),
 		actionItem("recordings", phrase(lang, "My Recordings", "我的录音", "我的錄音"), "", "recordingtape", "",
 			true, "open-sheet", homeActionLink("sheet", "recordings")),
 		actionItem("whats-new", phrase(lang, "What's New", "新功能", "新功能"), "", "sparkles.rectangle.stack", "",
 			true, "open-sheet", homeActionLink("sheet", "whats-new")),
+	})
+	accountItems = appendActionGroup(accountItems, "account-refresh-divider", []discussionUIActionItem{
 		actionItem("refresh", phrase(lang, "Refresh", "刷新", "重新整理"), "", "arrow.clockwise", "",
 			true, "request", homeActionLink("action", "refresh")),
+	})
+	accountItems = appendActionGroup(accountItems, "account-session-divider", []discussionUIActionItem{
 		actionItem("sign-out", phrase(lang, "Sign Out", "退出登录", "登出"), "", "rectangle.portrait.and.arrow.right", "destructive",
 			true, "request", homeActionLink("action", "sign-out")),
-	)
+	})
 
 	// Like every other create action, upload-own-audio is always listed; the
 	// per-tier entitlement gating (allowsAction → canUploadOwnAudio) grays it
@@ -445,6 +458,15 @@ func homeActionLink(parts ...string) string {
 		escaped = append(escaped, url.PathEscape(part))
 	}
 	return "debatepod://home/" + strings.Join(escaped, "/")
+}
+
+func documentActionLink(id string, parts ...string) string {
+	escaped := make([]string, 0, len(parts)+1)
+	escaped = append(escaped, url.PathEscape(id))
+	for _, part := range parts {
+		escaped = append(escaped, url.PathEscape(part))
+	}
+	return "debatepod://document/" + strings.Join(escaped, "/")
 }
 
 // allowsAction reports whether a UI-action id is subject to entitlement gating

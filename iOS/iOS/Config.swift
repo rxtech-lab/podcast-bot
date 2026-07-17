@@ -209,6 +209,42 @@ struct SummaryPDFDownloadTip: Tip {
     }
 }
 
+struct GlobalChatDocumentTip: Tip {
+    var title: Text {
+        Text("Write a document")
+    }
+
+    var message: Text? {
+        Text("Ask your library chat to create a document from your podcasts and sources.")
+    }
+
+    var image: Image? {
+        Image(systemName: "doc.badge.plus")
+    }
+
+    var options: [any TipOption] {
+        Tips.MaxDisplayCount(1)
+    }
+}
+
+struct PodcastChatDocumentTip: Tip {
+    var title: Text {
+        Text("Write a podcast document")
+    }
+
+    var message: Text? {
+        Text("Ask this chat to turn the podcast transcript and sources into a document.")
+    }
+
+    var image: Image? {
+        Image(systemName: "doc.text")
+    }
+
+    var options: [any TipOption] {
+        Tips.MaxDisplayCount(1)
+    }
+}
+
 struct TranscriptEditingTip: Tip {
     var title: Text {
         Text("Edit Transcript")

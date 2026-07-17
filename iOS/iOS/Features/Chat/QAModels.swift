@@ -20,13 +20,32 @@ enum QAScope: Hashable {
 /// field remains for histories created before batch podcast cards.
 /// tool calls. Mirrors the Go qa.Card JSON.
 struct QACard: Codable, Sendable, Hashable {
-    var kind: String // podcast(s) | highlights | transcript | sources | mindmap | ppt
+    var kind: String // podcast(s) | highlights | transcript | sources | mindmap | ppt | document
     var podcast: QAPodcastCard?
     var podcasts: [QAPodcastCard]?
     var highlights: [QAPodcastHighlightGroup]?
     var transcript: QATranscriptCard?
     var sources: [QASourceCard]?
     var document: QADocumentCard?
+    var agentDocument: QAAgentDocumentCard?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, podcast, podcasts, highlights, transcript, sources, document
+        case agentDocument = "agent_document"
+    }
+}
+
+struct QAAgentDocumentCard: Codable, Sendable, Hashable, Identifiable {
+    var id: String
+    var title: String
+    var discussionID: String?
+    var podcastTitle: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title
+        case discussionID = "discussion_id"
+        case podcastTitle = "podcast_title"
+    }
 }
 
 struct QADocumentCard: Codable, Sendable, Hashable, Identifiable {

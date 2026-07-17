@@ -60,6 +60,19 @@ nonisolated struct MessageListPinningController<ID: Hashable & Sendable>: Equata
         isPinningUserMessage = false
     }
 
+    mutating func handleUserMessageIDReplacement(
+        from previousID: ID?,
+        to currentID: ID?,
+        streamWasFinishing: Bool
+    ) {
+        guard streamWasFinishing,
+              pinnedUserMessageID == previousID,
+              previousID != currentID,
+              let currentID
+        else { return }
+        pinnedUserMessageID = currentID
+    }
+
     mutating func clear() {
         pinnedUserMessageID = nil
         isPinningUserMessage = false

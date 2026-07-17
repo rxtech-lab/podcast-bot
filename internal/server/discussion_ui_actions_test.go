@@ -104,6 +104,29 @@ func TestDiscussionUIActionsGroupDocumentsBeforeSearchAndAsk(t *testing.T) {
 	}
 }
 
+func TestDiscussionUIActionsIncludesLinkedChatDocuments(t *testing.T) {
+	srv, store := newUIActionsTestServer(t)
+	documents, err := NewAgentDocumentStore(store)
+	if err != nil {
+		t.Fatalf("NewAgentDocumentStore: %v", err)
+	}
+	srv.d.AgentDocuments = documents
+	d, err := store.Create(context.Background(), "anonymous", "Document podcast", planResponse{})
+	if err != nil {
+		t.Fatalf("Create discussion: %v", err)
+	}
+	if _, err := documents.Create(context.Background(), "anonymous", &d.ID,
+		"conv", "call", "Chat brief", "# Brief"); err != nil {
+		t.Fatalf("Create document: %v", err)
+	}
+	resp := getUIActions(t, srv, d.ID, "podcast-documents")
+	action := findAction(t, resp.Items, "agent-documents")
+	want := "debatepod://discussion/" + d.ID + "/sheet/documents"
+	if action.Action.Link != want {
+		t.Fatalf("agent-documents link=%q want=%q", action.Action.Link, want)
+	}
+}
+
 func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 	srv, store := newUIActionsTestServer(t)
 	ctx := context.Background()
@@ -290,6 +313,23 @@ func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
 	}
 	if !hasAction(account.Children, "recordings") {
 		t.Fatalf("recordings child missing from account menu: %+v", account.Children)
+	}
+	assertActionOrder(t, account.Children,
+		"points",
+		"account-content-divider",
+		"documents",
+		"settings",
+		"recordings",
+		"whats-new",
+		"account-refresh-divider",
+		"refresh",
+		"account-session-divider",
+		"sign-out",
+	)
+	for _, id := range []string{"account-content-divider", "account-refresh-divider", "account-session-divider"} {
+		if divider := findAction(t, account.Children, id); divider.Action.Type != "divider" {
+			t.Fatalf("%s action type = %q, want divider", id, divider.Action.Type)
+		}
 	}
 	create := findAction(t, out.Toolbars, "create")
 	if !hasAction(create.Children, "new-station") || !hasAction(create.Children, "new-album") {

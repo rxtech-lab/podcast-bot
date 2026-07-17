@@ -23,6 +23,7 @@ struct LibraryView: View {
     @State var showingMarketplace = false
     @State var selectedTab: HomeTab = .home
     @State var showingGlobalChat = false
+    @State var showingGlobalDocuments = false
     @State var path: [LibraryDestination] = []
     /// Navigation stack for the search tab; independent of the library
     /// tab's `path`/`selection` on both size classes.
@@ -135,6 +136,10 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $showingPointsHistory) {
                 PointsHistoryView()
+            }
+            .sheet(isPresented: $showingGlobalDocuments) {
+                AgentDocumentLibraryView(discussionID: nil,
+                                         api: APIClient(tokens: auth))
             }
             .fullScreenCover(isPresented: $showingSettings) {
                 LibrarySettingsView(
@@ -463,6 +468,8 @@ struct LibraryView: View {
         switch path {
         case ["sheet", "points"]:
             showingPointsHistory = true
+        case ["sheet", "documents"]:
+            showingGlobalDocuments = true
         case ["sheet", "settings"]:
             showingSettings = true
         case ["sheet", "whats-new"]:

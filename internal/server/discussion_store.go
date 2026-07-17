@@ -2453,12 +2453,35 @@ func (s *DiscussionStore) SetUsage(ctx context.Context, id string, promptTokens,
 }
 
 func (s *DiscussionStore) Delete(ctx context.Context, owner, id string) (bool, error) {
-	res, err := s.exec(ctx, `DELETE FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
+	// SQLite connections do not consistently have foreign_keys enabled in every
+	// test/deployment configuration. Remove first-party documents explicitly in
+	// the same transaction so deleting a podcast cannot leave orphaned content;
+	// PostgreSQL's ON DELETE CASCADE makes the second delete a harmless no-op.
+	hasAgentDocuments := s.tableExists(ctx, "agent_documents")
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM native_discussions WHERE owner_user_id = ? AND id = ?`, owner, id)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if n == 0 {
+		return false, nil
+	}
+	if hasAgentDocuments {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM agent_documents WHERE owner_user_id = ? AND discussion_id = ?`, owner, id); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // AppendEditTurn records a text-only turn (e.g. a "user" instruction).

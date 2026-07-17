@@ -141,6 +141,46 @@ final class QAChatTests: E2ETestCase {
         app.buttons["OK"].firstMatch.tap()
     }
 
+    // MARK: - 7. Agent documents persist in podcast and global libraries
+
+    func testPodcastChatWritesPersistentDocument() throws {
+        let app = launch()
+        openLibraryRow(app, id: "test-ready")
+        XCTAssertTrue(playerOpened(app), "player did not open for test-ready")
+
+        openDocumentAction(app, button: "Ask")
+        clearExistingChat(app)
+        sendChatMessage(app, "Write a document about this podcast")
+        let card = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "qa.card.document."))
+            .firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 40), "document card never appeared")
+        card.tap()
+        XCTAssertTrue(app.navigationBars["E2E Agent Document"].waitForExistence(timeout: 15),
+                      "document detail did not open")
+    }
+
+    func testGlobalChatWritesDocumentVisibleFromAccountMenu() throws {
+        let app = launch()
+        openHomeTab(app, "Chat", timeout: 15)
+        clearExistingChat(app)
+        sendChatMessage(app, "Write a document about my library")
+        let card = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "qa.card.document."))
+            .firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 40), "global document card never appeared")
+
+        app.navigationBars.buttons.firstMatch.tap()
+        let account = app.buttons["library.account"]
+        XCTAssertTrue(account.waitForExistence(timeout: 15), "account menu was missing")
+        account.tap()
+        let documents = app.buttons["Documents"].firstMatch
+        XCTAssertTrue(documents.waitForExistence(timeout: 5), "Documents account action was missing")
+        documents.tap()
+        XCTAssertTrue(app.staticTexts["E2E Agent Document"].waitForExistence(timeout: 15),
+                      "global document was not listed")
+    }
+
     // MARK: - Helpers
 
     private func sendChatMessage(_ app: XCUIApplication, _ text: String) {
