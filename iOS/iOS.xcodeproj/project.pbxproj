@@ -138,6 +138,7 @@
 			membershipExceptions = (
 				Auth/AuthManager.swift,
 				Config.swift,
+				Design/AppSheetPresentation.swift,
 				Design/MarkdownText.swift,
 				Design/MessageList.swift,
 				Design/MessageListPinningController.swift,

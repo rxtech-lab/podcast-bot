@@ -37,6 +37,7 @@ func (s *Server) handleHomeUIActions(w http.ResponseWriter, r *http.Request) {
 	lang := contentcreator.LangFromAcceptLanguage(r.Header.Get("Accept-Language"))
 	writeJSON(w, discussionUIActionsResponse{
 		ID:       "home-toolbar",
+		Items:    s.applyEntitlementsForUser(r, s.homeTabActions(r, lang)),
 		Toolbars: s.applyEntitlementsForUser(r, s.homeToolbarActions(r, lang)),
 	})
 }
@@ -397,6 +398,19 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 	}
 }
 
+// homeTabActions exposes server-owned feature availability for the otherwise
+// native home tabs. Keep the tab renderer native, but let the same backend
+// configuration that gates Q&A decide whether Chat can be entered.
+func (s *Server) homeTabActions(r *http.Request, lang contentcreator.Lang) []discussionUIActionItem {
+	if s.d.QA == nil || !s.SemanticSearchEnabled(r.Context()) {
+		return nil
+	}
+	return []discussionUIActionItem{
+		actionItem("chat", phrase(lang, "Chat", "聊天", "聊天"), "", "bubble.left.and.text.bubble.right", "",
+			true, "select", homeActionLink("tab", "chat")),
+	}
+}
+
 func filterSystemImage(selected, value, fallback string) string {
 	if selected == value {
 		return "checkmark"
@@ -475,6 +489,8 @@ func documentActionLink(id string, parts ...string) string {
 // source of truth mapping action ids → subscription features/studios.
 func (p Permissions) allowsAction(id string) (gated bool, allowed bool) {
 	switch id {
+	case "chat", "open-qa":
+		return true, p.Features.CanUseChat
 	case "generate-summary":
 		return true, p.Features.CanGenerateSummary
 	case "generate-mindmap":

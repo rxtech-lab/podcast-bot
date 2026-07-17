@@ -78,6 +78,7 @@ struct AgentDocumentLibraryView: View {
         } message: {
             Text(deleteError ?? "")
         }
+        .appSheetPresentation()
         .onDisappear { searchTask?.cancel() }
     }
 

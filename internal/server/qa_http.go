@@ -34,6 +34,23 @@ type qaDonePayload struct {
 	Conversation QAConversationView `json:"conversation"`
 }
 
+func (s *Server) requireChatPermission(w http.ResponseWriter, r *http.Request) bool {
+	// Hermetic E2E runs intentionally do not seed subscription permission rows.
+	if s.e2eMode() {
+		return true
+	}
+	allowed, err := s.chatAllowedForUser(r.Context(), s.requestUser(r).ID)
+	if err != nil {
+		http.Error(w, "could not resolve chat permission", http.StatusServiceUnavailable)
+		return false
+	}
+	if !allowed {
+		http.Error(w, "chat is not included in your subscription", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 // qaScopeFromRequest resolves which conversation a QA route addresses: the
 // path's discussion (podcast Q&A) or, on the /api/chat routes, the caller's
 // global chat. The returned Discussion is nil for global scope.
@@ -60,6 +77,9 @@ func (s *Server) qaScopeFromRequest(w http.ResponseWriter, r *http.Request) (*Di
 // planning equivalent it never 404s an existing podcast without a
 // conversation — it returns an empty view the client can start chatting from.
 func (s *Server) handleQAConversationGet(w http.ResponseWriter, r *http.Request) {
+	if !s.requireChatPermission(w, r) {
+		return
+	}
 	user := s.requestUser(r)
 	d, discussionID, ok := s.qaScopeFromRequest(w, r)
 	if !ok {
@@ -93,6 +113,9 @@ func (s *Server) handleQAConversationGet(w http.ResponseWriter, r *http.Request)
 // DELETE /api/chat. It removes every message from the addressed conversation
 // while preserving billing metadata, so clearing history cannot reset usage.
 func (s *Server) handleQAConversationClear(w http.ResponseWriter, r *http.Request) {
+	if !s.requireChatPermission(w, r) {
+		return
+	}
 	user := s.requestUser(r)
 	_, discussionID, ok := s.qaScopeFromRequest(w, r)
 	if !ok {
@@ -125,6 +148,9 @@ func (s *Server) handleQAConversationClear(w http.ResponseWriter, r *http.Reques
 // handleQAStreamResume serves GET /api/discussions/{id}/qa/stream and
 // GET /api/chat/stream: reattach to an in-flight run. 204 when none.
 func (s *Server) handleQAStreamResume(w http.ResponseWriter, r *http.Request) {
+	if !s.requireChatPermission(w, r) {
+		return
+	}
 	user := s.requestUser(r)
 	_, discussionID, ok := s.qaScopeFromRequest(w, r)
 	if !ok {
@@ -150,6 +176,9 @@ func (s *Server) handleQAStreamResume(w http.ResponseWriter, r *http.Request) {
 // handleQAStream serves POST /api/discussions/{id}/qa/stream and
 // POST /api/chat/stream: append the user message and stream the agent turn.
 func (s *Server) handleQAStream(w http.ResponseWriter, r *http.Request) {
+	if !s.requireChatPermission(w, r) {
+		return
+	}
 	user := s.requestUser(r)
 	d, discussionID, ok := s.qaScopeFromRequest(w, r)
 	if !ok {

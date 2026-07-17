@@ -164,6 +164,15 @@ struct QAConversationView: View {
             initialScrollTask?.cancel()
             showingPaywall = false
         }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    guard value.translation.height > 12,
+                          abs(value.translation.height) > abs(value.translation.width)
+                    else { return }
+                    inputFocused = false
+                }
+        )
     }
 
     var title: String {

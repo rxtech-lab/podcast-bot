@@ -14984,6 +14984,9 @@
         }
       }
     },
+    "Upgrade Required" : {
+
+    },
     "Upload" : {
       "localizations" : {
         "zh-Hans" : {
@@ -15276,6 +15279,9 @@
           }
         }
       }
+    },
+    "View Plans" : {
+
     },
     "View the plan" : {
       "localizations" : {
@@ -15653,6 +15659,9 @@
           }
         }
       }
+    },
+    "You need to upgrade your subscription to access Chat." : {
+
     },
     "You're signed out. Please sign in again." : {
       "comment" : "Error shown when the user's session has expired",
