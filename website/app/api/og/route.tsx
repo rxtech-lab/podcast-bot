@@ -1,5 +1,11 @@
-import { getPublicDiscussion, getShare } from "@/app/lib/backend";
-import { renderOGImage } from "@/app/lib/og";
+import { getAlbum, getCreator, getPublicDiscussion, getShare } from "@/app/lib/backend";
+import { creatorIdFromSlug, decodeRouteParam } from "@/app/lib/creator";
+import {
+  renderAlbumOGImage,
+  renderCreatorOGImage,
+  renderHomepageOGImage,
+  renderOGImage,
+} from "@/app/lib/og";
 
 export const dynamic = "force-dynamic";
 
@@ -7,6 +13,8 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const token = searchParams.get("token")?.trim();
   const id = searchParams.get("id")?.trim();
+  const album = searchParams.get("album")?.trim();
+  const creator = searchParams.get("creator")?.trim();
 
   if (token) {
     return await renderOGImage(await getShare(token));
@@ -14,5 +22,13 @@ export async function GET(request: Request) {
   if (id) {
     return await renderOGImage(await getPublicDiscussion(id));
   }
-  return await renderOGImage(null);
+  if (album) {
+    return await renderAlbumOGImage(await getAlbum(album));
+  }
+  if (creator) {
+    return await renderCreatorOGImage(
+      await getCreator(creatorIdFromSlug(decodeRouteParam(creator)))
+    );
+  }
+  return await renderHomepageOGImage();
 }

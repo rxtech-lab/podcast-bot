@@ -12,6 +12,10 @@ export const SITE_BASE_URL = (
   process.env.NEXT_PUBLIC_SITE_BASE_URL ?? "https://podcast.rxlab.app"
 ).replace(/\/$/, "");
 
+export function homeLink(): string {
+  return SITE_BASE_URL;
+}
+
 export function publicLink(id: string): string {
   return `${SITE_BASE_URL}/d/${id}`;
 }
@@ -20,13 +24,29 @@ export function podcastLink(id: string): string {
   return `${SITE_BASE_URL}/p/${id}`;
 }
 
+export function albumLink(id: string): string {
+  return `${SITE_BASE_URL}/a/${encodeURIComponent(id)}`;
+}
+
+export function creatorLink(slug: string): string {
+  return `${SITE_BASE_URL}/c/${encodeURIComponent(slug)}`;
+}
+
 export function shareLink(token: string): string {
   return `${SITE_BASE_URL}/s/${token}`;
 }
 
-export function ogImageLink(params: { id?: string; token?: string }): string {
+export function ogImageLink(params: {
+  id?: string;
+  token?: string;
+  album?: string;
+  creator?: string;
+}): string {
   const search = new URLSearchParams();
   if (params.id) search.set("id", params.id);
   if (params.token) search.set("token", params.token);
-  return `${SITE_BASE_URL}/api/og?${search.toString()}`;
+  if (params.album) search.set("album", params.album);
+  if (params.creator) search.set("creator", params.creator);
+  const query = search.toString();
+  return `${SITE_BASE_URL}/api/og${query ? `?${query}` : ""}`;
 }

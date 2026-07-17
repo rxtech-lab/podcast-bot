@@ -4,6 +4,7 @@ import { auth } from "@/app/lib/auth";
 import { getCreator, listCreatorStations } from "@/app/lib/backend";
 import { creatorIdFromSlug, decodeRouteParam } from "@/app/lib/creator";
 import { StationCard } from "@/app/components/StationCard";
+import { creatorLink, ogImageLink } from "@/app/lib/config";
 
 const PAGE_SIZE = 24;
 
@@ -14,13 +15,35 @@ type Props = {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
-  const creator = await getCreator(creatorIdFromSlug(decodeRouteParam(id)));
+  const slug = decodeRouteParam(id);
+  const creator = await getCreator(creatorIdFromSlug(slug));
+  if (!creator) {
+    return {
+      title: "Creator — PanelFM",
+      description: "Creator profile on PanelFM.",
+      robots: { index: false },
+      alternates: { canonical: creatorLink(slug) },
+    };
+  }
+  const title = `${creator.display_name} — PanelFM`;
+  const description = `Public podcasts by ${creator.display_name}.`;
+  const url = creatorLink(slug);
+  const image = ogImageLink({ creator: slug });
   return {
-    title: creator ? `${creator.display_name} — PanelFM` : "Creator — PanelFM",
-    description: creator
-      ? `Public podcasts by ${creator.display_name}.`
-      : "Creator profile on PanelFM.",
+    title,
+    description,
     robots: { index: false },
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description,
+      url,
+      type: "profile",
+      images: [
+        { url: image, width: 1200, height: 630, alt: `${creator.display_name} on PanelFM` },
+      ],
+    },
+    twitter: { card: "summary_large_image", title, description, images: [image] },
   };
 }
 

@@ -6,12 +6,34 @@ import { AccountMenu } from "@/app/components/AccountMenu";
 import { SignOutButton } from "@/app/components/SignOutButton";
 import { SignInButton } from "@/app/components/SignInButton";
 import { StationCard } from "@/app/components/StationCard";
+import { homeLink, ogImageLink } from "@/app/lib/config";
 
 const PAGE_SIZE = 24;
 
 export const metadata: Metadata = {
   title: "PanelFM — Marketplace",
-  description: "Browse public AI-generated podcasts and press play.",
+  description: "Browse public AI-generated podcasts from the community and press play.",
+  alternates: { canonical: homeLink() },
+  openGraph: {
+    title: "PanelFM — Marketplace",
+    description: "Browse public AI-generated podcasts from the community and press play.",
+    url: homeLink(),
+    type: "website",
+    images: [
+      {
+        url: ogImageLink({}),
+        width: 1200,
+        height: 630,
+        alt: "PanelFM podcast marketplace",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "PanelFM — Marketplace",
+    description: "Browse public AI-generated podcasts from the community and press play.",
+    images: [ogImageLink({})],
+  },
 };
 
 type Props = {
@@ -161,4 +183,3 @@ export default async function MarketplacePage({ searchParams }: Props) {
     </main>
   );
 }
-

@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+async function expectGeneratedOGImage(page: import("@playwright/test").Page, path: string) {
+  const response = await page.request.get(path);
+  expect(response.ok()).toBe(true);
+  expect(response.headers()["content-type"]).toContain("image/png");
+  expect((await response.body()).byteLength).toBeGreaterThan(1_000);
+}
+
 test("marketplace lists public podcasts without signing in", async ({ page }) => {
   await page.goto("/");
 
@@ -7,6 +14,25 @@ test("marketplace lists public podcasts without signing in", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Public Podcast" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Second Podcast" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+});
+
+test("homepage exposes Open Graph metadata and a generated image", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page).toHaveTitle("PanelFM — Marketplace");
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    "PanelFM — Marketplace"
+  );
+  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
+    "content",
+    "Browse public AI-generated podcasts from the community and press play."
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    /\/api\/og$/
+  );
+  await expectGeneratedOGImage(page, "/api/og");
 });
 
 test("clicking a station opens its player", async ({ page }) => {
@@ -52,6 +78,44 @@ test("clicking an album chip opens the album with its episodes", async ({ page }
 
   await page.getByRole("link", { name: /Second Podcast/ }).click();
   await expect(page).toHaveURL(/\/p\/second-podcast$/);
+});
+
+test("album exposes Open Graph metadata and a generated image", async ({ page }) => {
+  await page.goto("/a/album-1");
+
+  await expect(page).toHaveTitle("Mock Album — PanelFM");
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    "Mock Album — PanelFM"
+  );
+  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
+    "content",
+    "1 episode on PanelFM."
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    /\/api\/og\?album=album-1$/
+  );
+  await expectGeneratedOGImage(page, "/api/og?album=album-1");
+});
+
+test("creator exposes Open Graph metadata and a generated image", async ({ page }) => {
+  await page.goto("/c/creator-1");
+
+  await expect(page).toHaveTitle("PanelFM Creator — PanelFM");
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    "PanelFM Creator — PanelFM"
+  );
+  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
+    "content",
+    "Public podcasts by PanelFM Creator."
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    /\/api\/og\?creator=creator-1$/
+  );
+  await expectGeneratedOGImage(page, "/api/og?creator=creator-1");
 });
 
 test("legacy oauth-prefixed creator links still resolve", async ({ page }) => {
