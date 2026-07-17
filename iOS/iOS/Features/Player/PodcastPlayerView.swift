@@ -38,6 +38,7 @@ struct PodcastPlayerView: View {
     @State var showingText = false
     @State var showingMindmap = false
     @State var showingQA = false
+    @State var showingAgentDocuments = false
     @State var showingPodcastSearch = false
     @State var audioBookVideoURL: IdentifiableURL?
     @State var showingImporter = false
@@ -114,7 +115,9 @@ struct PodcastPlayerView: View {
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: currentDiscussion, language: model?.presentationLanguage)
         }
-        .sheet(isPresented: $showingQA) {
+        .sheet(isPresented: $showingQA, onDismiss: {
+            Task { await loadUIActions() }
+        }) {
             NavigationStack {
                 QAConversationView(scope: .podcast(currentDiscussion),
                                    language: model?.presentationLanguage,
@@ -128,6 +131,11 @@ struct PodcastPlayerView: View {
                     }
             }
             .interactiveDismissDisabled()
+        }
+        .sheet(isPresented: $showingAgentDocuments) {
+            AgentDocumentLibraryView(discussionID: currentDiscussion.id,
+                                     title: String(localized: "Chat Documents"),
+                                     api: APIClient(tokens: auth))
         }
         .sheet(isPresented: $showingPodcastSearch) {
             PodcastSearchSheet(discussion: currentDiscussion)
@@ -473,6 +481,8 @@ struct PodcastPlayerView: View {
             showingText = true
         case ["sheet", "mindmap"]:
             showingMindmap = true
+        case ["sheet", "documents"]:
+            showingAgentDocuments = true
         case ["action", "summary-generate"]:
             generateSummary()
         case ["action", "mindmap-generate"]:

@@ -70,6 +70,7 @@ func podcastTools() []openai.ChatCompletionToolParam {
 		}),
 		documentTool("display_mindmap", "Display this podcast's generated mindmap. Use when the user asks to view or open the mindmap.", false),
 		documentTool("display_ppt", "Display this podcast's generated slide deck. Use when the user asks to view or open the PPT or presentation.", false),
+		writeDocumentTool(false),
 	}
 }
 
@@ -171,7 +172,27 @@ func globalTools() []openai.ChatCompletionToolParam {
 		}),
 		documentTool("display_mindmap", "Display one podcast's generated mindmap. Use when the user asks to view or open its mindmap.", true),
 		documentTool("display_ppt", "Display one podcast's generated slide deck. Use when the user asks to view or open its PPT or presentation.", true),
+		writeDocumentTool(true),
 	}
+}
+
+func writeDocumentTool(allowsDiscussionID bool) openai.ChatCompletionToolParam {
+	properties := map[string]any{
+		"title": map[string]any{"type": "string", "description": "A concise document title."},
+		"markdown": map[string]any{
+			"type":        "string",
+			"description": "The complete document in Markdown. Use a fenced mermaid block when a diagram materially improves understanding.",
+		},
+	}
+	if allowsDiscussionID {
+		properties["discussion_id"] = map[string]any{
+			"type":        "string",
+			"description": "Optional podcast to link when this document belongs to exactly one verified podcast. Omit for a global or multi-podcast document.",
+		}
+	}
+	return toolDef("write_document", "Write and save a persistent document for the user. This is a terminal presentation tool.", map[string]any{
+		"type": "object", "properties": properties, "required": []string{"title", "markdown"},
+	})
 }
 
 func documentTool(name, description string, requireDiscussionID bool) openai.ChatCompletionToolParam {

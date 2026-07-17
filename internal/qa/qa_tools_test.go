@@ -15,6 +15,14 @@ type qaToolTestRetriever struct {
 	lines     map[string][]TranscriptLine
 	summaries []SummaryInfo
 	documents map[string]DocumentInfo
+	created   *AgentDocumentInfo
+}
+
+func (r *qaToolTestRetriever) CreateAgentDocument(_ context.Context, discussionID, _, _, title, _ string) (*AgentDocumentInfo, error) {
+	if r.created != nil {
+		return r.created, nil
+	}
+	return &AgentDocumentInfo{ID: "doc-1", Title: title, DiscussionID: discussionID}, nil
 }
 
 func (r *qaToolTestRetriever) SearchSummaries(context.Context, string, string, int) ([]SummaryInfo, error) {
@@ -82,11 +90,42 @@ func TestBothScopesExposeSummaryAndDocumentTools(t *testing.T) {
 		for _, tool := range tools {
 			names[tool.Function.Name] = true
 		}
-		for _, name := range []string{"search_summary", "display_mindmap", "display_ppt"} {
+		for _, name := range []string{"search_summary", "display_mindmap", "display_ppt", "write_document"} {
 			if !names[name] {
 				t.Fatalf("%s tool set is missing %q", scope, name)
 			}
 		}
+	}
+}
+
+func TestWriteDocumentForcesPodcastScopeAndIsTerminal(t *testing.T) {
+	retriever := &qaToolTestRetriever{}
+	s := &session{retriever: retriever, opts: Options{
+		Scope: ScopePodcast, DiscussionID: "podcast-1", ConversationID: "conversation-1",
+	}}
+	_, card, isErr := s.dispatch(context.Background(), llm.ToolCall{
+		ID: "call-1", Name: "write_document",
+		Arguments: `{"title":"Decision brief","markdown":"# Decision","discussion_id":"other"}`,
+	})
+	if isErr || card == nil || card.Kind != CardDocument || card.AgentDocument == nil {
+		t.Fatalf("write_document card=%+v isErr=%v", card, isErr)
+	}
+	if card.AgentDocument.DiscussionID != "podcast-1" {
+		t.Fatalf("linked discussion = %q, want forced podcast scope", card.AgentDocument.DiscussionID)
+	}
+	if !isBatchPresentationTool("write_document") {
+		t.Fatal("write_document must terminate the turn")
+	}
+}
+
+func TestWriteDocumentGlobalAllowsNoPodcast(t *testing.T) {
+	s := &session{retriever: &qaToolTestRetriever{}, opts: Options{Scope: ScopeGlobal}}
+	_, card, isErr := s.dispatch(context.Background(), llm.ToolCall{
+		ID: "call-global", Name: "write_document",
+		Arguments: `{"title":"Library brief","markdown":"# Brief"}`,
+	})
+	if isErr || card == nil || card.AgentDocument == nil || card.AgentDocument.DiscussionID != "" {
+		t.Fatalf("global document card=%+v isErr=%v", card, isErr)
 	}
 }
 

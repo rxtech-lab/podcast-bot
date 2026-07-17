@@ -123,6 +123,9 @@ type Deps struct {
 	// {id}/qa* and /api/chat* routes. Wired from the same database as
 	// Discussions.
 	QA *QAStore
+	// AgentDocuments stores Markdown documents authored by the Q&A agent. nil
+	// disables document writing and the document library/export routes.
+	AgentDocuments *AgentDocumentStore
 	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
 	// in Redis for 24h. nil disables caching — the handler fetches live each time.
 	ModelCatalog *ModelCatalogStore
@@ -396,6 +399,15 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/plan/stream", s.handleDiscussionPlanStreamForID)
 		s.mux.HandleFunc("POST /api/discussions/{id}/create/plan", s.handleDiscussionCreateFromPlan)
 		s.mux.HandleFunc("GET /api/discussions/{id}", s.handleDiscussionGet)
+		if d.AgentDocuments != nil {
+			s.mux.HandleFunc("GET /api/documents", s.handleGlobalAgentDocuments)
+			s.mux.HandleFunc("GET /api/documents/{id}", s.handleAgentDocumentGet)
+			s.mux.HandleFunc("DELETE /api/documents/{id}", s.handleAgentDocumentDelete)
+			s.mux.HandleFunc("GET /api/documents/{id}/ui-actions", s.handleAgentDocumentUIActions)
+			s.mux.HandleFunc("GET /api/documents/{id}/pdf", s.handleAgentDocumentPDF)
+			s.mux.HandleFunc("POST /api/documents/{id}/notion", s.handleAgentDocumentNotion)
+			s.mux.HandleFunc("GET /api/discussions/{id}/documents", s.handleDiscussionAgentDocuments)
+		}
 		s.mux.HandleFunc("GET /api/discussions/{id}/uploaded-audio", s.handleUploadedAudioPlayback)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/transcript/segments", s.handleUploadedAudioSegmentBatchUpdate)
 		s.mux.HandleFunc("PATCH /api/discussions/{id}/transcript/segments/{index}", s.handleUploadedAudioSegmentUpdate)

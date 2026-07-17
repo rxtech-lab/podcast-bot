@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ViewerDiscussion } from "@/app/lib/viewer";
+import { creatorSlug } from "@/app/lib/creator";
 
 type CaptionCue = {
   startMs: number;
@@ -166,9 +168,12 @@ export function PodcastViewer({
           <div className="flex min-h-full flex-col gap-6 lg:pt-10">
             <div className="space-y-6">
               <div className="flex items-center gap-2">
-                <div className="text-xs font-semibold uppercase text-teal-200/75">
+                <Link
+                  href="/"
+                  className="text-xs font-semibold uppercase text-teal-200/75 transition hover:text-teal-200"
+                >
                   podcast fm
-                </div>
+                </Link>
                 {headerAction}
               </div>
 
@@ -302,7 +307,10 @@ export function PodcastViewer({
               </div>
 
               {discussion.creator?.display_name ? (
-                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3">
+                <Link
+                  href={`/c/${encodeURIComponent(creatorSlug(discussion.creator.id))}`}
+                  className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3 transition hover:border-teal-300/40 hover:bg-white/[0.09]"
+                >
                   {discussion.creator.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -322,7 +330,10 @@ export function PodcastViewer({
                       {discussion.creator.display_name}
                     </div>
                   </div>
-                </div>
+                  <span aria-hidden="true" className="ml-auto text-stone-500">
+                    ›
+                  </span>
+                </Link>
               ) : null}
 
               <div className="grid grid-cols-3 gap-2 text-center">
