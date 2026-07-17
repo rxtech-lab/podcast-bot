@@ -4,6 +4,7 @@ import {
   renderAlbumOGImage,
   renderCreatorOGImage,
   renderHomepageOGImage,
+  renderMarketplaceOGImage,
   renderOGImage,
 } from "@/app/lib/og";
 
@@ -15,6 +16,7 @@ export async function GET(request: Request) {
   const id = searchParams.get("id")?.trim();
   const album = searchParams.get("album")?.trim();
   const creator = searchParams.get("creator")?.trim();
+  const screen = searchParams.get("screen")?.trim();
 
   if (token) {
     return await renderOGImage(await getShare(token));
@@ -29,6 +31,9 @@ export async function GET(request: Request) {
     return await renderCreatorOGImage(
       await getCreator(creatorIdFromSlug(decodeRouteParam(creator)))
     );
+  }
+  if (screen === "marketplace") {
+    return await renderMarketplaceOGImage();
   }
   return await renderHomepageOGImage();
 }

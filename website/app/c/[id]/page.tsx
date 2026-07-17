@@ -101,7 +101,7 @@ export default async function CreatorPage({ params, searchParams }: Props) {
               This creator doesn&apos;t exist or isn&apos;t visible.
             </p>
             <Link
-              href="/"
+              href="/marketplace"
               className="mt-5 inline-block rounded-full border border-white/10 bg-white/[0.08] px-5 py-2 text-sm font-medium text-stone-200 transition hover:bg-white/[0.14]"
             >
               Back to marketplace

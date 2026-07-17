@@ -121,7 +121,16 @@ export async function renderOGImage(meta: DiscussionMeta | null): Promise<ImageR
 
 export async function renderHomepageOGImage(): Promise<ImageResponse> {
   return renderOGCard({
-    eyebrow: "PANELFM",
+    eyebrow: "PODCASTFM",
+    title: "Turn every question into a conversation",
+    subtitle: "AI multi-speaker podcasts, structured knowledge, shareable content.",
+    fallbackArtwork: "FM",
+  });
+}
+
+export async function renderMarketplaceOGImage(): Promise<ImageResponse> {
+  return renderOGCard({
+    eyebrow: "PODCASTFM",
     title: "Podcast Marketplace",
     subtitle: "Public AI-generated podcasts from the community.",
     fallbackArtwork: "FM",
