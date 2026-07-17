@@ -181,6 +181,16 @@ func (s *Server) uploadAudioAllowedForUser(ctx context.Context, userID string) b
 	return perms.Features.CanUploadOwnAudio
 }
 
+// chatAllowedForUser reports whether the caller's subscription class grants
+// global library chat and per-podcast Q&A.
+func (s *Server) chatAllowedForUser(ctx context.Context, userID string) (bool, error) {
+	perms, err := s.resolveEntitlements(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return perms.Features.CanUseChat, nil
+}
+
 // uploadAudioCapBytes returns the caller's effective per-file audio upload cap
 // in bytes: the tier's MaxUploadAudioMB when set, bounded by the server-wide
 // MAX_PODCAST_AUDIO_UPLOAD_MB ceiling.

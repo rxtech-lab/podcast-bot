@@ -46,6 +46,11 @@ struct LibraryView: View {
     @State var typeFilter: LibraryTypeFilter = .all
     @State var loadedTypeFilter: LibraryTypeFilter = .all
     @State var toolbarItems: [DiscussionUIActionItem] = []
+    /// Nil means Chat is globally unavailable. A present but disabled action
+    /// means the feature exists but the current subscription does not grant it.
+    @State var homeChatAction: DiscussionUIActionItem?
+    @State var showingChatUpgradePrompt = false
+    @State var showingChatPaywall = false
     @State var isSearchLoading = false
     @State var searchTask: Task<Void, Never>?
     @State var renamingDiscussion: Discussion?
@@ -65,8 +70,10 @@ struct LibraryView: View {
                     }
                 }
 
-                Tab("Chat", systemImage: "bubble.left.and.text.bubble.right", value: HomeTab.chat) {
-                    chatTab
+                if homeChatAction != nil {
+                    Tab("Chat", systemImage: "bubble.left.and.text.bubble.right", value: HomeTab.chat) {
+                        chatTab
+                    }
                 }
 
                 Tab(value: HomeTab.search, role: .search) {
@@ -75,7 +82,13 @@ struct LibraryView: View {
             }
             .onChange(of: selectedTab) { _, newValue in
                 if newValue == .chat {
-                    showingGlobalChat = true
+                    if homeChatAction?.enabled == true {
+                        showingGlobalChat = true
+                    } else {
+                        showingGlobalChat = false
+                        selectedTab = .home
+                        showingChatUpgradePrompt = true
+                    }
                 }
             }
         ))
@@ -140,6 +153,19 @@ struct LibraryView: View {
             .sheet(isPresented: $showingGlobalDocuments) {
                 AgentDocumentLibraryView(discussionID: nil,
                                          api: APIClient(tokens: auth))
+            }
+            .alert("Upgrade Required", isPresented: $showingChatUpgradePrompt) {
+                Button("View Plans") { showingChatPaywall = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You need to upgrade your subscription to access Chat.")
+            }
+            .sheet(isPresented: $showingChatPaywall) {
+                PaywallScreen {
+                    showingChatPaywall = false
+                    Task { await loadHomeToolbar() }
+                }
+                    .appSheetPresentation()
             }
             .fullScreenCover(isPresented: $showingSettings) {
                 LibrarySettingsView(
@@ -457,6 +483,11 @@ struct LibraryView: View {
                 type: typeFilter.rawValue
             )
             toolbarItems = response.toolbars
+            homeChatAction = response.items.first(where: { $0.id == "chat" })
+            if homeChatAction == nil, selectedTab == .chat {
+                showingGlobalChat = false
+                selectedTab = .home
+            }
         } catch {
             toolbarItems = []
         }

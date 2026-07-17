@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,7 +36,7 @@ func newTestPermissionStores(t *testing.T) (*SubscriptionPermissionStore, *Point
 func fullPermissions() Permissions {
 	return Permissions{
 		Studios:  PermissionStudios{Discussion: true, AudioBook: true, Album: true},
-		Features: PermissionFeatures{CanPublishPodcast: true, CanGenerateVideo: true, CanExportToNotion: true},
+		Features: PermissionFeatures{CanUseChat: true, CanPublishPodcast: true, CanGenerateVideo: true, CanExportToNotion: true},
 		Models:   PermissionRule{Mode: PermissionModeAll},
 		Voices:   PermissionRule{Mode: PermissionModeOnly, Allow: []string{"en-US-AvaNeural"}},
 	}
@@ -59,7 +61,7 @@ func TestSubscriptionPermissionStoreCRUD(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("GetForClass: %v got=%v", err, got)
 	}
-	if !got.Permissions.Features.CanGenerateVideo || !got.Permissions.Voices.Allows("en-US-AvaNeural") {
+	if !got.Permissions.Features.CanUseChat || !got.Permissions.Features.CanGenerateVideo || !got.Permissions.Voices.Allows("en-US-AvaNeural") {
 		t.Fatalf("paid perms not round-tripped: %+v", got.Permissions)
 	}
 	if got.Permissions.Voices.Allows("zh-CN-XiaoxiaoNeural") {
@@ -242,9 +244,11 @@ func TestSubscriptionPermissionFormConditionalAllowlists(t *testing.T) {
 
 func TestApplyEntitlementsGraysOutGatedActions(t *testing.T) {
 	ent := Permissions{
-		Features: PermissionFeatures{CanGenerateVideo: false, CanExportToNotion: true, CanGeneratePPT: false},
+		Features: PermissionFeatures{CanUseChat: false, CanGenerateVideo: false, CanExportToNotion: true, CanGeneratePPT: false},
 	}
 	items := []discussionUIActionItem{
+		actionItem("chat", "Chat", "", "", "", true, "select", "link"),
+		actionItem("open-qa", "Ask", "", "", "", true, "open-sheet", "link"),
 		actionItem("generate-video", "Generate Video", "", "", "", true, "request", "link"),
 		actionItem("export-notion", "Export to Notion", "", "", "", true, "open-sheet", "link"),
 		actionItem("download-pptx", "PPTX", "", "", "", true, "download", "link"),
@@ -258,6 +262,9 @@ func TestApplyEntitlementsGraysOutGatedActions(t *testing.T) {
 	if byID["generate-video"] {
 		t.Fatalf("generate-video should be disabled")
 	}
+	if byID["chat"] || byID["open-qa"] {
+		t.Fatalf("global and podcast chat should be disabled")
+	}
 	if !byID["export-notion"] {
 		t.Fatalf("export-notion should stay enabled")
 	}
@@ -266,5 +273,28 @@ func TestApplyEntitlementsGraysOutGatedActions(t *testing.T) {
 	}
 	if !byID["open-summary"] {
 		t.Fatalf("non-gated open-summary must be untouched")
+	}
+}
+
+func TestRequireChatPermission(t *testing.T) {
+	sp, points := newTestPermissionStores(t)
+	s := &Server{d: Deps{SubscriptionPermissions: sp, Points: points}}
+	req := httptest.NewRequest(http.MethodGet, "/api/chat", nil)
+
+	rec := httptest.NewRecorder()
+	if s.requireChatPermission(rec, req) {
+		t.Fatal("chat should be denied without a granted permission class")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("denied status = %d, want 403", rec.Code)
+	}
+
+	free := SubscriptionPermission{Permissions: Permissions{Features: PermissionFeatures{CanUseChat: true}}}
+	if err := sp.Create(req.Context(), &free); err != nil {
+		t.Fatalf("create free permission: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	if !s.requireChatPermission(rec, req) {
+		t.Fatalf("chat should be allowed when granted; status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

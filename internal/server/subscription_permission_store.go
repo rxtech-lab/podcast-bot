@@ -40,6 +40,7 @@ type PermissionStudios struct {
 // PermissionFeatures gates the per-discussion feature actions surfaced in the
 // app's menus (see discussion_ui_actions.go for the action ids these map to).
 type PermissionFeatures struct {
+	CanUseChat               bool `json:"canUseChat"`
 	CanPublishPodcast        bool `json:"canPublishPodcast"`
 	CanSharePodcastPrivately bool `json:"canSharePodcastPrivately"`
 	CanGenerateVideo         bool `json:"canGenerateVideo"`

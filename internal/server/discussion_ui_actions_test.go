@@ -304,6 +304,9 @@ func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
+	if hasAction(out.Items, "chat") {
+		t.Fatal("chat tab returned without Q&A and semantic search configuration")
+	}
 	account := findAction(t, out.Toolbars, "account")
 	if len(account.Children) == 0 {
 		t.Fatalf("account toolbar children missing: %+v", account)
@@ -355,6 +358,69 @@ func TestHomeUIActionsRenderToolbarGroups(t *testing.T) {
 	audioBookFilter := findAction(t, filter.Children, "type-audio-book")
 	if audioBookFilter.SystemImage != "checkmark" {
 		t.Fatalf("audio book filter image = %q, want checkmark", audioBookFilter.SystemImage)
+	}
+}
+
+func TestHomeUIActionsEnableChatWhenQAIsConfigured(t *testing.T) {
+	srv, store := newUIActionsTestServer(t)
+	embeddings, err := NewEmbeddingStore(store, 3)
+	if err != nil {
+		t.Fatalf("NewEmbeddingStore: %v", err)
+	}
+	qa, err := NewQAStore(store)
+	if err != nil {
+		t.Fatalf("NewQAStore: %v", err)
+	}
+	srv.d.Embeddings = embeddings
+	srv.d.QA = qa
+	permissions, err := NewSubscriptionPermissionStore(store)
+	if err != nil {
+		t.Fatalf("NewSubscriptionPermissionStore: %v", err)
+	}
+	permission := SubscriptionPermission{
+		Permissions: Permissions{Features: PermissionFeatures{CanUseChat: true}},
+	}
+	if err := permissions.Create(context.Background(), &permission); err != nil {
+		t.Fatalf("create chat permission: %v", err)
+	}
+	srv.d.SubscriptionPermissions = permissions
+	srv.d.Env = &config.Env{
+		OpenAIBaseURL:  "https://api.example.test/v1",
+		EmbeddingModel: "test-embedding",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/home/ui-actions", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out discussionUIActionsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	chat := findAction(t, out.Items, "chat")
+	if !chat.Enabled {
+		t.Fatal("chat tab disabled with Q&A and semantic search configured")
+	}
+
+	permission.Permissions.Features.CanUseChat = false
+	if err := permissions.Update(context.Background(), permission.ID, &permission); err != nil {
+		t.Fatalf("remove chat permission: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/home/ui-actions", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("locked status = %d, want 200", rec.Code)
+	}
+	out = discussionUIActionsResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("Decode locked response: %v", err)
+	}
+	chat = findAction(t, out.Items, "chat")
+	if chat.Enabled {
+		t.Fatal("chat tab should remain present but locked without subscription permission")
 	}
 }
 

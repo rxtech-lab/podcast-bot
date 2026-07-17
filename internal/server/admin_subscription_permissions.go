@@ -30,6 +30,7 @@ type subscriptionPermissionForm struct {
 	StudioAudioBook  bool `json:"studio_audio_book" jsonschema:"title=Studio · Audiobook (single-narrator reading)"`
 	StudioAlbum      bool `json:"studio_album" jsonschema:"title=Studio · Album (multi-episode podcast series)"`
 
+	CanUseChat               bool `json:"can_use_chat" jsonschema:"title=Use global and podcast chat"`
 	CanPublishPodcast        bool `json:"can_publish_podcast" jsonschema:"title=Publish podcast to the public catalog"`
 	CanSharePodcastPrivately bool `json:"can_share_privately" jsonschema:"title=Share podcast via private link"`
 	CanGenerateVideo         bool `json:"can_generate_video" jsonschema:"title=Generate video from an episode"`
@@ -138,6 +139,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 	setPropDescription(fs, "studio_discussion", "Allow creating a Discussion in the studio: a multi-host talk show where AI voices debate or converse about the source material.")
 	setPropDescription(fs, "studio_audio_book", "Allow creating an Audiobook in the studio: a single narrator reads the source document straight through.")
 	setPropDescription(fs, "studio_album", "Allow creating an Album in the studio: a multi-episode podcast series grouped under one show.")
+	setPropDescription(fs, "can_use_chat", "Allow using both the global library chat and Q&A chat for an individual podcast.")
 	setPropDescription(fs, "can_publish_podcast", "Allow publishing an episode to the public podcast catalog where anyone can discover it.")
 	setPropDescription(fs, "can_share_privately", "Allow sharing an episode through a private, unlisted link instead of publishing it publicly.")
 	setPropDescription(fs, "can_generate_video", "Allow rendering a shareable video (audio + visuals) from an episode.")
@@ -159,7 +161,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 	// default value so they stay present regardless.
 	fs.Schema.Required = withoutSchemaRequiredFields(fs.Schema.Required,
 		"studio_discussion", "studio_audio_book", "studio_album",
-		"can_publish_podcast", "can_share_privately", "can_generate_video",
+		"can_use_chat", "can_publish_podcast", "can_share_privately", "can_generate_video",
 		"can_generate_summary", "can_export_notion", "can_generate_ppt",
 		"can_generate_mindmap", "can_translate_podcast", "can_generate_cover", "can_upload_own_audio",
 		"max_upload_audio_mb",
@@ -231,6 +233,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 	fs.UISchema["ui:order"] = []any{
 		"subscription_class",
 		"studio_discussion", "studio_audio_book", "studio_album",
+		"can_use_chat",
 		"can_publish_podcast", "can_share_privately", "can_generate_video",
 		"can_generate_summary", "can_export_notion", "can_generate_ppt",
 		"can_generate_mindmap", "can_translate_podcast", "can_generate_cover", "can_upload_own_audio",
@@ -301,6 +304,7 @@ func (r *subscriptionPermissionsResource) Fetch(ctx context.Context, req admin.R
 		// Sensible default for a new (typically paid) class: grant everything.
 		return admin.Detail(map[string]any{
 			"studio_discussion": true, "studio_audio_book": true, "studio_album": true,
+			"can_use_chat":        true,
 			"can_publish_podcast": true, "can_share_privately": true, "can_generate_video": true,
 			"can_generate_summary": true, "can_export_notion": true, "can_generate_ppt": true,
 			"can_generate_mindmap": true, "can_generate_cover": true, "can_upload_own_audio": true, "can_translate_podcast": true,
@@ -510,15 +514,17 @@ func classLabel(productID string) string {
 func permissionsSummary(p Permissions) string {
 	features := 0
 	for _, on := range []bool{
+		p.Features.CanUseChat,
 		p.Features.CanPublishPodcast, p.Features.CanSharePodcastPrivately, p.Features.CanGenerateVideo,
 		p.Features.CanGenerateSummary, p.Features.CanExportToNotion, p.Features.CanGeneratePPT,
-		p.Features.CanGenerateMindmap, p.Features.CanGenerateCoverWithAI, p.Features.CanTranslatePodcast,
+		p.Features.CanGenerateMindmap, p.Features.CanGenerateCoverWithAI, p.Features.CanUploadOwnAudio,
+		p.Features.CanTranslatePodcast,
 	} {
 		if on {
 			features++
 		}
 	}
-	return fmt.Sprintf("%d/9 features · models: %s · voices: %s", features, p.Models.Mode, p.Voices.Mode)
+	return fmt.Sprintf("%d/11 features · models: %s · voices: %s", features, p.Models.Mode, p.Voices.Mode)
 }
 
 // formFromRow flattens a stored row back into the form field map for editing.
@@ -529,6 +535,7 @@ func formFromRow(row *SubscriptionPermission) map[string]any {
 		"studio_discussion":     p.Studios.Discussion,
 		"studio_audio_book":     p.Studios.AudioBook,
 		"studio_album":          p.Studios.Album,
+		"can_use_chat":          p.Features.CanUseChat,
 		"can_publish_podcast":   p.Features.CanPublishPodcast,
 		"can_share_privately":   p.Features.CanSharePodcastPrivately,
 		"can_generate_video":    p.Features.CanGenerateVideo,
@@ -557,6 +564,7 @@ func permissionsFromForm(data map[string]any) Permissions {
 			Album:      boolField(data, "studio_album", false),
 		},
 		Features: PermissionFeatures{
+			CanUseChat:               boolField(data, "can_use_chat", false),
 			CanPublishPodcast:        boolField(data, "can_publish_podcast", false),
 			CanSharePodcastPrivately: boolField(data, "can_share_privately", false),
 			CanGenerateVideo:         boolField(data, "can_generate_video", false),

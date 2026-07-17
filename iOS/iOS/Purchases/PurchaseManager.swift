@@ -103,6 +103,7 @@ struct Entitlements: Codable, Sendable, Equatable {
     }
 
     struct Features: Codable, Sendable, Equatable {
+        var canUseChat = false
         var canPublishPodcast = false
         var canSharePodcastPrivately = false
         var canGenerateVideo = false
@@ -144,6 +145,7 @@ struct Entitlements: Codable, Sendable, Equatable {
     static let all = Entitlements(
         studios: Studios(discussion: true, audioBook: true, album: true),
         features: Features(
+            canUseChat: true,
             canPublishPodcast: true, canSharePodcastPrivately: true, canGenerateVideo: true,
             canGenerateSummary: true, canExportToNotion: true, canGeneratePPT: true,
             canGenerateMindmap: true, canGenerateCoverWithAI: true, canTranslatePodcast: true),
