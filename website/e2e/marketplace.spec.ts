@@ -7,26 +7,28 @@ async function expectGeneratedOGImage(page: import("@playwright/test").Page, pat
   expect((await response.body()).byteLength).toBeGreaterThan(1_000);
 }
 
-test("marketplace lists public podcasts without signing in", async ({ page }) => {
+test("landing page shows the hero and links to the marketplace", async ({ page }) => {
   await page.goto("/");
 
+  await expect(
+    page.getByRole("heading", { name: /Turn every question into a conversation/ })
+  ).toBeVisible();
+  // Download badges are hidden unless the store URLs are configured (they are
+  // not in the e2e environment).
+  await expect(page.getByRole("link", { name: "Download on the App Store" })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Marketplace", exact: true }).first().click();
+  await expect(page).toHaveURL(/\/marketplace$/);
   await expect(page.getByRole("heading", { name: "Marketplace" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Public Podcast" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Second Podcast" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
 });
 
-test("homepage exposes Open Graph metadata and a generated image", async ({ page }) => {
+test("landing page exposes Open Graph metadata and a generated image", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page).toHaveTitle("PanelFM — Marketplace");
+  await expect(page).toHaveTitle("PodcastFM — Turn every question into a conversation");
   await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
     "content",
-    "PanelFM — Marketplace"
-  );
-  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
-    "content",
-    "Browse public AI-generated podcasts from the community and press play."
+    "PodcastFM — Turn every question into a conversation"
   );
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
     "content",
@@ -35,8 +37,43 @@ test("homepage exposes Open Graph metadata and a generated image", async ({ page
   await expectGeneratedOGImage(page, "/api/og");
 });
 
+test("legacy marketplace search links redirect to /marketplace", async ({ page }) => {
+  await page.goto("/?q=second");
+
+  await expect(page).toHaveURL(/\/marketplace\?q=second$/);
+  await expect(page.getByRole("heading", { name: "Second Podcast" })).toBeVisible();
+});
+
+test("marketplace lists public podcasts without signing in", async ({ page }) => {
+  await page.goto("/marketplace");
+
+  await expect(page.getByRole("heading", { name: "Marketplace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Public Podcast" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Second Podcast" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+});
+
+test("marketplace exposes Open Graph metadata and a generated image", async ({ page }) => {
+  await page.goto("/marketplace");
+
+  await expect(page).toHaveTitle("PodcastFM — Marketplace");
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    "PodcastFM — Marketplace"
+  );
+  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
+    "content",
+    "Browse public AI-generated podcasts from the community and press play."
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    /\/api\/og\?screen=marketplace$/
+  );
+  await expectGeneratedOGImage(page, "/api/og?screen=marketplace");
+});
+
 test("clicking a station opens its player", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/marketplace");
 
   await page.getByRole("link", { name: "Play Public Podcast" }).click();
 
@@ -46,18 +83,18 @@ test("clicking a station opens its player", async ({ page }) => {
 });
 
 test("search filters the station grid", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/marketplace");
 
   await page.getByRole("searchbox", { name: "Search podcasts" }).fill("second");
   await page.getByRole("searchbox", { name: "Search podcasts" }).press("Enter");
 
-  await expect(page).toHaveURL(/\/\?q=second$/);
+  await expect(page).toHaveURL(/\/marketplace\?q=second$/);
   await expect(page.getByRole("heading", { name: "Second Podcast" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Public Podcast" })).not.toBeVisible();
 });
 
 test("clicking a creator opens their station list", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/marketplace");
 
   await page.getByRole("link", { name: "PanelFM Creator" }).first().click();
 
@@ -69,7 +106,7 @@ test("clicking a creator opens their station list", async ({ page }) => {
 });
 
 test("clicking an album chip opens the album with its episodes", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/marketplace");
 
   await page.getByRole("link", { name: "Mock Album" }).click();
 
@@ -140,5 +177,7 @@ test("podcast fm logo navigates back home", async ({ page }) => {
   await page.getByRole("link", { name: "podcast fm" }).click();
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Marketplace" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Turn every question into a conversation/ })
+  ).toBeVisible();
 });

@@ -12,8 +12,17 @@ export const SITE_BASE_URL = (
   process.env.NEXT_PUBLIC_SITE_BASE_URL ?? "https://podcast.rxlab.app"
 ).replace(/\/$/, "");
 
+// Store links for the landing page download badges. Each badge renders only
+// when its URL is set.
+export const APP_STORE_URL = (process.env.NEXT_PUBLIC_APP_STORE_URL ?? "").trim();
+export const TESTFLIGHT_URL = (process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? "").trim();
+
 export function homeLink(): string {
   return SITE_BASE_URL;
+}
+
+export function marketplaceLink(): string {
+  return `${SITE_BASE_URL}/marketplace`;
 }
 
 export function publicLink(id: string): string {
@@ -41,12 +50,14 @@ export function ogImageLink(params: {
   token?: string;
   album?: string;
   creator?: string;
+  screen?: "marketplace";
 }): string {
   const search = new URLSearchParams();
   if (params.id) search.set("id", params.id);
   if (params.token) search.set("token", params.token);
   if (params.album) search.set("album", params.album);
   if (params.creator) search.set("creator", params.creator);
+  if (params.screen) search.set("screen", params.screen);
   const query = search.toString();
   return `${SITE_BASE_URL}/api/og${query ? `?${query}` : ""}`;
 }
