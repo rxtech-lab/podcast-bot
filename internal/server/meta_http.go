@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"github.com/sirily11/debate-bot/internal/config"
-	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/planner"
 	"github.com/sirily11/debate-bot/internal/tools"
 )
@@ -50,29 +49,12 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 // the dashboard and app can populate their per-speaker model pickers. The list
 // is fetched live from the OpenAI-compatible gateway (GET /models) and cached
 // in Redis for 24h; a fetch failure degrades to an empty roster (the picker
-// keeps whatever model the speaker already has) rather than erroring.
+// keeps whatever model the speaker already has) rather than erroring. Only
+// chat-capable models are returned — the gateway also advertises embedding /
+// image / video models, which can't drive a speaker.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	defaults := s.resolvedModelDefaults(r.Context())
-
-	if cached, ok := s.d.ModelCatalog.Get(r.Context()); ok {
-		cached = config.ModelsFromIDs(modelIDs(cached), defaults)
-		writeJSON(w, modelsResponse{Defaults: defaults, Models: cached})
-		return
-	}
-
-	var models []config.ModelInfo
-	if s.d.Env != nil {
-		ids, err := llm.ListModels(r.Context(), s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey)
-		if err != nil {
-			if s.d.Log != nil {
-				s.d.Log.Warn("list gateway models", "err", err)
-			}
-		} else {
-			models = config.ModelsFromIDs(ids, defaults)
-			s.d.ModelCatalog.Set(r.Context(), models)
-		}
-	}
-	writeJSON(w, modelsResponse{Defaults: defaults, Models: models})
+	writeJSON(w, modelsResponse{Defaults: defaults, Models: s.languageModelCatalog(r.Context())})
 }
 
 // toolMeta is the dashboard-facing description of one tool.

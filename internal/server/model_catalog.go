@@ -15,7 +15,10 @@ import (
 // list rarely changes, so a day between upstream /models hits is plenty.
 const modelCatalogTTL = 24 * time.Hour
 
-const modelCatalogKey = "debate-bot:models:catalog"
+// v2: entries now carry the gateway model type (language/embedding/...); v1
+// rows lack it, and a typeless cache would empty the type-filtered pickers
+// for up to a full TTL, so the old key is simply abandoned.
+const modelCatalogKey = "debate-bot:models:catalog:v2"
 
 // ModelCatalogStore caches the gateway's advertised model roster in Redis so we
 // don't hit the upstream /models endpoint on every dashboard/app load. It is

@@ -16,5 +16,26 @@ services:
       retries: 10
       start_period: 10s
 
+  # Postgres with pgvector, matching the production database used for the
+  # semantic search / Q&A embedding store. Point the server at it with
+  # DATABASE_URL=postgres://debate:debate@127.0.0.1:5432/debate
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: debate
+      POSTGRES_PASSWORD: debate
+      POSTGRES_DB: debate
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U debate -d debate"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
 volumes:
   rabbitmq_data:
+  postgres_data:

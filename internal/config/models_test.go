@@ -66,6 +66,40 @@ func TestModelsFromIDs(t *testing.T) {
 	}
 }
 
+func TestModelsFromDescriptorsCarriesType(t *testing.T) {
+	got := config.ModelsFromDescriptors([]config.ModelDescriptor{
+		{ID: "openai/gpt-4o", Type: config.ModelTypeLanguage},
+		{ID: "openai/text-embedding-3-small", Type: config.ModelTypeEmbedding},
+		{ID: "legacy/untyped"},
+	}, config.ModelDefaults{})
+
+	if len(got) != 3 {
+		t.Fatalf("expected 3 models, got %d: %+v", len(got), got)
+	}
+	if got[0].Type != config.ModelTypeLanguage || got[1].Type != config.ModelTypeEmbedding || got[2].Type != "" {
+		t.Errorf("types = %q/%q/%q, want language/embedding/empty", got[0].Type, got[1].Type, got[2].Type)
+	}
+}
+
+func TestAnnotateModelDefaultsPreservesType(t *testing.T) {
+	cached := config.ModelsFromDescriptors([]config.ModelDescriptor{
+		{ID: "openai/gpt-4o", Type: config.ModelTypeLanguage},
+		{ID: "openai/text-embedding-3-small", Type: config.ModelTypeEmbedding},
+	}, config.ModelDefaults{})
+
+	got := config.AnnotateModelDefaults(cached, config.ModelDefaults{Host: "openai/gpt-4o"})
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(got))
+	}
+	if len(got[0].DefaultFor) != 1 || got[0].DefaultFor[0] != "host" {
+		t.Errorf("DefaultFor = %v, want [host] re-stamped from current defaults", got[0].DefaultFor)
+	}
+	if got[1].Type != config.ModelTypeEmbedding {
+		t.Errorf("cache-hit annotation dropped Type: %+v", got[1])
+	}
+}
+
 func TestDefaultsForEnvNil(t *testing.T) {
 	if got := config.DefaultsForEnv(nil); got != (config.ModelDefaults{}) {
 		t.Errorf("DefaultsForEnv(nil) = %+v, want zero value", got)

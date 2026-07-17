@@ -248,6 +248,9 @@
         }
       }
     },
+    "%lld percent match" : {
+      "comment" : "Accessibility label for a search similarity score"
+    },
     "%lld questions" : {
       "comment" : "Question card header; value is the question count",
       "localizations" : {
@@ -295,7 +298,7 @@
       }
     },
     "%lld sources" : {
-      "comment" : "Sources section header, plural",
+      "comment" : "Sources card header; value is the source count\nSources section header, plural",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -394,6 +397,9 @@
           }
         }
       }
+    },
+    "+%lld more lines" : {
+      "comment" : "Transcript excerpt card footer; value is the hidden line count"
     },
     "+%lld more pending" : {
       "localizations" : {
@@ -508,6 +514,9 @@
           }
         }
       }
+    },
+    "1 source" : {
+      "comment" : "Sources card header for a single source"
     },
     "1s" : {
 
@@ -1185,6 +1194,21 @@
         }
       }
     },
+    "Ask" : {
+      "comment" : "Q&A chat title fallback for one podcast"
+    },
+    "Ask about this podcast" : {
+      "comment" : "Q&A empty state title for one podcast\nQ&A input placeholder for one podcast"
+    },
+    "Ask about your podcasts" : {
+      "comment" : "Global chat empty state title\nGlobal chat input placeholder"
+    },
+    "Ask anything about what was said, who said it, or the sources behind it." : {
+      "comment" : "Q&A empty state message for one podcast"
+    },
+    "Ask Your Library" : {
+      "comment" : "Global chat title over all podcasts"
+    },
     "Assistant has a question" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1768,6 +1792,9 @@
         }
       }
     },
+    "Chat" : {
+
+    },
     "Checking Notion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1976,6 +2003,50 @@
     "Choose whether short gaps between subtitles are removed when you save." : {
 
     },
+    "Clear All Messages" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有消息"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有訊息"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有訊息"
+          }
+        }
+      }
+    },
+    "Clear all messages?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有消息？"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有訊息？"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有訊息？"
+          }
+        }
+      }
+    },
     "Clear parent discussion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2178,6 +2249,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法快取已上傳的音訊。"
+          }
+        }
+      }
+    },
+    "Could not clear messages" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法清除消息"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法清除訊息"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法清除訊息"
           }
         }
       }
@@ -2490,6 +2583,9 @@
           }
         }
       }
+    },
+    "Could not send the message" : {
+
     },
     "Could not update the plan" : {
       "localizations" : {
@@ -3538,7 +3634,7 @@
       }
     },
     "Done" : {
-      "comment" : "Dismiss the tool detail sheet",
+      "comment" : "Dismiss the in-podcast search sheet\nDismiss the podcast Q&A chat\nDismiss the tool detail sheet\nDismiss the transcript excerpt sheet",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -3835,6 +3931,9 @@
           }
         }
       }
+    },
+    "Earlier conversation summarized" : {
+      "comment" : "Chip shown where old chat history was compacted into a summary"
     },
     "Edit" : {
       "localizations" : {
@@ -4415,6 +4514,12 @@
         }
       }
     },
+    "Fetching the podcast…" : {
+      "comment" : "Progress while the chat agent loads a podcast card"
+    },
+    "Fetching the transcript…" : {
+      "comment" : "Progress while the chat agent loads a transcript excerpt"
+    },
     "Files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4526,6 +4631,15 @@
           }
         }
       }
+    },
+    "Find moments across your %@." : {
+
+    },
+    "Find moments and source passages by meaning, not just keywords." : {
+      "comment" : "In-podcast search initial state message"
+    },
+    "Finding podcasts…" : {
+      "comment" : "Progress while the chat agent searches podcasts"
     },
     "Finish recording" : {
       "comment" : "Finish button"
@@ -5320,6 +5434,9 @@
         }
       }
     },
+    "Home" : {
+
+    },
     "Hours" : {
       "comment" : "Hours in transcript timestamp wheel",
       "localizations" : {
@@ -5919,6 +6036,9 @@
         }
       }
     },
+    "Looking up sources…" : {
+      "comment" : "Progress while the chat agent fetches sources"
+    },
     "Make it public" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6096,6 +6216,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "毫秒"
+          }
+        }
+      }
+    },
+    "Mindmap" : {
+      "comment" : "Q&A generated mindmap card title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思维导图"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心智圖"
           }
         }
       }
@@ -6533,6 +6676,9 @@
         }
       }
     },
+    "No Matches" : {
+      "comment" : "In-podcast search empty result title"
+    },
     "No models available" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6896,6 +7042,9 @@
           }
         }
       }
+    },
+    "Nothing in this podcast matches your search." : {
+      "comment" : "In-podcast search empty result message"
     },
     "Nothing to add" : {
       "localizations" : {
@@ -8232,6 +8381,29 @@
         }
       }
     },
+    "Preparing highlights…" : {
+      "comment" : "Progress while the chat agent prepares podcast highlights",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备精彩片段…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備精彩片段…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備精彩片段…"
+          }
+        }
+      }
+    },
     "Preparing language…" : {
       "comment" : "Shown while the on-device transcription model loads",
       "localizations" : {
@@ -8300,6 +8472,29 @@
         }
       }
     },
+    "Preparing podcasts…" : {
+      "comment" : "Progress while the chat agent prepares a podcast grid",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备播客…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備播客…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備播客…"
+          }
+        }
+      }
+    },
     "Preparing PPTX…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8344,6 +8539,52 @@
         }
       }
     },
+    "Preparing the mindmap…" : {
+      "comment" : "Progress while the chat agent prepares a mindmap card",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备思维导图…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備心智圖…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備心智圖…"
+          }
+        }
+      }
+    },
+    "Preparing the presentation…" : {
+      "comment" : "Progress while the chat agent prepares a PPT card",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备演示文稿…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備簡報…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備簡報…"
+          }
+        }
+      }
+    },
     "Preparing Transcript" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8368,6 +8609,29 @@
     },
     "Preparing..." : {
       "comment" : "Recorder preparing status"
+    },
+    "Presentation" : {
+      "comment" : "Q&A generated PPT card title",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "演示文稿"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "簡報"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "簡報"
+          }
+        }
+      }
     },
     "Previous Subtitle" : {
       "extractionState" : "stale",
@@ -9536,6 +9800,9 @@
     "Scheduled to begin %@." : {
       "comment" : "Appended to an upcoming maintenance message with no end time; 'start' is a formatted date/time"
     },
+    "Search" : {
+
+    },
     "Search %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9557,6 +9824,15 @@
           }
         }
       }
+    },
+    "Search across every episode's content and sources — try “which episode talked about…”." : {
+      "comment" : "Global chat empty state message"
+    },
+    "Search Episode" : {
+      "comment" : "In-podcast semantic search sheet title"
+    },
+    "Search Failed" : {
+      "comment" : "In-podcast search error state title"
     },
     "Search models" : {
       "localizations" : {
@@ -9645,6 +9921,15 @@
           }
         }
       }
+    },
+    "Search This Episode" : {
+      "comment" : "In-podcast search initial state title"
+    },
+    "Search this podcast" : {
+      "comment" : "In-podcast search field prompt"
+    },
+    "Search Unavailable" : {
+      "comment" : "In-podcast search state when semantic search is unconfigured or still indexing"
     },
     "Search voices" : {
       "localizations" : {
@@ -9757,6 +10042,32 @@
           }
         }
       }
+    },
+    "Searching summaries…" : {
+      "comment" : "Progress while the chat agent searches podcast summaries",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜索摘要…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋摘要…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋摘要…"
+          }
+        }
+      }
+    },
+    "Searching the content…" : {
+      "comment" : "Progress while the chat agent searches podcast content"
     },
     "Searching the web…" : {
       "comment" : "Progress while searching sources",
@@ -10475,6 +10786,7 @@
       }
     },
     "Source" : {
+      "comment" : "Search match anchor label for a source document passage",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -11424,7 +11736,7 @@
       "comment" : "Audio upload failure"
     },
     "Thinking…" : {
-      "comment" : "Default progress text while the planning agent works\nProgress text while the planning agent works",
+      "comment" : "Default progress text while the chat agent works\nDefault progress text while the planning agent works\nProgress text while the planning agent works",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -11543,6 +11855,50 @@
         }
       }
     },
+    "This permanently removes every message from this podcast chat." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这将永久删除此播客聊天中的所有消息。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這會永久刪除此 Podcast 聊天中的所有訊息。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這會永久刪除此 Podcast 聊天中的所有訊息。"
+          }
+        }
+      }
+    },
+    "This permanently removes every message from your library chat." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这将永久删除资料库聊天中的所有消息。"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這會永久刪除資料庫聊天中的所有訊息。"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這會永久刪除資料庫聊天中的所有訊息。"
+          }
+        }
+      }
+    },
     "This plan has no speakers yet." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11609,6 +11965,9 @@
           }
         }
       }
+    },
+    "This podcast's content is still being indexed. Try again in a moment." : {
+      "comment" : "In-podcast search unavailable message"
     },
     "This share link has expired or was revoked." : {
       "comment" : "Shown when opening an expired/revoked share link",
@@ -11917,7 +12276,7 @@
       "comment" : "Progress shown while an uploaded audio file is being transcribed"
     },
     "Transcript" : {
-      "comment" : "Label above the reviewed voice-message transcript",
+      "comment" : "Label above the reviewed voice-message transcript\nSearch match anchor label for a transcript passage\nTranscript excerpt sheet title",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -11935,6 +12294,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文字稿"
+          }
+        }
+      }
+    },
+    "Transcript · %@–%@" : {
+      "comment" : "Transcript excerpt card header; values are start/end timestamps",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcript · %1$@–%2$@"
           }
         }
       }

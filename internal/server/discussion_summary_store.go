@@ -51,6 +51,14 @@ type SummaryDocument struct {
 	GeneratedAt *time.Time    `json:"generated_at,omitempty"`
 }
 
+// SummarySearchResult is an owner-scoped summary body with the podcast
+// identity the Q&A agent needs for library-wide answers.
+type SummarySearchResult struct {
+	DiscussionID string
+	Title        string
+	Markdown     string
+}
+
 // SummaryUsage carries the metered LLM usage of a summary run so it is persisted
 // alongside the document (kept out of client payloads, like other usage figures).
 type SummaryUsage struct {
@@ -157,6 +165,84 @@ func (s *DiscussionStore) SummaryDocumentFor(ctx context.Context, discussionID, 
 		doc.GeneratedAt = &t
 	}
 	return doc, nil
+}
+
+// SearchSummaryDocuments returns ready generated summaries owned by owner.
+// Supplying discussionID reads that podcast's summary directly. Otherwise the
+// query is matched against the podcast title/topic and summary body; a handful
+// of low-signal English question words are discarded so natural questions such
+// as "what did the episode say about AI safety" still find useful summaries.
+func (s *DiscussionStore) SearchSummaryDocuments(ctx context.Context, owner, discussionID, query string, limit int) ([]SummarySearchResult, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 10 {
+		limit = 10
+	}
+	where := `d.owner_user_id = ? AND sm.doc_type = ? AND sm.status = ?`
+	args := []any{owner, SummaryDocTypeSummary, string(SummaryReadyState)}
+	if discussionID = strings.TrimSpace(discussionID); discussionID != "" {
+		where += ` AND d.id = ?`
+		args = append(args, discussionID)
+	} else {
+		terms := summarySearchTerms(query)
+		if len(terms) == 0 {
+			return []SummarySearchResult{}, nil
+		}
+		clauses := make([]string, 0, len(terms))
+		for _, term := range terms {
+			pattern := "%" + escapeLike(strings.ToLower(term)) + "%"
+			clauses = append(clauses, `(LOWER(d.title) LIKE ? ESCAPE '\' OR LOWER(d.topic) LIKE ? ESCAPE '\' OR LOWER(sm.markdown) LIKE ? ESCAPE '\')`)
+			args = append(args, pattern, pattern, pattern)
+		}
+		where += " AND (" + strings.Join(clauses, " OR ") + ")"
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.title, sm.markdown
+		FROM native_discussion_summaries sm
+		JOIN native_discussions d ON d.id = sm.discussion_id
+		WHERE `+where+`
+		ORDER BY sm.generated_at DESC, d.created_at DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SummarySearchResult, 0)
+	for rows.Next() {
+		var result SummarySearchResult
+		if err := rows.Scan(&result.DiscussionID, &result.Title, &result.Markdown); err != nil {
+			return nil, err
+		}
+		out = append(out, result)
+	}
+	return out, rows.Err()
+}
+
+func summarySearchTerms(query string) []string {
+	stop := map[string]bool{
+		"a": true, "about": true, "and": true, "are": true, "did": true,
+		"do": true, "episode": true, "for": true, "from": true, "in": true,
+		"is": true, "it": true, "my": true, "of": true, "on": true,
+		"podcast": true, "say": true, "the": true, "this": true, "to": true,
+		"was": true, "what": true, "which": true, "with": true,
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, 6)
+	for _, raw := range strings.Fields(strings.ToLower(strings.TrimSpace(query))) {
+		term := strings.Trim(raw, ".,!?;:()[]{}\"'")
+		if term == "" || stop[term] || seen[term] {
+			continue
+		}
+		seen[term] = true
+		out = append(out, term)
+		if len(out) == 6 {
+			break
+		}
+	}
+	return out
 }
 
 // SummaryStatusFor returns the current status of a summary document and whether a

@@ -30,6 +30,8 @@ func requireAdmin() func(context.Context, admin.Identity, admin.ActionType) erro
 type appConfigForm struct {
 	DefaultHostModel string `json:"default_host_model" jsonschema:"title=Default generation model"`
 	TranslationModel string `json:"translation_model" jsonschema:"title=Podcast translation model"`
+	QAModel          string `json:"qa_model" jsonschema:"title=Q&A chat model"`
+	EmbeddingModel   string `json:"embedding_model" jsonschema:"title=Embedding model"`
 	STTProvider      string `json:"stt_provider" jsonschema:"title=Speech-to-text provider"`
 	STTGeminiModel   string `json:"stt_gemini_model" jsonschema:"title=Gemini transcription model"`
 }
@@ -52,11 +54,19 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			}
 			if p, ok := fs.Schema.Properties.Get("default_host_model"); ok {
 				p.Description = "The default model used when generating new content. Fetched live from the gateway."
-				p.OneOf = modelOptions(s.modelCatalog(ctx))
+				p.OneOf = modelOptions(s.languageModelCatalog(ctx))
 			}
 			if p, ok := fs.Schema.Properties.Get("translation_model"); ok {
 				p.Description = "Model used for podcast title, plan, transcript, caption, summary, and mindmap translations."
-				p.OneOf = modelOptions(s.modelCatalog(ctx))
+				p.OneOf = modelOptions(s.languageModelCatalog(ctx))
+			}
+			if p, ok := fs.Schema.Properties.Get("qa_model"); ok {
+				p.Description = "Model behind the podcast Q&A and global chat agent. Empty falls back to QA_MODEL / HOST_MODEL."
+				p.OneOf = modelOptions(s.languageModelCatalog(ctx))
+			}
+			if p, ok := fs.Schema.Properties.Get("embedding_model"); ok {
+				p.Description = "Embedding model for podcast content vectorization and semantic search, fetched live from the gateway. Switching triggers a background re-index; the default option falls back to EMBEDDING_MODEL (semantic features are disabled when that is unset too)."
+				p.OneOf = embeddingModelOptions(s.embeddingModelCatalog(ctx), s.resolvedEmbeddingModel(ctx))
 			}
 			if p, ok := fs.Schema.Properties.Get("stt_provider"); ok {
 				p.Description = "Speech-to-text provider used to transcribe uploaded audio with speaker diarization."
@@ -103,7 +113,7 @@ func (s *Server) newAppConfigResource() admin.Resource {
 				}
 				// The wildcard lets RJSF accept the dependency-injected field
 				// without tripping its ui:order completeness check.
-				fs.UISchema["ui:order"] = []any{"default_host_model", "translation_model", "stt_provider", "*"}
+				fs.UISchema["ui:order"] = []any{"default_host_model", "translation_model", "qa_model", "embedding_model", "stt_provider", "*"}
 			}
 			return fs, nil
 		},
@@ -112,6 +122,8 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			return admin.Detail(map[string]any{
 				"default_host_model": d.Host,
 				"translation_model":  s.resolvedTranslationModel(ctx),
+				"qa_model":           s.resolvedQAModel(ctx),
+				"embedding_model":    s.resolvedEmbeddingModel(ctx),
 				"stt_provider":       s.resolvedSTTProvider(ctx),
 				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
 			}), nil
@@ -126,6 +138,22 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			translationModel = strings.TrimSpace(translationModel)
 			if translationModel != "" && !s.modelExists(ctx, translationModel) {
 				return nil, fmt.Errorf("%w: unknown translation model %q", admin.ErrBadInput, translationModel)
+			}
+			qaModel, _ := data["qa_model"].(string)
+			qaModel = strings.TrimSpace(qaModel)
+			if qaModel != "" && !s.modelExists(ctx, qaModel) {
+				return nil, fmt.Errorf("%w: unknown Q&A model %q", admin.ErrBadInput, qaModel)
+			}
+			// The embedding model must be one of the gateway's embedding models.
+			// Fail open (accept the id) when the catalog can't be fetched so a
+			// gateway outage never locks the form; the currently stored value is
+			// always accepted since the dropdown offers it as a branch.
+			embeddingModel, _ := data["embedding_model"].(string)
+			embeddingModel = strings.TrimSpace(embeddingModel)
+			if embeddingModel != "" && embeddingModel != s.resolvedEmbeddingModel(ctx) {
+				if catalog := s.embeddingModelCatalog(ctx); len(catalog) > 0 && !modelInList(catalog, embeddingModel) {
+					return nil, fmt.Errorf("%w: unknown embedding model %q", admin.ErrBadInput, embeddingModel)
+				}
 			}
 			provider, _ := data["stt_provider"].(string)
 			provider = strings.ToLower(strings.TrimSpace(provider))
@@ -157,6 +185,12 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			if err := s.d.AppConfig.Set(ctx, appConfigKeyTranslationModel, translationModel); err != nil {
 				return nil, err
 			}
+			if err := s.d.AppConfig.Set(ctx, appConfigKeyQAModel, qaModel); err != nil {
+				return nil, err
+			}
+			if err := s.d.AppConfig.Set(ctx, appConfigKeyEmbeddingModel, embeddingModel); err != nil {
+				return nil, err
+			}
 			if provider != "" {
 				if err := s.d.AppConfig.Set(ctx, appConfigKeySTTProvider, provider); err != nil {
 					return nil, err
@@ -170,6 +204,8 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			return admin.Detail(map[string]any{
 				"default_host_model": model,
 				"translation_model":  s.resolvedTranslationModel(ctx),
+				"qa_model":           s.resolvedQAModel(ctx),
+				"embedding_model":    s.resolvedEmbeddingModel(ctx),
 				"stt_provider":       s.resolvedSTTProvider(ctx),
 				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
 			}), nil
@@ -215,9 +251,43 @@ func modelOptions(models []config.ModelInfo) []*jsonschema.Schema {
 	return opts
 }
 
-// modelExists reports whether id is in the live catalog.
+// embeddingModelOptions builds the embedding-model dropdown: an explicit
+// empty branch first (the field is optional and prefilled values must match a
+// oneOf branch — see the users-resource topup dropdown for the same pattern),
+// then the gateway's embedding models. When the stored value isn't in the
+// catalog (configured against a different gateway, or the catalog is
+// unreachable) it is appended as its own branch so the prefill still renders
+// and re-saving doesn't error.
+func embeddingModelOptions(models []config.ModelInfo, current string) []*jsonschema.Schema {
+	opts := []*jsonschema.Schema{{Const: "", Title: "— Default (EMBEDDING_MODEL env, or disabled) —"}}
+	current = strings.TrimSpace(current)
+	found := current == ""
+	for _, m := range models {
+		if m.ID == current {
+			found = true
+		}
+		label := m.ID
+		if m.Provider != "" {
+			label = fmt.Sprintf("%s (%s)", m.ID, m.Provider)
+		}
+		opts = append(opts, &jsonschema.Schema{Const: m.ID, Title: label})
+	}
+	if !found {
+		opts = append(opts, &jsonschema.Schema{Const: current, Title: current + " (current)"})
+	}
+	return opts
+}
+
+// modelExists reports whether id is a chat-capable model in the live catalog.
+// Used to validate the generation/translation/Q&A model overrides, so
+// embedding/image/video ids are rejected.
 func (s *Server) modelExists(ctx context.Context, id string) bool {
-	for _, m := range s.modelCatalog(ctx) {
+	return modelInList(s.languageModelCatalog(ctx), id)
+}
+
+// modelInList reports whether id is one of the given models.
+func modelInList(models []config.ModelInfo, id string) bool {
+	for _, m := range models {
 		if m.ID == id {
 			return true
 		}

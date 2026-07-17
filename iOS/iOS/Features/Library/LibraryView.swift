@@ -21,7 +21,12 @@ struct LibraryView: View {
     @State var showingSettings = false
     @State var showingWhatsNew = false
     @State var showingMarketplace = false
+    @State var selectedTab: HomeTab = .home
+    @State var showingGlobalChat = false
     @State var path: [LibraryDestination] = []
+    /// Navigation stack for the search tab; independent of the library
+    /// tab's `path`/`selection` on both size classes.
+    @State var searchPath: [LibraryDestination] = []
     /// Detail selection for the iPad split-view layout.
     @State var selection: LibraryDestination?
     @State var isLoading = false
@@ -32,6 +37,9 @@ struct LibraryView: View {
     @State var loadErrorMessage: String?
     @State var searchText = ""
     @State var loadedSearchQuery = ""
+    /// Grouped semantic content matches for the active search; nil while no
+    /// semantic search has completed (title-substring fallback / no query).
+    @State var semanticGroups: [SemanticSearchGroup]?
     @State var visibilityFilter: LibraryVisibilityFilter = .all
     @State var loadedVisibilityFilter: LibraryVisibilityFilter = .all
     @State var typeFilter: LibraryTypeFilter = .all
@@ -49,8 +57,25 @@ struct LibraryView: View {
 
     var body: some View {
         withLifecycle(withPresentations(
-            Group {
-                if isRegular { splitView } else { stackView }
+            TabView(selection: $selectedTab) {
+                Tab("Home", systemImage: "waveform.circle.fill", value: HomeTab.home) {
+                    Group {
+                        if isRegular { splitView } else { stackView }
+                    }
+                }
+
+                Tab("Chat", systemImage: "bubble.left.and.text.bubble.right", value: HomeTab.chat) {
+                    chatTab
+                }
+
+                Tab(value: HomeTab.search, role: .search) {
+                    searchTab
+                }
+            }
+            .onChange(of: selectedTab) { _, newValue in
+                if newValue == .chat {
+                    showingGlobalChat = true
+                }
             }
         ))
     }
@@ -135,6 +160,76 @@ struct LibraryView: View {
             }
     }
 
+    /// Global chat over every podcast in the library. Selecting Chat pushes the
+    /// conversation in this tab's navigation stack; the pushed view hides the
+    /// tab bar, so popping it restores the bar with the navigation animation.
+    var chatTab: some View {
+        NavigationStack {
+            Color.clear
+                .navigationTitle("Home")
+                .navigationDestination(isPresented: $showingGlobalChat) {
+                    QAConversationView(scope: .global, allowsClearingMessages: true) { discussionID in
+                        showingGlobalChat = false
+                        Task {
+                            if let discussion = try? await APIClient(tokens: auth).discussion(id: discussionID) {
+                                upsert(discussion)
+                                navigate(to: discussion)
+                            }
+                        }
+                    }
+                    .toolbar(.hidden, for: .tabBar)
+                }
+                .onChange(of: showingGlobalChat) { _, isPresented in
+                    if !isPresented, selectedTab == .chat {
+                        selectedTab = .home
+                    }
+                }
+        }
+    }
+
+    /// Semantic content search over the whole library, living behind the tab
+    /// bar's search button. Results push onto the tab's own stack so they
+    /// open in place on both iPhone and iPad.
+    var searchTab: some View {
+        NavigationStack(path: $searchPath) {
+            searchTabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.background.ignoresSafeArea())
+                .overlay(alignment: .center) {
+                    if isSearchLoading {
+                        searchLoadingOverlay
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.18), value: isSearchLoading)
+                .navigationTitle("Search")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(for: LibraryDestination.self) { destination in
+                    searchDestinationView(destination)
+                }
+        }
+        .searchable(text: $searchText,
+                    prompt: "Search \(AppStringLiteral.stationsNameRaw)")
+    }
+
+    @ViewBuilder
+    var searchTabContent: some View {
+        if normalizedSearchQuery(searchText).isEmpty {
+            searchPromptState
+        } else if let groups = semanticGroups, !loadedSearchQuery.isEmpty {
+            if groups.isEmpty {
+                searchEmptyState
+            } else {
+                SemanticSearchResultsView(groups: groups) { discussion in
+                    searchPath.append(.discussion(discussion))
+                }
+            }
+        } else {
+            // Query typed, debounce/fetch in flight — the overlay spinner covers this.
+            searchPromptState
+        }
+    }
+
     /// Load tasks and change observers hung off the root view.
     func withLifecycle(_ content: some View) -> some View {
         content
@@ -176,9 +271,6 @@ struct LibraryView: View {
             libraryContainer
                 .navigationTitle(AppStringLiteral.stationTitle)
                 .toolbar { libraryToolbar }
-                .searchable(text: $searchText,
-                            placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search \(AppStringLiteral.stationsNameRaw)")
                 .navigationDestination(for: LibraryDestination.self) { destination in
                     destinationView(destination)
                 }
@@ -191,9 +283,6 @@ struct LibraryView: View {
             libraryContainer
                 .navigationTitle(AppStringLiteral.stationTitle)
                 .toolbar { libraryToolbar }
-                .searchable(text: $searchText,
-                            placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search \(AppStringLiteral.stationsNameRaw)")
         } detail: {
             NavigationStack {
                 if let selection {
@@ -229,8 +318,6 @@ struct LibraryView: View {
             initialLibraryLoadingView
         } else if shouldShowLoadError {
             loadErrorState
-        } else if discussions.isEmpty && !loadedSearchQuery.isEmpty {
-            searchEmptyState
         } else if discussions.isEmpty && (loadedVisibilityFilter != .all || loadedTypeFilter != .all) {
             filterEmptyState
         } else if discussions.isEmpty {
@@ -242,7 +329,6 @@ struct LibraryView: View {
 
     @ToolbarContentBuilder
     var libraryToolbar: some ToolbarContent {
-        DefaultToolbarItem(kind: .search, placement: .bottomBar)
         ToolbarItemGroup(placement: .topBarLeading) {
             ForEach(leadingToolbarItems) { item in
                 homeToolbarItem(item)
@@ -407,7 +493,7 @@ struct LibraryView: View {
             typeFilter = .audioBook
         case ["action", "refresh"]:
             Task {
-                await load(searchQuery: searchText, visibility: visibilityFilter, type: typeFilter)
+                await load(visibility: visibilityFilter, type: typeFilter)
                 await purchases.refreshBalance()
                 await loadHomeToolbar()
             }

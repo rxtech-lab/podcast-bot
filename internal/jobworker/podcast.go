@@ -3,10 +3,12 @@ package jobworker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/mq"
+	"github.com/sirily11/debate-bot/internal/server"
 	"github.com/sirily11/debate-bot/internal/videojob"
 )
 
@@ -57,7 +59,19 @@ func (w *Worker) podcastRunner() runner {
 					"job", p.JobID, "attempt", t.Attempt)
 				return nil
 			}
-			return videojob.RunFromTask(ctx, w.videojobDeps(p.DiscussionID), p)
+			if err := videojob.RunFromTask(ctx, w.videojobDeps(p.DiscussionID), p); err != nil {
+				return err
+			}
+			// The podcast just became ready: vectorize its transcript + sources
+			// for semantic search / Q&A. Fire-and-forget — StartDiscussionIndexing
+			// skips unless content actually changed, and the precheck backfill
+			// catches anything missed here.
+			if w.d.Srv != nil && p.DiscussionID != "" {
+				if err := w.d.Srv.StartDiscussionIndexing(ctx, p.DiscussionID); err != nil && !errors.Is(err, server.ErrIndexingNotConfigured) {
+					w.d.Log.Warn("post-generation index enqueue failed", "discussion_id", p.DiscussionID, "err", err)
+				}
+			}
+			return nil
 		},
 		retrying: func(ctx context.Context, t mq.Task, err error, delay time.Duration) {
 			p, derr := decode(t)

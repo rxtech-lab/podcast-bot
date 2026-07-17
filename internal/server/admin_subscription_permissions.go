@@ -182,7 +182,7 @@ func (r *subscriptionPermissionsResource) applySchema(ctx context.Context, fs *a
 		// tolerates it. An enum compiles to one membership check. Labels are lost,
 		// but the id already carries the provider (e.g. "openai/gpt-4o"), so the
 		// bare value is self-descriptive.
-		p.Items.Enum = modelIDEnum(r.s.modelCatalog(ctx))
+		p.Items.Enum = modelIDEnum(r.s.languageModelCatalog(ctx))
 		// Leave UniqueItems unset: with it, RJSF treats an enum-item array as a
 		// multi-select checkbox list. We want the standard array widget (an
 		// "Add" button plus one dropdown per row), so keep it a plain array.

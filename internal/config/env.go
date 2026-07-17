@@ -43,6 +43,18 @@ type Env struct {
 	// PODCAST_SUMMARY_PPT_MODEL.
 	PodcastSummaryPPTModel string
 
+	// QAModel is the LLM used by the podcast Q&A / global chat agent. Falls back
+	// to HostModel when unset. Set via QA_MODEL; admin App Config can override.
+	QAModel string
+	// EmbeddingModel is the OpenAI-compatible embedding model used to vectorize
+	// podcast transcripts, sources, and search queries. Set via EMBEDDING_MODEL;
+	// admin App Config can override. Semantic features are disabled when empty.
+	EmbeddingModel string
+	// EmbeddingDimensions is the fixed dimension of stored embedding vectors
+	// (and the pgvector column). Changing it invalidates all stored chunks and
+	// requires a full re-index. Default 1536; set via EMBEDDING_DIMENSIONS.
+	EmbeddingDimensions int
+
 	// PPTXRendererScript points at the Node/pptxgenjs renderer used to turn a
 	// generated deck JSON spec into a .pptx file. Empty uses the built-in
 	// tools/ppt-renderer/render.mjs path.
@@ -362,6 +374,9 @@ func LoadEnv() (*Env, error) {
 		PodcastTranslationModel: strings.TrimSpace(os.Getenv("PODCAST_TRANSLATION_MODEL")),
 		JudgementModel:          strings.TrimSpace(os.Getenv("JUDGEMENT_MODEL_NAME")),
 		PodcastSummaryPPTModel:  strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
+		QAModel:                 strings.TrimSpace(os.Getenv("QA_MODEL")),
+		EmbeddingModel:          strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
+		EmbeddingDimensions:     int(parseIntEnvDefault("EMBEDDING_DIMENSIONS", 1536)),
 		PPTXRendererScript:      strings.TrimSpace(os.Getenv("PPTX_RENDERER_SCRIPT")),
 		LibreOfficePath:         strings.TrimSpace(os.Getenv("LIBREOFFICE_PATH")),
 		CompressionBaseURL:      strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
@@ -472,6 +487,12 @@ func LoadEnv() (*Env, error) {
 	if e.PodcastSummaryPPTModel == "" {
 		e.PodcastSummaryPPTModel = e.PodcastSummaryModel
 	}
+	if e.QAModel == "" {
+		e.QAModel = e.HostModel
+	}
+	if e.EmbeddingDimensions <= 0 {
+		e.EmbeddingDimensions = 1536
+	}
 	if e.TranscribeModel == "" {
 		e.TranscribeModel = "gemini-2.5-flash"
 	}
@@ -542,10 +563,13 @@ func LoadEnv() (*Env, error) {
 		if e.OpenAIKey == "" {
 			e.OpenAIKey = "e2e"
 		}
-		for _, m := range []*string{&e.HostModel, &e.CompressionModel, &e.ScenePlannerModel, &e.PodcastSummaryModel, &e.PodcastTranslationModel, &e.JudgementModel, &e.PodcastSummaryPPTModel} {
+		for _, m := range []*string{&e.HostModel, &e.CompressionModel, &e.ScenePlannerModel, &e.PodcastSummaryModel, &e.PodcastTranslationModel, &e.JudgementModel, &e.PodcastSummaryPPTModel, &e.QAModel} {
 			if *m == "" {
 				*m = "e2e-fake-model"
 			}
+		}
+		if e.EmbeddingModel == "" {
+			e.EmbeddingModel = "e2e-fake-embedding"
 		}
 		if e.CompressionBaseURL == "" {
 			e.CompressionBaseURL = e.OpenAIBaseURL

@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"regexp"
@@ -41,6 +42,7 @@ func StartFakeLLM() (baseURL string, stop func(), err error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", f.handleChat)
 	mux.HandleFunc("/v1/models", f.handleModels)
+	mux.HandleFunc("/v1/embeddings", f.handleEmbeddings)
 	f.srv = &http.Server{Handler: mux}
 	go func() { _ = f.srv.Serve(ln) }()
 
@@ -64,6 +66,88 @@ func (f *FakeLLM) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleEmbeddings serves a deterministic OpenAI-compatible embeddings
+// endpoint. Each input is embedded by hashing its lowercased tokens into a
+// fixed number of vector positions and L2-normalizing, so cosine similarity
+// between two texts tracks their token overlap — E2E semantic-search
+// assertions can rely on a query matching the seeded transcript text ranking
+// first, not just on non-empty results.
+func (f *FakeLLM) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Input      json.RawMessage `json:"input"`
+		Model      string          `json:"model"`
+		Dimensions int             `json:"dimensions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var inputs []string
+	var single string
+	if json.Unmarshal(req.Input, &inputs) != nil && json.Unmarshal(req.Input, &single) == nil {
+		inputs = []string{single}
+	}
+	dim := req.Dimensions
+	if dim <= 0 {
+		dim = 1536
+	}
+	type embedding struct {
+		Object    string    `json:"object"`
+		Index     int       `json:"index"`
+		Embedding []float32 `json:"embedding"`
+	}
+	out := struct {
+		Object string           `json:"object"`
+		Data   []embedding      `json:"data"`
+		Model  string           `json:"model"`
+		Usage  map[string]int64 `json:"usage"`
+	}{Object: "list", Model: req.Model, Usage: map[string]int64{"prompt_tokens": 8, "total_tokens": 8}}
+	for i, text := range inputs {
+		out.Data = append(out.Data, embedding{Object: "embedding", Index: i, Embedding: fakeEmbedding(text, dim)})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// fakeEmbedding spreads each token over a handful of hashed positions and
+// normalizes, giving overlapping texts overlapping support in the vector.
+func fakeEmbedding(text string, dim int) []float32 {
+	vec := make([]float32, dim)
+	for _, token := range strings.Fields(strings.ToLower(text)) {
+		token = strings.Trim(token, ".,!?;:\"'()[]{}")
+		if token == "" {
+			continue
+		}
+		h := fnv64(token)
+		for k := 0; k < 4; k++ {
+			h = h*1099511628211 + 14695981039346656037
+			vec[h%uint64(dim)] += 1
+		}
+	}
+	var norm float64
+	for _, v := range vec {
+		norm += float64(v) * float64(v)
+	}
+	if norm == 0 {
+		vec[0] = 1
+		return vec
+	}
+	scale := float32(1 / math.Sqrt(norm))
+	for i := range vec {
+		vec[i] *= scale
+	}
+	return vec
+}
+
+func fnv64(s string) uint64 {
+	h := uint64(14695981039346656037)
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211
+	}
+	return h
 }
 
 // --- request parsing ---
@@ -185,6 +269,20 @@ func (r fakeChatReq) allText() string {
 	return b.String()
 }
 
+// latestUserText returns the prompt that started the current agent turn. QA
+// intent must be derived from this message rather than allText: the global QA
+// system prompt itself describes highlights, quotes, and podcast display tools,
+// so scanning the whole request makes every list request look like a highlight
+// request.
+func (r fakeChatReq) latestUserText() string {
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		if r.Messages[i].Role == "user" {
+			return r.Messages[i].text()
+		}
+	}
+	return ""
+}
+
 func (r fakeChatReq) wantsJSONObject() bool {
 	return len(r.ResponseFormat) > 0 && strings.Contains(string(r.ResponseFormat), "json")
 }
@@ -230,6 +328,8 @@ func (f *FakeLLM) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer sw.done()
 
 	switch {
+	case tools["search_content"]:
+		f.streamQAChat(sw, req)
 	case tools["write_plan"]:
 		f.streamConversationalPlanner(sw, req)
 	case tools["create_plan"]:
@@ -284,6 +384,56 @@ func (f *FakeLLM) streamConversationalPlanner(sw *sseWriter, req fakeChatReq) {
 		sw.toolCall(0, "call_write", "write_plan", makeDraftJSON(req.discussantCount()))
 		sw.finish("tool_calls")
 	}
+}
+
+// QAAnswerText is the deterministic Q&A chat reply; UI tests assert on it.
+const QAAnswerText = "E2E: Based on the podcast content, this is a synthetic grounded answer."
+
+// streamQAChat drives the Q&A / global-chat agent loop deterministically. List
+// requests search podcast metadata then render one batch grid; highlight/quote
+// requests search content then render one batch highlight card. Other prompts
+// end with the stable grounded answer used by persistence coverage.
+func (f *FakeLLM) streamQAChat(sw *sseWriter, req fakeChatReq) {
+	tools := req.toolNames()
+	lower := strings.ToLower(req.latestUserText())
+	wantsHighlights := tools["show_highlight_lines"] &&
+		(strings.Contains(lower, "highlight") || strings.Contains(lower, "quote"))
+	wantsPodcastGrid := tools["display_podcasts"] && strings.Contains(lower, "show") &&
+		strings.Contains(lower, "podcast") && !wantsHighlights
+	if wantsPodcastGrid && !req.toolMsgsContain("[podcasts]") {
+		args, _ := json.Marshal(map[string]any{"query": "E2E"})
+		sw.toolCall(0, "call_qa_search_podcasts", "search_podcasts", string(args))
+		sw.finish("tool_calls")
+		return
+	}
+	if wantsPodcastGrid && !req.toolMsgsContain("Podcast grid shown") {
+		args, _ := json.Marshal(map[string]any{
+			"discussion_ids": []string{"test-ready", "test-ready-summary"},
+		})
+		sw.toolCall(0, "call_qa_display", "display_podcasts", string(args))
+		sw.finish("tool_calls")
+		return
+	}
+	searched := req.toolMsgsContain("[search results]") || req.toolMsgsContain("No matching content")
+	if !searched {
+		args, _ := json.Marshal(map[string]any{"query": "e2e test content"})
+		sw.toolCall(0, "call_qa_search", "search_content", string(args))
+		sw.finish("tool_calls")
+		return
+	}
+	if wantsHighlights && !req.toolMsgsContain("Highlight lines shown") {
+		args, _ := json.Marshal(map[string]any{
+			"highlights": []map[string]any{
+				{"discussion_id": "test-ready", "start_ms": 0, "end_ms": 5_000, "quote": "Welcome to this synthetic end-to-end test discussion."},
+				{"discussion_id": "test-ready-summary", "start_ms": 5_000, "end_ms": 10_000, "quote": "From a technical angle, the system works as designed."},
+			},
+		})
+		sw.toolCall(0, "call_qa_highlights", "show_highlight_lines", string(args))
+		sw.finish("tool_calls")
+		return
+	}
+	sw.text(QAAnswerText)
+	sw.finish("stop")
 }
 
 // streamCreatePlan satisfies the non-conversational agent loop (Generate/Improve)
