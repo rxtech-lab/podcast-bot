@@ -31,6 +31,7 @@ func (j *Judgement) Analyze(ctx context.Context, topic string, line TranscriptLi
 Your job is to check the latest speaker's factual claims. Use web/search tools when a claim is concrete, current, numerical, legal, medical, financial, or otherwise easy to verify. Do not comment on opinions, framing, or harmless uncertainty.
 Be selective: most turns should return should_comment=false. Return should_comment=true only when the latest turn appears unsupported, materially wrong, or lacks evidence for an important factual claim.
 Reply only as strict JSON: {"should_comment": bool, "comment": "<short natural host-facing note>", "sources": [{"title":"...", "url":"...", "snippet":"..."}]}.
+ALWAYS fill "sources" with the references you actually consulted during verification (max 5) — including when should_comment=false, e.g. sources that CONFIRM the speaker's claim. Leave "sources" empty only when you used no research tools at all.
 When should_comment=true, write comment as one short sentence a host could naturally insert, e.g. "That point needs stronger evidence before we lean on it."`
 
 	user := strings.Join([]string{

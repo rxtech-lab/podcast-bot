@@ -38,6 +38,19 @@ type DiscussionPlanner struct {
 	// pendingAnswerAgent is the discussant named in the host's most recent
 	// address-user handoff; the following answer-user turn is routed to it.
 	pendingAnswerAgent agent.Agent
+
+	// judgeNotes holds fact-check notes queued by the pipeline (producer
+	// goroutine) for the host to relay on-air; Next runs on the planner
+	// goroutine, hence the mutex. Capped and latest-wins per speaker so a
+	// live show never stockpiles stale fact-checks.
+	noteMu     sync.Mutex
+	judgeNotes []judgementNote
+}
+
+// judgementNote is one queued fact-check the host should relay on-air.
+type judgementNote struct {
+	speaker string
+	comment string
 }
 
 type discussionState struct {
@@ -64,6 +77,50 @@ func NewDiscussionPlanner(topic *config.DebateTopic, tracker *Tracker, reg *agen
 		transcript: tr,
 		state:      discussionState{phase: agent.PhaseOpening},
 	}
+}
+
+// EnqueueJudgementNote queues a fact-check note for the host to relay on-air.
+// Called from the pipeline once the judgement flags a discussant turn. Empty
+// speaker/comment are dropped; a note for a speaker already queued is replaced
+// (latest wins) and the queue is capped at 2 so stale corrections never pile up.
+func (p *DiscussionPlanner) EnqueueJudgementNote(speaker, comment string) {
+	speaker = strings.TrimSpace(speaker)
+	comment = strings.Join(strings.Fields(comment), " ")
+	if speaker == "" || comment == "" {
+		return
+	}
+	p.noteMu.Lock()
+	defer p.noteMu.Unlock()
+	for i := range p.judgeNotes {
+		if p.judgeNotes[i].speaker == speaker {
+			p.judgeNotes[i].comment = comment
+			return
+		}
+	}
+	if len(p.judgeNotes) >= 2 {
+		p.judgeNotes = p.judgeNotes[1:]
+	}
+	p.judgeNotes = append(p.judgeNotes, judgementNote{speaker: speaker, comment: comment})
+}
+
+func (p *DiscussionPlanner) dequeueJudgementNote() (judgementNote, bool) {
+	p.noteMu.Lock()
+	defer p.noteMu.Unlock()
+	if len(p.judgeNotes) == 0 {
+		return judgementNote{}, false
+	}
+	n := p.judgeNotes[0]
+	p.judgeNotes = p.judgeNotes[1:]
+	return n, true
+}
+
+func (p *DiscussionPlanner) discussantByName(name string) agent.Agent {
+	for _, d := range p.registry.Discussants {
+		if d.Name() == name {
+			return d
+		}
+	}
+	return nil
 }
 
 // Next produces the next Turn or returns false to end the discussion.
@@ -152,6 +209,25 @@ func (p *DiscussionPlanner) Next(ctx context.Context) (*Turn, bool) {
 				directive += ";first=" + p.registry.Discussants[0].Name()
 			}
 			return p.makeTurn(p.registry.Host, directive, p.budgetSeconds(15)), true
+		}
+		// Judgement relay: the host reads the fact-check note on-air and hands
+		// the floor back to the flagged discussant to respond. Deliberately
+		// below the closing check (a note queued as closing starts is stale
+		// and silently dropped) and below the audience-question path above.
+		if n, ok := p.dequeueJudgementNote(); ok {
+			directive := "judgement-note:" + n.speaker + "|" + n.comment
+			// An on-air promise from a prior handoff wins over the flagged
+			// speaker — the host already named that person to the audience.
+			ans := p.pendingNext
+			p.pendingNext = nil
+			if ans == nil {
+				ans = p.discussantByName(n.speaker)
+			}
+			if ans != nil {
+				p.pendingNext = ans
+				directive += "\n[hand off to: " + ans.Name() + "]"
+			}
+			return p.makeTurn(p.registry.Host, directive, p.budgetSeconds(20)), true
 		}
 		return p.planFree(ctx)
 	case agent.PhaseClosing:

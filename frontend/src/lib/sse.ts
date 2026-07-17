@@ -150,6 +150,8 @@ export function useDebateEvents() {
             role: l.role,
             side: l.side,
             text: l.text,
+            sources: l.sources,
+            judgementComment: l.judgement_comment,
           })),
         }),
       )
@@ -216,6 +218,9 @@ export function useDebateEvents() {
               role: inFlight.role,
               side: inFlight.side,
               text,
+              // Turn-level metadata rides only on the final done event.
+              sources: m.sources,
+              judgementComment: m.judgement_comment,
             },
           })
         }
@@ -286,6 +291,8 @@ export function useDebateEvents() {
               role: l.role,
               side: l.side,
               text: l.text,
+              sources: l.sources,
+              judgementComment: l.judgement_comment,
             })),
           }),
         )

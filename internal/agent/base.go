@@ -190,6 +190,12 @@ func (b *Base) recordLine(line TranscriptLine) error {
 		line.At.Format("15:04:05"), tag, oneLine(line.Text))); err != nil {
 		return err
 	}
+	if jc := strings.TrimSpace(line.JudgementComment); jc != "" {
+		if err := b.mem.Append(fmt.Sprintf("[%s] JUDGEMENT on %s: %s",
+			line.At.Format("15:04:05"), line.Speaker, oneLine(jc))); err != nil {
+			return err
+		}
+	}
 	if b.comp != nil {
 		go func() {
 			_ = b.comp.MaybeCompress(context.Background(), b.mem)
@@ -325,6 +331,9 @@ func formatRecent(lines []TranscriptLine) string {
 			tag = l.Side + " - " + l.Speaker
 		}
 		fmt.Fprintf(&b, "%s: %s\n", tag, oneLine(l.Text))
+		if jc := strings.TrimSpace(l.JudgementComment); jc != "" {
+			fmt.Fprintf(&b, "[Judgement fact-check on the line above]: %s\n", oneLine(jc))
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -5,9 +5,19 @@ import {
   User,
   ThumbsUp,
   ThumbsDown,
+  LinkSimple,
   type Icon,
 } from '@phosphor-icons/react'
-import type { ChatLine } from '@/lib/types'
+import type { ChatLine, SourceRef } from '@/lib/types'
+
+function sourceLabel(s: SourceRef): string {
+  if (s.title) return s.title
+  try {
+    return new URL(s.url).host
+  } catch {
+    return s.url
+  }
+}
 
 function speakerName({ speaker, role }: ChatLine, localUsername?: string): string {
   switch (role) {
@@ -127,6 +137,32 @@ export function ChatMessage({
         >
           {line.text}
         </div>
+        {line.judgementComment && (
+          <div className="flex items-start gap-1.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-xs leading-snug text-amber-300">
+            <Gavel weight="bold" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>
+              <span className="font-semibold">judgement</span> ·{' '}
+              {line.judgementComment}
+            </span>
+          </div>
+        )}
+        {line.sources && line.sources.length > 0 && (
+          <div className="flex flex-wrap gap-1 px-1">
+            {line.sources.map((s) => (
+              <a
+                key={s.url}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.snippet || s.url}
+                className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] leading-tight text-muted-foreground hover:text-foreground hover:border-white/25"
+              >
+                <LinkSimple weight="bold" className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{sourceLabel(s)}</span>
+              </a>
+            ))}
+          </div>
+        )}
       </div>
     </li>
   )

@@ -455,6 +455,15 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 			p.reviewAudioBookLoop(produceCtx, t)
 			p.d.Tracker.AddSpeaking(t.Speaker.Name(), time.Since(start))
 			p.validateAudioBookCompletionRequest(t)
+			// Judge + close the turn HERE, before the next produce() starts:
+			// the transcript line is guaranteed still open (the next turn
+			// hasn't streamed its first segment yet) so sources / judgement
+			// reliably land on the persisted line, and the next turn's
+			// prompt window already contains this turn's fact-check.
+			if t.Err() == nil {
+				p.maybeJudgeTurn(produceCtx, t)
+			}
+			p.d.Transcript.CloseTurn(t.ID, t.Sources(), t.JudgementComment())
 			t.MarkPlayed()
 			if t.AudioPath != "" {
 				filesMu.Lock()
@@ -1476,12 +1485,9 @@ func (p *Pipeline) phaseFrameCount(t *Turn) int {
 // phrasing. Other agents keep the original behaviour (their own past turns
 // only show up via the recent-transcript window in the prompt body).
 func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
-	p.maybeJudgeTurn(ctx, t)
-	// The turn's spoken text was already persisted per-speaker as it streamed
-	// (AppendAgentSegment). Close the open line and stamp the now-final
-	// turn-level sources / judgement onto it — no consolidated line is appended
-	// here, which would double the transcript.
-	p.d.Transcript.CloseTurn(t.ID, t.Sources(), t.JudgementComment())
+	// Judgement + CloseTurn already ran in the producer goroutine right after
+	// this turn was produced (see the producer loop), so the turn's sources /
+	// judgement are final by the time it arrives here via producedCh.
 	// Agent memory still sees one consolidated entry per turn (markers stripped),
 	// built from the accumulated full text rather than a persisted line.
 	full := agent.TranscriptLine{
@@ -1538,7 +1544,10 @@ func (p *Pipeline) maybeJudgeTurn(ctx context.Context, t *Turn) {
 		Sources: t.Sources(),
 	}
 	j.EmitActivity(string(ActivitySearching), "judgement")
-	judgeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// 12s, not longer: this now runs inline in the producer goroutine and
+	// serializes the next turn's production. The realtime-paced LiveStream
+	// buffer plus the session music bed absorb a stall of this size.
+	judgeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	res, err := j.Analyze(judgeCtx, p.d.Topic, line, p.d.Transcript.RecentN(40))
 	j.EmitActivity(string(ActivityIdle), "")
@@ -1555,6 +1564,14 @@ func (p *Pipeline) maybeJudgeTurn(ctx context.Context, t *Turn) {
 	line.Sources = t.Sources()
 	if res.ShouldComment {
 		t.SetJudgementComment(res.Comment)
+		// Queue the note so the host relays it on-air. Only genuine judge
+		// comments are relayed — the heuristic fallback below is generic
+		// boilerplate and would make the host nag constantly.
+		if relay, ok := p.d.Planner.(interface {
+			EnqueueJudgementNote(speaker, comment string)
+		}); ok {
+			relay.EnqueueJudgementNote(t.Speaker.Name(), res.Comment)
+		}
 	} else if comment := fallbackJudgementComment(line); comment != "" {
 		t.SetJudgementComment(comment)
 	}

@@ -395,24 +395,25 @@ struct FullScreenPlayerView: View {
     private var centeredCoverArt: some View {
         GeometryReader { geo in
             let side = max(0, min(min(geo.size.width - 40, geo.size.height - 32), 520))
-            ZStack(alignment: .bottom) {
-                baseCoverImage
-                    .matchedGeometryEffect(id: coverID, in: coverNamespace)
-                    .frame(width: side, height: side)
-                    .clipShape(.rect(cornerRadius: 20))
-                    .shadow(color: .black.opacity(0.35), radius: 24, y: 14)
-
-                if !artworkCaption.isEmpty {
-                    heroCaption
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 16)
+            baseCoverImage
+                .matchedGeometryEffect(id: coverID, in: coverNamespace)
+                .frame(width: side, height: side)
+                .clipShape(.rect(cornerRadius: 20))
+                .shadow(color: .black.opacity(0.35), radius: 24, y: 14)
+                .scaleEffect(model.isPlaying ? 1.0 : 0.86)
+                .animation(.spring(duration: 0.5), value: model.isPlaying)
+                .overlay(alignment: .bottom) {
+                    if !artworkCaption.isEmpty {
+                        heroCaption
+                            .frame(maxWidth: side)
+                            // Hang the caption below the artwork so it never
+                            // covers the cover; the cover itself stays centered
+                            // whether or not a caption is showing.
+                            .alignmentGuide(.bottom) { $0[.top] - 16 }
+                    }
                 }
-            }
-            .frame(width: side, height: side)
-            .scaleEffect(model.isPlaying ? 1.0 : 0.86)
-            .animation(.spring(duration: 0.5), value: model.isPlaying)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.2), value: artworkCaption)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: artworkCaption)
         }
     }
 
