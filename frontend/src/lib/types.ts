@@ -6,20 +6,40 @@ export type Role =
   | 'viewer'
   | 'user'
 
+export interface SourceRef {
+  title: string
+  url: string
+  snippet?: string
+}
+
 export interface ChatLine {
   speaker: string
   role: Role | string
   side: string
   text: string
+  sources?: SourceRef[]
+  judgementComment?: string
 }
 
-export interface TranscriptDTO extends ChatLine {
+export interface TranscriptDTO {
+  speaker: string
+  role: Role | string
+  side: string
+  text: string
   at: string
+  sources?: SourceRef[]
+  judgement_comment?: string
 }
 
-export interface TranscriptEvent extends ChatLine {
+export interface TranscriptEvent {
+  speaker: string
+  role: Role | string
+  side: string
+  text: string
   channel_id?: string
   done: boolean
+  sources?: SourceRef[]
+  judgement_comment?: string
 }
 
 export interface TickEvent {

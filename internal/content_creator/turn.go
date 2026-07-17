@@ -181,9 +181,11 @@ func (t *Turn) addSource(src agent.TranscriptSource) {
 			return
 		}
 	}
+	// 8, not 5: the judgement's verification sources arrive after the
+	// speaker's own research captures and must not be squeezed out.
 	t.sources = append(t.sources, src)
-	if len(t.sources) > 5 {
-		t.sources = t.sources[:5]
+	if len(t.sources) > 8 {
+		t.sources = t.sources[:8]
 	}
 }
 
