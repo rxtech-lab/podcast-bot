@@ -181,6 +181,8 @@ func (w *Worker) registerRunners() {
 	w.runners[mq.QueueDocs][mq.TaskTranslation] = w.translationRunner()
 	w.runners[mq.QueueDocs][mq.TaskPPTExport] = w.summaryExportRunner()
 	w.runners[mq.QueueDocs][mq.TaskPDFExport] = w.summaryExportRunner()
+	w.runners[mq.QueueDocs][mq.TaskDiscussionIndex] = w.discussionIndexRunner()
 	w.runners[mq.QueuePlanning][mq.TaskPlanningTurn] = w.planningRunner()
 	w.runners[mq.QueuePlanning][mq.TaskAudioTranscribe] = w.transcribeRunner()
+	w.runners[mq.QueuePlanning][mq.TaskQATurn] = w.qaRunner()
 }

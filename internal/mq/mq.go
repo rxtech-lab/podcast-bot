@@ -35,6 +35,8 @@ const (
 	TaskTranslation     TaskType = "translation"
 	TaskPPTExport       TaskType = "ppt-export"
 	TaskPDFExport       TaskType = "pdf-export"
+	TaskDiscussionIndex TaskType = "discussion-index" // chunk + embed podcast content
+	TaskQATurn          TaskType = "qa-turn"          // Q&A / global chat agent turn
 )
 
 // Work queues, grouped by weight. Prefetch is the per-pod concurrency knob,

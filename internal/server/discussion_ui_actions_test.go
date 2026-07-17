@@ -50,6 +50,60 @@ func TestDiscussionUIActionsDocumentsUseConcreteID(t *testing.T) {
 	}
 }
 
+func TestDiscussionUIActionsGroupDocumentsBeforeSearchAndAsk(t *testing.T) {
+	srv, store := newUIActionsTestServer(t)
+	ctx := context.Background()
+	d, err := store.Create(ctx, "anonymous", "Grouped document menu", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Grouped document menu",
+			Type:     config.ContentTypeDiscussion,
+			Language: "en-US",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SetJobResult(ctx, d.ID, DiscussionReady, "https://audio.example/ready.mp3"); err != nil {
+		t.Fatalf("SetJobResult: %v", err)
+	}
+	if err := store.SaveSummary(ctx, d.ID, SummaryDocTypeSummary, "summary", "model", SummaryUsage{}); err != nil {
+		t.Fatalf("SaveSummary: %v", err)
+	}
+	if err := store.SaveSummary(ctx, d.ID, SummaryDocTypeMindmap, `{"version":1,"root":{"id":"root","title":"Menu"}}`, "model", SummaryUsage{}); err != nil {
+		t.Fatalf("Save mindmap: %v", err)
+	}
+	embeddings, err := NewEmbeddingStore(store, 3)
+	if err != nil {
+		t.Fatalf("NewEmbeddingStore: %v", err)
+	}
+	qa, err := NewQAStore(store)
+	if err != nil {
+		t.Fatalf("NewQAStore: %v", err)
+	}
+	srv.d.Embeddings = embeddings
+	srv.d.QA = qa
+	srv.d.Env = &config.Env{
+		OpenAIBaseURL:  "https://api.example.test/v1",
+		EmbeddingModel: "test-embedding",
+	}
+	if err := embeddings.MarkReady(ctx, d.ID, "test-embedding", "content-hash"); err != nil {
+		t.Fatalf("MarkReady: %v", err)
+	}
+
+	resp := getUIActions(t, srv, d.ID, "podcast-documents")
+	assertActionOrder(t, resp.Items,
+		"open-plan",
+		"open-summary",
+		"open-mindmap",
+		"podcast-qa-divider",
+		"open-search",
+		"open-qa",
+	)
+	if divider := findAction(t, resp.Items, "podcast-qa-divider"); divider.Action.Type != "divider" {
+		t.Fatalf("podcast-qa-divider action type = %q, want divider", divider.Action.Type)
+	}
+}
+
 func TestDiscussionUIActionsPodcastActionsReflectOwnerState(t *testing.T) {
 	srv, store := newUIActionsTestServer(t)
 	ctx := context.Background()

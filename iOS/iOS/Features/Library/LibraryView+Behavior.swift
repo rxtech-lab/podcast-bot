@@ -5,11 +5,9 @@ import TipKit
 import UIKit
 
 extension LibraryView {
-    func load(searchQuery: String? = nil,
-                      visibility: LibraryVisibilityFilter? = nil,
+    func load(visibility: LibraryVisibilityFilter? = nil,
                       type: LibraryTypeFilter? = nil,
                       showsSearchOverlay: Bool = false) async {
-        let query = normalizedSearchQuery(searchQuery ?? searchText)
         let filter = visibility ?? visibilityFilter
         let podcastType = type ?? typeFilter
         if showsSearchOverlay {
@@ -18,7 +16,7 @@ extension LibraryView {
         isLoading = true
         defer {
             isLoading = false
-            if showsSearchOverlay && normalizedSearchQuery(searchText) == query && visibilityFilter == filter && typeFilter == podcastType {
+            if showsSearchOverlay && visibilityFilter == filter && typeFilter == podcastType {
                 isSearchLoading = false
             }
             hasLoadedInitialPage = true
@@ -27,15 +25,13 @@ extension LibraryView {
             let items = try await APIClient(tokens: auth).discussions(
                 limit: pageSize,
                 offset: 0,
-                query: query,
+                query: "",
                 visibility: filter.apiVisibility,
                 type: podcastType.apiType
             )
-            guard normalizedSearchQuery(searchText) == query,
-                  visibilityFilter == filter,
+            guard visibilityFilter == filter,
                   typeFilter == podcastType else { return }
             let selectedID = selectedDiscussionID
-            loadedSearchQuery = query
             loadedVisibilityFilter = filter
             loadedTypeFilter = podcastType
             discussions = items
@@ -61,7 +57,6 @@ extension LibraryView {
 
     func loadMore() async {
         guard canLoadMore, !isLoadingMore, !isLoading else { return }
-        let query = loadedSearchQuery
         let filter = loadedVisibilityFilter
         let podcastType = loadedTypeFilter
         let offset = discussions.count
@@ -71,13 +66,11 @@ extension LibraryView {
             let items = try await APIClient(tokens: auth).discussions(
                 limit: pageSize,
                 offset: offset,
-                query: query,
+                query: "",
                 visibility: filter.apiVisibility,
                 type: podcastType.apiType
             )
-            guard normalizedSearchQuery(searchText) == query,
-                  loadedSearchQuery == query,
-                  visibilityFilter == filter,
+            guard visibilityFilter == filter,
                   loadedVisibilityFilter == filter,
                   typeFilter == podcastType,
                   loadedTypeFilter == podcastType else { return }
@@ -98,7 +91,7 @@ extension LibraryView {
                 try await APIClient(tokens: auth).deleteDiscussion(id: target.id)
             } catch {
                 reportLoadError(error, inlineWhenEmpty: false)
-                await load(searchQuery: loadedSearchQuery, visibility: loadedVisibilityFilter, type: loadedTypeFilter)
+                await load(visibility: loadedVisibilityFilter, type: loadedTypeFilter)
             }
         }
     }
@@ -209,10 +202,8 @@ extension LibraryView {
         searchTask?.cancel()
         guard !query.isEmpty else {
             isSearchLoading = false
-            guard !loadedSearchQuery.isEmpty else { return }
-            searchTask = Task {
-                await load(searchQuery: "", visibility: visibilityFilter, type: typeFilter)
-            }
+            semanticGroups = nil
+            loadedSearchQuery = ""
             return
         }
         guard query != loadedSearchQuery else {
@@ -223,7 +214,46 @@ extension LibraryView {
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            await load(searchQuery: text, visibility: visibilityFilter, type: typeFilter, showsSearchOverlay: true)
+            await searchSemantic(query: query)
+        }
+    }
+
+    /// Global semantic search over indexed podcast content, grouped by
+    /// podcast. Falls back to the title-substring search when embeddings are
+    /// not configured on the server, so search never goes dark.
+    func searchSemantic(query: String) async {
+        isSearchLoading = true
+        defer {
+            if normalizedSearchQuery(searchText) == query {
+                isSearchLoading = false
+            }
+        }
+        do {
+            let response = try await APIClient(tokens: auth).semanticSearch(query: query)
+            guard normalizedSearchQuery(searchText) == query else { return }
+            guard response.enabled else {
+                // Embeddings are off on the server: fall back to a title
+                // substring search, rendered through the same grouped UI (a
+                // group with no matches is just the podcast header row).
+                let items = try await APIClient(tokens: auth).discussions(
+                    limit: pageSize,
+                    offset: 0,
+                    query: query,
+                    visibility: visibilityFilter.apiVisibility,
+                    type: typeFilter.apiType
+                )
+                guard normalizedSearchQuery(searchText) == query else { return }
+                loadedSearchQuery = query
+                semanticGroups = items.map { SemanticSearchGroup(discussion: $0, matches: []) }
+                loadErrorMessage = nil
+                return
+            }
+            loadedSearchQuery = query
+            semanticGroups = response.results
+            loadErrorMessage = nil
+        } catch {
+            guard normalizedSearchQuery(searchText) == query else { return }
+            reportLoadError(error, inlineWhenEmpty: false)
         }
     }
 
@@ -268,7 +298,7 @@ extension LibraryView {
             Button {
                 loadErrorMessage = nil
                 Task {
-                    await load(searchQuery: searchText, visibility: visibilityFilter, type: typeFilter)
+                    await load(visibility: visibilityFilter, type: typeFilter)
                     await loadHomeToolbar()
                 }
             } label: {
@@ -288,6 +318,14 @@ extension LibraryView {
             "No Results",
             systemImage: "magnifyingglass",
             description: Text("No \(AppStringLiteral.stationsNameRaw) match your search.")
+        )
+    }
+
+    var searchPromptState: some View {
+        ContentUnavailableView(
+            "Search \(AppStringLiteral.stationsNameRaw)",
+            systemImage: "magnifyingglass",
+            description: Text("Find moments across your \(AppStringLiteral.stationsNameRaw).")
         )
     }
 
@@ -380,10 +418,42 @@ extension LibraryView {
                 replaceCurrent(with: generated)
             }
         case .generating, .ready:
-            PodcastPlayerView(discussion: discussion, onCreatedFollowUp: { created in
-                upsert(created)
-                navigate(to: created)
-            })
+            PodcastPlayerView(discussion: discussion,
+                              onCreatedFollowUp: { created in
+                                  upsert(created)
+                                  navigate(to: created)
+                              },
+                              hidesTabBar: true)
+        }
+    }
+
+    /// Destination views pushed within the search tab's own stack. Mirrors
+    /// `destinationView` but drives `searchPath`, so results open in place on
+    /// both size classes instead of targeting the Home tab's navigation.
+    @ViewBuilder
+    func searchDestinationView(_ destination: LibraryDestination) -> some View {
+        switch destination {
+        case .discussion(let discussion):
+            switch discussion.status {
+            case .planning, .failed:
+                PlanConversationView(discussion: discussion) { generated in
+                    upsert(generated)
+                    if let index = searchPath.lastIndex(where: { destinationDiscussionID($0) == generated.id }) {
+                        searchPath[index] = .discussion(generated)
+                    } else {
+                        searchPath.append(.discussion(generated))
+                    }
+                }
+            case .generating, .ready:
+                PodcastPlayerView(discussion: discussion,
+                                  onCreatedFollowUp: { created in
+                                      upsert(created)
+                                      searchPath.append(.discussion(created))
+                                  },
+                                  hidesTabBar: true)
+            }
+        case .album(let id):
+            AlbumView(albumID: id)
         }
     }
 }

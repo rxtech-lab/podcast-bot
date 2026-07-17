@@ -28,7 +28,7 @@ struct SummaryView: View {
     let api: APIClient
 
     @Environment(\.dismiss) private var dismiss
-    @State private var docType = "summary"
+    @State private var docType: String
     @State private var document: SummaryDocument?
     @State private var isLoading = true
     @State private var loadError: String?
@@ -44,6 +44,20 @@ struct SummaryView: View {
     @State private var showingNotionExport = false
     @State private var showingMindmap = false
     @State private var actionItems: [DiscussionUIActionItem] = []
+
+    init(discussionID: String,
+         title: String = "Summary",
+         mindmapEditable: Bool = false,
+         language: String? = nil,
+         initialDocType: String = "summary",
+         api: APIClient) {
+        self.discussionID = discussionID
+        self.title = title
+        self.mindmapEditable = mindmapEditable
+        self.language = language
+        self.api = api
+        _docType = State(initialValue: initialDocType == "ppt" ? "ppt" : "summary")
+    }
 
     private var isSummaryDocumentSelected: Bool { docType == "summary" }
     private var isPPTDocumentSelected: Bool { docType == "ppt" }

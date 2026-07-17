@@ -4,10 +4,11 @@ import TipKit
 import UIKit
 
 /// Full-screen "now playing" experience presented over `PodcastPlayerView`.
-/// The cover art (or timed illustration) bleeds edge-to-edge from the top of
-/// the screen with the synced caption overlaid on it, and a button flips it to
-/// an Apple-Music-style synced caption list (or the single live caption while
-/// streaming). Bottom: scrubber + skip ±15s + play/pause.
+/// Timed audiobook illustrations bleed edge-to-edge with the synced caption
+/// overlaid on them, while ordinary cover art stays centered like a system Now
+/// Playing screen. A button flips either presentation to an Apple-Music-style
+/// synced caption list (or the single live caption while streaming). Bottom:
+/// scrubber + skip ±15s + play/pause.
 struct FullScreenPlayerView: View {
     @Bindable var model: PlayerModel
     @Environment(\.dismiss) private var dismiss
@@ -160,7 +161,11 @@ struct FullScreenPlayerView: View {
             // bottom edge always lands just above the seek bar.
             ZStack(alignment: .top) {
                 if showsCenterCover {
-                    coverHero
+                    if currentIllustrationURL != nil {
+                        illustrationHero
+                    } else {
+                        centeredCoverArt
+                    }
                 }
                 VStack(spacing: 0) {
                     header
@@ -228,12 +233,24 @@ struct FullScreenPlayerView: View {
 
     private var landscapeArtwork: some View {
         GeometryReader { geo in
-            FullScreenMovingArtwork(isPlaying: model.isPlaying) {
-                coverImage
+            if currentIllustrationURL != nil {
+                FullScreenMovingArtwork(isPlaying: model.isPlaying) {
+                    artworkImage
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+                .opacity(transcriptVisible ? 0.2 : 1)
+            } else {
+                let side = min(min(geo.size.width * 0.46, geo.size.height * 0.68), 440)
+                baseCoverImage
+                    .frame(width: side, height: side)
+                    .clipShape(.rect(cornerRadius: 20))
+                    .shadow(color: .black.opacity(0.35), radius: 24, y: 14)
+                    .scaleEffect(model.isPlaying ? 1.0 : 0.9)
+                    .animation(.spring(duration: 0.5), value: model.isPlaying)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .opacity(transcriptVisible ? 0.2 : 1)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipped()
-            .opacity(transcriptVisible ? 0.2 : 1)
         }
         .ignoresSafeArea()
     }
@@ -285,7 +302,7 @@ struct FullScreenPlayerView: View {
     /// light; the sampled palette only applies in transcript mode where the
     /// tinted gradient background shows through.
     private var landscapePalette: FullScreenForegroundPalette {
-        transcriptVisible ? foregroundPalette : .overArtwork
+        transcriptVisible || currentIllustrationURL == nil ? foregroundPalette : .overArtwork
     }
 
     // MARK: - Auto-hide
@@ -319,16 +336,14 @@ struct FullScreenPlayerView: View {
         }
     }
 
-    /// Full-bleed hero artwork running from the very top of the screen (under
-    /// the status bar, behind the header) down to just above the seek bar. The
-    /// bottom progressively blurs and melts into the tinted background, and the
-    /// synced VTT caption rides on top of the blurred band. The
-    /// matched-geometry id lets it "magic move" to the header thumbnail when
-    /// the listener flips to the transcript.
-    private var coverHero: some View {
+    /// Full-bleed audiobook illustration running from the very top of the
+    /// screen (under the status bar, behind the header) down to just above the
+    /// seek bar. The bottom progressively blurs into the tinted background and
+    /// the synced VTT caption rides on top of the blurred band.
+    private var illustrationHero: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                coverImage
+                artworkImage
                     .matchedGeometryEffect(id: coverID, in: coverNamespace)
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
@@ -374,6 +389,33 @@ struct FullScreenPlayerView: View {
         .ignoresSafeArea(edges: [.top, .horizontal])
     }
 
+    /// Large, bounded cover in the middle of the player. Timed audiobook
+    /// illustrations deliberately do not use this view: they retain the
+    /// existing full-bleed presentation above.
+    private var centeredCoverArt: some View {
+        GeometryReader { geo in
+            let side = max(0, min(min(geo.size.width - 40, geo.size.height - 32), 520))
+            ZStack(alignment: .bottom) {
+                baseCoverImage
+                    .matchedGeometryEffect(id: coverID, in: coverNamespace)
+                    .frame(width: side, height: side)
+                    .clipShape(.rect(cornerRadius: 20))
+                    .shadow(color: .black.opacity(0.35), radius: 24, y: 14)
+
+                if !artworkCaption.isEmpty {
+                    heroCaption
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                }
+            }
+            .frame(width: side, height: side)
+            .scaleEffect(model.isPlaying ? 1.0 : 0.86)
+            .animation(.spring(duration: 0.5), value: model.isPlaying)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: artworkCaption)
+        }
+    }
+
     /// Subtitle-style caption bubble: white text on a translucent dark backing,
     /// so it stays legible no matter what the artwork behind it looks like.
     private var heroCaption: some View {
@@ -393,7 +435,7 @@ struct FullScreenPlayerView: View {
     /// Small header artwork shown in transcription mode; shares the cover's
     /// matched-geometry id so it grows from / shrinks to the large artwork.
     private var coverThumbnail: some View {
-        coverImage
+        artworkImage
             .matchedGeometryEffect(id: coverID, in: coverNamespace)
             .frame(width: 48, height: 48)
             .clipShape(.rect(cornerRadius: 10))
@@ -401,7 +443,7 @@ struct FullScreenPlayerView: View {
     }
 
     @ViewBuilder
-    private var coverImage: some View {
+    private var artworkImage: some View {
         if let illustration = currentIllustrationURL {
             // Timed audiobook illustration: hard cut, no animation. The base
             // cover keeps showing until the first illustration has loaded.

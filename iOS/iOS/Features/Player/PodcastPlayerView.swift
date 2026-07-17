@@ -37,6 +37,8 @@ struct PodcastPlayerView: View {
     @State var showingSummary = false
     @State var showingText = false
     @State var showingMindmap = false
+    @State var showingQA = false
+    @State var showingPodcastSearch = false
     @State var audioBookVideoURL: IdentifiableURL?
     @State var showingImporter = false
     @State var showingPhotos = false
@@ -111,6 +113,24 @@ struct PodcastPlayerView: View {
         .modifier(VideoGenerateErrorAlert(error: $videoGenerateError))
         .sheet(isPresented: $showingPlan) {
             PlanSheetView(discussion: currentDiscussion, language: model?.presentationLanguage)
+        }
+        .sheet(isPresented: $showingQA) {
+            NavigationStack {
+                QAConversationView(scope: .podcast(currentDiscussion),
+                                   language: model?.presentationLanguage,
+                                   allowsClearingMessages: true)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button(String(localized: "Done", comment: "Dismiss the podcast Q&A chat")) {
+                                showingQA = false
+                            }
+                        }
+                    }
+            }
+            .interactiveDismissDisabled()
+        }
+        .sheet(isPresented: $showingPodcastSearch) {
+            PodcastSearchSheet(discussion: currentDiscussion)
         }
         .sheet(isPresented: $showingSummary) {
             summarySheet
@@ -443,6 +463,10 @@ struct PodcastPlayerView: View {
         switch path {
         case ["sheet", "plan"]:
             showingPlan = true
+        case ["sheet", "qa"]:
+            showingQA = true
+        case ["sheet", "search"]:
+            showingPodcastSearch = true
         case ["sheet", "summary"]:
             showingSummary = true
         case ["sheet", "text"]:
@@ -714,84 +738,6 @@ struct PodcastPlayerView: View {
 
     func fileShareSheet(_ file: DownloadedPodcastFile) -> some View {
         FileShareSheet(url: file.url)
-    }
-
-    var currentPodcastReference: PodcastReference {
-        PodcastReference(id: currentDiscussion.id,
-                         title: currentDiscussion.displayTitle,
-                         topic: currentDiscussion.topic)
-    }
-
-    var showsActionsMenu: Bool {
-        purchases.isConfigured
-            || model?.showsPodcastActions == true
-            || !podcastActionItems.isEmpty
-            || onCreatedFromPlan != nil
-            || onCreatedFollowUp != nil
-            || onSignOut != nil
-    }
-
-    var createFollowUpAction: (() -> Void)? {
-        guard onCreatedFollowUp != nil else { return nil }
-        return { showingFollowUpForm = true }
-    }
-
-    var createFromPlanAction: (() -> Void)? {
-        guard onCreatedFromPlan != nil else { return nil }
-        return { createFromPlan() }
-    }
-
-    var createFromPlanErrorBinding: Binding<Bool> {
-        Binding(
-            get: { createFromPlanError != nil },
-            set: { if !$0 { createFromPlanError = nil } }
-        )
-    }
-
-    var summaryGenerateErrorBinding: Binding<Bool> {
-        Binding(
-            get: { summaryGenerateError != nil },
-            set: { if !$0 { summaryGenerateError = nil } }
-        )
-    }
-
-    func loadPlayerIfNeeded() async {
-        let session = playerSessions.acquire(
-            discussion: discussion,
-            api: APIClient(tokens: auth),
-            username: auth.currentUser?.name ?? "You",
-            userID: auth.currentUser?.id ?? "",
-            shareToken: shareToken
-        )
-        if let playerSession, playerSession !== session {
-            playerSessions.release(playerSession)
-        }
-        playerSession = session
-        await purchases.refreshBalance()
-    }
-
-    func stopPlayerIfNeeded() {
-        guard let playerSession else { return }
-        playerSessions.release(playerSession)
-    }
-
-    func handleScenePhaseChange(_ phase: ScenePhase) {
-        // Returning to the foreground while the job is live: the socket may have
-        // been torn down while suspended, so reconcile immediately.
-        guard phase == .active else { return }
-        model?.foregroundRefresh()
-    }
-
-    /// Balance label for the podcast options menu, matching the discussion page.
-    var pointsMenuLabel: String {
-        guard let balance = purchases.pointsBalance else {
-            return String(localized: "Points", comment: "Podcast menu label when the points balance is unknown")
-        }
-        let pointLabel = balance == 1
-            ? String(localized: "Point", comment: "Singular unit for a points balance")
-            : String(localized: "Points", comment: "Plural unit for a points balance")
-        return String(localized: "Points (Balance \(UsageSummary.formatInt(balance)) \(pointLabel))",
-                      comment: "Podcast menu points label; first value is the formatted balance, second is the localized unit")
     }
 
 }

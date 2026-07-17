@@ -48,6 +48,20 @@ class E2ETestCase: XCTestCase {
         app.buttons["player.more"].waitForExistence(timeout: timeout)
     }
 
+    /// Taps a home tab bar button by its label ("Home", "Chat", "Search").
+    /// Falls back to a plain button query because the iOS 26 floating tab bar
+    /// may not expose an XCUIElement.Type.tabBar container.
+    func openHomeTab(_ app: XCUIApplication, _ label: String, timeout: TimeInterval = 10) {
+        let tab = app.tabBars.buttons[label].firstMatch
+        if tab.waitForExistence(timeout: timeout) {
+            tab.tap()
+            return
+        }
+        let fallback = app.buttons[label].firstMatch
+        XCTAssertTrue(fallback.waitForExistence(timeout: 5), "\(label) tab never appeared")
+        fallback.tap()
+    }
+
     /// Dismisses an open SwiftUI menu by tapping a safe point near the bottom edge.
     func dismissMenu(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()

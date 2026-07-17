@@ -975,6 +975,48 @@ func (s *DiscussionStore) ListParentPodcasts(ctx context.Context, owner, query s
 	return out, rows.Err()
 }
 
+// ListByIDs returns the owner's discussions matching ids as list rows (same
+// column set as List). Order follows ids; unknown/unowned ids are skipped.
+// Used by semantic search to hydrate the podcasts behind grouped chunk hits.
+func (s *DiscussionStore) ListByIDs(ctx context.Context, owner string, ids []string) ([]Discussion, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := []any{owner}
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
+			, `+discussionSummaryListSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+`
+			WHERE d.owner_user_id = ? AND d.id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := make(map[string]Discussion, len(ids))
+	for rows.Next() {
+		d, err := scanDiscussionWithSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, owner)
+		byID[d.ID] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]Discussion, 0, len(byID))
+	for _, id := range ids {
+		if d, ok := byID[id]; ok {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 func (s *DiscussionStore) search(ctx context.Context, owner, query string, visibility DiscussionVisibility, contentType string, limit, offset int) ([]Discussion, error) {
 	if limit <= 0 {
 		limit = defaultDiscussionPageSize

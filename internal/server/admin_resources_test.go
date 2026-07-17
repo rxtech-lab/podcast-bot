@@ -131,6 +131,117 @@ func TestAppConfigResource(t *testing.T) {
 	}
 }
 
+// fakeTypedGateway serves an OpenAI-compatible /models roster where each
+// entry carries the Vercel AI Gateway `type` field, so the type-filtered
+// catalogs can be exercised end to end.
+func fakeTypedGateway(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/models") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[
+			{"id":"openai/gpt-4o","object":"model","type":"language"},
+			{"id":"openai/text-embedding-3-small","object":"model","type":"embedding"},
+			{"id":"google/gemini-embedding-001","object":"model","type":"embedding"},
+			{"id":"openai/dall-e-3","object":"model","type":"image"}
+		]}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestAppConfigEmbeddingModelSelection pins the embedding-model field as a
+// dropdown: options come from the gateway's embedding-typed models (plus the
+// empty default branch), chat dropdowns exclude non-language models, and the
+// save handler rejects ids that aren't embedding models.
+func TestAppConfigEmbeddingModelSelection(t *testing.T) {
+	gw := fakeTypedGateway(t)
+	ac, _ := newTestAppConfigStore(t)
+	env := &config.Env{HostModel: "openai/gpt-4o", OpenAIBaseURL: gw.URL, OpenAIKey: "test"}
+	s := &Server{d: Deps{Env: env, AppConfig: ac}}
+	res := s.newAppConfigResource()
+	ctx := context.Background()
+	req := adminReq("")
+
+	raw, err := res.Schema(ctx, req, admin.ActionView)
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	fs := raw.(*admin.FormSchema)
+
+	embedding, ok := fs.Schema.Properties.Get("embedding_model")
+	if !ok {
+		t.Fatal("form missing embedding_model property")
+	}
+	if len(embedding.OneOf) != 3 {
+		t.Fatalf("embedding options = %d, want empty branch + 2 embedding models: %+v", len(embedding.OneOf), embedding.OneOf)
+	}
+	if embedding.OneOf[0].Const != "" {
+		t.Fatalf("first embedding option = %#v, want the empty default branch", embedding.OneOf[0])
+	}
+	ids := []any{embedding.OneOf[1].Const, embedding.OneOf[2].Const}
+	for _, want := range []any{"openai/text-embedding-3-small", "google/gemini-embedding-001"} {
+		if ids[0] != want && ids[1] != want {
+			t.Fatalf("embedding options missing %v: %v", want, ids)
+		}
+	}
+
+	// Chat dropdowns list only language models — no embedding/image entries.
+	host, _ := fs.Schema.Properties.Get("default_host_model")
+	if len(host.OneOf) != 1 || host.OneOf[0].Const != "openai/gpt-4o" {
+		t.Fatalf("host options = %+v, want only the language model", host.OneOf)
+	}
+
+	// A chat model is not a valid embedding model.
+	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"embedding_model": "openai/gpt-4o"}); err == nil {
+		t.Error("expected chat-model-as-embedding rejection")
+	}
+	// An embedding model is not a valid host model.
+	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"default_host_model": "openai/text-embedding-3-small"}); err == nil {
+		t.Error("expected embedding-model-as-host rejection")
+	}
+	// A catalog embedding model saves.
+	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"embedding_model": "google/gemini-embedding-001"}); err != nil {
+		t.Fatalf("Act embedding save: %v", err)
+	}
+	if got := s.resolvedEmbeddingModel(ctx); got != "google/gemini-embedding-001" {
+		t.Fatalf("stored embedding model = %q", got)
+	}
+	// The stored value is re-offered and re-savable, and clearing works.
+	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"embedding_model": ""}); err != nil {
+		t.Fatalf("Act embedding clear: %v", err)
+	}
+}
+
+// TestAppConfigEmbeddingModelFailsOpenWithoutCatalog pins the outage behavior:
+// with no reachable gateway the embedding field accepts any value (matching
+// the Gemini STT model's fail-open) and the current value is offered as its
+// own dropdown branch so the prefill validates.
+func TestAppConfigEmbeddingModelFailsOpenWithoutCatalog(t *testing.T) {
+	ac, _ := newTestAppConfigStore(t)
+	env := &config.Env{EmbeddingModel: "text-embedding-3-small"}
+	s := &Server{d: Deps{Env: env, AppConfig: ac}}
+	res := s.newAppConfigResource()
+	ctx := context.Background()
+
+	raw, err := res.Schema(ctx, adminReq(""), admin.ActionView)
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	fs := raw.(*admin.FormSchema)
+	embedding, _ := fs.Schema.Properties.Get("embedding_model")
+	if len(embedding.OneOf) != 2 || embedding.OneOf[1].Const != "text-embedding-3-small" {
+		t.Fatalf("offline embedding options = %+v, want empty branch + current value", embedding.OneOf)
+	}
+
+	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, map[string]any{"embedding_model": "anything/goes"}); err != nil {
+		t.Fatalf("Act should fail open without a catalog: %v", err)
+	}
+}
+
 func TestUsersResourceTopup(t *testing.T) {
 	ps, _ := newTestPointsStore(t)
 	iaps := newTestIAPProductStore(t)

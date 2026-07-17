@@ -96,7 +96,7 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 		case textMeta != nil && textMeta.Pending:
 			items = append(items, actionItem("text-pending", phrase(lang, "Generating text", "正在生成文字版", "正在產生文字版"), "", "hourglass", "", false, "none", discussionActionLink(d.ID, "text", "pending")))
 		}
-		return items
+		return appendActionGroup(items, "podcast-qa-divider", s.podcastQAActions(r, d, lang))
 	}
 	if d.Summary != nil && d.Summary.Available {
 		items = append(items, actionItem("open-summary", phrase(lang, "Summary", "总结", "摘要"), "", "doc.richtext", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "summary")))
@@ -120,7 +120,34 @@ func (s *Server) podcastDocumentActions(r *http.Request, d *Discussion, lang con
 			items = append(items, actionItem("generate-mindmap", phrase(lang, "Generate mindmap", "生成思维导图", "產生心智圖"), phrase(lang, "Generating mindmap", "正在生成思维导图", "正在產生心智圖"), "sparkles", "", true, "request", discussionActionLink(d.ID, "action", "mindmap-generate")))
 		}
 	}
-	return items
+	return appendActionGroup(items, "podcast-qa-divider", s.podcastQAActions(r, d, lang))
+}
+
+// podcastQAActions surfaces the Q&A chat and in-podcast semantic search on a
+// finished, owned podcast. Both are disabled with an "Indexing…" title while
+// the content index is still being built (the precheck backfill / completion
+// hook drives it), and absent entirely when semantic search is unconfigured.
+func (s *Server) podcastQAActions(r *http.Request, d *Discussion, lang contentcreator.Lang) []discussionUIActionItem {
+	if !d.IsOwner || d.Status != DiscussionReady || s.d.QA == nil || !s.SemanticSearchEnabled(r.Context()) {
+		return nil
+	}
+	indexed := false
+	if st, err := s.d.Embeddings.IndexStatus(r.Context(), d.ID); err == nil && st != nil && st.Status == DiscussionIndexReady {
+		indexed = true
+	}
+	askTitle := phrase(lang, "Ask", "问答", "問答")
+	searchTitle := phrase(lang, "Search", "搜索", "搜尋")
+	if !indexed {
+		indexingTitle := phrase(lang, "Indexing…", "正在索引…", "正在索引…")
+		return []discussionUIActionItem{
+			actionItem("search-indexing", searchTitle+" · "+indexingTitle, "", "magnifyingglass", "", false, "none", discussionActionLink(d.ID, "search", "indexing")),
+			actionItem("qa-indexing", askTitle+" · "+indexingTitle, "", "bubble.left.and.text.bubble.right", "", false, "none", discussionActionLink(d.ID, "qa", "indexing")),
+		}
+	}
+	return []discussionUIActionItem{
+		actionItem("open-search", searchTitle, "", "magnifyingglass", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "search")),
+		actionItem("open-qa", askTitle, "", "bubble.left.and.text.bubble.right", "", true, "open-sheet", discussionActionLink(d.ID, "sheet", "qa")),
+	}
 }
 
 func (s *Server) audioBookVideoAction(r *http.Request, d *Discussion, lang contentcreator.Lang) (discussionUIActionItem, bool) {

@@ -113,6 +113,16 @@ type Deps struct {
 	// PlanningStreams stores active planning stream IDs and replayable SSE
 	// frames in Redis so clients can resume after disconnecting.
 	PlanningStreams *PlanningStreamStore
+	// Embeddings backs vectorized podcast content (chunked transcript + source
+	// embeddings) powering semantic search and the Q&A chat retrieval tools.
+	// nil disables those routes entirely. Wired from the same database as
+	// Discussions.
+	Embeddings *EmbeddingStore
+	// QA backs the per-podcast Q&A and global chat conversations (rolling
+	// context window, per-turn billing). nil disables the /api/discussions/
+	// {id}/qa* and /api/chat* routes. Wired from the same database as
+	// Discussions.
+	QA *QAStore
 	// ModelCatalog caches the gateway's advertised model roster (GET /api/models)
 	// in Redis for 24h. nil disables caching — the handler fetches live each time.
 	ModelCatalog *ModelCatalogStore
@@ -223,8 +233,17 @@ type Server struct {
 	planningRunMu sync.Mutex
 	planningRuns  map[string]bool
 
+	// qaRunMu/qaRuns are the Q&A chat equivalent of planningRunMu/planningRuns.
+	qaRunMu sync.Mutex
+	qaRuns  map[string]bool
+
 	pushMu           sync.Mutex
 	podcastStartSent map[string]bool
+
+	// indexBackfillMu/indexBackfillLast rate-limit the per-user stale-index
+	// backfill sweep the precheck endpoint kicks off (at most once per TTL).
+	indexBackfillMu   sync.Mutex
+	indexBackfillLast map[string]time.Time
 }
 
 type discussionPlanRun struct {
@@ -413,9 +432,21 @@ func New(d Deps) *Server {
 			s.mux.HandleFunc("POST /api/discussions/{id}/planning/stream", s.handlePlanningStream)
 			s.mux.HandleFunc("POST /api/discussions/{id}/planning/answer", s.handlePlanningAnswer)
 		}
+		if d.QA != nil {
+			s.mux.HandleFunc("GET /api/discussions/{id}/qa", s.handleQAConversationGet)
+			s.mux.HandleFunc("DELETE /api/discussions/{id}/qa", s.handleQAConversationClear)
+			s.mux.HandleFunc("GET /api/discussions/{id}/qa/stream", s.handleQAStreamResume)
+			s.mux.HandleFunc("POST /api/discussions/{id}/qa/stream", s.handleQAStream)
+			s.mux.HandleFunc("GET /api/chat", s.handleQAConversationGet)
+			s.mux.HandleFunc("DELETE /api/chat", s.handleQAConversationClear)
+			s.mux.HandleFunc("GET /api/chat/stream", s.handleQAStreamResume)
+			s.mux.HandleFunc("POST /api/chat/stream", s.handleQAStream)
+		}
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources", s.handleDiscussionAddSources)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/stream", s.handleDiscussionAddSourcesStream)
 		s.mux.HandleFunc("POST /api/discussions/{id}/sources/search", s.handleDiscussionSearchSources)
+		s.mux.HandleFunc("POST /api/search/semantic", s.handleSemanticSearch)
+		s.mux.HandleFunc("POST /api/discussions/{id}/search", s.handleDiscussionSemanticSearch)
 		s.mux.HandleFunc("POST /api/discussions/{id}/generate", s.handleDiscussionGenerate)
 		s.mux.HandleFunc("PUT /api/discussions/{id}/language", s.handleDiscussionLanguageUpdate)
 		s.mux.HandleFunc("GET /api/discussions/{id}/chapters", s.handleDiscussionChapters)

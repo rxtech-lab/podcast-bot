@@ -2,29 +2,55 @@ package llm
 
 import (
 	"context"
-
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
 )
 
-// ListModels returns the model ids advertised by the OpenAI-compatible gateway
-// at baseURL (its GET /models endpoint). It is used to populate the per-speaker
-// model pickers with whatever the gateway actually serves, rather than a
-// hard-coded roster. The ids are returned in the order the gateway lists them.
-func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
-	c := openai.NewClient(
-		option.WithBaseURL(baseURL),
-		option.WithAPIKey(apiKey),
-	)
-	pager := c.Models.ListAutoPaging(ctx)
-	var ids []string
-	for pager.Next() {
-		if id := pager.Current().ID; id != "" {
-			ids = append(ids, id)
+// ModelEntry is one model advertised by the gateway's GET /models endpoint.
+// Type is the gateway's model kind ("language", "embedding", "image", ...);
+// it is empty when the endpoint doesn't include the field (plain
+// OpenAI-compatible servers), in which case callers should treat the model as
+// a chat model.
+type ModelEntry struct {
+	ID   string `json:"id"`
+	Type string `json:"type,omitempty"`
+}
+
+// ListModelEntries returns the models advertised by the OpenAI-compatible
+// gateway at baseURL (its GET /models endpoint) with each entry's type. It is
+// used to populate the model pickers with whatever the gateway actually
+// serves, rather than a hard-coded roster, and the type lets callers split
+// chat models from embedding models. Fetched with a plain HTTP GET because
+// the typed openai-go Model drops the gateway's extra `type` field. Entries
+// are returned in the order the gateway lists them.
+func ListModelEntries(ctx context.Context, baseURL, apiKey string) ([]ModelEntry, error) {
+	url := strings.TrimRight(baseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list models: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("list models: %s returned %s", url, resp.Status)
+	}
+	var body struct {
+		Data []ModelEntry `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("list models: decode: %w", err)
+	}
+	entries := make([]ModelEntry, 0, len(body.Data))
+	for _, m := range body.Data {
+		if m.ID != "" {
+			entries = append(entries, m)
 		}
 	}
-	if err := pager.Err(); err != nil {
-		return nil, err
-	}
-	return ids, nil
+	return entries, nil
 }

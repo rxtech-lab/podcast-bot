@@ -76,6 +76,11 @@ func (s *Server) handlePrecheck(w http.ResponseWriter, r *http.Request) {
 			Form: uploadAudioPrecheckForm(lang, s.uploadAudioCapBytes(r.Context(), user.ID)),
 		}
 	}
+	// Precheck is the app's "session started" beacon: sweep this user's
+	// pre-embedding (or model-stale) podcasts into the background indexing
+	// queue so semantic search / Q&A covers their back catalog. Rate-limited
+	// inside; never blocks the response.
+	go s.enqueueStaleIndexBackfill(user.ID)
 	writeJSON(w, resp)
 }
 

@@ -864,6 +864,18 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		cancel()
 		return nil, 1
 	}
+	embeddings, err := server.NewEmbeddingStore(discussions, env.EmbeddingDimensions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "embedding db:", err)
+		cancel()
+		return nil, 1
+	}
+	qaStore, err := server.NewQAStore(discussions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "qa db:", err)
+		cancel()
+		return nil, 1
+	}
 	if jobEnv.E2EMode {
 		if err := discussions.SeedE2E(ctx, points); err != nil {
 			fmt.Fprintln(os.Stderr, "e2e seed:", err)
@@ -944,6 +956,8 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		Discussions:           discussions,
 		Points:                points,
 		Planning:              planning,
+		Embeddings:            embeddings,
+		QA:                    qaStore,
 		Progress:              server.NewDiscussionProgressStore(env.RedisURL, log),
 		PlanningStreams:       server.NewPlanningStreamStore(env.RedisURL, log),
 		ModelCatalog:          server.NewModelCatalogStore(env.RedisURL, log),
@@ -1013,6 +1027,13 @@ func bootstrapVideo(mode, mcpPath, outOverride, addr string, maxConcurrency int,
 		fmt.Fprintln(os.Stderr, "job consumers:", err)
 		cancel()
 		return nil, 1
+	}
+
+	// E2E: index the seeded ready podcasts synchronously so semantic search
+	// and the Q&A entry points work from the first UI-test interaction.
+	if jobEnv.E2EMode {
+		rt.srv.SeedE2EIndexes(ctx)
+		fmt.Fprintln(os.Stdout, "E2E mode · seeded podcasts indexed")
 	}
 
 	return rt, 0

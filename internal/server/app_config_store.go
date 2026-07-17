@@ -19,6 +19,14 @@ const (
 	// appConfigKeySTTGeminiModel picks the Gemini model used when the STT
 	// provider is gemini; empty falls back to the env transcribe model.
 	appConfigKeySTTGeminiModel = "stt_gemini_model"
+	// appConfigKeyQAModel picks the LLM behind the podcast Q&A / global chat
+	// agent; empty falls back to QA_MODEL then HOST_MODEL.
+	appConfigKeyQAModel = "qa_model"
+	// appConfigKeyEmbeddingModel picks the embedding model used to vectorize
+	// podcast content and search queries; empty falls back to EMBEDDING_MODEL.
+	// Switching it marks previously indexed chunks stale (they are keyed by
+	// model) and the precheck backfill re-indexes them.
+	appConfigKeyEmbeddingModel = "embedding_model"
 )
 
 // AppConfigStore persists admin-editable, app-level configuration as a simple
