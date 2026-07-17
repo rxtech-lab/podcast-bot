@@ -2,18 +2,40 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { getAlbum } from "@/app/lib/backend";
 import { formatDuration } from "@/app/components/StationCard";
+import { albumLink, ogImageLink } from "@/app/lib/config";
 
 type Props = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
   const detail = await getAlbum(id);
+  if (!detail) {
+    return {
+      title: "Album — PanelFM",
+      description: "Album on PanelFM.",
+      robots: { index: false },
+      alternates: { canonical: albumLink(id) },
+    };
+  }
+  const title = `${detail.album.title} — PanelFM`;
+  const description = `${detail.album.episode_count} ${
+    detail.album.episode_count === 1 ? "episode" : "episodes"
+  } on PanelFM.`;
+  const url = albumLink(id);
+  const image = ogImageLink({ album: id });
   return {
-    title: detail ? `${detail.album.title} — PanelFM` : "Album — PanelFM",
-    description: detail
-      ? `${detail.album.episode_count} episode album on PanelFM.`
-      : "Album on PanelFM.",
+    title,
+    description,
     robots: { index: false },
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description,
+      url,
+      type: "website",
+      images: [{ url: image, width: 1200, height: 630, alt: `${detail.album.title} album` }],
+    },
+    twitter: { card: "summary_large_image", title, description, images: [image] },
   };
 }
 
