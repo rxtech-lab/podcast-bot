@@ -37,6 +37,27 @@ struct SharePrecheck {
     let uploadAudio: ShareAudioFormDefinition?
 }
 
+struct SharePlanOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let topic: String
+    let contentType: String
+
+    var displayTitle: String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty { return trimmedTitle }
+        let trimmedTopic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTopic.isEmpty ? "Untitled Plan" : trimmedTopic
+    }
+
+    var isNews: Bool { contentType == "news" }
+}
+
+struct SharePlanPage {
+    let plans: [SharePlanOption]
+    let canLoadMore: Bool
+}
+
 struct ShareUploadResult {
     let filename: String
     let key: String?
@@ -99,6 +120,40 @@ final class ShareExtensionAPI: @unchecked Sendable {
             discussion: try parseDiscussionForm(newDiscussion),
             uploadAudio: try raw.dictionary("upload_audio")?.dictionary("form").map(parseAudioForm)
         )
+    }
+
+    func plans(limit: Int, offset: Int, query: String) async throws -> SharePlanPage {
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedQuery.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "q", value: trimmedQuery))
+        }
+        let queryString = components.percentEncodedQuery.map { "?\($0)" } ?? ""
+        let data = try await requestData("GET", path: "/api/discussions/plans\(queryString)")
+        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw ShareAPIError.invalidResponse
+        }
+        let plans: [SharePlanOption] = rows.compactMap { row -> SharePlanOption? in
+            guard row["status"] as? String == "planning",
+                  let id = row["id"] as? String, !id.isEmpty else { return nil }
+            let script = row["script"] as? [String: Any]
+            let contentType = row["content_type"] as? String ?? script?["type"] as? String ?? "discussion"
+            guard contentType == "discussion" || contentType == "news" else { return nil }
+            let rowTitle = row["title"] as? String ?? ""
+            let scriptTitle = script?["title"] as? String ?? ""
+            let title = rowTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? scriptTitle : rowTitle
+            return SharePlanOption(
+                id: id,
+                title: title,
+                topic: row["topic"] as? String ?? "",
+                contentType: contentType
+            )
+        }
+        return SharePlanPage(plans: plans, canLoadMore: rows.count == limit)
     }
 
     func upload(item: IncomingShareItem, podcastAudio: Bool) async throws -> ShareUploadResult {
@@ -178,6 +233,17 @@ final class ShareExtensionAPI: @unchecked Sendable {
         return try discussionID(from: response)
     }
 
+    func sendToPlan(id: String, prompt: String, attachments: [[String: Any]]) async throws {
+        _ = try await requestData(
+            "POST",
+            path: "/api/discussions/\(id)/planning/messages",
+            body: [
+                "prompt": prompt,
+                "attachments": attachments,
+            ]
+        )
+    }
+
     private func discussionID(from response: [String: Any]) throws -> String {
         guard let id = response["id"] as? String, !id.isEmpty else {
             throw ShareAPIError.invalidResponse
@@ -187,6 +253,15 @@ final class ShareExtensionAPI: @unchecked Sendable {
 
     private func request(_ method: String, path: String,
                          body: [String: Any]? = nil, retrying: Bool = false) async throws -> [String: Any] {
+        let data = try await requestData(method, path: path, body: body, retrying: retrying)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ShareAPIError.invalidResponse
+        }
+        return object
+    }
+
+    private func requestData(_ method: String, path: String,
+                             body: [String: Any]? = nil, retrying: Bool = false) async throws -> Data {
         guard let token = keychain.value(account: .accessToken), !token.isEmpty else {
             throw ShareAPIError.signedOut
         }
@@ -207,15 +282,12 @@ final class ShareExtensionAPI: @unchecked Sendable {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ShareAPIError.invalidResponse }
         if http.statusCode == 401, !retrying, try await refreshAccessToken() {
-            return try await self.request(method, path: path, body: body, retrying: true)
+            return try await self.requestData(method, path: path, body: body, retrying: true)
         }
         guard (200..<300).contains(http.statusCode) else {
             throw ShareAPIError.server(http.statusCode, String(decoding: data, as: UTF8.self))
         }
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ShareAPIError.invalidResponse
-        }
-        return object
+        return data
     }
 
     private func refreshAccessToken() async throws -> Bool {

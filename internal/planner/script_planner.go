@@ -160,8 +160,10 @@ func (p *Planner) Generate(ctx context.Context, req PlanRequest) (*Result, error
 		return p.generateDiscussion(ctx, req)
 	case config.ContentTypeAudioBook:
 		return p.generateAudioBook(ctx, req)
+	case config.ContentTypeNews:
+		return p.generateNews(ctx, req)
 	default:
-		return nil, fmt.Errorf("only %q or %q planning is supported (got %q)", config.ContentTypeDiscussion, config.ContentTypeAudioBook, req.Type)
+		return nil, fmt.Errorf("only %q, %q, or %q planning is supported (got %q)", config.ContentTypeDiscussion, config.ContentTypeAudioBook, config.ContentTypeNews, req.Type)
 	}
 }
 
@@ -564,7 +566,26 @@ func discussantViews(specs []config.AgentSpec) []map[string]string {
 // draftJSON runs the planning agent loop. The model can call research tools for
 // multiple rounds, but the planner accepts a result only after create_plan.
 func (p *Planner) draftJSON(ctx context.Context, user string, attachments []Attachment, opts planningAgentOptions) (*draft, []config.Source, error) {
-	d, sources, err := p.runPlanningAgent(ctx, user, attachments, opts)
+	raw, sources, err := p.runPlanningAgent(ctx, user, attachments, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	d, err := decodeDraft(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	return d, sources, nil
+}
+
+// draftNewsJSON runs the same planning agent loop with the news create_plan
+// schema + decoder.
+func (p *Planner) draftNewsJSON(ctx context.Context, user string, attachments []Attachment, opts planningAgentOptions) (*newsDraft, []config.Source, error) {
+	opts.ContentType = config.ContentTypeNews
+	raw, sources, err := p.runPlanningAgent(ctx, user, attachments, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	d, err := decodeNewsDraft(raw)
 	if err != nil {
 		return nil, nil, err
 	}

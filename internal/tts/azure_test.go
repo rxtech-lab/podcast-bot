@@ -30,6 +30,9 @@ func TestAzureRetryTransportErrorThenSuccess(t *testing.T) {
 	restore := stubAzureBackoff(t)
 	defer restore()
 
+	// 0.25s of silent mono 48kHz s16le PCM — the raw format Azure now
+	// returns; the client transcodes it to stereo MP3 locally.
+	pcm := strings.Repeat("\x00", 48000/4*2)
 	attempts := 0
 	client := &AzureClient{
 		key:      "key",
@@ -39,7 +42,7 @@ func TestAzureRetryTransportErrorThenSuccess(t *testing.T) {
 			if attempts == 1 {
 				return nil, io.ErrUnexpectedEOF
 			}
-			return azureTestResponse(http.StatusOK, "mp3"), nil
+			return azureTestResponse(http.StatusOK, pcm), nil
 		})},
 	}
 
@@ -52,8 +55,14 @@ func TestAzureRetryTransportErrorThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	if string(got) != "mp3" {
-		t.Fatalf("body = %q, want mp3", got)
+	// The PCM must come back encoded as raw MP3 frames (0xFF sync byte, no
+	// ID3/Xing header — the byte→time contract depends on header-free CBR).
+	if len(got) == 0 || got[0] != 0xFF {
+		prefix := got
+		if len(prefix) > 8 {
+			prefix = prefix[:8]
+		}
+		t.Fatalf("body prefix = %q (len %d), want header-free MP3 frames starting with 0xFF", prefix, len(got))
 	}
 	if attempts != 2 {
 		t.Fatalf("attempts = %d, want 2", attempts)

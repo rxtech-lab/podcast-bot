@@ -311,7 +311,7 @@ func (p *Pipeline) vttBias() time.Duration {
 	if p != nil && p.d.HasSeriesPreviouslyOn {
 		bias += vttPreviouslyOnBias
 	}
-	if p != nil && p.d.ContentType == config.ContentTypeDiscussion {
+	if p != nil && isDiscussionFamily(p.d.ContentType) {
 		bias += vttDiscussionBias
 	}
 	return bias
@@ -347,7 +347,7 @@ func (p *Pipeline) Run(ctx context.Context) ([]string, error) {
 	}()
 
 	turnBuffer := 2
-	if p.d.ContentType == config.ContentTypeDiscussion {
+	if isDiscussionFamily(p.d.ContentType) {
 		// Keep a shallow look-ahead for smoothness while limiting audience
 		// question latency. A deeper queue can leave multiple ordinary
 		// discussant turns ahead of the host's address-user turn.
@@ -1499,18 +1499,24 @@ func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 		Sources:          t.Sources(),
 		JudgementComment: t.JudgementComment(),
 	}
-	for _, a := range p.d.Registry.All() {
-		if a == t.Speaker {
-			if t.Speaker.Role() == agent.RoleHost {
-				if ls, ok := a.(interface {
-					ListenSelf(context.Context, agent.TranscriptLine) error
-				}); ok {
-					_ = ls.ListenSelf(ctx, full)
+	// News runs are scripted ahead of air — per-agent memory (and its
+	// background compression LLM calls) buys nothing and can backpressure the
+	// producer between turns. Live listener-answer turns see the recent
+	// transcript in their prompt, which is all the context they need.
+	if p.d.ContentType != config.ContentTypeNews {
+		for _, a := range p.d.Registry.All() {
+			if a == t.Speaker {
+				if t.Speaker.Role() == agent.RoleHost {
+					if ls, ok := a.(interface {
+						ListenSelf(context.Context, agent.TranscriptLine) error
+					}); ok {
+						_ = ls.ListenSelf(ctx, full)
+					}
 				}
+				continue
 			}
-			continue
+			_ = a.Listen(ctx, full)
 		}
-		_ = a.Listen(ctx, full)
 	}
 	// Final transcript event completes the last-emitted speaker's running line
 	// (a dialogue turn may end on a guest, not the narrator).
@@ -1522,6 +1528,9 @@ func (p *Pipeline) updateMemories(ctx context.Context, t *Turn) {
 }
 
 func (p *Pipeline) maybeJudgeTurn(ctx context.Context, t *Turn) {
+	// Discussion only. News is a scripted broadcast: there is nothing to
+	// fact-check-debate on air, and the inline judge call would put dead air
+	// between every scripted line.
 	if p == nil || p.d.ContentType != config.ContentTypeDiscussion {
 		return
 	}

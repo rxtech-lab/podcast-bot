@@ -201,7 +201,8 @@ struct NewDiscussionView: View {
     private var studioAllowed: Bool {
         switch storedType {
         case "audio-book": return entitlements.canCreate(studio: .audioBook)
-        case "discussion": return entitlements.canCreate(studio: .discussion)
+        // News rides the discussion studio entitlement — same live runtime.
+        case "discussion", "news": return entitlements.canCreate(studio: .discussion)
         default: return true
         }
     }

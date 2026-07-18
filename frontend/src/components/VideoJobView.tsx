@@ -90,7 +90,7 @@ export function VideoJobView() {
   // Soft subs + translated tracks are produced from the per-turn
   // transcript, which series and discussion both emit. Burn-in and the
   // priors zip stay series-only.
-  const supportsSubtitles = topicType === 'series' || topicType === 'discussion'
+  const supportsSubtitles = topicType === 'series' || topicType === 'discussion' || topicType === 'news'
 
   // Auto-scroll the log as it grows.
   useEffect(() => {

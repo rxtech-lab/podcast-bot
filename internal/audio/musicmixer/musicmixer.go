@@ -1,9 +1,11 @@
 // Package musicmixer streams a looping background music bed mixed
 // underneath a pipeline of TTS mp3 bytes for the WHOLE debate
 // session. The output mp3 stream matches the LiveStream's expected
-// format (24 kHz mono 48 kbps mp3 — see audio.AudioBytesPerSec) so
+// format (48 kHz stereo 192 kbps mp3 — see audio.AudioBytesPerSec) so
 // subscribers don't need to renegotiate their decoder partway
-// through.
+// through. Mixing runs in stereo PCM: music beds and overlays keep
+// their native stereo image, while the (dual-mono) TTS voice stays
+// centered.
 //
 // Why this is not a single ffmpeg amix process: ffmpeg's amix
 // consumes samples from every input in lockstep, so when the TTS
@@ -104,20 +106,25 @@ const musicCrossfadeChunks = 20 // 20 × 50 ms = 1 s
 
 // pcmSampleRate / pcmChannels / pcmSampleBytes describe the PCM
 // format passed between the three ffmpeg processes and the Go
-// mixer. The output mp3 is re-encoded to the same sample rate
+// mixer: interleaved stereo s16le (frame = L sample + R sample).
+// The output mp3 is re-encoded to the same sample rate
 // (audio.AudioBytesPerSec contract).
 const (
-	pcmSampleRate  = 24000
-	pcmChannels    = 1
+	pcmSampleRate  = 48000
+	pcmChannels    = 2
 	pcmSampleBytes = 2 // s16le
+	// pcmFrameBytes is one interleaved frame (all channels of one
+	// sample instant) — the unit gain envelopes must operate on so
+	// L and R scale together.
+	pcmFrameBytes = pcmChannels * pcmSampleBytes
 )
 
 // chunkDuration is how much PCM the mix loop processes per
 // iteration. 50 ms is a small enough window that a turn's first TTS
 // byte lands in audible output within ~one chunk, while large
 // enough to amortise per-iteration overhead.
-const chunkSamples = pcmSampleRate / 20 // 50 ms
-const chunkBytes = chunkSamples * pcmChannels * pcmSampleBytes
+const chunkFrames = pcmSampleRate / 20 // 50 ms
+const chunkBytes = chunkFrames * pcmFrameBytes
 
 // ttsBufferChunks bounds the in-Go TTS PCM backlog. TTS arrives
 // faster than realtime, so the decoder produces PCM bursts; this
@@ -125,12 +132,13 @@ const chunkBytes = chunkSamples * pcmChannels * pcmSampleBytes
 // them. ~5 s of headroom matches LiveStream.inputBufferBytes.
 const ttsBufferChunks = 100
 
-// ttsDeClickSamples applies a tiny gain envelope at TTS burst edges. The TTS
+// ttsDeClickFrames applies a tiny gain envelope at TTS burst edges. The TTS
 // path is fed by many independently encoded MP3 clips; even when the speech is
 // clean, clip boundaries can decode to a discontinuity that sounds like a
 // digital tick between lines. 8 ms is long enough to hide the discontinuity
-// without making narration attacks feel faded.
-const ttsDeClickSamples = pcmSampleRate * 8 / 1000
+// without making narration attacks feel faded. Measured in frames so both
+// stereo channels fade together.
+const ttsDeClickFrames = pcmSampleRate * 8 / 1000
 
 // Mixer wraps the three ffmpeg processes plus the Go mix goroutine.
 // The zero value is not usable; construct via NewSession.
@@ -354,7 +362,9 @@ func NewSession(musicPath string, sink io.Writer) (*Mixer, error) {
 		return nil, fmt.Errorf("tts stdout: %w", err)
 	}
 
-	// Encoder: PCM → mp3 at the LiveStream-expected format.
+	// Encoder: PCM → mp3 at the LiveStream-expected format. -write_xing 0
+	// keeps the stream header-free so the AudioBytesPerSec byte→time
+	// contract stays exact.
 	encCmd := exec.Command("ffmpeg",
 		"-loglevel", "quiet",
 		"-f", "s16le",
@@ -362,7 +372,9 @@ func NewSession(musicPath string, sink io.Writer) (*Mixer, error) {
 		"-ac", fmt.Sprintf("%d", pcmChannels),
 		"-i", "pipe:0",
 		"-c:a", "libmp3lame",
-		"-b:a", "48k",
+		"-b:a", "192k",
+		"-write_xing", "0",
+		"-id3v2_version", "0",
 		"-f", "mp3",
 		"pipe:1",
 	)
@@ -974,8 +986,9 @@ func (m *Mixer) mixLoop() {
 
 // composeChunk writes the bed contribution into dst. Without a fade,
 // dst = music * oldGain. Mid-fade, dst = music * oldGain + next * newGain.
-// All buffers are s16le mono PCM at chunkBytes — caller guarantees lengths
-// match.
+// All buffers are interleaved s16le stereo PCM at chunkBytes — caller
+// guarantees lengths match. The loop is channel-agnostic: equal gain per
+// 2-byte sample preserves the stereo image.
 func composeChunk(dst, music, next []byte, fading bool, oldGain, newGain float32) {
 	for i := 0; i+1 < len(dst); i += 2 {
 		m := int16(binary.LittleEndian.Uint16(music[i:]))
@@ -1057,10 +1070,11 @@ func (m *Mixer) sweepClosedOverlays() {
 
 // mixInto attenuates `music` by `musicVol` in place and additively
 // mixes the leading `len(music)` bytes of `tts` (scaled by `ttsVol`)
-// on top, clipping to int16 range. Both buffers are s16le-encoded
-// mono PCM at the pipeline sample rate. Independent volume scales let
-// the operator dial in the speaker-vs-bed balance without re-encoding
-// the source files.
+// on top, clipping to int16 range. Both buffers are interleaved s16le
+// stereo PCM at the pipeline sample rate; equal per-sample gain keeps
+// the music's stereo image and the dual-mono voice centered.
+// Independent volume scales let the operator dial in the
+// speaker-vs-bed balance without re-encoding the source files.
 func mixInto(music, tts []byte, musicVol, ttsVol float32) {
 	for i := 0; i+1 < len(music); i += 2 {
 		m := int16(binary.LittleEndian.Uint16(music[i:]))
@@ -1079,45 +1093,50 @@ func mixInto(music, tts []byte, musicVol, ttsVol float32) {
 }
 
 func applyTTSDeClick(pcm []byte, fadeIn, fadeOut bool) {
-	if len(pcm) < pcmSampleBytes || (!fadeIn && !fadeOut) {
+	if len(pcm) < pcmFrameBytes || (!fadeIn && !fadeOut) {
 		return
 	}
-	samples := len(pcm) / pcmSampleBytes
-	if samples == 0 {
+	frames := len(pcm) / pcmFrameBytes
+	if frames == 0 {
 		return
 	}
-	fadeSamples := ttsDeClickSamples
-	if fadeSamples > samples {
-		fadeSamples = samples
+	fadeFrames := ttsDeClickFrames
+	if fadeFrames > frames {
+		fadeFrames = frames
 	}
-	if fadeSamples <= 0 {
+	if fadeFrames <= 0 {
 		return
 	}
-	for i := 0; i < fadeSamples; i++ {
-		scale := float32(i+1) / float32(fadeSamples)
+	for i := 0; i < fadeFrames; i++ {
+		scale := float32(i+1) / float32(fadeFrames)
 		if fadeIn {
-			scalePCMSample(pcm, i, scale)
+			scalePCMFrame(pcm, i, scale)
 		}
 		if fadeOut {
-			idx := samples - 1 - i
-			scalePCMSample(pcm, idx, scale)
+			idx := frames - 1 - i
+			scalePCMFrame(pcm, idx, scale)
 		}
 	}
 }
 
-func scalePCMSample(pcm []byte, sampleIndex int, scale float32) {
-	i := sampleIndex * pcmSampleBytes
-	if i < 0 || i+1 >= len(pcm) {
-		return
+// scalePCMFrame scales every channel of one interleaved frame by the same
+// factor, so a stereo fade doesn't alternate between L and R samples.
+func scalePCMFrame(pcm []byte, frameIndex int, scale float32) {
+	base := frameIndex * pcmFrameBytes
+	for ch := 0; ch < pcmChannels; ch++ {
+		i := base + ch*pcmSampleBytes
+		if i < 0 || i+1 >= len(pcm) {
+			return
+		}
+		v := int16(binary.LittleEndian.Uint16(pcm[i:]))
+		scaled := int32(float32(v) * scale)
+		if scaled > 32767 {
+			scaled = 32767
+		} else if scaled < -32768 {
+			scaled = -32768
+		}
+		binary.LittleEndian.PutUint16(pcm[i:], uint16(int16(scaled)))
 	}
-	v := int16(binary.LittleEndian.Uint16(pcm[i:]))
-	scaled := int32(float32(v) * scale)
-	if scaled > 32767 {
-		scaled = 32767
-	} else if scaled < -32768 {
-		scaled = -32768
-	}
-	binary.LittleEndian.PutUint16(pcm[i:], uint16(int16(scaled)))
 }
 
 func (m *Mixer) pump(sink io.Writer) {

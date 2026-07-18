@@ -41,12 +41,12 @@ func writeSyncTestImages(t *testing.T, dir string, n int) []string {
 }
 
 // writeSyncTestAudio generates secs seconds of 440Hz tone in the pipeline's
-// CBR contract format (24kHz mono 48kbps MP3).
+// CBR contract format (48kHz stereo 192kbps MP3).
 func writeSyncTestAudio(t *testing.T, path string, secs float64) {
 	t.Helper()
 	if out, err := exec.Command("ffmpeg", "-y",
 		"-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=440:duration=%.1f", secs),
-		"-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "48k",
+		"-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k", "-write_xing", "0",
 		path).CombinedOutput(); err != nil {
 		t.Fatalf("generate tone: %v (%s)", err, out)
 	}

@@ -18,6 +18,8 @@ type planningAgentOptions struct {
 	ExistingSources          []config.Source
 	RequireSuccessfulURLRead bool
 	Template                 string
+	// ContentType selects the create_plan schema + decoder ("" = discussion).
+	ContentType string
 }
 
 type planningToolSession struct {
@@ -26,14 +28,21 @@ type planningToolSession struct {
 	requiredURLs             []string
 	requireSuccessfulURLRead bool
 	template                 string
+	contentType              string
 	sources                  []config.Source
 	searched                 bool
 	readURLs                 map[string]bool
 	successfulURLReads       map[string]bool
-	final                    *draft
+	// finalArgs holds the raw create_plan arguments once the type-specific
+	// decoder accepted them; finalized guards against post-plan tool calls.
+	finalArgs string
+	finalized bool
 }
 
-func (p *Planner) runPlanningAgent(ctx context.Context, user string, attachments []Attachment, opts planningAgentOptions) (*draft, []config.Source, error) {
+// runPlanningAgent drives the one-shot planning agent loop and returns the raw
+// create_plan arguments (already validated by the content type's decoder) plus
+// the researched sources. Callers decode with their type-specific decoder.
+func (p *Planner) runPlanningAgent(ctx context.Context, user string, attachments []Attachment, opts planningAgentOptions) (string, []config.Source, error) {
 	client := llm.New(p.env.OpenAIBaseURL, p.env.OpenAIKey, p.scriptModel())
 	// Meter planning LLM usage when a recorder is registered, applying the same
 	// pricing fallback the content creator uses so cost is filled in even when
@@ -43,18 +52,27 @@ func (p *Planner) runPlanningAgent(ctx context.Context, user string, attachments
 			WithUsageRecorder(p.usageRecorder).
 			WithPricing(p.env.LLMInputCostPerMillion, p.env.LLMOutputCostPerMillion)
 	}
+	contentType := opts.ContentType
+	if contentType == "" {
+		contentType = config.ContentTypeDiscussion
+	}
 	session := &planningToolSession{
 		planner:                  p,
 		researchRequired:         opts.ResearchRequired,
 		requiredURLs:             dedupeURLs(opts.RequiredURLs),
 		requireSuccessfulURLRead: opts.RequireSuccessfulURLRead,
 		template:                 opts.Template,
+		contentType:              contentType,
 		sources:                  append([]config.Source(nil), opts.ExistingSources...),
 		readURLs:                 map[string]bool{},
 		successfulURLReads:       map[string]bool{},
 	}
 
-	system := `You are a planning agent for a panel-discussion generator.
+	generatorNoun := "a panel-discussion generator"
+	if contentType == config.ContentTypeNews {
+		generatorNoun = "a radio-news broadcast generator"
+	}
+	system := `You are a planning agent for ` + generatorNoun + `.
 
 Run as an agent loop:
 - Use tools to gather external context when required or useful.
@@ -67,7 +85,11 @@ Run as an agent loop:
 - Do not output the plan as prose or JSON outside the create_plan tool call.
 
 The final plan must be balanced, production-ready, and written in the requested language.`
-	if instructions := TemplateInstructions(opts.Template); instructions != "" {
+	instructions := TemplateInstructions(opts.Template)
+	if contentType == config.ContentTypeNews {
+		instructions = NewsTemplateInstructions(opts.Template)
+	}
+	if instructions != "" {
 		system += "\n\n" + instructions
 	}
 
@@ -87,9 +109,9 @@ The final plan must be balanced, production-ready, and written in the requested 
 			p.emit("thinking", "Composing the plan…")
 		}
 
-		stream, err := client.Stream(ctx, system, msgs, planningTools(opts.Template))
+		stream, err := client.Stream(ctx, system, msgs, planningTools(contentType, opts.Template))
 		if err != nil {
-			return nil, nil, fmt.Errorf("planning agent: %w", err)
+			return "", nil, fmt.Errorf("planning agent: %w", err)
 		}
 
 		var assistantText strings.Builder
@@ -123,7 +145,7 @@ The final plan must be balanced, production-ready, and written in the requested 
 			}
 		}
 		if err := stream.Err(); err != nil {
-			return nil, nil, fmt.Errorf("planning agent: %w", err)
+			return "", nil, fmt.Errorf("planning agent: %w", err)
 		}
 
 		calls := llm.AssembleToolCalls(tcDeltas)
@@ -131,7 +153,7 @@ The final plan must be balanced, production-ready, and written in the requested 
 			break
 		}
 		if err := validateCreatePlanTerminal(calls); err != nil {
-			return nil, nil, err
+			return "", nil, err
 		}
 
 		msgs = append(msgs, llm.Message{
@@ -142,7 +164,7 @@ The final plan must be balanced, production-ready, and written in the requested 
 		for _, tc := range calls {
 			result, terminal, err := session.dispatch(ctx, tc.Name, tc.Arguments)
 			if err != nil {
-				return nil, nil, err
+				return "", nil, err
 			}
 			msgs = append(msgs, llm.Message{
 				Role:       llm.RoleTool,
@@ -150,14 +172,14 @@ The final plan must be balanced, production-ready, and written in the requested 
 				ToolCallID: tc.ID,
 			})
 			if terminal {
-				return session.final, session.sources, nil
+				return session.finalArgs, session.sources, nil
 			}
 		}
 	}
-	if session.final == nil {
-		return nil, nil, fmt.Errorf("planning agent did not call create_plan")
+	if !session.finalized {
+		return "", nil, fmt.Errorf("planning agent did not call create_plan")
 	}
-	return session.final, session.sources, nil
+	return session.finalArgs, session.sources, nil
 }
 
 const maxPlanningToolRounds = 8
@@ -181,7 +203,7 @@ func (p *Planner) emitToolStart(name string) {
 	}
 }
 
-func planningTools(template string) []openai.ChatCompletionToolParam {
+func planningTools(contentType, template string) []openai.ChatCompletionToolParam {
 	tools := []openai.ChatCompletionToolParam{}
 	if IsResearchTemplate(template) {
 		tools = append(tools,
@@ -217,9 +239,16 @@ func planningTools(template string) []openai.ChatCompletionToolParam {
 			},
 			"required": []string{"url"},
 		}),
-		toolDef("create_plan", "Create the final panel-discussion plan. This must be the final tool call.", TemplateSchema(config.ContentTypeDiscussion, template)),
+		toolDef("create_plan", createPlanDescription(contentType), TemplateSchema(contentType, template)),
 	)
 	return tools
+}
+
+func createPlanDescription(contentType string) string {
+	if contentType == config.ContentTypeNews {
+		return "Create the final radio-news broadcast plan. This must be the final tool call."
+	}
+	return "Create the final panel-discussion plan. This must be the final tool call."
 }
 
 func toolDef(name, description string, schema map[string]any) openai.ChatCompletionToolParam {
@@ -233,7 +262,7 @@ func toolDef(name, description string, schema map[string]any) openai.ChatComplet
 }
 
 func (s *planningToolSession) dispatch(ctx context.Context, name, jsonArgs string) (string, bool, error) {
-	if s.final != nil {
+	if s.finalized {
 		return "", false, fmt.Errorf("planning already finalized; %s is not allowed after create_plan", name)
 	}
 	switch name {
@@ -307,11 +336,19 @@ func (s *planningToolSession) dispatch(ctx context.Context, name, jsonArgs strin
 			return "create_plan blocked: " + err.Error(), false, nil
 		}
 		s.planner.emit("writing", "Writing the plan")
-		d, err := decodeDraft(jsonArgs)
-		if err != nil {
-			return "", false, err
+		// Validate with the content type's decoder before accepting; the caller
+		// re-decodes finalArgs into its typed draft.
+		if s.contentType == config.ContentTypeNews {
+			if _, err := decodeNewsDraft(jsonArgs); err != nil {
+				return "", false, err
+			}
+		} else {
+			if _, err := decodeDraft(jsonArgs); err != nil {
+				return "", false, err
+			}
 		}
-		s.final = d
+		s.finalArgs = jsonArgs
+		s.finalized = true
 		return "plan accepted", true, nil
 	default:
 		return "", false, fmt.Errorf("unknown planning tool: %s", name)

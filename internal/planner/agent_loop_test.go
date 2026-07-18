@@ -37,7 +37,7 @@ func TestPlanningToolSessionRequiresSearchBeforeCreatePlan(t *testing.T) {
 	if !strings.Contains(got, "call web_search") {
 		t.Fatalf("create_plan before search = %q, want blocked search message", got)
 	}
-	if session.final != nil {
+	if session.finalized {
 		t.Fatal("create_plan should not accept a final plan before web_search")
 	}
 
@@ -56,8 +56,11 @@ func TestPlanningToolSessionRequiresSearchBeforeCreatePlan(t *testing.T) {
 	} else if got != "plan accepted" {
 		t.Fatalf("create_plan after search = %q, want accepted", got)
 	}
-	if session.final == nil || session.final.Title != "A Test Panel" {
-		t.Fatalf("final plan not captured: %+v", session.final)
+	if !session.finalized {
+		t.Fatal("final plan not captured")
+	}
+	if d, err := decodeDraft(session.finalArgs); err != nil || d.Title != "A Test Panel" {
+		t.Fatalf("final plan args not captured: %v %+v", err, d)
 	}
 	if _, _, err := session.dispatch(context.Background(), "web_search", `{"query":"after final"}`); err == nil {
 		t.Fatal("tool call after accepted create_plan should be rejected")

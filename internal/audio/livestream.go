@@ -14,12 +14,12 @@ import (
 )
 
 // inputBufferBytes is how many bytes of mp3 we let the producer race ahead of
-// realtime playback before its writes block. Azure TTS audio is 48 kbps mono,
-// so 90 KB ≈ 15 s of audio. The OS pipe alone is only ~16 KB on macOS, which
+// realtime playback before its writes block. TTS audio is 192 kbps stereo, so
+// 360 KB ≈ 15 s of audio. The OS pipe alone is only ~16 KB on macOS, which
 // is too thin to absorb the LLM time-to-first-token + TTS first-byte latency
 // at turn boundaries; a 15 s headroom hides typical 1–2 s gaps without
 // pushing the chat-input echo delay too far out.
-const inputBufferBytes = 90 * 1024
+const inputBufferBytes = 360 * 1024
 
 // LiveStream is a single-writer, many-reader MP3 broadcaster.
 //
@@ -27,7 +27,7 @@ const inputBufferBytes = 90 * 1024
 // emitted to subscribers paced at realtime. The pipeline writes per-turn TTS
 // MP3 bytes to LiveStream; HTTP clients and the local CLI ffplay subscribe.
 //
-// All Azure TTS turns share the format audio-24khz-48kbitrate-mono-mp3, which
+// All TTS turns share the uniform 48kHz/192kbps stereo CBR MP3 format, which
 // is byte-concat safe (same property ConcatToMP3 relies on). Late joiners
 // resync at the next MP3 frame.
 type LiveStream struct {
@@ -60,10 +60,11 @@ type LiveStream struct {
 	done   chan struct{}
 }
 
-// AudioBytesPerSec is the constant byte rate of the LiveStream output. Azure
-// TTS sends audio-24khz-48kbitrate-mono-mp3 — 48 kbit/s = 6000 bytes/s — and
-// ffmpeg's `-c copy` preserves that rate.
-const AudioBytesPerSec = 6000
+// AudioBytesPerSec is the constant byte rate of the LiveStream output. Every
+// TTS provider emits 48kHz/192kbps stereo CBR MP3 — 192 kbit/s = 24000
+// bytes/s (MP3 bitrate is total, not per-channel) — and ffmpeg's `-c copy`
+// preserves that rate.
+const AudioBytesPerSec = 24000
 
 type lsSub struct {
 	ch      chan []byte

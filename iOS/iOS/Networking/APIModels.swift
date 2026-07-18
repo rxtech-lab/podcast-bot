@@ -311,6 +311,8 @@ struct ScriptDTO: Codable, Hashable, Sendable {
     /// narrates. Set on derived chapter-batch scripts; nil/empty means the
     /// script narrates all of its chapters.
     var audioBookChapterIndices: [Int]?
+    /// News plans: the ordered story rundown the anchor presents on air.
+    var newsStories: [NewsStoryDTO]?
     var background: String?
     var surface: String?
     var sources: [SourceDTO]?
@@ -330,10 +332,23 @@ struct ScriptDTO: Codable, Hashable, Sendable {
         case audioBookSpeakers = "audio_book_speakers"
         case audioBookChapters = "audio_book_chapters"
         case audioBookChapterIndices = "audio_book_chapter_indices"
+        case newsStories = "news_stories"
         case uploadedAudioKey = "uploaded_audio_key"
         case uploadedAudioDurationMs = "uploaded_audio_duration_ms"
         case uploadedAudioSpeakers = "uploaded_audio_speakers"
         case transcriptSegments = "transcript_segments"
+    }
+}
+
+/// One item in a news podcast's rundown (config.NewsStory).
+struct NewsStoryDTO: Codable, Hashable, Sendable {
+    var headline: String
+    var summary: String
+    var keyFacts: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case headline, summary
+        case keyFacts = "key_facts"
     }
 }
 
@@ -762,36 +777,4 @@ struct CoverUpdateRequest: Codable, Sendable {
     var cover: DiscussionCover
     /// Persists the cover on that translation row; nil sets the default cover.
     var language: String?
-}
-
-/// POST /api/discussions/{id}/shares request body: how long the minted private
-/// share link stays valid.
-struct ShareCreateRequest: Codable, Sendable {
-    var ttlSeconds: Int
-
-    enum CodingKeys: String, CodingKey {
-        case ttlSeconds = "ttl_seconds"
-    }
-}
-
-/// A private share link returned by the share endpoints. Dates arrive as RFC3339
-/// strings; `ShareLink` parses them into `Date` for display.
-struct ShareLinkDTO: Codable, Sendable {
-    var token: String
-    var url: String
-    var createdAt: String
-    var expiresAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case token
-        case url
-        case createdAt = "created_at"
-        case expiresAt = "expires_at"
-    }
-}
-
-/// POST /api/discussions/{id}/join request body. The token authorizes a
-/// non-owner to join a private discussion via a share link.
-struct DiscussionJoinRequest: Codable, Sendable {
-    var token: String?
 }

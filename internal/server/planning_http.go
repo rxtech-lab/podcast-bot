@@ -129,6 +129,81 @@ func (s *Server) handlePlanningConversationGet(w http.ResponseWriter, r *http.Re
 	)
 }
 
+// handlePlanningMessageAppend persists a planning user turn without starting
+// the agent run. Short-lived clients such as the iOS share extension can append
+// sources, open the app, and let the normal planning screen resume the pending
+// turn through the recoverable SSE path.
+func (s *Server) handlePlanningMessageAppend(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	id := r.PathValue("id")
+	d, err := s.d.Discussions.Get(r.Context(), user.ID, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d == nil {
+		http.NotFound(w, r)
+		return
+	}
+	contentType, err := s.planningPodcastContentType(r.Context(), user.ID, d)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if d.Status != DiscussionPlanning ||
+		(contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeNews) {
+		http.Error(w, "discussion is not a plan-mode podcast", http.StatusConflict)
+		return
+	}
+	var req planningStreamRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		http.Error(w, "prompt is required", http.StatusBadRequest)
+		return
+	}
+	conv, err := s.d.Planning.EnsureConversation(r.Context(), user.ID, id)
+	if err != nil || conv == nil {
+		http.Error(w, "could not start planning conversation", http.StatusInternalServerError)
+		return
+	}
+	if _, active := s.d.PlanningStreams.Active(r.Context(), conv.ID); active {
+		http.Error(w, "a planning turn is already in progress", http.StatusConflict)
+		return
+	}
+	attachments := s.sanitizedAttachments(user.ID, req.Attachments)
+	if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
+		Role:        "user",
+		Text:        planner.ConversationMessageText(prompt, attachments, req.Language),
+		Attachments: attachments,
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// planningPodcastContentType resolves the type for both saved plans and the
+// script-less placeholder created while the first conversational plan is still
+// being assembled. Placeholder type lives in the initial persisted user turn.
+func (s *Server) planningPodcastContentType(ctx context.Context, userID string, d *Discussion) (string, error) {
+	if d != nil && d.Script != nil {
+		if contentType := strings.TrimSpace(d.Script.Type); contentType != "" {
+			return contentType, nil
+		}
+	}
+	if d == nil || s.d.Planning == nil {
+		return config.ContentTypeDiscussion, nil
+	}
+	_, _, turns, err := s.d.Planning.ConversationWithTurnsByDiscussion(ctx, userID, d.ID)
+	if err != nil {
+		return "", err
+	}
+	return planningContentType(d, turns), nil
+}
+
 // preparePlanningPartsForClient restores the original audio attachment for
 // turns created before audio metadata was persisted, validates every stored key
 // against the conversation owner, and replaces stale attachment URLs with fresh
@@ -983,6 +1058,10 @@ func planningContentType(d *Discussion, turns []planningTurnRow) string {
 		if strings.Contains(text, "- Content type: "+config.ContentTypeAudioBook) ||
 			strings.Contains(text, "Content type: "+config.ContentTypeAudioBook) {
 			return config.ContentTypeAudioBook
+		}
+		if strings.Contains(text, "- Content type: "+config.ContentTypeNews) ||
+			strings.Contains(text, "Content type: "+config.ContentTypeNews) {
+			return config.ContentTypeNews
 		}
 	}
 	return config.ContentTypeDiscussion

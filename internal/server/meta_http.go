@@ -34,6 +34,7 @@ func (s *Server) handleDiscussionTypes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, discussionTypesResponse{Types: []discussionTypeMeta{
 		{ID: config.ContentTypeDiscussion, Label: "Discussion"},
 		{ID: config.ContentTypeAudioBook, Label: "Audio Book"},
+		{ID: config.ContentTypeNews, Label: "News Podcast"},
 	}})
 }
 
@@ -86,7 +87,7 @@ var toolProfiles = map[string]struct {
 }{
 	"take_note":     {nil, []string{"host", "discussant", "affirmative", "negative", "judge", "player", "puzzle_host", "series_host"}, "builtin"},
 	"look_up_quote": {nil, []string{"host", "discussant", "affirmative", "negative", "judge", "player", "puzzle_host"}, "builtin"},
-	"data_store":    {[]string{config.ContentTypeDiscussion}, []string{"discussant"}, "datastore"},
+	"data_store":    {[]string{config.ContentTypeDiscussion, config.ContentTypeNews}, []string{"discussant"}, "datastore"},
 }
 
 // handleTools enumerates the engine's statically-known tools plus the MCP
@@ -125,7 +126,7 @@ func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {
 				Name:         name,
 				Description:  "MCP server (tools resolved at runtime).",
 				Source:       "mcp",
-				ContentTypes: []string{config.ContentTypeDiscussion},
+				ContentTypes: []string{config.ContentTypeDiscussion, config.ContentTypeNews},
 				Roles:        []string{"discussant"},
 				Dynamic:      true,
 			})

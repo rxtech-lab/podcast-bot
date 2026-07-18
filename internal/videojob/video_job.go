@@ -296,7 +296,8 @@ func supportsSoftSubtitles(contentType string) bool {
 	case config.ContentTypeSeries,
 		config.ContentTypeDiscussion,
 		config.ContentTypeAudioBook,
-		config.ContentTypeUploadedAudio:
+		config.ContentTypeUploadedAudio,
+		config.ContentTypeNews:
 		return true
 	default:
 		return false
@@ -608,12 +609,13 @@ func run(ctx context.Context, deps Deps, jobID string,
 			time.Since(t0).Round(time.Second)))
 	}
 
-	// Discussion needs its background palette + music beds generated before
-	// the orchestrator runs (the session bed must be installed pre-Run, and
-	// the stage paints the first background as soon as it lands). Without this
-	// the show rendered over a bare background with no imagery.
+	// Discussion-family shows (discussion + news) need their background
+	// palette + music beds generated before the orchestrator runs (the
+	// session bed must be installed pre-Run, and the stage paints the first
+	// background as soon as it lands). Without this the show rendered over a
+	// bare background with no imagery.
 	var discussionMusic discussion.Music
-	if topic.Type == config.ContentTypeDiscussion && !jobEnv.E2EMode {
+	if (topic.Type == config.ContentTypeDiscussion || topic.Type == config.ContentTypeNews) && !jobEnv.E2EMode {
 		t0 := time.Now()
 		if audioOnly {
 			status("preparing discussion audio (music)…")
@@ -1377,6 +1379,17 @@ func buildTopicMsg(topic *config.DebateTopic, jobID string) contentcreator.Topic
 			hostName = "Host"
 		}
 		msg.NegNames = []string{hostName}
+		msg.AffPosition = topic.Background
+	case config.ContentTypeNews:
+		// Commentators populate the left panel; the anchor the right.
+		for _, dsc := range topic.Discussants {
+			msg.AffNames = append(msg.AffNames, dsc.Name)
+		}
+		anchorName := topic.Host.Name
+		if anchorName == "" {
+			anchorName = "Anchor"
+		}
+		msg.NegNames = []string{anchorName}
 		msg.AffPosition = topic.Background
 	}
 	return msg

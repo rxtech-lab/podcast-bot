@@ -26,7 +26,7 @@ import (
 const syncTolerance = 600 * time.Millisecond
 
 // fakeClipDuration is the exact play time of the fake TTS provider's embedded
-// silence clip: 5184 bytes at the pipeline's 6000 B/s CBR contract.
+// silence clip: 20736 bytes at the pipeline's 24000 B/s CBR contract.
 const fakeClipDuration = 864 * time.Millisecond
 
 type syncTestAgent struct {

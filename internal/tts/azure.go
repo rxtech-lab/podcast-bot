@@ -9,9 +9,12 @@ import (
 	"time"
 )
 
-// OutputFormatMP3_24k48 is the chunked-streamable mp3 format used throughout
-// the project. Same codec for every turn means ffmpeg concat -c copy works.
-const OutputFormatMP3_24k48 = "audio-24khz-48kbitrate-mono-mp3"
+// OutputFormatRawPCM48k is the raw-PCM format requested from Azure. Azure has
+// no stereo MP3 output formats, so we take mono 48 kHz PCM and locally encode
+// to the pipeline's uniform 48 kHz/192 kbps stereo MP3 (encodePCMToStereoMP3)
+// — a single lossy encode, same codec for every turn, so ffmpeg concat
+// -c copy works.
+const OutputFormatRawPCM48k = "raw-48khz-16bit-mono-pcm"
 
 // AzureClient is an Azure TTS REST client.
 type AzureClient struct {
@@ -74,7 +77,7 @@ func (c *AzureClient) postSSML(ctx context.Context, ssml string) (io.ReadCloser,
 		}
 		req.Header.Set("Ocp-Apim-Subscription-Key", c.key)
 		req.Header.Set("Content-Type", "application/ssml+xml")
-		req.Header.Set("X-Microsoft-OutputFormat", OutputFormatMP3_24k48)
+		req.Header.Set("X-Microsoft-OutputFormat", OutputFormatRawPCM48k)
 		req.Header.Set("User-Agent", "debate-bot/0.1")
 
 		resp, err := client.Do(req)
@@ -86,7 +89,9 @@ func (c *AzureClient) postSSML(ctx context.Context, ssml string) (io.ReadCloser,
 			continue
 		}
 		if resp.StatusCode == http.StatusOK {
-			return resp.Body, nil
+			// Azure streams raw PCM; encode to the pipeline's uniform stereo
+			// MP3 on the fly (chunk-by-chunk, preserving stream-through).
+			return encodePCMToStereoMP3(ctx, resp.Body, 48000)
 		}
 
 		body, _ := io.ReadAll(resp.Body)

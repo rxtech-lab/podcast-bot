@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"strings"
 )
 
@@ -21,10 +20,10 @@ const (
 
 // ElevenLabsClient is an ElevenLabs TTS REST client.
 //
-// Output is transcoded on the fly to Azure's audio-24khz-48kbitrate-mono-mp3
-// format so the rest of the pipeline (LiveStream pacing, ConcatToMP3 with
-// `-c copy`, AudioBytesPerSec subtitle alignment) keeps working without a
-// branch per provider.
+// Output is transcoded on the fly to the pipeline's uniform 48 kHz/192 kbps
+// stereo MP3 format so the rest of the pipeline (LiveStream pacing,
+// ConcatToMP3 with `-c copy`, AudioBytesPerSec subtitle alignment) keeps
+// working without a branch per provider.
 type ElevenLabsClient struct {
 	apiKey string
 	http   *http.Client
@@ -91,14 +90,17 @@ func (c *ElevenLabsClient) FetchVoices(ctx context.Context, language string) ([]
 }
 
 // SynthesizeStream POSTs `text` to the ElevenLabs streaming endpoint and
-// returns a reader yielding MP3 bytes in Azure's 24kHz/48kbps/mono format.
+// returns a reader yielding MP3 bytes in the pipeline's uniform
+// 48kHz/192kbps/stereo format.
 //
 // Internally:
-//  1. Request `output_format=pcm_24000` so we get raw 16-bit signed LE PCM
-//     at 24 kHz mono — matching Azure's sample rate exactly.
-//  2. Pipe that PCM through ffmpeg to MP3 at 48 kbps mono. Single lossy
-//     encode (vs. mp3->mp3 transcode) and the final byte stream is
-//     bit-rate compatible with the rest of the pipeline.
+//  1. Request `output_format=pcm_24000` — raw 16-bit signed LE PCM at 24 kHz
+//     mono (higher PCM rates are tier-gated; TTS voices carry essentially no
+//     energy above 12 kHz, so the upsample in the encoder is perceptually
+//     free).
+//  2. Pipe that PCM through the shared ffmpeg encoder to 48 kHz/192 kbps
+//     stereo MP3. Single lossy encode (vs. mp3->mp3 transcode) and the final
+//     byte stream is bit-rate compatible with the rest of the pipeline.
 func (c *ElevenLabsClient) SynthesizeStream(ctx context.Context, voiceID, text, lang string) (io.ReadCloser, error) {
 	if voiceID == "" {
 		return nil, fmt.Errorf("elevenlabs: voice_id is required")
@@ -135,7 +137,7 @@ func (c *ElevenLabsClient) SynthesizeStream(ctx context.Context, voiceID, text, 
 		resp.Body.Close()
 		return nil, fmt.Errorf("elevenlabs tts status %d: %s", resp.StatusCode, string(errBody))
 	}
-	return encodePCMToAzureMP3(ctx, resp.Body)
+	return encodePCMToStereoMP3(ctx, resp.Body, 24000)
 }
 
 // SynthesizeSSML is not supported by ElevenLabs — its REST API consumes
@@ -143,63 +145,6 @@ func (c *ElevenLabsClient) SynthesizeStream(ctx context.Context, voiceID, text, 
 // for ErrSSMLUnsupported and fall back to single-voice SynthesizeStream.
 func (c *ElevenLabsClient) SynthesizeSSML(_ context.Context, _ string) (io.ReadCloser, error) {
 	return nil, ErrSSMLUnsupported
-}
-
-// encodePCMToAzureMP3 wraps a PCM reader with an ffmpeg subprocess that
-// re-encodes to audio-24khz-48kbitrate-mono-mp3. The returned ReadCloser
-// closes both ffmpeg's pipes and waits for the subprocess.
-func encodePCMToAzureMP3(ctx context.Context, src io.ReadCloser) (io.ReadCloser, error) {
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-loglevel", "quiet",
-		"-f", "s16le",
-		"-ar", "24000",
-		"-ac", "1",
-		"-i", "pipe:0",
-		"-c:a", "libmp3lame",
-		"-b:a", "48k",
-		"-ar", "24000",
-		"-ac", "1",
-		"-f", "mp3",
-		"pipe:1",
-	)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		_ = src.Close()
-		return nil, fmt.Errorf("elevenlabs ffmpeg stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = src.Close()
-		_ = stdin.Close()
-		return nil, fmt.Errorf("elevenlabs ffmpeg stdout: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = src.Close()
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, fmt.Errorf("elevenlabs ffmpeg start: %w", err)
-	}
-	// Pump HTTP body → ffmpeg stdin in the background so the caller can
-	// stream bytes off stdout as they're produced.
-	go func() {
-		defer src.Close()
-		defer stdin.Close()
-		_, _ = io.Copy(stdin, src)
-	}()
-	return &transcodeReader{stdout: stdout, cmd: cmd}, nil
-}
-
-type transcodeReader struct {
-	stdout io.ReadCloser
-	cmd    *exec.Cmd
-}
-
-func (r *transcodeReader) Read(p []byte) (int, error) { return r.stdout.Read(p) }
-
-func (r *transcodeReader) Close() error {
-	err := r.stdout.Close()
-	_ = r.cmd.Wait()
-	return err
 }
 
 func normalizeGender(g string) string {

@@ -14,7 +14,7 @@ import (
 
 // TestFakeClipMatchesByteRateContract pins the pipeline-wide CBR assumption:
 // caption cue durations are computed as raw TTS byte count divided by
-// audio.AudioBytesPerSec (6000 B/s, i.e. Azure's 24kHz/48kbps mono MP3). The
+// audio.AudioBytesPerSec (24000 B/s, i.e. the pipeline's 48kHz/192kbps stereo MP3). The
 // fake provider's embedded clip must honour the same contract, both so
 // hermetic sync tests stay representative and so a future TTS format change
 // fails here by name instead of silently skewing every subtitle timeline.
@@ -42,11 +42,11 @@ func TestFakeClipMatchesByteRateContract(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 
-	if got := probe("stream=sample_rate", "a:0"); got != "24000" {
-		t.Errorf("fake clip sample rate = %s, want 24000 (Azure audio-24khz-48kbitrate-mono-mp3)", got)
+	if got := probe("stream=sample_rate", "a:0"); got != "48000" {
+		t.Errorf("fake clip sample rate = %s, want 48000 (48kHz/192kbps stereo MP3)", got)
 	}
-	if got := probe("stream=channels", "a:0"); got != "1" {
-		t.Errorf("fake clip channels = %s, want mono", got)
+	if got := probe("stream=channels", "a:0"); got != "2" {
+		t.Errorf("fake clip channels = %s, want stereo", got)
 	}
 
 	wantSecs := float64(len(silenceMP3)) / float64(audio.AudioBytesPerSec)

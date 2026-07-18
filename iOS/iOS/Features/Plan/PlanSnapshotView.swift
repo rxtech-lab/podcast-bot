@@ -6,6 +6,7 @@ struct PlanSnapshot {
     let title: String
     let topic: String
     let isAudioBook: Bool
+    let isNews: Bool
     let isUploadedAudio: Bool
     let uploadedAudioDurationMs: Int64
     let uploadedAudioSpeakers: [String]
@@ -20,6 +21,7 @@ struct PlanSnapshot {
         title = discussion.title
         topic = discussion.topic
         isAudioBook = discussion.script?.type == "audio-book"
+        isNews = discussion.script?.type == "news"
         isUploadedAudio = discussion.script?.type == "uploaded-audio"
         uploadedAudioDurationMs = discussion.script?.uploadedAudioDurationMs ?? 0
         uploadedAudioSpeakers = discussion.script?.uploadedAudioSpeakers ?? []
@@ -38,6 +40,7 @@ struct PlanSnapshot {
         self.title = turn.script?.title ?? ""
         self.topic = topic
         self.isAudioBook = turn.script?.type == "audio-book"
+        self.isNews = turn.script?.type == "news"
         self.isUploadedAudio = turn.script?.type == "uploaded-audio"
         self.uploadedAudioDurationMs = turn.script?.uploadedAudioDurationMs ?? 0
         self.uploadedAudioSpeakers = turn.script?.uploadedAudioSpeakers ?? []
@@ -85,6 +88,20 @@ struct PlanSnapshot {
                     title: "\(clockLabel(ms: segment.offsetMs)) · \(segment.speaker)",
                     summary: segment.text
                 )
+            }
+        }
+        if script?.type == "news" {
+            // The story rundown reuses the chapter presentation: one row per
+            // story, headline as the title, summary (+ key facts) as the body.
+            return (script?.newsStories ?? []).enumerated().compactMap { idx, story in
+                let title = story.headline.trimmingCharacters(in: .whitespacesAndNewlines)
+                var summary = story.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                let facts = (story.keyFacts ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                if !facts.isEmpty {
+                    summary += "\n" + facts.map { "• \($0)" }.joined(separator: "\n")
+                }
+                guard !title.isEmpty || !summary.isEmpty else { return nil }
+                return PlanChapterSnapshot(number: idx + 1, title: title, summary: summary)
             }
         }
         guard script?.type == "audio-book" else { return [] }
@@ -144,7 +161,8 @@ struct PlanSnapshot {
             return people
         }
         if let host = script?.host, !host.name.isEmpty {
-            people.append(PlanPersonSnapshot(name: host.name, aspect: "Moderator", isHost: true))
+            let hostLabel = script?.type == "news" ? "Anchor" : "Moderator"
+            people.append(PlanPersonSnapshot(name: host.name, aspect: hostLabel, isHost: true))
         }
         people.append(contentsOf: (script?.discussants ?? []).map {
             PlanPersonSnapshot(name: $0.name, aspect: $0.aspect ?? "", isHost: false)
@@ -282,7 +300,7 @@ struct PlanSnapshotCard: View {
 
             if !snapshot.chapters.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(snapshot.isUploadedAudio ? "Transcript" : "Chapters")
+                    Text(snapshot.isUploadedAudio ? "Transcript" : (snapshot.isNews ? "Rundown" : "Chapters"))
                         .font(.headline)
                     if let onChaptersTapped {
                         Button(action: onChaptersTapped) {
@@ -391,12 +409,13 @@ struct PlanSnapshotCard: View {
 
     private var peopleHeading: String {
         if snapshot.isUploadedAudio { return "Speakers" }
+        if snapshot.isNews { return "News Desk" }
         return snapshot.chapters.isEmpty ? "Panelists" : "Voices"
     }
 
     private var chaptersSentence: some View {
         HStack(spacing: 8) {
-            Image(systemName: snapshot.isUploadedAudio ? "text.quote" : "book.closed")
+            Image(systemName: snapshot.isUploadedAudio ? "text.quote" : (snapshot.isNews ? "newspaper" : "book.closed"))
                 .foregroundStyle(Theme.accent)
             Text(chapterSentenceText)
                 .font(.subheadline)
@@ -432,6 +451,9 @@ struct PlanSnapshotCard: View {
         let count = snapshot.chapters.count
         if snapshot.isUploadedAudio {
             return "\(count) transcript segment\(count == 1 ? "" : "s") — tap to review."
+        }
+        if snapshot.isNews {
+            return "\(count) stor\(count == 1 ? "y" : "ies") in today's rundown."
         }
         return "\(count) chapter section\(count == 1 ? "" : "s") in this audiobook plan."
     }

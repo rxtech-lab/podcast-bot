@@ -54,7 +54,7 @@ func TestMixerTimelineMapMatchesAudibleOnsets(t *testing.T) {
 	musicPath := filepath.Join(dir, "bed.mp3")
 	if out, err := exec.Command("ffmpeg", "-y",
 		"-f", "lavfi", "-i", "sine=frequency=110:duration=30",
-		"-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "48k",
+		"-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k", "-write_xing", "0",
 		musicPath).CombinedOutput(); err != nil {
 		t.Fatalf("generate bed: %v (%s)", err, out)
 	}
@@ -64,7 +64,7 @@ func TestMixerTimelineMapMatchesAudibleOnsets(t *testing.T) {
 	if out, err := exec.Command("ffmpeg", "-y",
 		"-f", "lavfi", "-i", "sine=frequency=880:duration=1.0",
 		"-af", "volume=8",
-		"-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "48k",
+		"-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k", "-write_xing", "0",
 		tonePath).CombinedOutput(); err != nil {
 		t.Fatalf("generate tone: %v (%s)", err, out)
 	}
@@ -72,7 +72,7 @@ func TestMixerTimelineMapMatchesAudibleOnsets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clipDur := time.Duration(len(clip)) * time.Second / 6000 // CBR 48kbps
+	clipDur := time.Duration(len(clip)) * time.Second / 24000 // CBR 192kbps
 
 	// The TTS mp3 decoder buffers tens of KB of input before its first
 	// output — a single short clip would sit undecoded until EOF. Prime it
@@ -82,7 +82,7 @@ func TestMixerTimelineMapMatchesAudibleOnsets(t *testing.T) {
 	if out, err := exec.Command("ffmpeg", "-y",
 		"-f", "lavfi", "-i", "sine=frequency=200:duration=8",
 		"-af", "volume=0.01",
-		"-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "48k",
+		"-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k", "-write_xing", "0",
 		quietPath).CombinedOutput(); err != nil {
 		t.Fatalf("generate quiet primer: %v (%s)", err, out)
 	}
@@ -90,7 +90,7 @@ func TestMixerTimelineMapMatchesAudibleOnsets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	quietDur := time.Duration(len(quiet)) * time.Second / 6000
+	quietDur := time.Duration(len(quiet)) * time.Second / 24000
 
 	outPath := filepath.Join(dir, "mixed.mp3")
 	sink, err := os.Create(outPath)
