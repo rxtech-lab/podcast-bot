@@ -7716,6 +7716,9 @@
         }
       }
     },
+    "News %@ will appear here." : {
+
+    },
     "Next" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8048,6 +8051,9 @@
           }
         }
       }
+    },
+    "No News %@" : {
+
     },
     "No podcasts yet" : {
       "extractionState" : "stale",
@@ -11283,6 +11289,9 @@
           }
         }
       }
+    },
+    "Rundown" : {
+
     },
     "Running…" : {
       "comment" : "Tool card status while a tool is running",

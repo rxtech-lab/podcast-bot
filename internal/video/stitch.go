@@ -147,9 +147,9 @@ func buildStitchArgs(hlsDir, outPath string, opts StitchOpts) ([]string, error) 
 		args = append(args,
 			"-af", finalAudioFadeFilter(opts.AudioFadeOut),
 			"-c:a", "aac",
-			"-b:a", "64k",
-			"-ar", "24000",
-			"-ac", "1",
+			"-b:a", "160k",
+			"-ar", "48000",
+			"-ac", "2",
 		)
 	} else {
 		args = append(args, "-c:a", "copy")

@@ -160,7 +160,7 @@ func (s *Server) handleDiscussionList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentType := strings.TrimSpace(r.URL.Query().Get("type"))
-	if contentType != "" && contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeAudioBook {
+	if contentType != "" && contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeAudioBook && contentType != config.ContentTypeNews {
 		http.Error(w, "invalid type", http.StatusBadRequest)
 		return
 	}
@@ -270,8 +270,8 @@ func (s *Server) handleDiscussionCreate(w http.ResponseWriter, r *http.Request) 
 	if contentType == "" {
 		contentType = config.ContentTypeDiscussion
 	}
-	if contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeAudioBook {
-		http.Error(w, "only discussion and audio-book creation are supported", http.StatusBadRequest)
+	if contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeAudioBook && contentType != config.ContentTypeNews {
+		http.Error(w, "only discussion, audio-book, and news creation are supported", http.StatusBadRequest)
 		return
 	}
 	language := strings.TrimSpace(settings.Language)
@@ -385,6 +385,50 @@ func (s *Server) handleDiscussionParentPodcastList(w http.ResponseWriter, r *htt
 	s.prepareDiscussionListRows(r, items, timer)
 	writeJSON(w, items)
 	s.logStationTiming("discussions.parent_podcasts.list", len(items), timer)
+}
+
+func (s *Server) handleDiscussionPlanningPodcastList(w http.ResponseWriter, r *http.Request) {
+	user := s.requestUser(r)
+	limit := atoiDefault(r.URL.Query().Get("limit"), 0)
+	offset := atoiDefault(r.URL.Query().Get("offset"), 0)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	timer := newStationTimer()
+	qStart := time.Now()
+	items, err := s.d.Discussions.ListPlanningPodcasts(r.Context(), user.ID, query, limit, offset)
+	timer.mark("query", qStart)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type planningPodcastListItem struct {
+		Discussion
+		ContentType string `json:"content_type"`
+	}
+	filtered := items[:0]
+	contentTypes := make(map[string]string, len(items))
+	for i := range items {
+		contentType, err := s.planningPodcastContentType(r.Context(), user.ID, &items[i])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if contentType != config.ContentTypeDiscussion && contentType != config.ContentTypeNews {
+			continue
+		}
+		contentTypes[items[i].ID] = contentType
+		filtered = append(filtered, items[i])
+	}
+	items = filtered
+	s.prepareDiscussionListRows(r, items, timer)
+	response := make([]planningPodcastListItem, 0, len(items))
+	for i := range items {
+		response = append(response, planningPodcastListItem{
+			Discussion:  items[i],
+			ContentType: contentTypes[items[i].ID],
+		})
+	}
+	writeJSON(w, response)
+	s.logStationTiming("discussions.planning_podcasts.list", len(items), timer)
 }
 
 func (s *Server) handleDiscussionParentPodcastGet(w http.ResponseWriter, r *http.Request) {
@@ -1261,15 +1305,29 @@ func discussionIsDiscussion(d *Discussion) bool {
 	return d != nil && d.Script != nil && strings.TrimSpace(d.Script.Type) == config.ContentTypeDiscussion
 }
 
-// discussionSupportsMindmap gates the mindmap feature: panel discussions and
-// uploaded-audio podcasts have a transcript worth mapping; the other formats
-// don't get one.
+// discussionIsDiscussionFamily reports whether the podcast runs on the
+// discussion live runtime (panel discussion or news broadcast) — the formats
+// with a host/discussant roster, live audience flow, and grounded transcripts.
+func discussionIsDiscussionFamily(d *Discussion) bool {
+	if d == nil || d.Script == nil {
+		return false
+	}
+	switch strings.TrimSpace(d.Script.Type) {
+	case config.ContentTypeDiscussion, config.ContentTypeNews:
+		return true
+	}
+	return false
+}
+
+// discussionSupportsMindmap gates the mindmap feature: panel discussions, news
+// broadcasts, and uploaded-audio podcasts have a transcript worth mapping; the
+// other formats don't get one.
 func discussionSupportsMindmap(d *Discussion) bool {
 	if d == nil || d.Script == nil {
 		return false
 	}
 	switch strings.TrimSpace(d.Script.Type) {
-	case config.ContentTypeDiscussion, config.ContentTypeUploadedAudio:
+	case config.ContentTypeDiscussion, config.ContentTypeUploadedAudio, config.ContentTypeNews:
 		return true
 	}
 	return false
@@ -1739,11 +1797,11 @@ func (s *Server) handleDiscussionGenerate(w http.ResponseWriter, r *http.Request
 		http.Error(w, "chapter selection is only supported for audiobooks", http.StatusBadRequest)
 		return
 	}
-	// Discussions get a digest of the documents the user attached during
-	// planning, injected on a submit-only copy (never persisted via
-	// UpdatePlan) so the runtime host can summarize the source material and
-	// discussants can quote it.
-	if genScript.Type == config.ContentTypeDiscussion {
+	// Discussions and news broadcasts get a digest of the documents the user
+	// attached during planning, injected on a submit-only copy (never
+	// persisted via UpdatePlan) so the runtime host/anchor can summarize the
+	// source material and discussants/commentators can quote it.
+	if genScript.Type == config.ContentTypeDiscussion || genScript.Type == config.ContentTypeNews {
 		if digest := s.discussionSourceDocsDigest(r.Context(), user.ID, id); digest != "" {
 			genCopy := *genScript
 			genCopy.SourceDocuments = digest

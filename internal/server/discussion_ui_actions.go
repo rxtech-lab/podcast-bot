@@ -325,7 +325,7 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 	}
 	contentType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	switch contentType {
-	case config.ContentTypeDiscussion, config.ContentTypeAudioBook:
+	case config.ContentTypeDiscussion, config.ContentTypeAudioBook, config.ContentTypeNews:
 	default:
 		contentType = "all"
 	}
@@ -343,6 +343,8 @@ func (s *Server) homeToolbarActions(r *http.Request, lang contentcreator.Lang) [
 			true, "select", homeActionLink("type", config.ContentTypeDiscussion)),
 		actionItem("type-audio-book", phrase(lang, "Audio Book", "有声书", "有聲書"), "", filterSystemImage(contentType, config.ContentTypeAudioBook, "book.closed"), "",
 			true, "select", homeActionLink("type", config.ContentTypeAudioBook)),
+		actionItem("type-news", phrase(lang, "News Podcast", "新闻播客", "新聞 Podcast"), "", filterSystemImage(contentType, config.ContentTypeNews, "newspaper"), "",
+			true, "select", homeActionLink("type", config.ContentTypeNews)),
 	}
 	accountItems := make([]discussionUIActionItem, 0, 10)
 	if queryBool(r, "supports_points") {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/eventbus"
+	"github.com/sirily11/debate-bot/internal/planner"
 )
 
 type discussionAPITestEnv struct {
@@ -89,6 +90,133 @@ func TestDiscussionHistoryAPIWorksForPendingAndCompletedPlan(t *testing.T) {
 	}
 	if completed.EditTurns[0].Role != "plan" || completed.EditTurns[0].Text != "Current plan" {
 		t.Fatalf("first completed edit turn = %+v, want Current plan", completed.EditTurns[0])
+	}
+}
+
+func TestPlanningMessageAppendPersistsShareTurnForAppResume(t *testing.T) {
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "planning-message.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	planning, err := NewPlanningStore(store)
+	if err != nil {
+		t.Fatalf("NewPlanningStore: %v", err)
+	}
+	created, err := store.CreatePlaceholder(context.Background(), "anonymous", "Existing news plan", "en-US", "default")
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+	conversation, err := planning.EnsureConversation(context.Background(), "anonymous", created.ID)
+	if err != nil {
+		t.Fatalf("EnsureConversation: %v", err)
+	}
+	if err := planning.AppendTurn(context.Background(), conversation.ID, planningTurnInput{
+		Role: "user",
+		Text: planner.ConversationInitialText(planner.PlanRequest{
+			Type:     config.ContentTypeNews,
+			Topic:    "Existing news plan",
+			Language: "en-US",
+		}),
+	}); err != nil {
+		t.Fatalf("AppendTurn initial: %v", err)
+	}
+	srv := New(Deps{Discussions: store, Planning: planning, Log: slog.Default()})
+	body := strings.NewReader(`{
+		"prompt":"Use this source to add one more news roundup.",
+		"attachments":[{
+			"filename":"example.com",
+			"url":"https://example.com/news",
+			"mime_type":"text/html"
+		}]
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/discussions/"+created.ID+"/planning/messages", body)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("append status = %d body=%s", response.Code, response.Body.String())
+	}
+
+	historyRequest := httptest.NewRequest(http.MethodGet, "/api/discussions/"+created.ID+"/planning", nil)
+	historyResponse := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(historyResponse, historyRequest)
+	if historyResponse.Code != http.StatusOK {
+		t.Fatalf("history status = %d body=%s", historyResponse.Code, historyResponse.Body.String())
+	}
+	var history PlanningConversationView
+	if err := json.NewDecoder(historyResponse.Body).Decode(&history); err != nil {
+		t.Fatalf("decode planning history: %v", err)
+	}
+	if !history.NeedsRun {
+		t.Fatal("appended user turn should be pending for the app to resume")
+	}
+	if len(history.Parts) < 2 {
+		t.Fatalf("history parts = %+v, want initial and appended user turns", history.Parts)
+	}
+	last := history.Parts[len(history.Parts)-1]
+	if last.Role != "user" || last.Text != "Use this source to add one more news roundup." {
+		t.Fatalf("last part = %+v, want appended user message", last)
+	}
+	if len(last.Attachments) != 1 || last.Attachments[0].URL != "https://example.com/news" {
+		t.Fatalf("last attachments = %+v, want shared source", last.Attachments)
+	}
+}
+
+func TestPlanningPodcastListIncludesScriptlessNewsPlaceholder(t *testing.T) {
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "planning-podcast-list.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	planning, err := NewPlanningStore(store)
+	if err != nil {
+		t.Fatalf("NewPlanningStore: %v", err)
+	}
+	placeholder, err := store.CreatePlaceholder(context.Background(), "anonymous", "Haze crisis", "en-US", "default")
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+	conversation, err := planning.EnsureConversation(context.Background(), "anonymous", placeholder.ID)
+	if err != nil {
+		t.Fatalf("EnsureConversation: %v", err)
+	}
+	if err := planning.AppendTurn(context.Background(), conversation.ID, planningTurnInput{
+		Role: "user",
+		Text: planner.ConversationInitialText(planner.PlanRequest{
+			Type:     config.ContentTypeNews,
+			Topic:    "Haze crisis",
+			Language: "en-US",
+		}),
+	}); err != nil {
+		t.Fatalf("AppendTurn initial: %v", err)
+	}
+	if _, err := store.Create(context.Background(), "anonymous", "Foundation", planResponse{
+		Script: &config.DebateTopic{
+			Title:    "Foundation audio book",
+			Type:     config.ContentTypeAudioBook,
+			Language: "en-US",
+		},
+	}); err != nil {
+		t.Fatalf("Create audiobook: %v", err)
+	}
+
+	srv := New(Deps{Discussions: store, Planning: planning, Log: slog.Default()})
+	request := httptest.NewRequest(http.MethodGet, "/api/discussions/plans?limit=20", nil)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", response.Code, response.Body.String())
+	}
+	var rows []struct {
+		ID          string `json:"id"`
+		ContentType string `json:"content_type"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&rows); err != nil {
+		t.Fatalf("decode planning podcast list: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != placeholder.ID || rows[0].ContentType != config.ContentTypeNews {
+		t.Fatalf("planning podcast rows = %+v, want script-less news placeholder %s", rows, placeholder.ID)
 	}
 }
 

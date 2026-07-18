@@ -111,6 +111,20 @@ func conversationSystemForType(contentType, template string) string {
 	if contentType == config.ContentTypeUploadedAudio {
 		return conversationSystemBase + "\n" + uploadedAudioSystemContract
 	}
+	if contentType == config.ContentTypeNews {
+		system := conversationSystemBase + `
+
+News-podcast contract:
+- Plan a radio-news broadcast: one anchor who reads/presents the stories, and 1-4 commentators who add context and reactions between reads.
+- Ground every story in sources. Prefer RECENT news sources — call search_sources with news-slanted queries (include the current year and month), read the best candidates with crawl_sources, and put publication dates and outlet attributions into the story summaries and key_facts.
+- If the user uploaded documents, treat them as the primary raw material: build the rundown from their content and only research to fill gaps.
+- Give each commentator a distinct beat (focus) that maps onto the rundown.
+- The "stories" array is the on-air rundown: the anchor presents the stories in order, so sequence them like a broadcast (lead story first).`
+		if instructions := NewsTemplateInstructions(template); instructions != "" {
+			system += "\n\n" + instructions
+		}
+		return system
+	}
 	if contentType != config.ContentTypeAudioBook {
 		return conversationSystem(template)
 	}
@@ -399,6 +413,13 @@ func (s *conversationSession) assemblePlanFromToolArgs(args string) (*Result, er
 		}
 		return s.planner.assembleAudioBookWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
 	}
+	if s.opts.Type == config.ContentTypeNews {
+		d, err := decodeNewsDraft(args)
+		if err != nil {
+			return nil, err
+		}
+		return s.planner.assembleNewsWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+	}
 	d, err := decodeDraft(args)
 	if err != nil {
 		return nil, err
@@ -540,19 +561,40 @@ func ConversationInitialText(req PlanRequest) string {
 	if contentType == "" {
 		contentType = config.ContentTypeDiscussion
 	}
-	if contentType == config.ContentTypeAudioBook {
+	if contentType == config.ContentTypeNews {
+		// Commentator desks are smaller than discussion panels.
+		n = req.Discussants
+		if n < 1 {
+			n = 2
+		}
+		if n > 4 {
+			n = 4
+		}
+	}
+	switch contentType {
+	case config.ContentTypeAudioBook:
 		sb.WriteString("Design an audio-book plan from the following topic and sources.\n\n")
-	} else {
+	case config.ContentTypeNews:
+		sb.WriteString("Design a radio-news broadcast about the following topic (or from the uploaded materials).\n\n")
+	default:
 		sb.WriteString("Design a panel discussion about the following topic.\n\n")
 	}
 	sb.WriteString("Topic: " + topic + "\n\n")
 	sb.WriteString("Plan settings:\n")
 	sb.WriteString("- Content type: " + contentType + "\n")
 	sb.WriteString("- Language for all names and text: " + lang + "\n")
-	if contentType != config.ContentTypeAudioBook {
+	switch contentType {
+	case config.ContentTypeAudioBook:
+	case config.ContentTypeNews:
+		sb.WriteString(fmt.Sprintf("- Number of commentators: %d\n", n))
+	default:
 		sb.WriteString(fmt.Sprintf("- Number of discussants: %d\n", n))
 	}
-	if instructions := TemplateInstructions(req.Template); instructions != "" {
+	instructions := TemplateInstructions(req.Template)
+	if contentType == config.ContentTypeNews {
+		instructions = NewsTemplateInstructions(req.Template)
+	}
+	if instructions != "" {
 		sb.WriteString("\nTemplate instructions:\n")
 		sb.WriteString(instructions)
 		sb.WriteString("\n\n")
@@ -562,7 +604,9 @@ func ConversationInitialText(req PlanRequest) string {
 	} else {
 		sb.WriteString("- Do not use live web research unless the user explicitly asks for it later.\n")
 	}
-	if contentType == config.ContentTypeAudioBook {
+	if contentType == config.ContentTypeNews {
+		sb.WriteString(fmt.Sprintf("\nUse exactly %d commentators. Each commentator must have a distinct beat (focus) that maps onto the rundown. Sequence the stories like a broadcast — lead story first — and include publication dates and outlet attributions in summaries and key_facts.\n", n))
+	} else if contentType == config.ContentTypeAudioBook {
 		sb.WriteString("\nCreate an audiobook outline with a `style`, narrator, source-cast speakers, one compact overall Markdown summary, and dedicated ordered chapter sections in `chapters`. Style must be one of news, conversational, audiobook, podcast, or meeting; infer it from the source unless the user or selected template asks for a specific style. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose `conversational`. Create one chapter per natural chapter or major section of the source: prefer 3-5 chapters for short sources, and let long books have as many chapters as the source genuinely has (up to " + fmt.Sprint(audioBookMaxChapters) + "). Do not include full source text in the plan, do not number chapter titles, and do not repeat the chapter list in the summary. Before chaptering, identify the book/source's speaking cast and include most central or recurring voices in top-level `speakers`, omitting only unnamed/background/incidental speakers. Give each included character or guest their own `speakers` entry with a required `gender` of exactly `male` or `female` (the narrator too), a concrete voice-casting description, and chapter `speakers` references wherever that voice speaks — never fold two characters into one voice or leave a gender empty.\n")
 	} else {
 		sb.WriteString(fmt.Sprintf("\nUse exactly %d discussants. Each discussant must have a distinct perspective.\n", n))

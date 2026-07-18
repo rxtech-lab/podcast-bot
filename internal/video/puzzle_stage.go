@@ -149,7 +149,8 @@ func isPuzzleType(t string) bool {
 func usesPuzzleMode(t string) bool {
 	return t == config.ContentTypeSituationPuzzle ||
 		t == config.ContentTypeSeries ||
-		t == config.ContentTypeDiscussion
+		t == config.ContentTypeDiscussion ||
+		t == config.ContentTypeNews
 }
 
 // phaseChipText returns the on-frame label for the phase pill. Prefers

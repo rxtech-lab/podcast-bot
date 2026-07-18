@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// silenceMP3 is a ~0.8s clip of silence encoded as audio-24khz-48kbitrate-mono-mp3
-// — the exact format every Provider must emit so the pipeline's per-turn
-// `ffmpeg -c copy` concat works. In E2E mode every synthesized turn returns this
-// same clip, so all segments share identical codec params.
+// silenceMP3 is a ~0.86s clip of silence encoded as 48kHz/192kbps stereo CBR
+// MP3 (no Xing/ID3 header) — the exact format every Provider must emit so the
+// pipeline's per-turn `ffmpeg -c copy` concat works. In E2E mode every
+// synthesized turn returns this same clip, so all segments share identical
+// codec params.
 //
 //go:embed silence.mp3
 var silenceMP3 []byte
@@ -22,8 +23,8 @@ var silenceMP3 []byte
 // same property the pipeline's `ffmpeg -c copy` concat relies on. E2E mode
 // uses this to serve playable uploaded-audio fixtures of arbitrary length.
 func SilenceMP3(minDuration time.Duration) []byte {
-	// 48 kbit/s CBR = 6000 bytes per second of audio.
-	const bytesPerSecond = 6000
+	// 192 kbit/s CBR = 24000 bytes per second of audio.
+	const bytesPerSecond = 24000
 	need := int(minDuration.Seconds()*bytesPerSecond) + 1
 	repeats := (need + len(silenceMP3) - 1) / len(silenceMP3)
 	if repeats < 1 {

@@ -98,14 +98,17 @@ func TestHandleDiscussionTypes(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(out.Types) != 2 {
-		t.Fatalf("types length = %d, want 2", len(out.Types))
+	if len(out.Types) != 3 {
+		t.Fatalf("types length = %d, want 3", len(out.Types))
 	}
 	if out.Types[0].ID != config.ContentTypeDiscussion {
 		t.Fatalf("type id = %q, want %q", out.Types[0].ID, config.ContentTypeDiscussion)
 	}
 	if out.Types[1].ID != config.ContentTypeAudioBook {
 		t.Fatalf("type id = %q, want %q", out.Types[1].ID, config.ContentTypeAudioBook)
+	}
+	if out.Types[2].ID != config.ContentTypeNews {
+		t.Fatalf("type id = %q, want %q", out.Types[2].ID, config.ContentTypeNews)
 	}
 }
 
@@ -223,15 +226,15 @@ func TestHandlePrecheckNewDiscussionForm(t *testing.T) {
 			t.Fatalf("settings.properties missing %q", key)
 		}
 	}
-	// Panelists live in an if/then conditional (discussion type only), not in
-	// the base properties.
+	// Panelists live in an if/then conditional (discussion-family types), not
+	// in the base properties.
 	if _, ok := settingsProps["discussants"]; ok {
 		t.Fatal("settings.properties should not contain discussants (moved to if/then)")
 	}
 	settingsIf := settings["if"].(map[string]any)
 	ifType := settingsIf["properties"].(map[string]any)["type"].(map[string]any)
-	if got := ifType["const"]; got != config.ContentTypeDiscussion {
-		t.Fatalf("settings.if type const = %v, want %q", got, config.ContentTypeDiscussion)
+	if got, want := ifType["enum"], []any{config.ContentTypeDiscussion, config.ContentTypeNews}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("settings.if type enum = %v, want %v", got, want)
 	}
 	settingsThen := settings["then"].(map[string]any)
 	discussants := settingsThen["properties"].(map[string]any)["discussants"].(map[string]any)

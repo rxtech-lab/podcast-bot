@@ -797,7 +797,7 @@ func writeSmokeAudio(path string, dur time.Duration) error {
 		"-y",
 		"-loglevel", "error",
 		"-f", "lavfi",
-		"-i", "anullsrc=r=24000:cl=mono",
+		"-i", "anullsrc=r=48000:cl=stereo",
 		"-t", fmt.Sprintf("%.3f", dur.Seconds()),
 		"-c:a", "aac",
 		"-b:a", "96k",

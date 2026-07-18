@@ -54,6 +54,5 @@ Directives:
 
 // Speak emits a discussant turn.
 func (d *Discussant) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, error) {
-	system := discussantSystem(d.Name(), d.aspect, d.roster)
-	return d.runStream(ctx, system, p)
+	return d.runStream(ctx, discussantSystem(d.Name(), d.aspect, d.roster), p)
 }

@@ -14,9 +14,11 @@ var ErrSSMLUnsupported = errors.New("tts: provider does not support raw SSML")
 
 // Provider is the abstraction every TTS backend (Azure, ElevenLabs, ...)
 // satisfies. Implementations MUST return MP3 byte streams in the same format
-// (audio-24khz-48kbitrate-mono-mp3) so the downstream LiveStream pacing,
+// — 48 kHz / 192 kbps CBR STEREO MP3 with no Xing/ID3 header, voices encoded
+// dual-mono (identical L/R = centered) — so the downstream LiveStream pacing,
 // per-turn concat with `ffmpeg -c copy`, and AudioBytesPerSec subtitle
-// alignment work without provider-specific branches.
+// alignment work without provider-specific branches. Both real providers
+// synthesize mono PCM and normalize through encodePCMToStereoMP3.
 type Provider interface {
 	// FetchVoices lists voices the provider can render. The `language` hint
 	// (e.g. "en-US", "zh-CN") may be used by the provider to tag returned

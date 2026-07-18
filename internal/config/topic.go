@@ -79,6 +79,15 @@ const (
 	// a generative roster. Generation skips TTS entirely — the uploaded audio
 	// becomes the podcast audio and the segments become captions/transcript.
 	ContentTypeUploadedAudio = "uploaded-audio"
+	// ContentTypeNews is a radio-news broadcast: an anchor reads/presents an
+	// ordered story rundown (NewsStories) while one or more commentators —
+	// stored in Discussants, each with a beat in Aspect — add context and
+	// reactions between reads. It reuses the discussion live runtime (host +
+	// discussants + silent commander, audience messages, research tools), so
+	// the discussion roster fields double as the news roster: Host is the
+	// anchor, Discussants are the commentators. Distinct from
+	// AudioBookStyleNews, which is a narration style of the audio-book type.
+	ContentTypeNews = "news"
 )
 
 // Research-scratchpad storage backends selectable via the `storage:` field in
@@ -133,6 +142,16 @@ const (
 	AudioBookModeNarration = "narration"
 	AudioBookModeDialogue  = "dialogue"
 )
+
+// NewsStory is one item in a news podcast's rundown: the on-air headline, a
+// short summary the anchor reads from, and optional dated/attributed key
+// facts. Stories are presented in order; each drives one on-air segment
+// (anchor read → commentator reactions → bridge to the next story).
+type NewsStory struct {
+	Headline string   `yaml:"headline" json:"headline"`
+	Summary  string   `yaml:"summary" json:"summary"`
+	KeyFacts []string `yaml:"key_facts,omitempty" json:"key_facts,omitempty"`
+}
 
 // TranscriptSegment is one sentence-level piece of an uploaded-audio
 // transcript: who said it, where it sits on the audio timeline, and the text.
@@ -212,6 +231,11 @@ type DebateTopic struct {
 	Host        AgentSpec   `yaml:"host,omitempty" json:"host,omitempty"`
 	Commander   AgentSpec   `yaml:"commander,omitempty" json:"commander,omitempty"`
 	Storage     string      `yaml:"storage,omitempty" json:"storage,omitempty"`
+
+	// News-only rundown. News reuses the discussion roster above (Host = the
+	// anchor, Discussants = the commentators, Commander = silent director);
+	// NewsStories is the ordered story list the anchor presents on air.
+	NewsStories []NewsStory `yaml:"news_stories,omitempty" json:"news_stories,omitempty"`
 
 	// Uploaded-audio-only fields. UploadedAudioKey is the durable storage key
 	// of the user's original upload; the duration and max-speaker setting come
@@ -295,7 +319,7 @@ func LoadTopic(path string) (*DebateTopic, error) {
 	if t.Resolution == "" {
 		t.Resolution = Resolution1080p
 	}
-	if t.Type == ContentTypeDiscussion && t.Storage == "" {
+	if (t.Type == ContentTypeDiscussion || t.Type == ContentTypeNews) && t.Storage == "" {
 		t.Storage = StoragePlaintext
 	}
 	return &t, nil
@@ -378,10 +402,10 @@ func validateTopic(t *DebateTopic) error {
 		return fmt.Errorf("channel is required (set `channel: <id>` in frontmatter; ids are defined in channels.json)")
 	}
 	switch t.Type {
-	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, ContentTypeUploadedAudio:
+	case ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, ContentTypeUploadedAudio, ContentTypeNews:
 	default:
-		return fmt.Errorf("type must be one of %q, %q, %q, %q, %q, %q (got %q)",
-			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, ContentTypeUploadedAudio, t.Type)
+		return fmt.Errorf("type must be one of %q, %q, %q, %q, %q, %q, %q (got %q)",
+			ContentTypeDebate, ContentTypeSituationPuzzle, ContentTypeSeries, ContentTypeDiscussion, ContentTypeAudioBook, ContentTypeUploadedAudio, ContentTypeNews, t.Type)
 	}
 	switch t.TTSProvider {
 	case "", TTSProviderAzure, TTSProviderEleven:
@@ -413,6 +437,8 @@ func validateTopic(t *DebateTopic) error {
 		return validateAudioBook(t)
 	case ContentTypeUploadedAudio:
 		return validateUploadedAudio(t)
+	case ContentTypeNews:
+		return validateNews(t)
 	}
 	return nil
 }
@@ -545,6 +571,49 @@ func validateDiscussion(t *DebateTopic) error {
 	}
 	if t.Commander.Model == "" {
 		return fmt.Errorf("commander.model is required for type=discussion (the silent visual/music director)")
+	}
+	switch t.Storage {
+	case "", StoragePlaintext, StorageMongo:
+	default:
+		return fmt.Errorf("storage must be %q or %q (got %q)", StoragePlaintext, StorageMongo, t.Storage)
+	}
+	return nil
+}
+
+func validateNews(t *DebateTopic) error {
+	// News rides the discussion roster (Host = anchor, Discussants =
+	// commentators, Commander = silent director) plus its own rundown.
+	// Reject other formats' fields like validateDiscussion does.
+	if len(t.Affirmative) > 0 || len(t.Negative) > 0 || t.Judge.Model != "" {
+		return fmt.Errorf("type=news must not declare affirmative/negative/judge — use host/discussants/commander")
+	}
+	if t.PuzzleHost.Model != "" || len(t.Players) > 0 || t.SeriesHost.Model != "" {
+		return fmt.Errorf("type=news must not declare puzzle_host/players/series_host")
+	}
+	if t.AudioBookHost.Model != "" {
+		return fmt.Errorf("type=news must not declare audio_book_host — use host/discussants/commander")
+	}
+	if len(t.Discussants) < 1 {
+		return fmt.Errorf("type=news requires at least one commentator (discussants)")
+	}
+	for _, s := range t.Discussants {
+		if s.Name == "" || s.Model == "" {
+			return fmt.Errorf("commentator (discussant) entry needs name and model")
+		}
+	}
+	if t.Host.Model == "" {
+		return fmt.Errorf("host.model is required for type=news (the anchor)")
+	}
+	if t.Commander.Model == "" {
+		return fmt.Errorf("commander.model is required for type=news (the silent visual/music director)")
+	}
+	if len(t.NewsStories) == 0 {
+		return fmt.Errorf("type=news requires at least one news_stories entry")
+	}
+	for _, s := range t.NewsStories {
+		if strings.TrimSpace(s.Headline) == "" || strings.TrimSpace(s.Summary) == "" {
+			return fmt.Errorf("news_stories entries need headline and summary")
+		}
 	}
 	switch t.Storage {
 	case "", StoragePlaintext, StorageMongo:

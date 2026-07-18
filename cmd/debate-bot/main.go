@@ -1188,7 +1188,7 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 				"channel", ch.def.ID, "id", d.id,
 				"elapsed", time.Since(t0).Round(time.Millisecond))
 		}
-		if d.topic.Type == config.ContentTypeDiscussion && ch.discussionStage != nil {
+		if (d.topic.Type == config.ContentTypeDiscussion || d.topic.Type == config.ContentTypeNews) && ch.discussionStage != nil {
 			t0 := time.Now()
 			r.log.Info("discussion asset prep starting", "channel", ch.def.ID, "id", d.id)
 			prepareDiscussionAssets(r.ctx, r.log, &debateEnv, ch, d, orch)
@@ -1466,7 +1466,7 @@ func buildTopicMsg(d loadedDebate, index, total int) contentcreator.TopicMsg {
 	if d.topic.Type == config.ContentTypeSeries {
 		return buildSeriesTopicMsg(d, msg)
 	}
-	if d.topic.Type == config.ContentTypeDiscussion {
+	if d.topic.Type == config.ContentTypeDiscussion || d.topic.Type == config.ContentTypeNews {
 		return buildDiscussionTopicMsg(d, msg)
 	}
 	return buildDebateTopicMsg(d, msg)

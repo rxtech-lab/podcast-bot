@@ -132,6 +132,15 @@ func PhaseLabelLang(contentType string, p agent.Phase, lang Lang) string {
 		case agent.PhaseClosing, agent.PhaseConclusion, agent.PhaseEnded:
 			return phaseTriple{"Conclusion", "总结", "總結"}.pick(lang)
 		}
+	case config.ContentTypeNews:
+		switch p {
+		case agent.PhaseSetup, agent.PhaseOpening:
+			return phaseTriple{"Headlines", "头条", "頭條"}.pick(lang)
+		case agent.PhaseFreeSpeech:
+			return phaseTriple{"Stories", "新闻", "新聞"}.pick(lang)
+		case agent.PhaseClosing, agent.PhaseConclusion, agent.PhaseEnded:
+			return phaseTriple{"Sign-off", "结束", "結束"}.pick(lang)
+		}
 	case config.ContentTypeSeries:
 		// Series episodes: recap → main body → end (see PhaseLabel notes).
 		switch p {

@@ -43,9 +43,9 @@ func TestBuildStitchArgs_AudioFadeOutReencodesAudio(t *testing.T) {
 		{"-c:v", "copy"},
 		{"-af", "areverse,afade=t=in:st=0:d=5.000,areverse"},
 		{"-c:a", "aac"},
-		{"-b:a", "64k"},
-		{"-ar", "24000"},
-		{"-ac", "1"},
+		{"-b:a", "160k"},
+		{"-ar", "48000"},
+		{"-ac", "2"},
 	} {
 		if !containsAdjacent(args, want[0], want[1]) {
 			t.Fatalf("args missing %v; args=%v", want, args)

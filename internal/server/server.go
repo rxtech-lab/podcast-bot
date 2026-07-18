@@ -393,6 +393,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("GET /api/home/ui-actions", s.handleHomeUIActions)
 		s.mux.HandleFunc("POST /api/discussions", s.handleDiscussionCreate)
 		s.mux.HandleFunc("POST /api/discussions/upload-audio", s.handleDiscussionCreateUploadAudio)
+		s.mux.HandleFunc("GET /api/discussions/plans", s.handleDiscussionPlanningPodcastList)
 		s.mux.HandleFunc("GET /api/discussions/parent-podcasts", s.handleDiscussionParentPodcastList)
 		s.mux.HandleFunc("POST /api/discussions/plan", s.handleDiscussionPlan)
 		s.mux.HandleFunc("POST /api/discussions/plan/stream", s.handleDiscussionPlanStream)
@@ -440,6 +441,7 @@ func New(d Deps) *Server {
 		s.mux.HandleFunc("POST /api/discussions/{id}/improve/stream", s.handleDiscussionImproveStream)
 		if d.Planning != nil {
 			s.mux.HandleFunc("GET /api/discussions/{id}/planning", s.handlePlanningConversationGet)
+			s.mux.HandleFunc("POST /api/discussions/{id}/planning/messages", s.handlePlanningMessageAppend)
 			s.mux.HandleFunc("GET /api/discussions/{id}/planning/stream", s.handlePlanningStreamResume)
 			s.mux.HandleFunc("POST /api/discussions/{id}/planning/stream", s.handlePlanningStream)
 			s.mux.HandleFunc("POST /api/discussions/{id}/planning/answer", s.handlePlanningAnswer)

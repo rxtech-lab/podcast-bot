@@ -21,18 +21,20 @@ import (
 const silentBufSeconds = 30
 
 // generateSilentMP3 produces a contiguous MPEG-1/2 Layer 3 byte stream of the
-// requested duration in the same format as Azure TTS output
-// (audio-24khz-48kbitrate-mono-mp3). The bytes are read from a one-shot
-// ffmpeg subprocess fed by lavfi's anullsrc so they're guaranteed to be valid
-// frame-aligned MP3.
+// requested duration in the pipeline's uniform TTS output format
+// (48kHz/192kbps stereo CBR, no Xing header). The bytes are read from a
+// one-shot ffmpeg subprocess fed by lavfi's anullsrc so they're guaranteed to
+// be valid frame-aligned MP3.
 func generateSilentMP3(seconds int) ([]byte, error) {
 	cmd := exec.Command("ffmpeg",
 		"-loglevel", "quiet",
 		"-f", "lavfi",
-		"-i", "anullsrc=channel_layout=mono:sample_rate=24000",
+		"-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
 		"-t", fmt.Sprintf("%d", seconds),
 		"-c:a", "libmp3lame",
-		"-b:a", "48k",
+		"-b:a", "192k",
+		"-write_xing", "0",
+		"-id3v2_version", "0",
 		"-f", "mp3",
 		"-",
 	)

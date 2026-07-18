@@ -289,10 +289,11 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 		}
 	}
 
-	// Discussion participants get a plain-text research scratchpad when the
-	// topic's storage backend is plaintext (the default). For mongodb the
-	// scratchpad is the MongoDB MCP server declared in mcp.json, so no
-	// built-in tool is registered here.
+	// Discussants get a plain-text research scratchpad when the topic's
+	// storage backend is plaintext (the default). For mongodb the scratchpad
+	// is the MongoDB MCP server declared in mcp.json, so no built-in tool is
+	// registered here. News speakers deliberately have NO tools — their turns
+	// are scripted ahead of air (see buildNewsAgents).
 	if o.Topic.Type == config.ContentTypeDiscussion &&
 		o.Topic.Storage != config.StorageMongo {
 		tools.RegisterDataStore(o.Tools, filepath.Join(o.Env.OutDir, "datastore"))
@@ -359,12 +360,9 @@ func (o *Orchestrator) speakerGenders() map[string]string {
 	return out
 }
 
-// makeAgent constructs one role-typed agent from a config.AgentSpec, falling
-// back to env-level defaults for any blank fields. Shared between the per-
-// format buildAgents methods (see debate_orchestrator.go and
-// situation_puzzle_orchestrator.go) — every role recognised by the registry
-// is wired up here so a new format only needs to call this with its specs.
-func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, defaultModel string) agent.Agent {
+// newAgentLLMClient builds the priced, usage-recorded LLM client for one
+// agent spec, falling back to env-level defaults for any blank fields.
+func (o *Orchestrator) newAgentLLMClient(spec config.AgentSpec, defaultModel string) *llm.Client {
 	baseURL := spec.BaseURL
 	if baseURL == "" {
 		baseURL = o.Env.OpenAIBaseURL
@@ -377,13 +375,20 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 	if model == "" {
 		model = defaultModel
 	}
-	client := llm.New(baseURL, key, model).
+	return llm.New(baseURL, key, model).
 		WithUsageRecorder(o.Tracker.AddLLMUsage).
 		WithPricing(o.Env.LLMInputCostPerMillion, o.Env.LLMOutputCostPerMillion)
+}
+
+// newAgentBase wires the shared Base for one agent: LLM client, memory,
+// compressor, tool registry, transcript view, and the activity emitter that
+// fans this agent's transitions onto the event bus so the dashboard's live
+// diagram can show who is searching / taking memory. reg is the tool registry
+// the agent may call mid-turn — pass an empty registry for speakers that must
+// never stall a live broadcast on tool loops (see buildNewsAgents).
+func (o *Orchestrator) newAgentBase(spec config.AgentSpec, role agent.Role, defaultModel string, reg *tools.Registry) *agent.Base {
 	mem := o.MemStore.For(spec.Name)
-	base := agent.NewBase(spec.Name, role, client, mem, o.Compressor, o.Tools, o.Transcript)
-	// Fan this agent's activity transitions onto the event bus so the
-	// dashboard's live diagram can show who is searching / taking memory.
+	base := agent.NewBase(spec.Name, role, o.newAgentLLMClient(spec, defaultModel), mem, o.Compressor, reg, o.Transcript)
 	agentName, agentRole := spec.Name, string(role)
 	base.SetActivityEmitter(func(activity, detail string) {
 		o.Send(AgentActivityMsg{
@@ -393,10 +398,22 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 			Detail:   detail,
 		})
 	})
+	return base
+}
+
+// makeAgent constructs one role-typed agent from a config.AgentSpec, falling
+// back to env-level defaults for any blank fields. Shared between the per-
+// format buildAgents methods (see debate_orchestrator.go and
+// situation_puzzle_orchestrator.go) — every role recognised by the registry
+// is wired up here so a new format only needs to call this with its specs.
+func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, defaultModel string) agent.Agent {
+	base := o.newAgentBase(spec, role, defaultModel, o.Tools)
 	switch role {
 	case agent.RoleHost:
 		// Discussions reuse the generic host role but need a facilitator
 		// prompt with no sides / judge / verdict; debate keeps the default.
+		// (News does not route through here — it builds its dedicated
+		// anchor/commentator structs in buildNewsAgents.)
 		if o.Topic.Type == config.ContentTypeDiscussion {
 			return agent.NewDiscussionHost(base, discussionRoster(o.Topic))
 		}
@@ -479,6 +496,8 @@ func (o *Orchestrator) buildAgents() error {
 		return o.buildAudioBookAgents()
 	case config.ContentTypeDiscussion:
 		return o.buildDiscussionAgents()
+	case config.ContentTypeNews:
+		return o.buildNewsAgents()
 	default:
 		// Debate is also the implicit fallback if a future content type is
 		// added before its branch lands here; config validation rejects
@@ -500,6 +519,8 @@ func (o *Orchestrator) newPlanner() Planner {
 		return o.newAudioBookPlanner()
 	case config.ContentTypeDiscussion:
 		return o.newDiscussionPlanner()
+	case config.ContentTypeNews:
+		return o.newNewsPlanner()
 	}
 	return o.newDebatePlanner()
 }
@@ -528,11 +549,12 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			soundPaths = append([]string(nil), o.seriesSoundPaths...)
 		}
 	}
-	// Discussion folds its pre-generated beds into the same MusicPaths /
-	// SoundPaths surfaces (session bed under every turn; the rest crossfaded
-	// live by the commander via replace SoundCueMsg). The silent director
-	// loop is started here and cancelled when ctx ends.
-	if o.Topic.Type == config.ContentTypeDiscussion {
+	// Discussion-family types (discussion + news) fold their pre-generated
+	// beds into the same MusicPaths / SoundPaths surfaces (session bed under
+	// every turn; the rest crossfaded live by the commander via replace
+	// SoundCueMsg). The silent director loop is started here and cancelled
+	// when ctx ends.
+	if isDiscussionFamily(o.Topic.Type) {
 		if len(o.discussionMusic) > 0 {
 			musicPaths = o.discussionMusic
 		}
@@ -561,10 +583,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		AudioBookImageCaptions:     o.audioBookImageCaptions(),
 		RecordAudioBookImageOffset: o.recordAudioBookImageOffset,
 	}
-	// Ground discussion agents in the plan background and the uploaded
-	// source documents. Gated to the discussion type: other formats reuse
-	// Background for their own flows and must not see new prompt sections.
-	if o.Topic.Type == config.ContentTypeDiscussion {
+	// Ground discussion-family agents in the plan background and the
+	// uploaded source documents. Gated to discussion + news: other formats
+	// reuse Background for their own flows and must not see new prompt
+	// sections.
+	if isDiscussionFamily(o.Topic.Type) {
 		deps.Background = o.Topic.Background
 		deps.SourceDocuments = o.Topic.SourceDocuments
 	}

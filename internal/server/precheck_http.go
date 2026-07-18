@@ -208,6 +208,7 @@ func newDiscussionPrecheckForm(lang contentcreator.Lang) precheckForm {
 func newDiscussionPrecheckFormForSurface(lang contentcreator.Lang, shareExtension bool) precheckForm {
 	templateIDs, templateOptions, templateLabels := templateMetadata(config.ContentTypeDiscussion, lang)
 	audioBookTemplateIDs, audioBookTemplateOptions, _ := templateMetadata(config.ContentTypeAudioBook, lang)
+	newsTemplateIDs, newsTemplateOptions, _ := templateMetadata(config.ContentTypeNews, lang)
 
 	languages := []precheckOption{
 		{ID: "en-US", Label: phrase(lang, "English", "英语", "英語")},
@@ -231,10 +232,12 @@ func newDiscussionPrecheckFormForSurface(lang contentcreator.Lang, shareExtensio
 	templateOptionsByType := map[string]any{
 		config.ContentTypeDiscussion: templateOptions,
 		config.ContentTypeAudioBook:  audioBookTemplateOptions,
+		config.ContentTypeNews:       newsTemplateOptions,
 	}
 	templateIDsByType := map[string]any{
 		config.ContentTypeDiscussion: templateIDs,
 		config.ContentTypeAudioBook:  audioBookTemplateIDs,
+		config.ContentTypeNews:       newsTemplateIDs,
 	}
 	settingsProps := settingsSchema["properties"].(map[string]any)
 	templateSchema := settingsProps["template"].(map[string]any)
@@ -330,7 +333,7 @@ func newDiscussionPrecheckFormForSurface(lang contentcreator.Lang, shareExtensio
 				"ui:order":          []any{"type", "template", "discussants", "language", "generate_cover"},
 				"type": map[string]any{
 					"ui:widget":    "glassMenu",
-					"ui:enumNames": []any{phrase(lang, "Discussion", "讨论", "討論"), phrase(lang, "Audio Book", "有声书", "有聲書")},
+					"ui:enumNames": []any{phrase(lang, "Discussion", "讨论", "討論"), phrase(lang, "Audio Book", "有声书", "有聲書"), phrase(lang, "News Podcast", "新闻播客", "新聞 Podcast")},
 					"ui:options":   map[string]any{"icon": "book.pages.fill"},
 				},
 				"template": map[string]any{
@@ -396,7 +399,7 @@ func templateMetadata(contentType string, lang contentcreator.Lang) (ids, option
 	options = make([]any, 0, len(templates))
 	labels = make([]any, 0, len(templates))
 	for _, tmpl := range templates {
-		label := templateLabel(tmpl.ID, lang)
+		label := templateLabel(contentType, tmpl.ID, lang)
 		ids = append(ids, tmpl.ID)
 		labels = append(labels, label)
 		options = append(options, map[string]any{
@@ -418,11 +421,12 @@ func newDiscussionSettingsSchema(lang contentcreator.Lang, templateIDs, template
 				"type":        "string",
 				"title":       phrase(lang, "Type", "类型", "類型"),
 				"description": phrase(lang, "The kind of station to plan.", "要规划的频道类型。", "要規劃的頻道類型。"),
-				"enum":        []any{config.ContentTypeDiscussion, config.ContentTypeAudioBook},
+				"enum":        []any{config.ContentTypeDiscussion, config.ContentTypeAudioBook, config.ContentTypeNews},
 				"default":     config.ContentTypeDiscussion,
 				"x-options": []any{
 					map[string]any{"id": config.ContentTypeDiscussion, "label": phrase(lang, "Discussion", "讨论", "討論")},
 					map[string]any{"id": config.ContentTypeAudioBook, "label": phrase(lang, "Audio Book", "有声书", "有聲書")},
+					map[string]any{"id": config.ContentTypeNews, "label": phrase(lang, "News Podcast", "新闻播客", "新聞 Podcast")},
 				},
 			},
 			"template": map[string]any{
@@ -449,7 +453,8 @@ func newDiscussionSettingsSchema(lang contentcreator.Lang, templateIDs, template
 			},
 		},
 		"required": []any{"type", "template", "language"},
-		// Panelists only make sense for discussions, so the field lives in a
+		// Panelists only make sense for discussion-family types (discussion +
+		// news, where they become commentators), so the field lives in a
 		// standard JSON Schema if/then conditional keyed on the selected type;
 		// the iOS form renderer shows/hides the row as the type changes.
 		// Note: additionalProperties=false above plus a then-only property is
@@ -458,7 +463,7 @@ func newDiscussionSettingsSchema(lang contentcreator.Lang, templateIDs, template
 		// submissions against this schema — it drives rendering only.
 		"if": map[string]any{
 			"properties": map[string]any{
-				"type": map[string]any{"const": config.ContentTypeDiscussion},
+				"type": map[string]any{"enum": []any{config.ContentTypeDiscussion, config.ContentTypeNews}},
 			},
 			"required": []any{"type"},
 		},
@@ -489,7 +494,19 @@ func phrase(lang contentcreator.Lang, en, hans, hant string) string {
 	}
 }
 
-func templateLabel(id string, lang contentcreator.Lang) string {
+func templateLabel(contentType, id string, lang contentcreator.Lang) string {
+	if contentType == config.ContentTypeNews {
+		switch id {
+		case planner.NewsDeepDiveTemplateID:
+			return phrase(lang, "Deep Dive", "深度报道", "深度報導")
+		case planner.NewsCommentaryTemplateID:
+			return phrase(lang, "News + Commentary", "新闻评论", "新聞評論")
+		case planner.NewsBreakingTemplateID:
+			return phrase(lang, "Breaking News", "突发新闻", "突發新聞")
+		default:
+			return phrase(lang, "Morning Roundup", "早间新闻速览", "早間新聞速覽")
+		}
+	}
 	switch id {
 	case planner.ResearchTemplateID:
 		return phrase(lang, "Research", "研究", "研究")
@@ -523,6 +540,30 @@ func templateDescription(contentType, id string, lang contentcreator.Lang) strin
 			return phrase(lang, "A meeting-style audiobook with a facilitator and participant questions.", "会议风格有声书，包含主持人和参会者提问。", "會議風格有聲書，包含主持人和參與者提問。")
 		default:
 			return phrase(lang, "Let the agent choose the best audiobook style for the source.", "让智能体根据素材选择最合适的有声书风格。", "讓智能體根據素材選擇最合適的有聲書風格。")
+		}
+	}
+	if contentType == config.ContentTypeNews {
+		switch id {
+		case planner.NewsDeepDiveTemplateID:
+			return phrase(lang,
+				"One story broken into segments with extended analyst commentary.",
+				"一条新闻分段深入报道，分析员深入点评。",
+				"一條新聞分段深入報導，分析員深入點評。")
+		case planner.NewsCommentaryTemplateID:
+			return phrase(lang,
+				"The anchor reads each report, then the desk discusses opinions and implications.",
+				"主播播报每条新闻后，评论员讨论观点和影响。",
+				"主播播報每條新聞後，評論員討論觀點和影響。")
+		case planner.NewsBreakingTemplateID:
+			return phrase(lang,
+				"Urgent single-event coverage: what we know, what is unconfirmed, what's next.",
+				"突发事件紧急报道：已知信息、未证实消息、后续关注。",
+				"突發事件緊急報導：已知資訊、未證實消息、後續關注。")
+		default:
+			return phrase(lang,
+				"Several headlines at a brisk pace with quick commentator reactions.",
+				"多条头条快节奏播报，评论员快速点评。",
+				"多條頭條快節奏播報，評論員快速點評。")
 		}
 	}
 	switch id {

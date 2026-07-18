@@ -975,6 +975,52 @@ func (s *DiscussionStore) ListParentPodcasts(ctx context.Context, owner, query s
 	return out, rows.Err()
 }
 
+// ListPlanningPodcasts returns owned discussion/news podcasts that are still in
+// plan mode. A newly-created planning placeholder has no script_json until the
+// first plan is saved, so an absent type is treated as a discussion here.
+// Audiobooks and uploaded-audio plans with a persisted type are excluded.
+func (s *DiscussionStore) ListPlanningPodcasts(ctx context.Context, owner, query string, limit, offset int) ([]Discussion, error) {
+	if limit <= 0 {
+		limit = defaultDiscussionPageSize
+	}
+	if limit > maxDiscussionPageSize {
+		limit = maxDiscussionPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query = strings.TrimSpace(query)
+	typeExpression := s.scriptTypeExpression("d")
+	typePredicate := typeExpression + " = ?"
+	where := "d.owner_user_id = ? AND d.status = ? AND (COALESCE(NULLIF(" + typeExpression + ", ''), '') = '' OR " + typePredicate + " OR " + typePredicate + ")"
+	args := []any{owner, string(DiscussionPlanning), config.ContentTypeDiscussion, config.ContentTypeNews}
+	if query != "" {
+		pattern := "%" + escapeLike(query) + "%"
+		where += ` AND (d.topic LIKE ? ESCAPE '\' OR d.title LIKE ? ESCAPE '\' OR d.markdown LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern)
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+prefixedDiscussionListSelectColumns("d", s.joinVideoJobs)+`
+			, `+discussionSummaryListSelectColumns+`
+			FROM native_discussions d`+s.videoJobsJoin()+summaryMetaJoin()+`
+			WHERE `+where+`
+			ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Discussion, 0)
+	for rows.Next() {
+		d, err := scanDiscussionWithSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		markDiscussionViewer(&d, owner)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // ListByIDs returns the owner's discussions matching ids as list rows (same
 // column set as List). Order follows ids; unknown/unowned ids are skipped.
 // Used by semantic search to hydrate the podcasts behind grouped chunk hits.
@@ -1064,14 +1110,18 @@ func (s *DiscussionStore) search(ctx context.Context, owner, query string, visib
 }
 
 func (s *DiscussionStore) scriptTypePredicate(alias string) string {
+	return s.scriptTypeExpression(alias) + " = ?"
+}
+
+func (s *DiscussionStore) scriptTypeExpression(alias string) string {
 	if alias == "" {
 		alias = "native_discussions"
 	}
 	column := alias + ".script_json"
 	if s != nil && s.db != nil && s.db.kind == databasePostgres {
-		return "(NULLIF(" + column + ", '')::jsonb ->> 'type') = ?"
+		return "(NULLIF(" + column + ", '')::jsonb ->> 'type')"
 	}
-	return "json_valid(" + column + ") AND json_extract(" + column + ", '$.type') = ?"
+	return "CASE WHEN json_valid(" + column + ") THEN json_extract(" + column + ", '$.type') ELSE '' END"
 }
 
 func (s *DiscussionStore) ListPublic(ctx context.Context, viewer, query string, limit, offset int) ([]Discussion, error) {

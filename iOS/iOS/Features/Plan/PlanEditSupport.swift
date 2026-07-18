@@ -74,7 +74,8 @@ extension DiscussionEditTurnDTO {
 extension PlanSnapshot {
     /// Memberwise initializer for previews/tests (the production type only ships
     /// `init(discussion:)`).
-    init(title: String, topic: String, isAudioBook: Bool = false, isUploadedAudio: Bool = false,
+    init(title: String, topic: String, isAudioBook: Bool = false, isNews: Bool = false,
+         isUploadedAudio: Bool = false,
          style: String = "", background: String,
          chapters: [PlanChapterSnapshot] = [],
          people: [PlanPersonSnapshot], sources: [PlanSourceSnapshot])
@@ -82,6 +83,7 @@ extension PlanSnapshot {
         self.title = title
         self.topic = topic
         self.isAudioBook = isAudioBook
+        self.isNews = isNews
         self.isUploadedAudio = isUploadedAudio
         self.uploadedAudioDurationMs = 0
         self.transcriptSegments = []

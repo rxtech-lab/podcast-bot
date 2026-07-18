@@ -17,6 +17,14 @@ const (
 	AudioBookMeetingTemplateID        = config.AudioBookStyleMeeting
 )
 
+// News-podcast template IDs. The roundup template is the type default
+// (DefaultTemplateID) so the shared default-fallback lookups resolve.
+const (
+	NewsDeepDiveTemplateID   = "deep-dive"
+	NewsCommentaryTemplateID = "commentary"
+	NewsBreakingTemplateID   = "breaking"
+)
+
 // Template is a named JSON schema for a planner output shape. The current
 // decoder/assembler still expects the default discussion shape; divergent
 // future templates will need per-template decoders or a template-driven
@@ -99,6 +107,36 @@ var templateRegistry = map[string][]Template{
 			Schema:      defaultAudioBookPlanSchema(),
 		},
 	},
+	config.ContentTypeNews: {
+		{
+			ID:          DefaultTemplateID,
+			Type:        config.ContentTypeNews,
+			Name:        "Morning News Roundup",
+			Description: "Several headlines at a brisk pace with quick commentator reactions.",
+			Schema:      newsPlanSchema(),
+		},
+		{
+			ID:          NewsDeepDiveTemplateID,
+			Type:        config.ContentTypeNews,
+			Name:        "Deep Dive Single Story",
+			Description: "One story broken into segments with extended analyst commentary.",
+			Schema:      newsPlanSchema(),
+		},
+		{
+			ID:          NewsCommentaryTemplateID,
+			Type:        config.ContentTypeNews,
+			Name:        "News + Commentary",
+			Description: "The anchor reads each report, then the desk discusses opinions and implications.",
+			Schema:      newsPlanSchema(),
+		},
+		{
+			ID:          NewsBreakingTemplateID,
+			Type:        config.ContentTypeNews,
+			Name:        "Breaking News Special",
+			Description: "Urgent single-event coverage: what we know, what is unconfirmed, what's next.",
+			Schema:      newsPlanSchema(),
+		},
+	},
 }
 
 func IsResearchTemplate(id string) bool {
@@ -116,6 +154,33 @@ func TemplateInstructions(id string) string {
 	}
 	if style := AudioBookStyleForTemplate(id); style != "" {
 		return "Template: " + style + "\n- Set `style` to `" + style + "` unless the user explicitly asks for a different style.\n- Shape the narrator, speakers, chapter modes, and summaries around that style."
+	}
+	return ""
+}
+
+// NewsTemplateInstructions returns per-template planning guidance for the news
+// content type. Kept separate from TemplateInstructions because the news
+// default template shares the "default" ID with the discussion default.
+func NewsTemplateInstructions(id string) string {
+	shared := `
+- Prefer sources published within the last 72 hours; include publication dates and outlet attributions in summaries and key_facts.
+- Give each commentator a distinct beat (focus) that maps onto the rundown.`
+	switch strings.TrimSpace(id) {
+	case "", DefaultTemplateID:
+		return strings.TrimSpace(`Template: Morning News Roundup
+- Plan 6-10 short stories covering today's most relevant headlines for the topic.
+- Keep summaries brisk — two or three sentences each; the pace is a fast morning show with roughly one commentator reaction per story.`) + shared
+	case NewsDeepDiveTemplateID:
+		return strings.TrimSpace(`Template: Deep Dive Single Story
+- Plan EXACTLY ONE story, but make it segment-sized: split its key_facts into 3-5 coherent groups (timeline, background, stakeholders, implications) so the anchor can present it in parts while the analysts go deep between reads.`) + shared
+	case NewsCommentaryTemplateID:
+		return strings.TrimSpace(`Template: News + Commentary
+- Plan 3-5 stories with meaty summaries. The format is talk-radio: the anchor reads the full report, then the desk debates opinions and implications back and forth before the next item — so pick stories with genuine room for disagreement and give commentators opinionated but distinct beats.`) + shared
+	case NewsBreakingTemplateID:
+		return strings.TrimSpace(`Template: Breaking News Special
+- Plan EXACTLY ONE developing event with an urgent, live-updates feel.
+- Explicitly separate confirmed key_facts from unconfirmed reports — prefix unconfirmed items with "Unconfirmed:" so the anchor can flag them on air.
+- Structure the summary as: what happened, what we know, what remains unclear, what to watch next.`) + shared
 	}
 	return ""
 }
@@ -161,6 +226,51 @@ func defaultDiscussionPlanSchema() map[string]any {
 			},
 		},
 		"required": []string{"title", "background", "host", "discussants"},
+	}
+}
+
+func newsPlanSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title":      map[string]any{"type": "string", "description": "Concise broadcast title; fewer than 10 words."},
+			"background": map[string]any{"type": "string", "description": "One to three neutral paragraphs of shared context for today's broadcast."},
+			"anchor": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+				"required":   []string{"name"},
+			},
+			"commentators": map[string]any{
+				"type":        "array",
+				"description": "One to four commentators, each with a distinct beat that maps onto the rundown.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":  map[string]any{"type": "string"},
+						"focus": map[string]any{"type": "string", "description": "The commentator's beat or analytical angle (e.g. economics, on-the-ground, policy)."},
+					},
+					"required": []string{"name", "focus"},
+				},
+			},
+			"stories": map[string]any{
+				"type":        "array",
+				"description": "The ordered rundown. Each story drives one on-air segment: the anchor reads it, then commentators react.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"headline": map[string]any{"type": "string", "description": "The on-air headline for this story."},
+						"summary":  map[string]any{"type": "string", "description": "Two to four sentences the anchor reads from; include publication dates and outlet attributions."},
+						"key_facts": map[string]any{
+							"type":        "array",
+							"items":       map[string]any{"type": "string"},
+							"description": "Concrete, dated, attributed facts the anchor works into the read.",
+						},
+					},
+					"required": []string{"headline", "summary"},
+				},
+			},
+		},
+		"required": []string{"title", "background", "anchor", "commentators", "stories"},
 	}
 }
 

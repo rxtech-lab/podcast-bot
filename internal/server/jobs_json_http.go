@@ -128,7 +128,7 @@ func applyTopicDefaults(t *config.DebateTopic) {
 	if t.Resolution == "" {
 		t.Resolution = config.Resolution1080p
 	}
-	if t.Type == config.ContentTypeDiscussion && t.Storage == "" {
+	if (t.Type == config.ContentTypeDiscussion || t.Type == config.ContentTypeNews) && t.Storage == "" {
 		t.Storage = config.StoragePlaintext
 	}
 }

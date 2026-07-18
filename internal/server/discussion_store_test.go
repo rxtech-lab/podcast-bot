@@ -501,6 +501,65 @@ func TestDiscussionStoreListAndSearchByVisibility(t *testing.T) {
 	}
 }
 
+func TestDiscussionStoreListPlanningPodcastsExcludesAudiobooksAndReadyRows(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "planning-podcasts.db"), "", "")
+	if err != nil {
+		t.Fatalf("NewDiscussionStore: %v", err)
+	}
+	defer store.Close()
+
+	owner := "oauth:user-1"
+	mk := func(topic, title, contentType string) *Discussion {
+		d, err := store.Create(ctx, owner, topic, planResponse{
+			Script: &config.DebateTopic{Title: title, Type: contentType, Language: "en-US"},
+		})
+		if err != nil {
+			t.Fatalf("Create %s: %v", title, err)
+		}
+		return d
+	}
+	discussion := mk("future work", "Discussion Plan", config.ContentTypeDiscussion)
+	news := mk("daily news", "News Plan", config.ContentTypeNews)
+	audioBook := mk("foundation", "Audio Book Plan", config.ContentTypeAudioBook)
+	ready := mk("finished", "Ready Discussion", config.ContentTypeDiscussion)
+	placeholder, err := store.CreatePlaceholder(ctx, owner, "haze crisis", "en-US", "default")
+	if err != nil {
+		t.Fatalf("CreatePlaceholder: %v", err)
+	}
+	if err := store.SetJobResult(ctx, ready.ID, DiscussionReady, "https://example.com/ready.mp3"); err != nil {
+		t.Fatalf("SetJobResult ready: %v", err)
+	}
+
+	rows, err := store.ListPlanningPodcasts(ctx, owner, "", 20, 0)
+	if err != nil {
+		t.Fatalf("ListPlanningPodcasts: %v", err)
+	}
+	got := map[string]bool{}
+	for _, row := range rows {
+		got[row.ID] = true
+	}
+	if len(rows) != 3 || !got[discussion.ID] || !got[news.ID] || !got[placeholder.ID] || got[audioBook.ID] || got[ready.ID] {
+		t.Fatalf("planning podcast rows = %+v, want discussion/news plans and the pending placeholder", rows)
+	}
+
+	searched, err := store.ListPlanningPodcasts(ctx, owner, "daily", 20, 0)
+	if err != nil {
+		t.Fatalf("search planning podcasts: %v", err)
+	}
+	if len(searched) != 1 || searched[0].ID != news.ID {
+		t.Fatalf("searched planning podcasts = %+v, want only %s", searched, news.ID)
+	}
+
+	searched, err = store.ListPlanningPodcasts(ctx, owner, "haze", 20, 0)
+	if err != nil {
+		t.Fatalf("search planning placeholders: %v", err)
+	}
+	if len(searched) != 1 || searched[0].ID != placeholder.ID {
+		t.Fatalf("searched planning placeholders = %+v, want only %s", searched, placeholder.ID)
+	}
+}
+
 func TestDiscussionStoreMarketPublishSearchAndLikes(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewDiscussionStore(filepath.Join(t.TempDir(), "native-discussions.db"), "", "")

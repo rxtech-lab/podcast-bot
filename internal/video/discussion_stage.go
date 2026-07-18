@@ -155,7 +155,11 @@ func (s *DiscussionStage) Run(ctx context.Context, bus *eventbus.Bus) {
 	}
 }
 
-func isDiscussionType(t string) bool { return t == config.ContentTypeDiscussion }
+// News broadcasts render with the discussion stage (full-bleed background +
+// caption card) — same roster shape, same live director.
+func isDiscussionType(t string) bool {
+	return t == config.ContentTypeDiscussion || t == config.ContentTypeNews
+}
 
 func (s *DiscussionStage) activate() {
 	s.mu.Lock()

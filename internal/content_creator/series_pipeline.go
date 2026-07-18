@@ -38,6 +38,10 @@ const (
 	minPauseMS     = 150
 	maxPauseMS     = 1200
 
+	// audiobookDropoutSampleRate is an ANALYSIS-ONLY decode format for the
+	// silence detector — it downmixes the (dual-mono voice) stream to mono
+	// 24 kHz, which preserves amplitude, so the PCM threshold stays valid
+	// regardless of the pipeline's 48 kHz stereo output format.
 	audiobookDropoutSampleRate      = 24000
 	audiobookDropoutWindow          = 10 * time.Millisecond
 	audiobookDropoutMergeGap        = 50 * time.Millisecond

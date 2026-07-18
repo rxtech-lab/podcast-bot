@@ -113,7 +113,7 @@ func (s *Server) handleExportSummaryToNotion(w http.ResponseWriter, r *http.Requ
 // summary document of a discussion-type podcast. Returns nil (with a warning
 // log) on any failure so the export proceeds without the image.
 func (s *Server) notionMindmapBlocks(ctx context.Context, token string, d *Discussion, docType, language string) []map[string]any {
-	if docType != SummaryDocTypeSummary || !discussionIsDiscussion(d) {
+	if docType != SummaryDocTypeSummary || !discussionIsDiscussionFamily(d) {
 		return nil
 	}
 	var spec summarizer.MindmapSpec
