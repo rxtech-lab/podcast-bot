@@ -156,6 +156,11 @@ type Orchestrator struct {
 	// audioBookImageOffsetsMu — the pipeline writes from timer goroutines.
 	audioBookImageOffsetsMu sync.Mutex
 	audioBookImageOffsets   map[int]float64
+	// audioBookChapterTexts is each chapter's real source markdown (keyed by
+	// global chapter number), fetched from object storage by the job runner
+	// before Run. nil for legacy plans / storage-off runs — the narrator then
+	// works from the outline alone.
+	audioBookChapterTexts map[int]string
 
 	subtitleCues []SubtitleCue
 
@@ -443,6 +448,7 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 				}
 			}
 			return agent.NewAudioBookHost(base, o.Topic.Title, audioBookOutline(o.Topic),
+				len(o.audioBookChapterTexts) > 0,
 				audioBookCharacters(o.Topic),
 				o.seriesNarrationPlan, o.seriesNarrationAnchors, soundForHost)
 		}

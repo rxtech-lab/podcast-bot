@@ -218,7 +218,7 @@ func TestQuestionsArgRejectsEmpty(t *testing.T) {
 }
 
 func TestConversationMessageTextIncludesCurrentLanguage(t *testing.T) {
-	text := ConversationMessageText("Make it more technical", nil, "zh-Hant-HK")
+	text := ConversationMessageText("Make it more technical", nil, "zh-Hant-HK", config.ContentTypeDiscussion)
 	if !strings.Contains(text, "Make it more technical") {
 		t.Fatalf("message text missing visible prompt: %q", text)
 	}

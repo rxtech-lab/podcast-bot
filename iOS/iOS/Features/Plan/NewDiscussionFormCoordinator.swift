@@ -130,6 +130,21 @@ final class NewDiscussionAttachmentsCoordinator {
     var showingNotionPicker = false
     var selectedPhotos: [PhotosPickerItem] = []
 
+    /// Attachment opened for preview by tapping its chip. Parent-hosted (like
+    /// the pickers) because the form widget is re-created on every edit.
+    var previewedAttachmentID: UUID?
+
+    var previewedAttachment: PendingAttachment? {
+        previewedAttachmentID.flatMap { id in attachments.first { $0.id == id } }
+    }
+
+    func preview(_ id: UUID) { previewedAttachmentID = id }
+
+    /// True when any attachment would be silently missing from the plan
+    /// (failed upload/parse, or ready with no readable content) — submission
+    /// is blocked until the user removes it.
+    var hasProblemAttachments: Bool { attachments.contains { $0.hasProblem } }
+
     /// Notion connection status, loaded once so the menu can offer connect vs pick.
     private(set) var notionConnected = false
     private(set) var notionStatusLoaded = false

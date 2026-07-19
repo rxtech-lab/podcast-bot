@@ -3,8 +3,10 @@ package contentcreator
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -95,6 +97,134 @@ type AudioBookPlanner struct {
 
 	boundaryReason atomic.Value
 	boundaryJudge  func(context.Context, string, string, int) (audioBookBoundaryDecision, bool)
+
+	// chapterTexts is each selected chapter's real source markdown keyed by
+	// global chapter number; nil in legacy (outline-only) mode. currentChapter
+	// is the global number of the chapter being narrated. The pipeline's
+	// producer goroutine reads it at produce() time and the boundary review
+	// advances it, but the planner goroutine runs ahead of produce (turn
+	// buffering), so the mutex keeps init/advance/read coherent.
+	chapterMu      sync.Mutex
+	chapterTexts   map[int]string
+	currentChapter int
+}
+
+// WithChapterTexts installs the fetched per-chapter source texts (keyed by
+// global chapter number) and returns the planner. A nil/empty map keeps the
+// legacy outline-only behavior.
+func (p *AudioBookPlanner) WithChapterTexts(texts map[int]string) *AudioBookPlanner {
+	if len(texts) > 0 {
+		p.chapterTexts = texts
+	}
+	return p
+}
+
+// CurrentAudioBookChapter returns the label ("Chapter 3: Title") and full
+// source text of the chapter currently being narrated. ok=false in legacy
+// mode or when the current chapter's text is missing (that turn then narrates
+// outline-style). Called by the pipeline's produce() for every audiobook turn.
+func (p *AudioBookPlanner) CurrentAudioBookChapter() (label, text string, ok bool) {
+	if p == nil || len(p.chapterTexts) == 0 {
+		return "", "", false
+	}
+	p.chapterMu.Lock()
+	defer p.chapterMu.Unlock()
+	sel := p.selectedChapters()
+	if len(sel) == 0 {
+		return "", "", false
+	}
+	if p.currentChapter == 0 {
+		p.currentChapter = sel[0]
+	}
+	text, found := p.chapterTexts[p.currentChapter]
+	if !found || strings.TrimSpace(text) == "" {
+		return "", "", false
+	}
+	return p.chapterLabel(p.currentChapter), text, true
+}
+
+// advanceCurrentChapter moves the tracker to the next selected chapter, never
+// past the last one. Called when the boundary judge reports the current
+// chapter complete.
+func (p *AudioBookPlanner) advanceCurrentChapter() {
+	if p == nil || len(p.chapterTexts) == 0 {
+		return
+	}
+	p.chapterMu.Lock()
+	defer p.chapterMu.Unlock()
+	sel := p.selectedChapters()
+	if len(sel) == 0 {
+		return
+	}
+	if p.currentChapter == 0 {
+		p.currentChapter = sel[0]
+	}
+	for i, n := range sel {
+		if n == p.currentChapter {
+			if i+1 < len(sel) {
+				p.currentChapter = sel[i+1]
+			}
+			return
+		}
+	}
+}
+
+// selectedChapters returns this batch's global chapter numbers in ascending
+// order. Batch selections may be non-contiguous, so advancing always walks
+// this slice instead of incrementing.
+func (p *AudioBookPlanner) selectedChapters() []int {
+	if p == nil || p.topic == nil {
+		return nil
+	}
+	if len(p.topic.AudioBookChapterIndices) > 0 {
+		out := make([]int, 0, len(p.topic.AudioBookChapterIndices))
+		for _, idx := range p.topic.AudioBookChapterIndices {
+			if idx > 0 {
+				out = append(out, idx)
+			}
+		}
+		sort.Ints(out)
+		return out
+	}
+	out := make([]int, len(p.topic.AudioBookChapters))
+	for i := range out {
+		out[i] = i + 1
+	}
+	return out
+}
+
+// chapterLabel renders "Chapter <global number>: <title>" for a selected
+// chapter. Callers hold chapterMu or run before the pipeline starts.
+func (p *AudioBookPlanner) chapterLabel(number int) string {
+	label := "Chapter " + strconv.Itoa(number)
+	sel := p.selectedChapters()
+	for i, n := range sel {
+		if n == number && i < len(p.topic.AudioBookChapters) {
+			if title := strings.TrimSpace(p.topic.AudioBookChapters[i].Title); title != "" {
+				label += ": " + title
+			}
+			break
+		}
+	}
+	return label
+}
+
+// currentChapterLabel returns the label of the chapter being narrated, or ""
+// in legacy mode.
+func (p *AudioBookPlanner) currentChapterLabel() string {
+	if p == nil || len(p.chapterTexts) == 0 {
+		return ""
+	}
+	p.chapterMu.Lock()
+	defer p.chapterMu.Unlock()
+	if p.currentChapter == 0 {
+		sel := p.selectedChapters()
+		if len(sel) == 0 {
+			return ""
+		}
+		p.currentChapter = sel[0]
+	}
+	return p.chapterLabel(p.currentChapter)
 }
 
 // maxAudioBookEndRejections caps how many times the backend may refuse an
@@ -121,6 +251,10 @@ func (p *AudioBookPlanner) Next(ctx context.Context) (*Turn, bool) {
 	}
 	if boundary := p.chapterBoundaryInstruction(); boundary != "" {
 		directive = strings.TrimSpace(directive + "\n\n" + boundary)
+	}
+	if len(p.chapterTexts) > 0 {
+		directive = strings.TrimSpace(directive +
+			"\n\nNarrate only from the current chapter source text provided in this prompt.")
 	}
 	budget := 30 * time.Minute
 	if p.topic != nil && p.topic.TotalMinutes > 0 {
@@ -184,6 +318,13 @@ func (p *AudioBookPlanner) ReviewAudioBookLoop(ctx context.Context, generated st
 		p.ForceDoneAtChapterBoundary()
 		return true
 	default:
+		// In source-text mode a chapter-complete verdict moves the tracker so
+		// the next loop's prompt carries the next chapter's real text. On
+		// judge failure the tracker stays put — re-injecting the same chapter
+		// is always safe.
+		if decision.ChapterComplete {
+			p.advanceCurrentChapter()
+		}
 		return false
 	}
 }
@@ -266,6 +407,7 @@ func (p *AudioBookPlanner) judgeChapterBoundary(ctx context.Context, accepted, c
 	decision, err := judge.Review(
 		judgeCtx,
 		fmt.Sprintf("%d-%d", firstChapter, finalChapter),
+		p.currentChapterLabel(),
 		boundaryJudgeSnippet(p.boundaryJudgeOutline(), 1200),
 		boundaryJudgeSnippet(accepted, 900),
 		boundaryJudgeSnippet(candidate, 900),

@@ -67,8 +67,9 @@ func (p *Planner) emit(phase, text string) {
 	}
 }
 
-// Attachment is a user-uploaded reference. Documents carry markdown converted
-// by markitdown; images carry a URL and are sent to the model as image parts.
+// Attachment is a user-uploaded reference. Documents carry complete markdown
+// converted by markitdown; service pagination is resolved before this model is
+// constructed. Images carry a URL and are sent to the model as image parts.
 // Key is the S3 object key of the upload; the server uses it to re-sign a fresh
 // image URL whenever a persisted conversation turn is replayed to the model
 // (presigned URLs expire, keys don't).
@@ -145,12 +146,20 @@ type audioBookDraft struct {
 		Gender      string `json:"gender"`
 		Description string `json:"description"`
 	} `json:"speakers"`
-	Chapters []struct {
-		Title    string   `json:"title"`
-		Summary  string   `json:"summary"`
-		Mode     string   `json:"mode"`
-		Speakers []string `json:"speakers"`
-	} `json:"chapters"`
+	Chapters []audioBookDraftChapter `json:"chapters"`
+}
+
+// audioBookDraftChapter is one chapter in the LLM's audiobook draft.
+// StartIndex references an entry in the server-provided source marker catalog
+// (0 = unset); StartMarker is a verbatim line copied from the source, used
+// when no catalog entry fits. Both are optional so legacy drafts still decode.
+type audioBookDraftChapter struct {
+	Title       string   `json:"title"`
+	Summary     string   `json:"summary"`
+	Mode        string   `json:"mode"`
+	Speakers    []string `json:"speakers"`
+	StartIndex  int      `json:"start_index,omitempty"`
+	StartMarker string   `json:"start_marker,omitempty"`
 }
 
 // Generate drafts a brand-new script from a topic.
@@ -406,53 +415,54 @@ func attachmentsPromptForType(contentType string, attachments []Attachment) stri
 }
 
 func audioBookAttachmentsPrompt(attachments []Attachment) string {
-	var rendered []Attachment
-	for _, a := range attachments {
-		if a.isImage() || strings.TrimSpace(a.Markdown) == "" {
-			continue
-		}
-		rendered = append(rendered, a)
-	}
-	if len(rendered) == 0 {
-		return ""
+	source := AudioBookSourceFromAttachments(attachments)
+	note := unreadableAttachmentsNote(attachments)
+	if source == "" {
+		return note
 	}
 	var sb strings.Builder
-	sb.WriteString("\n\nUploaded source digests for audiobook planning. The full converted documents remain server-side; use these bounded digests to avoid overloading context:\n")
-	for i, a := range rendered {
+	sb.WriteString("\n\nUploaded source digest for audiobook planning. The full converted documents remain server-side; use this bounded digest to avoid overloading context, and anchor every chapter's start_index to the Source markers catalog below so the server can slice the real text at your boundaries:\n\n")
+	sb.WriteString(audioBookSourceDigest(source))
+	sb.WriteByte('\n')
+	sb.WriteString(note)
+	return sb.String()
+}
+
+// unreadableAttachmentsNote covers document attachments whose text never
+// reached the server (failed/empty conversion, or a URL-only reference the
+// audiobook pipeline cannot fetch). Without it the model has no idea an
+// attachment existed and answers as if nothing was uploaded.
+func unreadableAttachmentsNote(attachments []Attachment) string {
+	var names []string
+	for i, a := range attachments {
+		if a.isImage() || a.isAudio() || strings.TrimSpace(a.Markdown) != "" {
+			continue
+		}
 		name := strings.TrimSpace(a.Filename)
 		if name == "" {
 			name = fmt.Sprintf("document %d", i+1)
 		}
-		fmt.Fprintf(&sb, "\n--- %s ---\n%s\n", name, audioBookSourceDigest(a.Markdown))
+		names = append(names, name)
 	}
-	return sb.String()
+	if len(names) == 0 {
+		return ""
+	}
+	return "\n\nThe user attached " + strings.Join(names, ", ") +
+		", but no readable text reached the server for it. Tell the user the attachment could not be read and ask them to re-upload a text-based copy (or paste the content) before planning chapters — do not pretend the source is available.\n"
 }
 
-func audioBookSourceDigest(markdown string) string {
-	text := strings.TrimSpace(markdown)
+// audioBookSourceDigest renders the bounded planning digest over the exact
+// concatenated source the splitter will later slice: total length, the indexed
+// Source markers catalog, and a short orientation excerpt.
+func audioBookSourceDigest(source string) string {
+	text := strings.TrimSpace(source)
 	if text == "" {
 		return "(empty document)"
 	}
-	lines := strings.Split(text, "\n")
-	var headings []string
-	for _, line := range lines {
-		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "#") {
-			headings = append(headings, trim)
-			if len(headings) >= 20 {
-				break
-			}
-		}
-	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Converted length: %d characters.\n", len(text))
-	if len(headings) > 0 {
-		sb.WriteString("Detected headings:\n")
-		for _, h := range headings {
-			sb.WriteString("- ")
-			sb.WriteString(truncate(h, 180))
-			sb.WriteByte('\n')
-		}
+	if catalog := renderSourceMarkers(audioBookSourceMarkers(source)); catalog != "" {
+		sb.WriteString(catalog)
 	}
 	cleaned := strings.Join(strings.Fields(text), " ")
 	if cleaned != "" {
@@ -534,6 +544,12 @@ func imageAttachments(attachments []Attachment) []Attachment {
 		}
 	}
 	return images
+}
+
+// isAudio marks voice-message/audio attachments, which are replayed for
+// humans and never carry converted text.
+func (a Attachment) isAudio() bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.MIMEType)), "audio/")
 }
 
 func (a Attachment) isImage() bool {

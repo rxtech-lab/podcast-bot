@@ -2,12 +2,9 @@ import JSONSchema
 import JSONSchemaForm
 import SwiftUI
 
-/// Custom `JSONSchemaForm` widgets + templates that render the backend-driven
-/// New Discussion form with the original hand-built glass styling, while keeping
-/// the form schema-driven and backend-owned.
-///
-/// The backend selects these by name via `ui:widget` / `ui:objectTemplate`, and
-/// supplies per-row presentation (icons, deep links) via `ui:options`.
+/// Custom `JSONSchemaForm` widgets + templates that preserve the hand-built
+/// glass styling while keeping the New Discussion form backend-owned. The
+/// backend selects widgets and supplies presentation through the UI schema.
 enum NewDiscussionFormUI {
     /// Glass leaf widgets keyed by the `ui:widget` names emitted by the backend.
     @MainActor
@@ -30,8 +27,7 @@ enum NewDiscussionFormUI {
         ]
     }
 
-    /// Widgets for the backend-driven Upload Own Audio form: the audio-file
-    /// picker plus the shared glass rows it reuses (stepper for max speakers).
+    /// Widgets for Upload Own Audio: the picker plus its shared glass rows.
     @MainActor
     static func uploadAudioWidgets(
         rootFormData: Binding<FormData>,
@@ -45,8 +41,7 @@ enum NewDiscussionFormUI {
         ]
     }
 
-    /// Object templates: a grouped glass card (`card`) for the reference/settings
-    /// groups, and a plain vertical stack as the default for the root and prompt.
+    /// Object templates for grouped cards and plain root/prompt stacks.
     static func templates() -> JSONSchemaFormTemplates {
         JSONSchemaFormTemplates(
             objects: ["card": { context in AnyView(GlassCardGroup(context: context)) }],
@@ -187,9 +182,7 @@ private struct GlassCardGroup: View {
 
 // MARK: - Leaf widgets
 
-/// Text field rendered as a glass text box with a caption: the multi-line
-/// topic box by default, or a single-line input when the backend sets
-/// `ui:options.multiline` to false.
+/// Glass text box, multiline unless `ui:options.multiline` is false.
 private struct GlassTextWidget: View {
     let context: JSONSchemaFormWidgetContext
     var body: some View {
@@ -336,8 +329,7 @@ private struct GlassToggleWidget: View {
     }
 }
 
-/// Parent-discussion row. Shows the current selection and opens the searchable
-/// picker sheet through the form coordinator using the backend-declared deep link.
+/// Parent-discussion row backed by the coordinator and schema deep link.
 private struct DiscussionPickerWidget: View {
     let context: JSONSchemaFormWidgetContext
     let rootFormData: Binding<FormData>
@@ -407,8 +399,7 @@ private struct DiscussionPickerWidget: View {
         rootFormData.wrappedValue = .object(properties: root)
     }
 
-    /// When a parent id is present but its title isn't cached (pre-filled or
-    /// restored), resolve it so the row shows a human-readable title.
+    /// Resolves an uncached, pre-filled parent id to a readable title.
     @MainActor
     private func resolveIfNeeded() async {
         guard !selectedID.isEmpty, selectedReference == nil, !isResolving else { return }
@@ -420,10 +411,7 @@ private struct DiscussionPickerWidget: View {
     }
 }
 
-/// Owns the upload-own-audio picker state: the file-importer presentation flag
-/// (the sheet must host `fileImporter`, a form widget can't) and the streaming
-/// upload of the picked file. Writes the finished `{key, filename, mime_type,
-/// size_bytes}` object into the form through the bound writer.
+/// Owns audio picker presentation, upload state, and form writes.
 @MainActor
 @Observable
 final class UploadAudioCoordinator {
@@ -459,9 +447,7 @@ final class UploadAudioCoordinator {
         }
     }
 
-    /// Queues a file to upload as soon as the form widget binds — used when the
-    /// caller already has the audio (an in-app recording) instead of the user
-    /// picking one. `filename` is what the server sees (it titles the episode).
+    /// Queues an existing recording to upload once the form widget binds.
     func stageInitialFile(url: URL, filename: String) {
         guard status == .idle else { return }
         if write != nil, api != nil {
@@ -538,9 +524,7 @@ final class UploadAudioCoordinator {
     }
 }
 
-/// Audio-file row for the Upload Own Audio form: shows the picked file (or a
-/// prompt), streams the upload through the coordinator, and writes the ready
-/// audio object into the form value.
+/// Audio-file row that uploads through the coordinator and writes the form value.
 struct AudioPickerWidget: View {
     let context: JSONSchemaFormWidgetContext
     let rootFormData: Binding<FormData>
@@ -648,11 +632,7 @@ struct AudioPickerWidget: View {
     }
 }
 
-/// Attachments row. Renders the picked-file chips and a source menu (Notion,
-/// photos, files); each menu item opens the matching picker through the form
-/// coordinator using the backend-declared deep link. The coordinator (owned by
-/// `NewDiscussionView`) holds the live upload state and writes ready attachments
-/// back into the form value here.
+/// Attachment chips and source menu backed by the parent-owned coordinator.
 private struct AttachmentsPickerWidget: View {
     let context: JSONSchemaFormWidgetContext
     let rootFormData: Binding<FormData>
@@ -670,6 +650,12 @@ private struct AttachmentsPickerWidget: View {
                         }
                     }
                     .padding(.vertical, 2)
+                }
+                if coordinator.hasProblemAttachments {
+                    Text("An attachment can't be used — tap it for details, or remove it to continue.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("newPlan.attachments.problem")
                 }
             }
             Menu {
@@ -743,20 +729,34 @@ private struct AttachmentsPickerWidget: View {
         .glassEffect(in: .rect(cornerRadius: 16))
     }
 
+    /// One picked-file chip. Tapping the body opens the parent-hosted preview
+    /// sheet (parsed content when ready, the error when something went wrong);
+    /// the trailing x removes the attachment.
     private func chip(_ att: PendingAttachment) -> some View {
         HStack(spacing: 6) {
-            switch att.status {
-            case .uploading:
-                ProgressView().controlSize(.mini).tint(Theme.accent)
-            case .ready:
-                Image(systemName: "doc.fill").font(.caption2).foregroundStyle(Theme.accent)
-            case .failed:
-                Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
+            Button {
+                coordinator.preview(att.id)
+            } label: {
+                HStack(spacing: 6) {
+                    switch att.status {
+                    case .uploading:
+                        ProgressView().controlSize(.mini).tint(Theme.accent)
+                    case .ready:
+                        if att.isReadyWithoutContent {
+                            Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
+                        } else {
+                            Image(systemName: "doc.fill").font(.caption2).foregroundStyle(Theme.accent)
+                        }
+                    case .failed:
+                        Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
+                    }
+                    Text(att.filename)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                }
             }
-            Text(att.filename)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-                .foregroundStyle(.primary)
+            .buttonStyle(.plain)
             Button {
                 coordinator.remove(att.id)
             } label: {

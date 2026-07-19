@@ -237,6 +237,13 @@ func (b *Base) runStream(ctx context.Context, system string, p SpeakPrompt) (*ll
 			"When a passage directly supports a point, quote a short excerpt verbatim and name the document it comes from.",
 		)
 	}
+	if txt := strings.TrimSpace(p.CurrentChapterText); txt != "" {
+		parts = append(parts, "",
+			"# Current chapter source text — "+strings.TrimSpace(p.CurrentChapterLabel),
+			txt,
+			"Narrate this turn ONLY from this chapter's text. Cover it fully and in order; do not invent content that is not in it, and do not continue into the next chapter — its text will be provided on a later turn. If this is the final planned chapter, call end_audio_book once its text is fully narrated.",
+		)
+	}
 
 	parts = append(parts, "",
 		"# Your private memory (use to recall earlier moments)",

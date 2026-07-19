@@ -316,6 +316,8 @@ func defaultAudioBookPlanSchema() map[string]any {
 							"items":       map[string]any{"type": "string"},
 							"description": "Names from the top-level speakers list who talk in this chapter; empty for narration chapters. Never list the narrator.",
 						},
+						"start_index":  map[string]any{"type": "integer", "description": "REQUIRED when a source document was uploaded: the marker index (from the 'Source markers' catalog in the digest) where this chapter's text begins. Chapter 1 may use marker 1 or omit it (it implicitly starts at the top of the document, including any front matter). Indices must be strictly increasing across chapters."},
+						"start_marker": map[string]any{"type": "string", "description": "Verbatim start line copied exactly from the source (a heading or the chapter's first sentence). Use only when no catalog marker fits."},
 					},
 					"required": []string{"title", "summary"},
 				},

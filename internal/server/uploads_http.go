@@ -238,6 +238,12 @@ func (s *Server) finishUploadedObject(ctx context.Context, key, filename, mimeTy
 	if err != nil {
 		return uploadResponse{}, errUpload("parse file: " + err.Error())
 	}
+	// markitdown returns 200 with empty content for scanned/image-only
+	// documents; succeeding here would let the client attach a file the model
+	// can never read.
+	if strings.TrimSpace(markdown) == "" {
+		return uploadResponse{}, errUpload("no text could be extracted from this file — if it is a scanned document, upload a text-based (OCR'd) copy instead")
+	}
 	return uploadResponse{Filename: filename, Key: key, Markdown: markdown, URL: fetchURL, MIMEType: mimeType}, nil
 }
 

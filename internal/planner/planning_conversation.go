@@ -67,6 +67,16 @@ type ConversationOptions struct {
 	ExistingSources  []config.Source
 	ExistingPlan     *config.DebateTopic
 	ExistingMarkdown string
+	// AudioBookSource is the full concatenated markdown of the conversation's
+	// uploaded book documents ("" when none). It must be the same
+	// concatenation the digest was rendered over so the model's start_index
+	// references resolve (see AudioBookSourceFromAttachments).
+	AudioBookSource string
+	// StoreChapterContent uploads one chapter's sliced markdown to durable
+	// storage and returns its key. nil when object storage is disabled — the
+	// plan then assembles without content keys and generation falls back to
+	// outline-only narration.
+	StoreChapterContent func(ctx context.Context, chapterIndex int, content []byte) (string, error)
 }
 
 const conversationSystemBase = `You are a conversational planning agent for a podcast generator.
@@ -137,10 +147,12 @@ Audiobook-specific contract:
 - Include most of the book/source's speaking cast in the top-level "speakers" list: all central and recurring voices plus chapter-critical one-off voices. Omit only unnamed, background, or truly incidental speakers. Do not shrink a real book cast down to one generic guest or narrator-only plan.
 - Give each included character or guest who speaks anywhere in the audiobook their own "speakers" entry — never fold two characters into one shared voice. Each speaker should appear in at least one chapter's "speakers" list when they speak there. Each speaker (and the narrator) MUST carry a "gender" of exactly "male" or "female" (infer from the source; never leave it empty) so a female character is cast with a female TTS voice and a male character with a male voice, plus a concrete voice-casting description (age, tone, register, personality).
 - Uploaded long documents are represented by bounded server digests. Do not ask the user to paste the full source into the chat, and do not dump long source text into the plan.
+- When a source document was uploaded, each chapter MUST map to a real contiguous span of it: set "start_index" to the Source-markers catalog entry where the chapter's text begins (strictly increasing across chapters), or "start_marker" with a verbatim source line only when no catalog entry fits. The server slices the real text at your markers, stores each chapter's actual content, and the narrator reads from it during generation — chapters are not summaries to be re-imagined.
+- After write_plan/update_plan, the server walks each chapter's actual text and reports the speaking voices it found in the tool result. Fold those findings into the plan: they are already merged into "speakers"; assign them to the chapters where they talk.
 - Create one chapter per natural chapter or major section of the source. Prefer 3-5 chapters for short sources; long books may have as many chapters as the source genuinely has, up to ` + fmt.Sprint(audioBookMaxChapters) + ` chapters.
 - Chapter titles should not include "Chapter 1" / "Chapter 2" prefixes. Keep each chapter summary to one or two concise sentences.
 - Do not repeat the chapter list inside "overall_summary"; chapters belong only in the structured "chapters" field.
-- The generated plan is an outline only; full narration happens during the audio generation phase.`
+- The generated plan is an outline only; full narration happens during the audio generation phase, reading from each chapter's stored source text when one was uploaded.`
 }
 
 // convDispatchKind classifies a tool result so the loop knows how to record it.
@@ -370,12 +382,17 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 		return sourceDigest("crawl_sources results", found), dispatchTool, nil, "", false
 	case "write_plan", "update_plan":
 		s.planner.emit("writing", "Writing the plan…")
-		result, err := s.assemblePlanFromToolArgs(tc.Arguments)
+		result, note, err := s.assemblePlanFromToolArgs(ctx, tc.Arguments)
 		if err != nil {
 			return "plan rejected: " + err.Error(), dispatchTool, nil, "", true
 		}
 		s.currentPlan = result
-		return "Plan saved internally. Call show_plan when this plan should be visible to the user.", dispatchTool, result, "", false
+		output := "Plan saved internally."
+		if note != "" {
+			output += " " + note
+		}
+		output += " Call show_plan when this plan should be visible to the user."
+		return output, dispatchTool, result, "", false
 	case "show_plan":
 		if s.currentPlan == nil || s.currentPlan.Script == nil {
 			return "no plan has been written yet; call write_plan or update_plan first", dispatchTool, nil, "", true
@@ -392,11 +409,14 @@ func (s *conversationSession) dispatch(ctx context.Context, tc llm.ToolCall) (ou
 	}
 }
 
-func (s *conversationSession) assemblePlanFromToolArgs(args string) (*Result, error) {
+// assemblePlanFromToolArgs assembles a plan from write_plan/update_plan args.
+// note is extra context appended to the tool result (e.g. audiobook split and
+// cast-extraction findings); "" for content types that don't produce one.
+func (s *conversationSession) assemblePlanFromToolArgs(ctx context.Context, args string) (*Result, string, error) {
 	if s.opts.Type == config.ContentTypeUploadedAudio {
 		d, err := decodeUploadedAudioDraft(args)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		// Merge onto the freshest saved plan so consecutive update_plan calls
 		// within one turn stack instead of each starting from the stored plan.
@@ -404,30 +424,29 @@ func (s *conversationSession) assemblePlanFromToolArgs(args string) (*Result, er
 		if s.currentPlan != nil && s.currentPlan.Script != nil {
 			existing = s.currentPlan.Script
 		}
-		return assembleUploadedAudioPlan(existing, d)
+		res, err := assembleUploadedAudioPlan(existing, d)
+		return res, "", err
 	}
 	if s.opts.Type == config.ContentTypeAudioBook {
-		d, err := decodeAudioBookDraft(args)
-		if err != nil {
-			return nil, err
-		}
-		return s.planner.assembleAudioBookWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+		return s.assembleAudioBookPlan(ctx, args)
 	}
 	if s.opts.Type == config.ContentTypeNews {
 		d, err := decodeNewsDraft(args)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return s.planner.assembleNewsWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+		res, err := s.planner.assembleNewsWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+		return res, "", err
 	}
 	d, err := decodeDraft(args)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := s.validateDraft(d); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return s.planner.assembleWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+	res, err := s.planner.assembleWithModel(d, s.planLanguage(), s.opts.Channel, s.sources, s.planModel())
+	return res, "", err
 }
 
 func (s *conversationSession) validateDraft(d *draft) error {
@@ -526,17 +545,19 @@ func AttachmentsText(prompt string, attachments []Attachment) string {
 // ConversationMessageText persists a visible user message plus hidden current
 // planning settings for the model. The server's client-facing projection strips
 // the hidden settings block back out before rendering the user bubble.
-func ConversationMessageText(prompt string, attachments []Attachment, language string) string {
+// contentType picks the attachment rendering: audiobook conversations get the
+// bounded source digest with the marker catalog instead of inlined markdown.
+func ConversationMessageText(prompt string, attachments []Attachment, language, contentType string) string {
 	visible := strings.TrimSpace(prompt)
 	lang := strings.TrimSpace(language)
 	if lang == "" {
-		return AttachmentsText(visible, attachments)
+		return strings.TrimSpace(visible + attachmentsPromptForType(contentType, attachments))
 	}
 	var sb strings.Builder
 	sb.WriteString(visible)
 	sb.WriteString("\n\nCurrent plan settings:\n")
 	sb.WriteString("- Language for all names and text: " + lang + "\n")
-	sb.WriteString(attachmentsPrompt(attachments))
+	sb.WriteString(attachmentsPromptForType(contentType, attachments))
 	return strings.TrimSpace(sb.String())
 }
 
@@ -607,7 +628,7 @@ func ConversationInitialText(req PlanRequest) string {
 	if contentType == config.ContentTypeNews {
 		sb.WriteString(fmt.Sprintf("\nUse exactly %d commentators. Each commentator must have a distinct beat (focus) that maps onto the rundown. Sequence the stories like a broadcast — lead story first — and include publication dates and outlet attributions in summaries and key_facts.\n", n))
 	} else if contentType == config.ContentTypeAudioBook {
-		sb.WriteString("\nCreate an audiobook outline with a `style`, narrator, source-cast speakers, one compact overall Markdown summary, and dedicated ordered chapter sections in `chapters`. Style must be one of news, conversational, audiobook, podcast, or meeting; infer it from the source unless the user or selected template asks for a specific style. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose `conversational`. Create one chapter per natural chapter or major section of the source: prefer 3-5 chapters for short sources, and let long books have as many chapters as the source genuinely has (up to " + fmt.Sprint(audioBookMaxChapters) + "). Do not include full source text in the plan, do not number chapter titles, and do not repeat the chapter list in the summary. Before chaptering, identify the book/source's speaking cast and include most central or recurring voices in top-level `speakers`, omitting only unnamed/background/incidental speakers. Give each included character or guest their own `speakers` entry with a required `gender` of exactly `male` or `female` (the narrator too), a concrete voice-casting description, and chapter `speakers` references wherever that voice speaks — never fold two characters into one voice or leave a gender empty.\n")
+		sb.WriteString("\nCreate an audiobook outline with a `style`, narrator, source-cast speakers, one compact overall Markdown summary, and dedicated ordered chapter sections in `chapters`. Style must be one of news, conversational, audiobook, podcast, or meeting; infer it from the source unless the user or selected template asks for a specific style. If the user asks for people talking, two people talking, an interview, Q&A, a conversation, or one main speaker with others asking questions, choose `conversational`. Create one chapter per natural chapter or major section of the source: prefer 3-5 chapters for short sources, and let long books have as many chapters as the source genuinely has (up to " + fmt.Sprint(audioBookMaxChapters) + "). Do not include full source text in the plan, do not number chapter titles, and do not repeat the chapter list in the summary. When a source document is attached, anchor every chapter to the real text with `start_index` (a Source-markers catalog entry, strictly increasing across chapters) so the server can slice and store each chapter's actual content for narration. Before chaptering, identify the book/source's speaking cast and include most central or recurring voices in top-level `speakers`, omitting only unnamed/background/incidental speakers. Give each included character or guest their own `speakers` entry with a required `gender` of exactly `male` or `female` (the narrator too), a concrete voice-casting description, and chapter `speakers` references wherever that voice speaks — never fold two characters into one voice or leave a gender empty.\n")
 	} else {
 		sb.WriteString(fmt.Sprintf("\nUse exactly %d discussants. Each discussant must have a distinct perspective.\n", n))
 	}

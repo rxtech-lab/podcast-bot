@@ -273,7 +273,8 @@ extension APIClient {
         return try await send(
             "POST",
             "/api/uploads/complete",
-            body: UploadCompleteRequest(key: presign.key, filename: filename, mimeType: mimeType)
+            body: UploadCompleteRequest(key: presign.key, filename: filename, mimeType: mimeType),
+            timeout: Self.markitdownTimeout
         )
     }
 

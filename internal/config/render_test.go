@@ -133,7 +133,7 @@ func TestRenderMarkdownRoundTripAudioBook(t *testing.T) {
 		AudioBookStyle:    AudioBookStylePodcast,
 		AudioBookSpeakers: []AudioBookSpeaker{{Name: "Author", Gender: "neutral", Description: "quoted source passages"}},
 		AudioBookChapters: []AudioBookChapter{
-			{Title: "Origins", Summary: "How the story begins."},
+			{Title: "Origins", Summary: "How the story begins.", StartMarker: "# Origins", ContentKey: "audiobooks/d1/chapters/01-abcd1234.md", ContentChars: 5200},
 			{Title: "Consequences", Summary: "What follows from the opening ideas."},
 		},
 		AudioBookChapterIndices: []int{6, 7},

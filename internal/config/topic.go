@@ -129,6 +129,15 @@ type AudioBookChapter struct {
 	Summary  string   `yaml:"summary" json:"summary"`
 	Mode     string   `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Speakers []string `yaml:"speakers,omitempty" json:"speakers,omitempty"`
+	// StartMarker is the verbatim source line where this chapter's text begins
+	// in the uploaded document. ContentKey is the durable storage key of the
+	// chapter's sliced markdown; ContentChars is the slice's true length before
+	// any fetch-time cap. All three are empty on legacy plans and when object
+	// storage is disabled — generation then falls back to outline-only
+	// narration.
+	StartMarker  string `yaml:"start_marker,omitempty" json:"start_marker,omitempty"`
+	ContentKey   string `yaml:"content_key,omitempty" json:"content_key,omitempty"`
+	ContentChars int    `yaml:"content_chars,omitempty" json:"content_chars,omitempty"`
 }
 
 // Audiobook style and chapter narration modes.

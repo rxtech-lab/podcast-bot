@@ -717,6 +717,20 @@ func (p *Pipeline) produce(ctx context.Context, t *Turn) error {
 	if mr, ok := t.Speaker.(interface{ MemoryRead() string }); ok {
 		prompt.Memory = mr.MemoryRead()
 	}
+	// Audiobook source-text mode: resolve the current chapter at produce()
+	// time, not planner time — the planner goroutine runs ahead of produce,
+	// while the previous turn's boundary review (which advances the chapter
+	// tracker) runs on this goroutine just before this call.
+	if p.d.ContentType == config.ContentTypeAudioBook {
+		if cc, ok := p.d.Planner.(interface {
+			CurrentAudioBookChapter() (string, string, bool)
+		}); ok {
+			if label, text, chapterOK := cc.CurrentAudioBookChapter(); chapterOK {
+				prompt.CurrentChapterLabel = label
+				prompt.CurrentChapterText = text
+			}
+		}
+	}
 
 	stream, err := t.Speaker.Speak(ctx, prompt)
 	if err != nil {

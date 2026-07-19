@@ -9,7 +9,8 @@ import (
 func TestAudioBookPromptRequiresImmediateEndToolAtCompletion(t *testing.T) {
 	system := fmt.Sprintf(audioBookHostSystemTemplate,
 		"Rain Notes",
-		"Chapter 1: The path\nChapter 2: The clinic",
+		audioBookOutlineBlock(false, "Chapter 1: The path\nChapter 2: The clinic"),
+		audioBookDirectiveBlock(false),
 		"",
 		"",
 		"",
@@ -35,7 +36,7 @@ func TestAudioBookLengthContractIncludesConcreteDensity(t *testing.T) {
 	contract := audioBookLengthContract(SpeakPrompt{
 		SecondsBudget: 600,
 		Instructions:  "narrate",
-	})
+	}, false)
 	required := []string{
 		"Target duration: at least 10 minute(s)",
 		"at least about 2400 CJK characters",
@@ -61,7 +62,7 @@ func TestAudioBookLengthContractContinuationHasNoPerLoopMinimum(t *testing.T) {
 	contract := audioBookLengthContract(SpeakPrompt{
 		SecondsBudget: 600,
 		Instructions:  "narrate continuation: keep going",
-	})
+	}, false)
 	for _, want := range []string{
 		"does NOT apply to this continuation loop alone",
 		"Never pad this loop",

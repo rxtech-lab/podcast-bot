@@ -102,6 +102,9 @@ struct NewDiscussionView: View {
                 attachmentsCoordinator.importNotionPages(pages)
             }
         }
+        .sheet(item: attachmentPreview) { attachment in
+            PendingAttachmentPreviewSheet(attachment: attachment)
+        }
         .task {
             await loadPrecheck()
         }
@@ -123,6 +126,15 @@ struct NewDiscussionView: View {
         Binding(
             get: { attachmentsCoordinator.selectedPhotos },
             set: { attachmentsCoordinator.selectedPhotos = $0 }
+        )
+    }
+
+    /// Drives the tapped-chip attachment preview sheet; removing the previewed
+    /// attachment (or dismissing) clears the coordinator's selection.
+    private var attachmentPreview: Binding<PendingAttachment?> {
+        Binding(
+            get: { attachmentsCoordinator.previewedAttachment },
+            set: { if $0 == nil { attachmentsCoordinator.previewedAttachmentID = nil } }
         )
     }
 
@@ -193,6 +205,7 @@ struct NewDiscussionView: View {
             && !isLoadingForm
             && !isPlanning
             && !attachmentsCoordinator.isUploading
+            && !attachmentsCoordinator.hasProblemAttachments
             && studioAllowed
     }
 

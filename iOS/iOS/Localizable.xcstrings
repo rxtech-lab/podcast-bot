@@ -1301,6 +1301,9 @@
         }
       }
     },
+    "An attachment can't be used — tap it for details, or remove it to continue." : {
+
+    },
     "Answered" : {
       "comment" : "Question card status when answered",
       "localizations" : {
@@ -1615,6 +1618,9 @@
           }
         }
       }
+    },
+    "Attachment failed" : {
+
     },
     "Attachments" : {
       "localizations" : {
@@ -8144,6 +8150,9 @@
         }
       }
     },
+    "No readable content" : {
+
+    },
     "No readable content was returned for this source." : {
       "localizations" : {
         "zh-Hans" : {
@@ -8278,6 +8287,9 @@
           }
         }
       }
+    },
+    "No text could be extracted from this file, so it can't be used for planning. If it is a scanned document, try a text-based (OCR'd) copy." : {
+
     },
     "No transcript yet. You can type one, or send the audio for transcription." : {
       "comment" : "Placeholder shown when a reviewed voice message has no transcript",
@@ -10989,6 +11001,9 @@
           }
         }
       }
+    },
+    "Remove this attachment (or add the file again) to continue." : {
+
     },
     "Rename" : {
       "comment" : "Rename recording\nRename recording swipe action",
@@ -14016,6 +14031,9 @@
         }
       }
     },
+    "This file is still being uploaded and converted. It will be attached once it's ready." : {
+
+    },
     "This language isn't available for on-device transcription on this device." : {
       "comment" : "Shown when the chosen voice-message language has no on-device model",
       "localizations" : {
@@ -15062,6 +15080,9 @@
           }
         }
       }
+    },
+    "Uploading and parsing…" : {
+
     },
     "Uploading your own audio is not enabled for your account." : {
       "comment" : "Upload own audio unavailable description",
