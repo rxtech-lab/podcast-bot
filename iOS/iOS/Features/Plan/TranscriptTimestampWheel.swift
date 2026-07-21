@@ -73,7 +73,11 @@ struct TranscriptTimestampWheel: View {
                 Text(label(value)).tag(value)
             }
         }
+        #if os(macOS)
+        .pickerStyle(.menu)
+        #else
         .pickerStyle(.wheel)
+        #endif
         .labelsHidden()
         .accessibilityLabel(title)
         .frame(maxWidth: .infinity)

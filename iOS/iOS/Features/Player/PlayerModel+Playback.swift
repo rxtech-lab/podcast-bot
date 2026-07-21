@@ -3,7 +3,9 @@ import Observation
 import AVFoundation
 import MediaPlayer
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import os
 
 extension PlayerModel {
@@ -37,6 +39,7 @@ extension PlayerModel {
     }
 
     func configureAudioSessionObservers() {
+        #if os(iOS)
         guard audioInterruptionObserver == nil else { return }
         audioInterruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -47,6 +50,7 @@ extension PlayerModel {
                 self?.handleAudioSessionInterruption(notification)
             }
         }
+        #endif
     }
 
     func removeAudioSessionObservers() {
@@ -59,6 +63,7 @@ extension PlayerModel {
     }
 
     func handleAudioSessionInterruption(_ notification: Notification) {
+        #if os(iOS)
         guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
         switch type {
@@ -82,6 +87,7 @@ extension PlayerModel {
         @unknown default:
             break
         }
+        #endif
     }
 
     func suppressPlaybackForAudioInterruption() {
@@ -96,8 +102,12 @@ extension PlayerModel {
     }
 
     nonisolated static func audioInterruptionShouldResume(_ userInfo: [AnyHashable: Any]?) -> Bool {
+        #if os(iOS)
         guard let rawOptions = userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt else { return false }
         return AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
+        #else
+        return false
+        #endif
     }
 
     func configureRemoteCommands() {

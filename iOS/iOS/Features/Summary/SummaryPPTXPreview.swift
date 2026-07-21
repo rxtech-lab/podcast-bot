@@ -6,7 +6,11 @@ import QuickLook
 import SwiftUI
 import TipKit
 import os
+#if os(macOS)
+import QuickLookUI
+#endif
 
+#if canImport(UIKit)
 struct SummaryPPTXPreview: UIViewControllerRepresentable {
     let url: URL
 
@@ -42,6 +46,21 @@ struct SummaryPPTXPreview: UIViewControllerRepresentable {
         }
     }
 }
+#else
+struct SummaryPPTXPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ view: QLPreviewView, context: Context) {
+        view.previewItem = url as NSURL
+    }
+}
+#endif
 
 /// Renders one ```mermaid fenced block natively. Falls back to showing the raw
 /// mermaid source as a code block if the diagram fails to parse/render.

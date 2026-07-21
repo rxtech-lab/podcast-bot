@@ -37,11 +37,27 @@ struct CustomerCenterScreen: View {
     var showsCloseButton = true
 
     var body: some View {
+        #if os(macOS)
+        // RevenueCat's Customer Center isn't available on macOS; point the
+        // user at the App Store subscription management page instead.
+        VStack(spacing: 16) {
+            Image(systemName: "person.crop.circle")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Manage your subscription in the App Store.")
+                .multilineTextAlignment(.center)
+            Link("Manage Subscriptions",
+                 destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
+        }
+        .padding(32)
+        .frame(minWidth: 360, minHeight: 240)
+        #else
         CustomerCenterView(
             navigationOptions: CustomerCenterNavigationOptions(
                 usesExistingNavigation: !showsCloseButton,
                 shouldShowCloseButton: showsCloseButton
             )
         )
+        #endif
     }
 }

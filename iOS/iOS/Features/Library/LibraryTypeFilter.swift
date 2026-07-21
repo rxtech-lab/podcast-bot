@@ -2,7 +2,9 @@ import Kingfisher
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 enum LibraryTypeFilter: String, CaseIterable, Identifiable {
     case all

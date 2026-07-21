@@ -1,7 +1,9 @@
 import Kingfisher
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Full-screen "now playing" experience presented over `PodcastPlayerView`.
 /// Timed audiobook illustrations bleed edge-to-edge with the synced caption
@@ -12,7 +14,9 @@ import UIKit
 struct FullScreenPlayerView: View {
     @Bindable var model: PlayerModel
     @Environment(\.dismiss) private var dismiss
+    #if !os(macOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    #endif
 
     /// When the podcast has a cover, the center starts on the artwork and the
     /// listener taps the transcript button to flip to the captions. Without a
@@ -30,7 +34,13 @@ struct FullScreenPlayerView: View {
     /// Bumped by any control interaction so the auto-hide timer restarts.
     @State private var interactionCount = 0
 
-    private var isLandscape: Bool { verticalSizeClass == .compact }
+    private var isLandscape: Bool {
+        #if os(macOS)
+        false
+        #else
+        verticalSizeClass == .compact
+        #endif
+    }
 
     private static let autoHideDelay: Duration = .seconds(4)
     private static let controlsFade = Animation.easeInOut(duration: 0.25)
@@ -106,7 +116,9 @@ struct FullScreenPlayerView: View {
         .onChange(of: model.isPlaying) { _, _ in revealControls() }
         .onChange(of: showingTranscript) { _, _ in revealControls() }
         .task(id: autoHideKey) { await autoHideControlsAfterIdle() }
+        #if !os(macOS)
         .statusBarHidden(isLandscape && !controlsVisible)
+        #endif
         .persistentSystemOverlays(isLandscape && !controlsVisible ? .hidden : .automatic)
         .sheet(isPresented: Binding(
             get: { model.showsDownloadDialog },
@@ -679,7 +691,9 @@ struct FullScreenPlayerView: View {
     /// orientation once — the listener can still rotate the device physically.
     private func fullscreenToggleButton(palette: FullScreenForegroundPalette) -> some View {
         Button {
+            #if canImport(UIKit)
             requestInterfaceOrientation(isLandscape ? .portrait : .landscapeRight)
+            #endif
             interactionCount += 1
         } label: {
             Image(systemName: isLandscape
@@ -693,10 +707,12 @@ struct FullScreenPlayerView: View {
         .accessibilityLabel(isLandscape ? "Exit fullscreen" : "Enter fullscreen")
     }
 
+    #if canImport(UIKit)
     private func requestInterfaceOrientation(_ orientation: UIInterfaceOrientationMask) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
         scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
     }
+    #endif
 }

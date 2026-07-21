@@ -6,7 +6,9 @@ import PhotosUI
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 import os
 
@@ -23,11 +25,13 @@ extension PodcastPlayerView {
                 .padding(.vertical, 6)
         }
         .scrollDismissesKeyboard(.interactively)
+        #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 requestTranscriptScrollToBottom()
             }
         }
+        #endif
     }
 
     @ViewBuilder
@@ -148,7 +152,7 @@ extension PodcastPlayerView {
     func inputBar(_ model: PlayerModel) -> some View {
         let canSend = model.canSendMessages
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        let disabledControlColor = Color(uiColor: .secondaryLabel)
+        let disabledControlColor = Theme.secondaryText
         let attachmentColor = canSend ? Theme.accent : disabledControlColor
         let sendColor = canSend && !trimmedMessage.isEmpty ? Theme.accent : disabledControlColor
         return HStack(spacing: 10) {

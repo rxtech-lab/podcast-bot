@@ -2,7 +2,9 @@ import Kingfisher
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 struct LibrarySettingsView: View {
     @Environment(\.dismiss) var dismiss
@@ -127,7 +129,12 @@ struct LibrarySettingsView: View {
             Spacer(minLength: 8)
 
             Button {
+                #if canImport(UIKit)
                 UIPasteboard.general.string = displayUserID
+                #else
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(displayUserID, forType: .string)
+                #endif
                 didCopyUserID = true
             } label: {
                 Image(systemName: didCopyUserID ? "checkmark" : "doc.on.doc")

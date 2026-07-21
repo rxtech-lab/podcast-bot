@@ -3,7 +3,9 @@ import Observation
 import AVFoundation
 import MediaPlayer
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import os
 
 extension PlayerModel {

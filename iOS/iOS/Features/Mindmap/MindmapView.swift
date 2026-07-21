@@ -261,7 +261,12 @@ struct MindmapView: View {
                     .environment(\.colorScheme, .light)
             )
             renderer.scale = 3
-            guard let image = renderer.uiImage else {
+            #if canImport(UIKit)
+            let renderedImage = renderer.uiImage
+            #else
+            let renderedImage = renderer.nsImage
+            #endif
+            guard let image = renderedImage else {
                 exportResultMessage = String(localized: "Could not render the mindmap.")
                 return
             }

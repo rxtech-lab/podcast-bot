@@ -1,7 +1,11 @@
 import Kingfisher
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 enum FullScreenPlayerStyle {
     /// Opaque dark fallback used when a podcast has no cover palette yet.
@@ -56,12 +60,16 @@ struct FullScreenForegroundPalette {
     }
 
     private static func relativeLuminance(for color: Color) -> Double? {
-        let uiColor = UIColor(color)
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
-        guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
+        #if canImport(UIKit)
+        guard UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
+        #else
+        guard let rgb = NSColor(color).usingColorSpace(.deviceRGB) else { return nil }
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        #endif
 
         func linearize(_ value: CGFloat) -> Double {
             let value = Double(value)
@@ -88,8 +96,12 @@ actor IllustrationImageLoader {
         if let task = inflight[url] { return await task.value }
         let task = Task<Image?, Never> {
             guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let uiImage = UIImage(data: data) else { return nil }
-            return Image(uiImage: uiImage)
+                  let platformImage = PlatformImage(data: data) else { return nil }
+            #if canImport(UIKit)
+            return Image(uiImage: platformImage)
+            #else
+            return Image(nsImage: platformImage)
+            #endif
         }
         inflight[url] = task
         let image = await task.value

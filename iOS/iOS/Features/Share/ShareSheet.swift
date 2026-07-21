@@ -1,6 +1,8 @@
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Non-full-height bottom sheet for sharing a PRIVATE discussion: pick how long
 /// the link should stay valid (1h … 72h), create it, and manage (share / revoke)
@@ -63,7 +65,9 @@ struct ShareSheet: View {
                 }
             }
             .navigationTitle("Share")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -144,6 +148,7 @@ private struct ShareLinkRow: View {
     }
 }
 
+#if canImport(UIKit)
 /// Presents iOS's system share sheet for a local file URL, including "Save to
 /// Files" and app-to-app share destinations.
 struct FileShareSheet: UIViewControllerRepresentable {
@@ -155,3 +160,28 @@ struct FileShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+#else
+/// macOS stand-in for the iOS activity sheet: a small sheet exposing the system
+/// share picker via `ShareLink` for the exported file.
+struct FileShareSheet: View {
+    let url: URL
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(url.lastPathComponent)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            ShareLink(item: url) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(24)
+        .frame(minWidth: 320)
+    }
+}
+#endif

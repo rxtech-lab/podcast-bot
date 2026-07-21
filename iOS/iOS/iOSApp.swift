@@ -8,14 +8,30 @@
 
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
 import RevenueCat
 import Observation
 
+#if canImport(UIKit)
+typealias PlatformApplication = UIApplication
+typealias PlatformApplicationDelegate = UIApplicationDelegate
+#else
+typealias PlatformApplication = NSApplication
+typealias PlatformApplicationDelegate = NSApplicationDelegate
+#endif
+
 @main
 struct iOSApp: App {
+    #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #else
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
     @State private var auth = AuthManager()
     @State private var purchases: PurchaseManager
     @State private var entitlements: EntitlementsManager
@@ -26,7 +42,9 @@ struct iOSApp: App {
     @State private var maintenance = MaintenanceMonitor()
 
     init() {
+        #if canImport(UIKit)
         UIScrollView.appearance().keyboardDismissMode = .interactive
+        #endif
         // In E2E mode, leave TipKit unconfigured so no `.popoverTip` ever
         // displays — an onboarding tip popover would cover the UI (e.g. the
         // new-plan topic field) and make elements non-hittable for the tests.
@@ -91,7 +109,7 @@ struct iOSApp: App {
     }
 }
 
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, PlatformApplicationDelegate, UNUserNotificationCenterDelegate {
     private weak var deepLinks: DeepLinkRouter?
     private weak var push: PushNotificationManager?
     private var pendingNotificationURL: URL?
@@ -106,14 +124,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    func application(_ application: UIApplication,
+    func application(_ application: PlatformApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { @MainActor [weak self] in
             self?.push?.updateDeviceToken(deviceToken)
         }
     }
 
-    func application(_ application: UIApplication,
+    func application(_ application: PlatformApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         Task { @MainActor [weak self] in
             self?.push?.registrationError = error.localizedDescription
@@ -161,7 +179,7 @@ final class PushNotificationManager {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
             guard granted else { return }
-            UIApplication.shared.registerForRemoteNotifications()
+            PlatformApplication.shared.registerForRemoteNotifications()
         } catch {
             registrationError = error.localizedDescription
         }

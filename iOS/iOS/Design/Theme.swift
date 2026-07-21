@@ -1,13 +1,22 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Centralized adaptive colors + Liquid Glass helpers.
 enum Theme {
     static let accent = Color(red: 0.49, green: 0.31, blue: 0.96)   // vivid purple
+    #if canImport(UIKit)
     static let background = Color(uiColor: .systemBackground)
     static let agentBubble = Color(uiColor: .secondarySystemFill)
     static let rowBackground = Color(uiColor: .secondarySystemBackground)
     static let divider = Color(uiColor: .separator)
+    #else
+    static let background = Color(nsColor: .windowBackgroundColor)
+    static let agentBubble = Color(nsColor: .quaternaryLabelColor)
+    static let rowBackground = Color(nsColor: .controlBackgroundColor)
+    static let divider = Color(nsColor: .separatorColor)
+    #endif
     static let secondaryText = Color.secondary
 }
 

@@ -1,6 +1,16 @@
+#if canImport(UIKit)
 import UIKit
 
-extension UIColor {
+typealias PlatformColor = UIColor
+typealias PlatformImage = UIImage
+#else
+import AppKit
+
+typealias PlatformColor = NSColor
+typealias PlatformImage = NSImage
+#endif
+
+extension PlatformColor {
     convenience init(hex: String) {
         let clean = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased()
         var value: UInt64 = 0

@@ -1,7 +1,9 @@
 import Kingfisher
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 struct LyricLine: View {
     let group: LyricCueGroup

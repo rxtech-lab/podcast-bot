@@ -6,7 +6,9 @@ import PhotosUI
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 import os
 
@@ -107,7 +109,9 @@ struct PodcastPlayerView: View {
         .navigationTitle(currentDiscussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : currentDiscussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { podcastToolbar }
+        #if !os(macOS)
         .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
+        #endif
         .modifier(CreateFromPlanErrorAlert(error: $createFromPlanError))
         .modifier(SummaryGenerateErrorAlert(error: $summaryGenerateError))
         .modifier(MindmapGenerateErrorAlert(error: $mindmapGenerateError))

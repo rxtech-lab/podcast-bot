@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000002 /* BeautifulMermaid */; };
 		AABBCCDD0000000000000013 /* BeautifulMermaid in Frameworks */ = {isa = PBXBuildFile; productRef = AABBCCDD0000000000000012 /* BeautifulMermaid */; };
-		DF0DA35D2FE8459500A02339 /* SwiftStreamingMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */; };
+		DF0DA35D2FE8459500A02339 /* SwiftStreamingMarkdown in Frameworks */ = {isa = PBXBuildFile; platformFilters = (ios, xros, ); productRef = DF0DA35C2FE8459500A02339 /* SwiftStreamingMarkdown */; };
 		DF6A0AB22FF7CF890045484F /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = DF6A0AB12FF7CF890045484F /* Kingfisher */; };
 		DF6A0AB42FF7CF890045484F /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = DF6A0AB32FF7CF890045484F /* Kingfisher */; };
 		DF6A14DF2FFA80120045484F /* JSONSchemaForm in Frameworks */ = {isa = PBXBuildFile; productRef = DF6A14DE2FFA80120045484F /* JSONSchemaForm */; };
@@ -21,20 +21,21 @@
 		DF6AD85C2FE9E5530045484F /* ReceiptParser in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85B2FE9E5530045484F /* ReceiptParser */; };
 		DF6AD85E2FE9E5530045484F /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85D2FE9E5530045484F /* RevenueCat */; };
 		DF6AD8602FE9E5530045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AD85F2FE9E5530045484F /* RevenueCatUI */; };
-		DF6ADDC22FEAF2CC0045484F /* iosClip.app in Embed App Clips */ = {isa = PBXBuildFile; fileRef = DF6ADD9E2FEAF2CB0045484F /* iosClip.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF6ADDC22FEAF2CC0045484F /* iosClip.app in Embed App Clips */ = {isa = PBXBuildFile; fileRef = DF6ADD9E2FEAF2CB0045484F /* iosClip.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DF6ADDF22FEB03A30045484F /* SwiftStreamingMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF12FEB03A30045484F /* SwiftStreamingMarkdown */; };
 		DF6ADDF42FEB03A30045484F /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF32FEB03A30045484F /* RxAuthSwift */; };
 		DF6ADDF62FEB03A30045484F /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF52FEB03A30045484F /* RxAuthSwiftUI */; };
 		DF6ADDF92FEB03C60045484F /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6ADDF82FEB03C60045484F /* RevenueCatUI */; };
-		DF6AE8592FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
-		DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF6AE8582FEBD09E0045484F /* icon.icon */; };
 		DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9CE2FEC0E850045484F /* MarkdownUI */; };
 		DF6AE9D12FEC0EB50045484F /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AE9D02FEC0EB50045484F /* MarkdownUI */; };
 		DF6AF75A2FEE6A380045484F /* JSONSchemaForm in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF7592FEE6A380045484F /* JSONSchemaForm */; };
 		DF6AF75C2FEE6A380045484F /* JSONSchemaValidator in Frameworks */ = {isa = PBXBuildFile; productRef = DF6AF75B2FEE6A380045484F /* JSONSchemaValidator */; };
 		DF6AF9DE2FF0EB4D0045484F /* iosUITestPlan.xctestplan in Resources */ = {isa = PBXBuildFile; fileRef = DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */; };
 		DF6AF9DF2FF0EB4D0045484F /* iosUITestPlan.xctestplan in Resources */ = {isa = PBXBuildFile; fileRef = DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */; };
-		DF9822F63009306500BBB638 /* iOSShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF9822EC3009306500BBB638 /* iOSShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF9822F63009306500BBB638 /* iOSShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF9822EC3009306500BBB638 /* iOSShareExtension.appex */; platformFilters = (ios, xros, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF985E4B300F9D4B00BBB638 /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF985E4A300F9D4B00BBB638 /* icon.icon */; };
+		DF985E4C300F9D4B00BBB638 /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF985E4A300F9D4B00BBB638 /* icon.icon */; };
+		DF985E4D300F9D4B00BBB638 /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF985E4A300F9D4B00BBB638 /* icon.icon */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -116,9 +117,9 @@
 		DF6ADD9E2FEAF2CB0045484F /* iosClip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iosClip.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF6ADDAE2FEAF2CC0045484F /* iosClipTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosClipTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF6ADDB82FEAF2CC0045484F /* iosClipUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosClipUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		DF6AE8582FEBD09E0045484F /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = iosUITestPlan.xctestplan; sourceTree = "<group>"; };
 		DF9822EC3009306500BBB638 /* iOSShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = iOSShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF985E4A300F9D4B00BBB638 /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DFF526A12FE852D0007BEF2A /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		DFF526A22FE852D0007BEF2A /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		DFF526A32FE852D0007BEF2A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -470,7 +471,7 @@
 			isa = PBXGroup;
 			children = (
 				DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */,
-				DF6AE8582FEBD09E0045484F /* icon.icon */,
+				DF985E4A300F9D4B00BBB638 /* icon.icon */,
 				DFF526A52FE852D0007BEF2A /* Config */,
 				DF0DA3312FE8445500A02339 /* iOS */,
 				DF0DA3412FE8445600A02339 /* iOSTests */,
@@ -788,8 +789,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF985E4B300F9D4B00BBB638 /* icon.icon in Resources */,
 				DF6AF9DE2FF0EB4D0045484F /* iosUITestPlan.xctestplan in Resources */,
-				DF6AE8592FEBD09E0045484F /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -811,8 +812,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF985E4C300F9D4B00BBB638 /* icon.icon in Resources */,
 				DF6AF9DF2FF0EB4D0045484F /* iosUITestPlan.xctestplan in Resources */,
-				DF6AE85A2FEBD09E0045484F /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -834,6 +835,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF985E4D300F9D4B00BBB638 /* icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -914,11 +916,16 @@
 		};
 		DF6ADDC12FEAF2CC0045484F /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
+			platformFilter = ios;
 			target = DF6ADD9D2FEAF2CB0045484F /* iosClip */;
 			targetProxy = DF6ADDC02FEAF2CC0045484F /* PBXContainerItemProxy */;
 		};
 		DF9822F53009306500BBB638 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
+			platformFilters = (
+				ios,
+				xros,
+			);
 			target = DF9822EB3009306500BBB638 /* iOSShareExtension */;
 			targetProxy = DF9822F43009306500BBB638 /* PBXContainerItemProxy */;
 		};
@@ -1048,6 +1055,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = T7GYB573Y6;
@@ -1097,6 +1105,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = T7GYB573Y6;

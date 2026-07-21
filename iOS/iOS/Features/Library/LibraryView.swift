@@ -2,7 +2,9 @@ import Kingfisher
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Home: the user's server-owned discussions, newest first. Podcasts that
 /// belong to an album (audiobook chapter batches, follow-ups, manual groups)
@@ -10,7 +12,9 @@ import UIKit
 struct LibraryView: View {
     @Environment(AuthManager.self) var auth
     @Environment(PurchaseManager.self) var purchases
+    #if !os(macOS)
     @Environment(\.horizontalSizeClass) var hSize
+    #endif
     @State var discussions: [Discussion] = []
     @State var showingNew = false
     @State var showingNewAlbum = false
@@ -59,7 +63,13 @@ struct LibraryView: View {
     @State var renamingAlbumTitle = ""
     let pageSize = 20
 
-    var isRegular: Bool { hSize == .regular }
+    var isRegular: Bool {
+        #if os(macOS)
+        true
+        #else
+        hSize == .regular
+        #endif
+    }
 
     var body: some View {
         withLifecycle(withPresentations(
@@ -208,7 +218,9 @@ struct LibraryView: View {
                             }
                         }
                     }
+                    #if !os(macOS)
                     .toolbar(.hidden, for: .tabBar)
+                    #endif
                 }
                 .onChange(of: showingGlobalChat) { _, isPresented in
                     if !isPresented, selectedTab == .chat {
@@ -264,8 +276,8 @@ struct LibraryView: View {
     /// Load tasks and change observers hung off the root view.
     func withLifecycle(_ content: some View) -> some View {
         content
-            .onChange(of: hSize) { _, newValue in
-                syncNavigation(toRegular: newValue == .regular)
+            .onChange(of: isRegular) { _, newValue in
+                syncNavigation(toRegular: newValue)
             }
             .task { await loadInitialPageIfNeeded() }
             .task { await loadHomeToolbar() }

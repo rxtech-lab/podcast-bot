@@ -1,7 +1,9 @@
 import Kingfisher
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 struct SeekBar: View {
     @Bindable var model: PlayerModel
