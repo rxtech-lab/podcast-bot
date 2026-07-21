@@ -176,7 +176,7 @@ func (s *Server) handlePlanningMessageAppend(w http.ResponseWriter, r *http.Requ
 	attachments := s.sanitizedAttachments(user.ID, req.Attachments)
 	if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
 		Role:        "user",
-		Text:        planner.ConversationMessageText(prompt, attachments, req.Language),
+		Text:        planner.ConversationMessageText(prompt, attachments, req.Language, contentType),
 		Attachments: attachments,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -384,7 +384,12 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Attachments = s.sanitizedAttachments(user.ID, req.Attachments)
-		userText := planner.ConversationMessageText(prompt, req.Attachments, req.Language)
+		streamContentType, err := s.planningPodcastContentType(r.Context(), user.ID, d)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		userText := planner.ConversationMessageText(prompt, req.Attachments, req.Language, streamContentType)
 		if err := s.d.Planning.AppendTurn(r.Context(), conv.ID, planningTurnInput{
 			Role:        "user",
 			Text:        userText,
@@ -555,16 +560,21 @@ func (s *Server) runPlanningTurn(w http.ResponseWriter, r *http.Request, userID 
 		"history", len(history),
 		"last_role", planningLastTurnRole(turns),
 	)
+	contentType := planningContentType(d, turns)
 	opts := planner.ConversationOptions{
-		Type:             planningContentType(d, turns),
+		Type:             contentType,
 		Language:         planningLanguage(d, languageOverride),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
-		Template:         planningTemplate(d, planningContentType(d, turns)),
+		Template:         planningTemplate(d, contentType),
 		AgentModel:       planningAgentModel(d),
 		ExistingSources:  d.Sources,
 		ExistingPlan:     d.Script,
 		ExistingMarkdown: d.Markdown,
+	}
+	if contentType == config.ContentTypeAudioBook {
+		opts.AudioBookSource = planningAudioBookSource(turns)
+		opts.StoreChapterContent = s.audioBookChapterStorer(d.ID)
 	}
 	emit := func(ev planner.ConvEvent) { s.handlePlanningConvEvent(workCtx, sse, userID, d.ID, conv.ID, ev) }
 	paused, runErr := p.RunConversationTurn(workCtx, history, opts, emit)
@@ -745,16 +755,21 @@ func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload
 		"history", len(history),
 		"last_role", planningLastTurnRole(turns),
 	)
+	contentType := planningContentType(d, turns)
 	opts := planner.ConversationOptions{
-		Type:             planningContentType(d, turns),
+		Type:             contentType,
 		Language:         planningLanguage(d, pl.Language),
 		Channel:          planningChannel(d),
 		Discussants:      planningDiscussants(d),
-		Template:         planningTemplate(d, planningContentType(d, turns)),
+		Template:         planningTemplate(d, contentType),
 		AgentModel:       planningAgentModel(d),
 		ExistingSources:  d.Sources,
 		ExistingPlan:     d.Script,
 		ExistingMarkdown: d.Markdown,
+	}
+	if contentType == config.ContentTypeAudioBook {
+		opts.AudioBookSource = planningAudioBookSource(turns)
+		opts.StoreChapterContent = s.audioBookChapterStorer(d.ID)
 	}
 	emit := func(ev planner.ConvEvent) { s.handlePlanningConvEvent(workCtx, sink, pl.UserID, d.ID, conv.ID, ev) }
 	paused, runErr := p.RunConversationTurn(workCtx, history, opts, emit)

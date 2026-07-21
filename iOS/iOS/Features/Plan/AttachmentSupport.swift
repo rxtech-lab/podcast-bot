@@ -31,6 +31,22 @@ struct PendingAttachment: Identifiable {
         }
         return nil
     }
+
+    var isFailed: Bool {
+        if case .failed = status { return true }
+        return false
+    }
+
+    /// Ready in name only: the upload finished but produced nothing the model
+    /// can read, so `apiAttachment` would silently drop it. Surfaced as a
+    /// problem in the UI rather than left invisible.
+    var isReadyWithoutContent: Bool {
+        status == .ready && apiAttachment == nil
+    }
+
+    /// True when this attachment will not reach the model and the user should
+    /// be told (failed upload/parse, or ready-but-empty).
+    var hasProblem: Bool { isFailed || isReadyWithoutContent }
 }
 
 extension Array where Element == PendingAttachment {
@@ -145,6 +161,77 @@ struct AttachmentPreviewSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Theme.background)
+    }
+}
+
+/// Preview for a picked (pre-submit) attachment: ready attachments show their
+/// parsed content through `AttachmentPreviewSheet`; uploading, failed, and
+/// ready-but-empty ones show their status so problems are visible in the UI
+/// instead of the attachment being silently dropped at submit.
+struct PendingAttachmentPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let attachment: PendingAttachment
+
+    var body: some View {
+        if let ready = attachment.apiAttachment {
+            AttachmentPreviewSheet(attachment: ready)
+        } else {
+            NavigationStack {
+                statusView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(24)
+                    .background(Theme.background)
+                    .navigationTitle(attachment.filename)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
+                        }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        VStack(spacing: 14) {
+            switch attachment.status {
+            case .uploading:
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(Theme.accent)
+                Text("Uploading and parsing…")
+                    .font(.headline)
+                Text("This file is still being uploaded and converted. It will be attached once it's ready.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+            case let .failed(message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.orange)
+                Text("Attachment failed")
+                    .font(.headline)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                Text("Remove this attachment (or add the file again) to continue.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+            case .ready:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.orange)
+                Text("No readable content")
+                    .font(.headline)
+                Text("No text could be extracted from this file, so it can't be used for planning. If it is a scanned document, try a text-based (OCR'd) copy.")
+                    .font(.callout)
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+        }
     }
 }
 

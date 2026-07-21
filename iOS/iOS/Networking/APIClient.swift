@@ -32,6 +32,7 @@ final class APIClient: Sendable {
     let tokens: TokenProviding
     let session: URLSession
     static let summaryExportTimeout: TimeInterval = 600
+    static let markitdownTimeout: TimeInterval = 600
 
 
     init(baseURL: URL = AppConfig.apiBaseURL, tokens: TokenProviding, session: URLSession = .shared) {

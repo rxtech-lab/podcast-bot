@@ -23,12 +23,7 @@ func TestAssembleAudioBookNormalizesGenders(t *testing.T) {
 		{Name: "The Oracle", Gender: "unknown", Description: "mysterious voice"},
 		{Name: "Mira", Gender: "WOMAN", Description: "young apprentice"},
 	}
-	d.Chapters = []struct {
-		Title    string   `json:"title"`
-		Summary  string   `json:"summary"`
-		Mode     string   `json:"mode"`
-		Speakers []string `json:"speakers"`
-	}{
+	d.Chapters = []audioBookDraftChapter{
 		{Title: "One", Summary: "The beginning.", Mode: "narration"},
 	}
 
@@ -68,12 +63,7 @@ func TestAssembleAudioBookSingleChapterUsesChapterTitle(t *testing.T) {
 	}
 	d.Narrator.Name = "Narrator"
 	d.Narrator.Gender = "female"
-	d.Chapters = []struct {
-		Title    string   `json:"title"`
-		Summary  string   `json:"summary"`
-		Mode     string   `json:"mode"`
-		Speakers []string `json:"speakers"`
-	}{
+	d.Chapters = []audioBookDraftChapter{
 		{Title: "The First Door", Summary: "The opening chapter.", Mode: "narration"},
 	}
 

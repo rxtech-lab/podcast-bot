@@ -218,3 +218,25 @@ func TestAlbumPositionFor(t *testing.T) {
 		t.Fatalf("non-batch position = %d, want 0", got)
 	}
 }
+
+func TestDeriveAudioBookBatchScriptPreservesContentKeys(t *testing.T) {
+	root := testAudioBookPlan(6)
+	for i := range root.AudioBookChapters {
+		root.AudioBookChapters[i].ContentKey = "audiobooks/d1/chapters/0" + string(rune('1'+i)) + "-cafe0123.md"
+		root.AudioBookChapters[i].ContentChars = 1000 * (i + 1)
+	}
+	batch, err := deriveAudioBookBatchScript(root, []int{4, 5}, "", false)
+	if err != nil {
+		t.Fatalf("derive batch: %v", err)
+	}
+	if got := len(batch.AudioBookChapters); got != 2 {
+		t.Fatalf("batch chapters = %d, want 2", got)
+	}
+	for i, globalIdx := range []int{4, 5} {
+		want := root.AudioBookChapters[globalIdx-1]
+		got := batch.AudioBookChapters[i]
+		if got.ContentKey != want.ContentKey || got.ContentChars != want.ContentChars {
+			t.Fatalf("batch chapter %d lost content fields: got %+v want %+v", i, got, want)
+		}
+	}
+}

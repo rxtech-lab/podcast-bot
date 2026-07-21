@@ -70,7 +70,10 @@ func (s *Server) handlePlanImprove(w http.ResponseWriter, r *http.Request) {
 // written).
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	// Planning payloads re-carry converted document markdown (whole books for
+	// audiobooks), so the cap must comfortably exceed a book's text; a hit cap
+	// truncates the body and surfaces as "bad json".
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	if err != nil {
 		http.Error(w, "read body", http.StatusBadRequest)
 		return false

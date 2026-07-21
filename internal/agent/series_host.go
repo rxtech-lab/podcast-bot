@@ -66,6 +66,12 @@ type SeriesHost struct {
 	// disables the feature — the host's prompt stays free of character
 	// instructions and the synth path stays single-voice.
 	characters []SeriesCharacter
+
+	// audioBookHasSourceText switches the audiobook prompt to the
+	// faithful-narration contract: each turn carries the current chapter's
+	// full source text and the narrator must read from it instead of
+	// expanding the outline.
+	audioBookHasSourceText bool
 }
 
 // SeriesCharacter is one extra speaking role surfaced to the host. Mirrors
@@ -125,20 +131,21 @@ func NewSeriesHost(b *Base, show string, season, episode int, synopsis, previous
 // generated images surfaced in the companion text + video); pass nil to
 // disable imagery. soundPlan drives the `<sound-overlapped-N/>` chapter
 // stingers layered over the music bed; pass nil to disable stingers.
-func NewAudioBookHost(b *Base, title, outline string, characters []SeriesCharacter,
+func NewAudioBookHost(b *Base, title, outline string, hasSourceText bool, characters []SeriesCharacter,
 	narrationPlan, narrationAnchors []string, soundPlan []SoundDirection,
 ) *SeriesHost {
 	return &SeriesHost{
-		Base:             b,
-		audioBook:        true,
-		show:             title,
-		season:           1,
-		episode:          1,
-		synopsis:         outline,
-		characters:       characters,
-		narrationPlan:    narrationPlan,
-		narrationAnchors: narrationAnchors,
-		soundPlan:        soundPlan,
+		Base:                   b,
+		audioBook:              true,
+		audioBookHasSourceText: hasSourceText,
+		show:                   title,
+		season:                 1,
+		episode:                1,
+		synopsis:               outline,
+		characters:             characters,
+		narrationPlan:          narrationPlan,
+		narrationAnchors:       narrationAnchors,
+		soundPlan:              soundPlan,
 	}
 }
 
@@ -196,9 +203,10 @@ func (h *SeriesHost) Speak(ctx context.Context, p SpeakPrompt) (*llm.Stream, err
 	if h.audioBook {
 		system := fmt.Sprintf(audioBookHostSystemTemplate,
 			h.show,
-			strings.TrimSpace(h.synopsis),
+			audioBookOutlineBlock(h.audioBookHasSourceText, strings.TrimSpace(h.synopsis)),
+			audioBookDirectiveBlock(h.audioBookHasSourceText),
 			audioBookSceneBlock(h.narrationPlan, h.narrationAnchors),
-			audioBookLengthContract(p),
+			audioBookLengthContract(p, h.audioBookHasSourceText),
 			seriesCharacterBlock(h.characters),
 			seriesSoundBlock(h.soundPlan),
 		)
@@ -228,16 +236,9 @@ Natural speech markers — these are silent controls for the audio engine and ne
 Audiobook title:
 %s
 
-Source-derived audiobook outline. This is the source of truth for the narration. Follow the chapter order, keep facts and names intact, and do not invent contradictions:
 %s
 
-Directive:
-- "narrate" — narrate the audiobook chapter by chapter. Open each chapter with its chapter title. Expand the outline into complete audiobook prose with connective narration, examples, and careful transitions, but do not claim access to details not present in the outline.
-- "narrate continuation" — continue exactly from the most recent transcript line. Do not restart, recap, or skip forward. Keep following the planned chapter order.
-  Chapter modes — the outline marks each chapter's style:
-  * A normal (narration) chapter is the narrator reading alone. Keep speaker dialogue minimal; use a character voice only for a literal quoted line.
-  * A chapter marked "_Dialogue chapter — main speaker: …; guest speakers: …_" must read as a real back-and-forth conversation between the narrator/main speaker and the listed guest speakers, NOT a monologue summarizing what they said. The narrator/main speaker speaks in the normal narrator voice without a character marker. Wrap each guest speaker's spoken words in their <char-N> markers (see the cast list below for each guest speaker's index), and keep only brief connective narration ("she paused, then", "he leaned in") between turns. Give the narrator/main speaker and every listed guest several turns so the listener clearly hears distinct voices trading lines.
-  * A legacy chapter marked "_Dialogue chapter — speakers: …_" must read as a real back-and-forth conversation between the listed speakers. Alternate turns between those speakers, wrapping each speaker's spoken words in their <char-N> markers from the cast list.
+%s
 
 Completion rule:
 - The backend will keep asking you to continue until you call the end_audio_book tool.
@@ -256,9 +257,45 @@ Completion rule:
 
 %s`
 
-func audioBookLengthContract(p SpeakPrompt) string {
+// audioBookOutlineBlock frames the plan outline. In source-text mode the
+// outline is demoted to a chapter map — the per-turn chapter text is the
+// source of truth; in legacy mode the outline itself is all the narrator has.
+func audioBookOutlineBlock(hasSourceText bool, outline string) string {
+	if hasSourceText {
+		return `Source-derived audiobook outline. This outline is only a map of the chapter order and casting; each turn's prompt carries the CURRENT CHAPTER'S FULL SOURCE TEXT, and that text — not this outline — is the source of truth for the narration:
+` + outline
+	}
+	return `Source-derived audiobook outline. This is the source of truth for the narration. Follow the chapter order, keep facts and names intact, and do not invent contradictions:
+` + outline
+}
+
+// audioBookDirectiveBlock renders the narrate/continuation contract. The
+// source-text variant demands faithful narration of the provided chapter
+// text; the legacy variant keeps the outline-expansion behavior.
+func audioBookDirectiveBlock(hasSourceText bool) string {
+	narrate := `- "narrate" — narrate the audiobook chapter by chapter. Open each chapter with its chapter title. Expand the outline into complete audiobook prose with connective narration, examples, and careful transitions, but do not claim access to details not present in the outline.`
+	if hasSourceText {
+		narrate = `- "narrate" — narrate the audiobook chapter by chapter, reading from the current chapter source text provided in each turn's prompt. Open each chapter with its chapter title. That text is the source of truth: narrate it faithfully, preserving its content, order, names, facts, numbers, and quotations. Adapt written prose into spoken narration — smooth transitions, split overlong sentences, read quoted dialogue in character — but NEVER invent scenes, facts, characters, or conclusions that the text does not contain, and never skip substantial content.`
+	}
+	return `Directive:
+` + narrate + `
+- "narrate continuation" — continue exactly from the most recent transcript line. Do not restart, recap, or skip forward. Keep following the planned chapter order.
+  Chapter modes — the outline marks each chapter's style:
+  * A normal (narration) chapter is the narrator reading alone. Keep speaker dialogue minimal; use a character voice only for a literal quoted line.
+  * A chapter marked "_Dialogue chapter — main speaker: …; guest speakers: …_" must read as a real back-and-forth conversation between the narrator/main speaker and the listed guest speakers, NOT a monologue summarizing what they said. The narrator/main speaker speaks in the normal narrator voice without a character marker. Wrap each guest speaker's spoken words in their <char-N> markers (see the cast list below for each guest speaker's index), and keep only brief connective narration ("she paused, then", "he leaned in") between turns. Give the narrator/main speaker and every listed guest several turns so the listener clearly hears distinct voices trading lines.
+  * A legacy chapter marked "_Dialogue chapter — speakers: …_" must read as a real back-and-forth conversation between the listed speakers. Alternate turns between those speakers, wrapping each speaker's spoken words in their <char-N> markers from the cast list.`
+}
+
+func audioBookLengthContract(p SpeakPrompt, hasSourceText bool) string {
 	if p.SecondsBudget <= 0 || !strings.HasPrefix(p.Instructions, "narrate") {
 		return ""
+	}
+	if hasSourceText {
+		return `Length contract:
+  * The chapter's source text sets the length: fully narrate the entire provided chapter text — do not compress it into a summary, and do not pad beyond it.
+  * Do not collapse the remaining source text into a short synopsis; every substantial passage of the chapter deserves narration.
+  * A duration target NEVER justifies filler: no sign-offs, credits, thank-yous, "the end" lines, or any spoken text beyond the planned chapters.
+  * Once the final planned chapter's text is fully narrated, call end_audio_book immediately — even if a duration target has not been reached.`
 	}
 	minMinutes := p.SecondsBudget / 60
 	if minMinutes < 1 {

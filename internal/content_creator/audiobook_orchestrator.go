@@ -93,6 +93,14 @@ func (o *Orchestrator) AudioBookImages() []AudioBookImage {
 	return append([]AudioBookImage(nil), o.audioBookImages...)
 }
 
+// SetAudioBookChapterTexts records the fetched per-chapter source markdown,
+// keyed by global chapter number. Called by the job runner before Run; the
+// audiobook planner injects the current chapter's text into each narration
+// turn and the host prompt switches to the faithful-narration contract.
+func (o *Orchestrator) SetAudioBookChapterTexts(texts map[int]string) {
+	o.audioBookChapterTexts = texts
+}
+
 // SetAudioBookAvatars records generated transparent speaker portraits.
 func (o *Orchestrator) SetAudioBookAvatars(avatars []AudioBookAvatar) {
 	o.audioBookAvatars = append([]AudioBookAvatar(nil), avatars...)
@@ -209,7 +217,8 @@ func (o *Orchestrator) buildAudioBookAgents() error {
 }
 
 func (o *Orchestrator) newAudioBookPlanner() Planner {
-	return NewAudioBookPlanner(o.Topic, o.Registry, o.audioBookEnd)
+	return NewAudioBookPlanner(o.Topic, o.Registry, o.audioBookEnd).
+		WithChapterTexts(o.audioBookChapterTexts)
 }
 
 func audioBookOutline(t *config.DebateTopic) string {

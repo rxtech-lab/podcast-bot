@@ -133,8 +133,14 @@ type SpeakPrompt struct {
 	// host can summarize the source material and discussants can quote it.
 	Background      string
 	SourceDocuments string
-	Side            string // for candidates only; convenience copy of agent's side
-	ToolResult      func(name, jsonArgs, result string)
+	// CurrentChapterLabel/Text carry the audiobook chapter being narrated
+	// this turn ("Chapter 3: Title" + its full source markdown). Set only for
+	// audiobook runs whose plan stored per-chapter source text; empty
+	// otherwise.
+	CurrentChapterLabel string
+	CurrentChapterText  string
+	Side                string // for candidates only; convenience copy of agent's side
+	ToolResult          func(name, jsonArgs, result string)
 }
 
 // Agent is the OOP contract every participant satisfies.

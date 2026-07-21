@@ -198,9 +198,14 @@ extension APIClient {
         return try decode(data)
     }
 
-    func send<B: Encodable, T: Decodable>(_ method: String, _ path: String, body: B) async throws -> T {
+    func send<B: Encodable, T: Decodable>(_ method: String, _ path: String, body: B,
+                                           timeout: TimeInterval? = nil) async throws -> T {
         let payload = try JSONEncoder().encode(body)
-        let (data, _) = try await perform(request(method: method, path: path, body: payload))
+        var req = request(method: method, path: path, body: payload)
+        if let timeout {
+            req.timeoutInterval = timeout
+        }
+        let (data, _) = try await perform(req)
         return try decode(data)
     }
 

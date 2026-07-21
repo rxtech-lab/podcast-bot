@@ -651,6 +651,14 @@ func run(ctx context.Context, deps Deps, jobID string,
 			time.Since(t0).Round(time.Second)))
 	}
 
+	// Audiobook: fetch each chapter's real source text (sliced + stored during
+	// planning) so the narrator reads from the book instead of expanding the
+	// outline. Nil for legacy plans or when storage is off — the host then
+	// falls back to outline-only narration.
+	if topic.Type == config.ContentTypeAudioBook {
+		orch.SetAudioBookChapterTexts(audiobook.FetchChapterTexts(ctx, logger, deps.Uploader, topic))
+	}
+
 	status("running orchestrator…")
 	tRun := time.Now()
 	if err := orch.Run(ctx); err != nil {
