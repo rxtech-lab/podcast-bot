@@ -36,12 +36,22 @@ struct PodcastSearchSheet: View {
                 Task { await search(query: searchText) }
             }
             .toolbar {
+                #if os(macOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(String(localized: "Done", comment: "Dismiss the in-podcast search sheet")) { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                #else
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(String(localized: "Done", comment: "Dismiss the in-podcast search sheet")) { dismiss() }
                 }
+                #endif
             }
             .onDisappear { searchTask?.cancel() }
         }
+        #if os(macOS)
+        .frame(minWidth: 620, minHeight: 420)
+        #endif
     }
 
     @ViewBuilder

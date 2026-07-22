@@ -7,6 +7,12 @@ final class PlayerSession {
     let key: PlayerSessionStore.Key
     let model: PlayerModel
     var isFullPlayerPresented = false
+    #if os(macOS)
+    /// The podcast screen and the detached player window can outlive one
+    /// another. Track the source screen separately so closing the window only
+    /// stops playback when no podcast screen still owns the session.
+    var isHostPresented = false
+    #endif
 
     init(key: PlayerSessionStore.Key, model: PlayerModel) {
         self.key = key
@@ -29,6 +35,15 @@ final class PlayerSessionStore {
     @ObservationIgnored private let releaseGracePeriod: Duration
     @ObservationIgnored private let startsModels: Bool
     @ObservationIgnored private let modelFactory: ModelFactory
+
+    #if os(macOS)
+    private(set) var presentedPlayerKey: Key?
+
+    var presentedPlayerSession: PlayerSession? {
+        guard let presentedPlayerKey else { return nil }
+        return sessions[presentedPlayerKey]
+    }
+    #endif
 
     var activeSessionCount: Int { sessions.count }
 
@@ -97,9 +112,46 @@ final class PlayerSessionStore {
         pendingReleases[key] = task
     }
 
+    #if os(macOS)
+    /// Selects the session rendered by the app's single detached player
+    /// window. Reusing one scene prevents repeated mini-player taps from
+    /// creating duplicate player windows.
+    func presentPlayerWindow(for session: PlayerSession) {
+        if let currentKey = presentedPlayerKey,
+           currentKey != session.key,
+           let currentSession = sessions[currentKey] {
+            currentSession.isFullPlayerPresented = false
+            if !currentSession.isHostPresented {
+                release(currentSession)
+            }
+        }
+        pendingReleases[session.key]?.cancel()
+        pendingReleases[session.key] = nil
+        session.isFullPlayerPresented = true
+        presentedPlayerKey = session.key
+    }
+
+    /// Clears the detached window only when it is still showing this session;
+    /// an old window-content disappearance must not clear a newly selected
+    /// player during a session switch.
+    func dismissPlayerWindow(for session: PlayerSession) {
+        guard presentedPlayerKey == session.key else { return }
+        presentedPlayerKey = nil
+        session.isFullPlayerPresented = false
+        if !session.isHostPresented {
+            release(session)
+        }
+    }
+    #endif
+
     func stopSession(for key: Key) {
         pendingReleases[key]?.cancel()
         pendingReleases[key] = nil
+        #if os(macOS)
+        if presentedPlayerKey == key {
+            presentedPlayerKey = nil
+        }
+        #endif
         guard let session = sessions.removeValue(forKey: key) else { return }
         session.model.stop()
     }
@@ -109,6 +161,9 @@ final class PlayerSessionStore {
         pendingReleases.removeAll()
         let active = sessions
         sessions.removeAll()
+        #if os(macOS)
+        presentedPlayerKey = nil
+        #endif
         active.values.forEach { $0.model.stop() }
     }
 }

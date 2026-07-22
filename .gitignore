@@ -2,6 +2,7 @@
 bin
 .build/
 build.log
+macos-build.log
 mcp.json
 out
 .DS_Store

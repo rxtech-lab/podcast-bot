@@ -2,6 +2,9 @@ import SwiftUI
 import TipKit
 #if canImport(UIKit)
 import UIKit
+#elseif os(macOS)
+import AppKit
+import UniformTypeIdentifiers
 #endif
 
 /// Non-full-height bottom sheet for sharing a PRIVATE discussion: pick how long
@@ -64,6 +67,9 @@ struct ShareSheet: View {
                     }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle("Share")
             #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -145,6 +151,13 @@ private struct ShareLinkRow: View {
                 Label("Revoke", systemImage: "trash")
             }
         }
+        #if os(macOS)
+        .contextMenu {
+            Button(role: .destructive, action: onRevoke) {
+                Label("Delete Shared Link", systemImage: "trash")
+            }
+        }
+        #endif
     }
 }
 
@@ -161,6 +174,36 @@ struct FileShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 #else
+enum MacFileSavePanel {
+    @MainActor
+    static func save(_ sourceURL: URL) async throws -> Bool {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = sourceURL.lastPathComponent
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        if let contentType = UTType(filenameExtension: sourceURL.pathExtension) {
+            panel.allowedContentTypes = [contentType]
+        }
+
+        let response = await withCheckedContinuation { continuation in
+            panel.begin { response in
+                continuation.resume(returning: response)
+            }
+        }
+        guard response == .OK, let destinationURL = panel.url else { return false }
+        guard destinationURL.standardizedFileURL != sourceURL.standardizedFileURL else { return true }
+
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: sourceURL)
+        } else {
+            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        }
+        return true
+    }
+}
+
 /// macOS stand-in for the iOS activity sheet: a small sheet exposing the system
 /// share picker via `ShareLink` for the exported file.
 struct FileShareSheet: View {

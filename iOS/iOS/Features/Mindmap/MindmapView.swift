@@ -28,15 +28,16 @@ struct MindmapView: View {
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Done") {
-                            let model = model
-                            Task { @MainActor in
-                                await model?.saveNow()
-                            }
-                            dismiss()
-                        }
+                    #if os(macOS)
+                    ToolbarItem(placement: .confirmationAction) {
+                        doneButton
+                            .keyboardShortcut(.cancelAction)
                     }
+                    #else
+                    ToolbarItem(placement: .topBarLeading) {
+                        doneButton
+                    }
+                    #endif
                     if isEditable {
                         ToolbarItem(placement: .topBarTrailing) {
                             saveStateIndicator
@@ -115,6 +116,19 @@ struct MindmapView: View {
                     }
                     await model?.load()
                 }
+        }
+        #if os(macOS)
+        .frame(minHeight: 520)
+        #endif
+    }
+
+    private var doneButton: some View {
+        Button("Done") {
+            let model = model
+            Task { @MainActor in
+                await model?.saveNow()
+            }
+            dismiss()
         }
     }
 

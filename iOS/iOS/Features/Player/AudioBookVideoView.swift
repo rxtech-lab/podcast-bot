@@ -39,6 +39,7 @@ struct AudioBookVideoView: View {
 
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
+                    #if !os(macOS)
                     Button {
                         dismiss()
                     } label: {
@@ -48,6 +49,7 @@ struct AudioBookVideoView: View {
                             .foregroundStyle(.white)
                     }
                     .accessibilityLabel("Close")
+                    #endif
 
                     Spacer()
 
@@ -101,6 +103,15 @@ struct AudioBookVideoView: View {
             .allowsHitTesting(chromeVisible)
             .animation(.easeInOut(duration: 0.18), value: chromeVisible)
         }
+        #if os(macOS)
+        .frame(minHeight: 520)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        #endif
         .sheet(isPresented: $showingShareSheet) {
             if let localFile {
                 FileShareSheet(url: localFile)

@@ -30,6 +30,9 @@ struct DiscussionRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(tint: isSelected ? Theme.accent.opacity(0.55) : nil)
+        #if os(macOS)
+        .contentShape(.rect(cornerRadius: 22))
+        #endif
     }
 
     /// Cover thumbnail when the discussion has cover art, otherwise the

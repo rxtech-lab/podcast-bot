@@ -339,7 +339,11 @@ extension PlayerModel {
                 downloadProgress = 1
                 showsDownloadDialog = false
                 try? await Task.sleep(for: .milliseconds(250))
+                #if os(macOS)
+                _ = try await MacFileSavePanel.save(file)
+                #else
                 downloadedPodcastFile = DownloadedPodcastFile(url: file)
+                #endif
             } catch {
                 isDownloadingPodcast = false
                 downloadErrorText = error.localizedDescription

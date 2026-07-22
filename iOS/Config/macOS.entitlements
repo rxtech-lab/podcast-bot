@@ -2,31 +2,26 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>keychain-access-groups</key>
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>$(AppIdentifierPrefix)app.rxlab.debate-bot.shared</string>
-	</array>
-	<!-- iCloud / CloudKit for SwiftData cross-device sync. -->
-	<key>com.apple.developer.icloud-services</key>
-	<array>
-		<string>CloudKit</string>
+		<string>applinks:podcast.rxlab.app</string>
+		<string>webcredentials:rxlab.app</string>
 	</array>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
 		<string>iCloud.app.rxlab.debate-bot</string>
 	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
 	<string>$(TeamIdentifierPrefix)$(CFBundleIdentifier)</string>
-
-	<!-- Silent-push channel CloudKit uses to sync between devices. -->
-	<key>aps-environment</key>
-	<string>$(APS_ENVIRONMENT)</string>
-
-	<!-- Passkey / associated web credentials for rxlab auth. -->
-	<key>com.apple.developer.associated-domains</key>
+	<key>keychain-access-groups</key>
 	<array>
-		<string>applinks:podcast.rxlab.app</string>
-		<string>webcredentials:rxlab.app</string>
+		<string>$(AppIdentifierPrefix)app.rxlab.debate-bot.shared</string>
 	</array>
 </dict>
 </plist>

@@ -52,12 +52,27 @@ jobs:
           CONFIGURATION: Debug
           SDK: iphonesimulator
 
+      - name: Build macOS app
+        run: ./scripts/macos-build.sh
+        env:
+          SCHEME: iOS
+          CONFIGURATION: Debug
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ios-build-log
           path: build.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload macOS build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-build-log
+          path: macos-build.log
           retention-days: 7
           if-no-files-found: ignore
 

@@ -143,10 +143,20 @@ extension PodcastPlayerView {
     @ViewBuilder
     func footer(_ model: PlayerModel) -> some View {
         VStack(spacing: 10) {
-            MusicPlayerBar(model: model) { playerSession?.isFullPlayerPresented = true }
+            MusicPlayerBar(model: model) { presentFullPlayer() }
             inputBar(model)
         }
         .padding(16)
+    }
+
+    func presentFullPlayer() {
+        guard let playerSession else { return }
+        #if os(macOS)
+        playerSessions.presentPlayerWindow(for: playerSession)
+        openWindow(id: PlayerWindowScene.id)
+        #else
+        playerSession.isFullPlayerPresented = true
+        #endif
     }
 
     func inputBar(_ model: PlayerModel) -> some View {
@@ -185,6 +195,12 @@ extension PodcastPlayerView {
                     Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(attachmentColor)
                 }
             }
+            #if os(macOS)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .accessibilityLabel("Add attachment")
+            .help("Add attachment")
+            #endif
             .disabled(isUploadingAttachment || !canSend)
             .popoverTip(SendAudioTip(), arrowEdge: .bottom)
             TextField("Send message", text: $message, axis: .vertical)
@@ -197,6 +213,11 @@ extension PodcastPlayerView {
             } label: {
                 Image(systemName: "arrow.up.circle.fill").font(.title2).foregroundStyle(sendColor)
             }
+            #if os(macOS)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Send message")
+            .help("Send message")
+            #endif
             .disabled(!canSend || trimmedMessage.isEmpty)
         }
         .padding(12)
@@ -456,14 +477,23 @@ extension PodcastPlayerView {
             shareToken: shareToken
         )
         if let playerSession, playerSession !== session {
+            #if os(macOS)
+            playerSession.isHostPresented = false
+            #endif
             playerSessions.release(playerSession)
         }
+        #if os(macOS)
+        session.isHostPresented = true
+        #endif
         playerSession = session
         await purchases.refreshBalance()
     }
 
     func stopPlayerIfNeeded() {
         guard let playerSession else { return }
+        #if os(macOS)
+        playerSession.isHostPresented = false
+        #endif
         playerSessions.release(playerSession)
     }
 

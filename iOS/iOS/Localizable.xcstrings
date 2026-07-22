@@ -4153,6 +4153,12 @@
         }
       }
     },
+    "Delete Podcast" : {
+
+    },
+    "Delete Shared Link" : {
+
+    },
     "Delete this document?" : {
       "comment" : "Confirm deleting an agent-authored document",
       "localizations" : {
@@ -7296,6 +7302,12 @@
         }
       }
     },
+    "Manage Subscriptions" : {
+
+    },
+    "Manage your subscription in the App Store." : {
+
+    },
     "Market" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8449,6 +8461,9 @@
         }
       }
     },
+    "Nothing Playing" : {
+
+    },
     "Nothing to add" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8515,6 +8530,9 @@
           }
         }
       }
+    },
+    "Now Playing" : {
+
     },
     "OK" : {
       "comment" : "Dismiss error button",
@@ -8649,6 +8667,9 @@
           }
         }
       }
+    },
+    "Open the player from a podcast." : {
+
     },
     "Open this menu to download the summary as a PDF or Markdown file." : {
       "localizations" : {

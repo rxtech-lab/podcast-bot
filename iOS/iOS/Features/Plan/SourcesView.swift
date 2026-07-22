@@ -41,6 +41,17 @@ struct SourcesSheet: View {
             .navigationTitle("Sources")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                #if os(macOS)
+                ToolbarItem(placement: .primaryAction) {
+                    if allowsAddingSources {
+                        addSourcesLink
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                #else
                 ToolbarItem(placement: .topBarLeading) {
                     if allowsAddingSources {
                         addSourcesLink
@@ -50,8 +61,17 @@ struct SourcesSheet: View {
                     Button { dismiss() } label: { Image(systemName: "xmark") }
                         .accessibilityLabel("Close")
                 }
+                #endif
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 620,
+               idealWidth: 720,
+               maxWidth: 840,
+               minHeight: 480,
+               idealHeight: 620,
+               maxHeight: 760)
+        #endif
     }
 
     private var list: some View {
@@ -73,7 +93,11 @@ struct SourcesSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .listStyle(.plain)
+        #else
         .listStyle(.insetGrouped)
+        #endif
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .interactiveDismissDisabled()
@@ -193,20 +217,30 @@ private struct AddSourcesView: View {
         .searchable(text: $inputText, prompt: "Add link or search")
         .onSubmit(of: .search, submitInput)
         .toolbar {
+            #if os(macOS)
+            ToolbarItem(placement: .confirmationAction) {
+                saveButton
+            }
+            #else
             ToolbarItem(placement: .topBarTrailing) {
-                Button(action: save) {
-                    if isSaving {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(Theme.accent)
-                    } else {
-                        Text("Save")
-                    }
-                }
-                .disabled(!canSave)
+                saveButton
             }
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
+            #endif
         }
+    }
+
+    private var saveButton: some View {
+        Button(action: save) {
+            if isSaving {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.accent)
+            } else {
+                Text("Save")
+            }
+        }
+        .disabled(!canSave)
     }
 
     private var linksList: some View {
@@ -245,7 +279,11 @@ private struct AddSourcesView: View {
                 .listRowBackground(Color.clear)
             }
         }
+        #if os(macOS)
+        .listStyle(.plain)
+        #else
         .listStyle(.insetGrouped)
+        #endif
         .scrollContentBackground(.hidden)
     }
 

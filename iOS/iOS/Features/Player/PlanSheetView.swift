@@ -79,6 +79,12 @@ struct PlanSheetView: View {
             .navigationTitle("Plan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                #if os(macOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                #else
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         dismiss()
@@ -87,6 +93,7 @@ struct PlanSheetView: View {
                     }
                     .accessibilityLabel("Close")
                 }
+                #endif
             }
             .sheet(isPresented: $showingSources) {
                 SourcesSheet(

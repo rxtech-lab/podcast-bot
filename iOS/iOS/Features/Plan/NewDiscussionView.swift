@@ -57,6 +57,9 @@ struct NewDiscussionView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(precheckForm?.cancelTitle ?? "Cancel") { dismiss() }
                         .disabled(isPlanning)
+                        #if os(macOS)
+                        .keyboardShortcut(.cancelAction)
+                        #endif
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -68,11 +71,22 @@ struct NewDiscussionView: View {
                         }
                     }
                     .disabled(!canSubmit)
+                    #if os(macOS)
+                    .keyboardShortcut(.defaultAction)
+                    #endif
                     .accessibilityIdentifier("newPlan.submit")
                     .popoverTip(NewDiscussionPlanTip(), arrowEdge: .top)
                 }
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 680,
+               idealWidth: 760,
+               maxWidth: 840,
+               minHeight: 620,
+               idealHeight: 720,
+               maxHeight: 800)
+        #endif
         .interactiveDismissDisabled(true)
         .sheet(isPresented: pickerPresented) {
             ReferencePodcastPickerSheet(

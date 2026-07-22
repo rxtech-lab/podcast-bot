@@ -529,6 +529,9 @@ struct FullScreenPlayerView: View {
                     .glassEffect(in: .circle)
             }
             .accessibilityLabel("Minimize")
+            #if os(macOS)
+            .buttonStyle(.plain)
+            #endif
 
             if showsHeaderCover {
                 coverThumbnail
@@ -590,6 +593,10 @@ struct FullScreenPlayerView: View {
                 .foregroundStyle(foregroundPalette.primary)
                 .frame(width: 40, height: 40)
                 .glassEffect(in: .circle)
+                #if os(macOS)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                #endif
         } else {
             Color.clear.frame(width: 40, height: 40)
         }
@@ -626,7 +633,9 @@ struct FullScreenPlayerView: View {
                     transcriptToggleButton(palette: foregroundPalette)
                 }
                 Spacer()
+                #if !os(macOS)
                 fullscreenToggleButton(palette: foregroundPalette)
+                #endif
             }
         }
     }
@@ -665,6 +674,9 @@ struct FullScreenPlayerView: View {
             .disabled(!model.canSeek)
         }
         .foregroundStyle(palette.primary)
+        #if os(macOS)
+        .buttonStyle(.plain)
+        #endif
     }
 
     /// Flips the center between the artwork and the transcript, echoing the
@@ -684,6 +696,9 @@ struct FullScreenPlayerView: View {
         .accessibilityLabel(showingTranscript ? "Show cover" : "Show transcript")
         .accessibilityIdentifier("player.lyrics")
         .popoverTip(FullScreenCaptionTip(), arrowEdge: .bottom)
+        #if os(macOS)
+        .buttonStyle(.plain)
+        #endif
     }
 
     /// Flips the interface into the video-style landscape presentation (and
@@ -705,6 +720,9 @@ struct FullScreenPlayerView: View {
                 .glassEffect(in: .circle)
         }
         .accessibilityLabel(isLandscape ? "Exit fullscreen" : "Enter fullscreen")
+        #if os(macOS)
+        .buttonStyle(.plain)
+        #endif
     }
 
     #if canImport(UIKit)

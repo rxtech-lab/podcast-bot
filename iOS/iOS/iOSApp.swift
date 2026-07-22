@@ -106,8 +106,52 @@ struct iOSApp: App {
                 }
                 .onOpenURL { url in deepLinks.handle(url: url) }
         }
+
+        #if os(macOS)
+        Window("Now Playing", id: PlayerWindowScene.id) {
+            PlayerWindowView()
+                .environment(auth)
+                .environment(purchases)
+                .environment(entitlements)
+                .environment(playerSessions)
+                .tint(Theme.accent)
+        }
+        .defaultSize(width: 720, height: 820)
+        .windowResizability(.contentMinSize)
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        #endif
     }
 }
+
+#if os(macOS)
+enum PlayerWindowScene {
+    static let id = "full-player"
+}
+
+private struct PlayerWindowView: View {
+    @Environment(PlayerSessionStore.self) private var playerSessions
+
+    var body: some View {
+        Group {
+            if let session = playerSessions.presentedPlayerSession {
+                FullScreenPlayerView(model: session.model)
+                    .id(session.key)
+                    .onDisappear {
+                        playerSessions.dismissPlayerWindow(for: session)
+                    }
+            } else {
+                ContentUnavailableView(
+                    "Nothing Playing",
+                    systemImage: "music.note",
+                    description: Text("Open the player from a podcast.")
+                )
+            }
+        }
+        .frame(minWidth: 620, minHeight: 620)
+    }
+}
+#endif
 
 final class AppDelegate: NSObject, PlatformApplicationDelegate, UNUserNotificationCenterDelegate {
     private weak var deepLinks: DeepLinkRouter?

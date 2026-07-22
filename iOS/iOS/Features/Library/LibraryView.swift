@@ -29,8 +29,8 @@ struct LibraryView: View {
     @State var showingGlobalChat = false
     @State var showingGlobalDocuments = false
     @State var path: [LibraryDestination] = []
-    /// Navigation stack for the search tab; independent of the library
-    /// tab's `path`/`selection` on both size classes.
+    /// Navigation stack for the dedicated iOS search tab. macOS renders search
+    /// directly in the Home split view and uses its normal detail selection.
     @State var searchPath: [LibraryDestination] = []
     /// Detail selection for the iPad split-view layout.
     @State var selection: LibraryDestination?
@@ -78,6 +78,10 @@ struct LibraryView: View {
                     Group {
                         if isRegular { splitView } else { stackView }
                     }
+                    #if os(macOS)
+                    .searchable(text: $searchText,
+                                prompt: "Search \(AppStringLiteral.stationsNameRaw)")
+                    #endif
                 }
 
                 if homeChatAction != nil {
@@ -86,9 +90,11 @@ struct LibraryView: View {
                     }
                 }
 
+                #if !os(macOS)
                 Tab(value: HomeTab.search, role: .search) {
                     searchTab
                 }
+                #endif
             }
             .onChange(of: selectedTab) { _, newValue in
                 if newValue == .chat {
@@ -230,9 +236,8 @@ struct LibraryView: View {
         }
     }
 
-    /// Semantic content search over the whole library, living behind the tab
-    /// bar's search button. Results push onto the tab's own stack so they
-    /// open in place on both iPhone and iPad.
+    /// Semantic content search over the whole library, living behind the iOS
+    /// tab bar's search button. Results push onto the tab's own stack.
     var searchTab: some View {
         NavigationStack(path: $searchPath) {
             searchTabContent
@@ -326,6 +331,9 @@ struct LibraryView: View {
             libraryContainer
                 .navigationTitle(AppStringLiteral.stationTitle)
                 .toolbar { libraryToolbar }
+                #if os(macOS)
+                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+                #endif
         } detail: {
             NavigationStack {
                 if let selection {
@@ -343,8 +351,18 @@ struct LibraryView: View {
     }
 
     var libraryContainer: some View {
-        libraryContent
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            #if os(macOS)
+            if normalizedSearchQuery(searchText).isEmpty {
+                libraryContent
+            } else {
+                macOSSearchContent
+            }
+            #else
+            libraryContent
+            #endif
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background.ignoresSafeArea())
             .overlay(alignment: .center) {
                 if isSearchLoading && hasLoadedInitialPage {
@@ -354,6 +372,23 @@ struct LibraryView: View {
             }
             .animation(.easeInOut(duration: 0.18), value: isSearchLoading)
     }
+
+    #if os(macOS)
+    @ViewBuilder
+    var macOSSearchContent: some View {
+        if let groups = semanticGroups, !loadedSearchQuery.isEmpty {
+            if groups.isEmpty {
+                searchEmptyState
+            } else {
+                SemanticSearchResultsView(groups: groups) { discussion in
+                    navigate(to: discussion)
+                }
+            }
+        } else {
+            searchPromptState
+        }
+    }
+    #endif
 
     @ViewBuilder
     var libraryContent: some View {
@@ -657,6 +692,15 @@ struct LibraryView: View {
                 }
                 .tint(Theme.accent)
             }
+            #if os(macOS)
+            .contextMenu {
+                Button(role: .destructive) {
+                    deleteDiscussion(d)
+                } label: {
+                    Label("Delete Podcast", systemImage: "trash")
+                }
+            }
+            #endif
         case .album(let summary, let newest, let count):
             Button {
                 navigateToAlbum(id: summary.id)

@@ -682,6 +682,9 @@ struct NotionPagePickerSheet: View {
                 await search()
             }
         }
+        #if os(macOS)
+        .frame(minHeight: 480)
+        #endif
     }
 
     private func toggle(_ page: NotionPageDTO) {
