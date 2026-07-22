@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// Extracts the prominent colors from a cover image so the full-screen player
 /// can tint its background to match the artwork (Apple-Music style).
@@ -18,7 +22,12 @@ enum CoverPalette {
     /// pixels by coarse RGB, then averages each bucket. Pure/CPU work — call it
     /// off the main actor.
     static func dominantColors(from data: Data, count: Int = 2) -> [Color] {
+        #if canImport(UIKit)
         guard let cgImage = UIImage(data: data)?.cgImage else { return [] }
+        #else
+        guard let cgImage = NSImage(data: data)?
+            .cgImage(forProposedRect: nil, context: nil, hints: nil) else { return [] }
+        #endif
 
         let dimension = 40
         let bytesPerPixel = 4

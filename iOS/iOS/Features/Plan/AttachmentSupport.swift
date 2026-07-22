@@ -682,6 +682,9 @@ struct NotionPagePickerSheet: View {
                 await search()
             }
         }
+        #if os(macOS)
+        .frame(minHeight: 480)
+        #endif
     }
 
     private func toggle(_ page: NotionPageDTO) {
@@ -742,10 +745,14 @@ struct NotionPagePickerSheet: View {
 @MainActor
 final class AttachmentWebAuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        UIApplication.shared.connectedScenes
+        #if canImport(UIKit)
+        return UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+        #else
+        return NSApp.keyWindow ?? ASPresentationAnchor()
+        #endif
     }
 }
 

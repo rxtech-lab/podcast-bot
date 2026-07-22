@@ -348,9 +348,11 @@ final class RecordingPlayback {
 
     func play() {
         do {
+            #if !os(macOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true, options: [])
+            #endif
             let player = try loadPlayerIfNeeded()
             if duration > 0, currentTime >= duration - 0.05 {
                 currentTime = 0

@@ -82,13 +82,21 @@ struct AgentDocumentLibraryView: View {
         .onDisappear { searchTask?.cancel() }
     }
 
+    private var searchFieldPlacement: SearchFieldPlacement {
+        #if os(macOS)
+        .automatic
+        #else
+        .navigationBarDrawer(displayMode: .always)
+        #endif
+    }
+
     @ViewBuilder
     private var searchableContent: some View {
         if showsAllDocuments {
             navigationContent
                 .searchable(
                     text: $searchText,
-                    placement: .navigationBarDrawer(displayMode: .always),
+                    placement: searchFieldPlacement,
                     prompt: Text("Search documents")
                 )
                 .onChange(of: searchText) { _, newValue in

@@ -6,7 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 final class ShareViewController: UIViewController {
     private var hostingController: UIHostingController<ShareExtensionRootView>?

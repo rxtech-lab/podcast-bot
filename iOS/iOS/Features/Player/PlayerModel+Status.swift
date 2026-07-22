@@ -3,7 +3,11 @@ import Observation
 import AVFoundation
 import MediaPlayer
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import os
 
 extension PlayerModel {
@@ -231,7 +235,7 @@ extension PlayerModel {
            let urlString = cover.imageURL?.trimmingCharacters(in: .whitespacesAndNewlines),
            let url = URL(string: urlString),
            let (data, _) = try? await URLSession.shared.data(from: url),
-           let image = UIImage(data: data) {
+           let image = PlatformImage(data: data) {
             nowPlayingArtworkSourceKey = key
             nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             updateNowPlayingInfo()
@@ -265,27 +269,41 @@ extension PlayerModel {
         return nil
     }
 
-    nonisolated static func gradientArtworkImage(startHex: String, endHex: String) -> UIImage {
+    nonisolated static func gradientArtworkImage(startHex: String, endHex: String) -> PlatformImage {
         let size = CGSize(width: 512, height: 512)
+        #if canImport(UIKit)
         return UIGraphicsImageRenderer(size: size).image { context in
-            let cgContext = context.cgContext
-            let colors = [
-                UIColor(hex: startHex).cgColor,
-                UIColor(hex: endHex).cgColor,
-            ] as CFArray
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1]) else {
-                UIColor(hex: startHex).setFill()
-                cgContext.fill(CGRect(origin: .zero, size: size))
-                return
-            }
-            cgContext.drawLinearGradient(
-                gradient,
-                start: CGPoint(x: 0, y: 0),
-                end: CGPoint(x: size.width, y: size.height),
-                options: []
-            )
+            drawGradientArtwork(in: context.cgContext, size: size, startHex: startHex, endHex: endHex)
         }
+        #else
+        let image = NSImage(size: size)
+        image.lockFocus()
+        if let cgContext = NSGraphicsContext.current?.cgContext {
+            drawGradientArtwork(in: cgContext, size: size, startHex: startHex, endHex: endHex)
+        }
+        image.unlockFocus()
+        return image
+        #endif
+    }
+
+    nonisolated private static func drawGradientArtwork(in cgContext: CGContext, size: CGSize,
+                                                        startHex: String, endHex: String) {
+        let colors = [
+            PlatformColor(hex: startHex).cgColor,
+            PlatformColor(hex: endHex).cgColor,
+        ] as CFArray
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1]) else {
+            cgContext.setFillColor(PlatformColor(hex: startHex).cgColor)
+            cgContext.fill(CGRect(origin: .zero, size: size))
+            return
+        }
+        cgContext.drawLinearGradient(
+            gradient,
+            start: CGPoint(x: 0, y: 0),
+            end: CGPoint(x: size.width, y: size.height),
+            options: []
+        )
     }
 
     nonisolated static func mergingLocalDiscussionState(current: Discussion, fresh: Discussion) -> Discussion {

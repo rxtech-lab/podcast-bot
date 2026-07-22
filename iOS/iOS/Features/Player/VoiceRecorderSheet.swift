@@ -90,7 +90,7 @@ struct VoiceRecorderSheet: View {
                 Image(systemName: "chevron.down").font(.caption2)
             }
             .font(.subheadline.weight(.medium))
-            .foregroundStyle(canPickLanguage ? Theme.accent : Color(uiColor: .secondaryLabel))
+            .foregroundStyle(canPickLanguage ? Theme.accent : Theme.secondaryText)
         }
         .buttonStyle(.plain)
         .disabled(!canPickLanguage)

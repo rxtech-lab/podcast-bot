@@ -451,6 +451,9 @@ struct ReferencePodcastPickerSheet: View {
                 searchTask?.cancel()
             }
         }
+        #if os(macOS)
+        .frame(minHeight: 480)
+        #endif
     }
 
     @MainActor

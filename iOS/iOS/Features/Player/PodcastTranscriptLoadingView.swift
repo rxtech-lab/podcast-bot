@@ -6,7 +6,9 @@ import PhotosUI
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 import os
 

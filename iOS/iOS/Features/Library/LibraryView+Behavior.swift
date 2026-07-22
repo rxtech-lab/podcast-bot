@@ -2,7 +2,9 @@ import Kingfisher
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 extension LibraryView {
     func load(visibility: LibraryVisibilityFilter? = nil,

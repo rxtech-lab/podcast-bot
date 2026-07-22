@@ -6,7 +6,9 @@ import PhotosUI
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 import os
 
@@ -21,6 +23,9 @@ struct PodcastPlayerView: View {
     @Environment(PurchaseManager.self) var purchases
     @Environment(PlayerSessionStore.self) var playerSessions
     @Environment(\.scenePhase) var scenePhase
+    #if os(macOS)
+    @Environment(\.openWindow) var openWindow
+    #endif
     let discussion: Discussion
     var onCreatedFromPlan: ((Discussion) -> Void)?
     var onCreatedFollowUp: ((Discussion) -> Void)?
@@ -95,10 +100,18 @@ struct PodcastPlayerView: View {
                 if model.isTranscriptLoading {
                     PodcastTranscriptLoadingView()
                 } else {
+                    #if os(macOS)
+                    VStack(spacing: 0) {
+                        transcript(model)
+                            .frame(maxHeight: .infinity)
+                        footer(model)
+                    }
+                    #else
                     transcript(model)
                         .safeAreaInset(edge: .bottom, spacing: 0) {
                             footer(model)
                         }
+                    #endif
                 }
             } else {
                 ProgressView().tint(Theme.accent)
@@ -107,7 +120,9 @@ struct PodcastPlayerView: View {
         .navigationTitle(currentDiscussion.displayTitle.isEmpty ? AppStringLiteral.stationNameRaw : currentDiscussion.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { podcastToolbar }
+        #if !os(macOS)
         .toolbar(hidesTabBar ? .hidden : .visible, for: .tabBar)
+        #endif
         .modifier(CreateFromPlanErrorAlert(error: $createFromPlanError))
         .modifier(SummaryGenerateErrorAlert(error: $summaryGenerateError))
         .modifier(MindmapGenerateErrorAlert(error: $mindmapGenerateError))
@@ -123,13 +138,25 @@ struct PodcastPlayerView: View {
                                    language: model?.presentationLanguage,
                                    allowsClearingMessages: true)
                     .toolbar {
+                        #if os(macOS)
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(String(localized: "Done", comment: "Dismiss the podcast Q&A chat")) {
+                                showingQA = false
+                            }
+                            .keyboardShortcut(.cancelAction)
+                        }
+                        #else
                         ToolbarItem(placement: .topBarLeading) {
                             Button(String(localized: "Done", comment: "Dismiss the podcast Q&A chat")) {
                                 showingQA = false
                             }
                         }
+                        #endif
                     }
             }
+            #if os(macOS)
+            .frame(minHeight: 520)
+            #endif
             .interactiveDismissDisabled()
         }
         .sheet(isPresented: $showingAgentDocuments) {
@@ -228,9 +255,11 @@ struct PodcastPlayerView: View {
         .sheet(item: downloadedPodcastFileBinding) { file in
             fileShareSheet(file)
         }
+        #if !os(macOS)
         .fullScreenCover(isPresented: fullPlayerPresentedBinding) {
             fullPlayerCover
         }
+        #endif
         .task(id: playerSessionTaskKey) {
             await loadPlayerIfNeeded()
         }

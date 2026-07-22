@@ -6,7 +6,9 @@ import PhotosUI
 import RxAuthSwift
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 import os
 
@@ -43,7 +45,7 @@ struct PointsSummaryBubble: View {
                     .fill(LinearGradient(
                         colors: [
                             Theme.accent.opacity(0.13),
-                            Color(uiColor: .secondarySystemBackground)
+                            Theme.rowBackground
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing

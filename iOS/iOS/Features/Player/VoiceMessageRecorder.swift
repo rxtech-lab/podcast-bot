@@ -201,10 +201,12 @@ final class VoiceMessageRecorder {
     // MARK: - Setup
 
     private func beginRecording() async throws {
+        #if !os(macOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat,
                                 options: [.allowBluetooth])
         try session.setActive(true, options: [])
+        #endif
 
         let inputNode = engine.inputNode
         try? inputNode.setVoiceProcessingEnabled(true)
@@ -403,9 +405,11 @@ final class VoiceMessageRecorder {
     }
 
     private func deactivateSession() {
+        #if !os(macOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         // Restore the playback category the podcast player expects.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+        #endif
     }
 
     private func startTimer() {

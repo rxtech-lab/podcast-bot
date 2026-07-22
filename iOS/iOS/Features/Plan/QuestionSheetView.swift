@@ -54,9 +54,15 @@ struct QuestionSheetView: View {
             }
             .background(Theme.background.ignoresSafeArea())
             .onTapGesture {
+                #if canImport(UIKit)
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                #else
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                #endif
             }
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -398,7 +404,7 @@ private extension QuestionSheetView {
 }
 
 private func triggerHaptic() {
-    #if !targetEnvironment(simulator)
+    #if canImport(UIKit) && !targetEnvironment(simulator)
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     #endif
 }
@@ -417,7 +423,7 @@ private struct BooleanOptionButton: View {
             VStack(spacing: 10) {
                 ZStack {
                     Circle()
-                        .fill(isSelected ? color.opacity(0.15) : Color(.tertiarySystemGroupedBackground))
+                        .fill(isSelected ? color.opacity(0.15) : Color.compatTertiaryGroupedBackground)
                         .frame(width: 52, height: 52)
                     Image(systemName: systemImage)
                         .font(.title3.weight(.semibold))
@@ -432,7 +438,7 @@ private struct BooleanOptionButton: View {
             .padding(.vertical, 16)
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(isSelected ? color.opacity(0.06) : Color(.quaternarySystemFill))
+                    .fill(isSelected ? color.opacity(0.06) : Color.compatQuaternaryFill)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -484,7 +490,7 @@ private struct ChoiceOptionRow: View {
             .padding(.vertical, 12)
             .background {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Theme.accent.opacity(0.06) : Color(.quaternarySystemFill))
+                    .fill(isSelected ? Theme.accent.opacity(0.06) : Color.compatQuaternaryFill)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -511,11 +517,33 @@ private struct CustomTextInput: View {
             }
         }
         .padding(14)
-        .background { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.quaternarySystemFill)) }
+        .background { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.compatQuaternaryFill) }
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(isFocused ? Theme.accent.opacity(0.5) : Color.clear, lineWidth: 1.5)
         }
         .animation(.easeInOut(duration: 0.2), value: isFocused)
+    }
+}
+
+// MARK: - Platform colors
+
+private extension Color {
+    /// `tertiarySystemGroupedBackground` with a macOS equivalent.
+    static var compatTertiaryGroupedBackground: Color {
+        #if canImport(UIKit)
+        Color(.tertiarySystemGroupedBackground)
+        #else
+        Color(nsColor: .controlBackgroundColor)
+        #endif
+    }
+
+    /// `quaternarySystemFill` with a macOS equivalent.
+    static var compatQuaternaryFill: Color {
+        #if canImport(UIKit)
+        Color(.quaternarySystemFill)
+        #else
+        Color(nsColor: .quaternaryLabelColor).opacity(0.35)
+        #endif
     }
 }

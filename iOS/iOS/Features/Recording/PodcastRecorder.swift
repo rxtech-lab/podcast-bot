@@ -120,8 +120,10 @@ final class PodcastRecorder {
     func resume() {
         guard phase == .paused else { return }
         do {
+            #if !os(macOS)
             // An interruption (phone call) may have deactivated the session.
             try AVAudioSession.sharedInstance().setActive(true, options: [])
+            #endif
             try engine.start()
             segmentStart = Date()
             phase = .recording
@@ -171,9 +173,11 @@ final class PodcastRecorder {
     // MARK: - Setup
 
     private func beginRecording(at url: URL) throws {
+        #if !os(macOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
         try session.setActive(true, options: [])
+        #endif
 
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -212,6 +216,7 @@ final class PodcastRecorder {
     // MARK: - Session events
 
     private func registerSessionObservers() {
+        #if !os(macOS)
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification,
                                             object: nil, queue: .main) { [weak self] note in
@@ -245,6 +250,7 @@ final class PodcastRecorder {
                                             comment: "Shown when the system audio daemon restarts mid-recording"))
             }
         })
+        #endif
     }
 
     private func removeSessionObservers() {
@@ -293,9 +299,11 @@ final class PodcastRecorder {
     }
 
     private func deactivateSession() {
+        #if !os(macOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         // Restore the playback category the podcast player expects.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+        #endif
     }
 
     private func startTimer() {

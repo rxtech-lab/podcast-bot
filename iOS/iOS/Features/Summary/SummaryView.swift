@@ -119,12 +119,25 @@ struct SummaryView: View {
                 .navigationTitle("Summary")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    #if os(macOS)
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    #else
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Done") { dismiss() }
                     }
+                    #endif
+                    #if os(macOS)
+                    ToolbarItem(placement: .primaryAction) {
+                        documentTypeMenu
+                    }
+                    #else
                     ToolbarItem(placement: .topBarTrailing) {
                         documentTypeMenu
                     }
+                    #endif
                 }
                 .sheet(item: $exportFile) { file in
                     FileShareSheet(url: file.url)

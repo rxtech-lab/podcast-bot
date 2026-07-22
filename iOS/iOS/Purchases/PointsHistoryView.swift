@@ -46,10 +46,17 @@ struct PointsHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsCloseButton {
+                #if os(macOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                #else
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }
                         .accessibilityLabel("Close")
                 }
+                #endif
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { await load() } } label: {

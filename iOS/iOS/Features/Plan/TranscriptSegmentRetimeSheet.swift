@@ -175,25 +175,25 @@ struct TranscriptRetimeSequence: Equatable {
 // an active audio session. Compile them out of simulator builds entirely.
 private enum TranscriptRetimeHaptic {
     static func setBoundary() {
-        #if !targetEnvironment(simulator)
+        #if canImport(UIKit) && !targetEnvironment(simulator)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         #endif
     }
 
     static func togglePlayback() {
-        #if !targetEnvironment(simulator)
+        #if canImport(UIKit) && !targetEnvironment(simulator)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         #endif
     }
 
     static func movePrevious() {
-        #if !targetEnvironment(simulator)
+        #if canImport(UIKit) && !targetEnvironment(simulator)
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
         #endif
     }
 
     static func moveNext() {
-        #if !targetEnvironment(simulator)
+        #if canImport(UIKit) && !targetEnvironment(simulator)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         #endif
     }

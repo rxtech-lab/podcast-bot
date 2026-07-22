@@ -8,14 +8,30 @@
 
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
 import RevenueCat
 import Observation
 
+#if canImport(UIKit)
+typealias PlatformApplication = UIApplication
+typealias PlatformApplicationDelegate = UIApplicationDelegate
+#else
+typealias PlatformApplication = NSApplication
+typealias PlatformApplicationDelegate = NSApplicationDelegate
+#endif
+
 @main
 struct iOSApp: App {
+    #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #else
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
     @State private var auth = AuthManager()
     @State private var purchases: PurchaseManager
     @State private var entitlements: EntitlementsManager
@@ -26,7 +42,9 @@ struct iOSApp: App {
     @State private var maintenance = MaintenanceMonitor()
 
     init() {
+        #if canImport(UIKit)
         UIScrollView.appearance().keyboardDismissMode = .interactive
+        #endif
         // In E2E mode, leave TipKit unconfigured so no `.popoverTip` ever
         // displays — an onboarding tip popover would cover the UI (e.g. the
         // new-plan topic field) and make elements non-hittable for the tests.
@@ -88,10 +106,54 @@ struct iOSApp: App {
                 }
                 .onOpenURL { url in deepLinks.handle(url: url) }
         }
+
+        #if os(macOS)
+        Window("Now Playing", id: PlayerWindowScene.id) {
+            PlayerWindowView()
+                .environment(auth)
+                .environment(purchases)
+                .environment(entitlements)
+                .environment(playerSessions)
+                .tint(Theme.accent)
+        }
+        .defaultSize(width: 720, height: 820)
+        .windowResizability(.contentMinSize)
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        #endif
     }
 }
 
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+#if os(macOS)
+enum PlayerWindowScene {
+    static let id = "full-player"
+}
+
+private struct PlayerWindowView: View {
+    @Environment(PlayerSessionStore.self) private var playerSessions
+
+    var body: some View {
+        Group {
+            if let session = playerSessions.presentedPlayerSession {
+                FullScreenPlayerView(model: session.model)
+                    .id(session.key)
+                    .onDisappear {
+                        playerSessions.dismissPlayerWindow(for: session)
+                    }
+            } else {
+                ContentUnavailableView(
+                    "Nothing Playing",
+                    systemImage: "music.note",
+                    description: Text("Open the player from a podcast.")
+                )
+            }
+        }
+        .frame(minWidth: 620, minHeight: 620)
+    }
+}
+#endif
+
+final class AppDelegate: NSObject, PlatformApplicationDelegate, UNUserNotificationCenterDelegate {
     private weak var deepLinks: DeepLinkRouter?
     private weak var push: PushNotificationManager?
     private var pendingNotificationURL: URL?
@@ -106,14 +168,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    func application(_ application: UIApplication,
+    func application(_ application: PlatformApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { @MainActor [weak self] in
             self?.push?.updateDeviceToken(deviceToken)
         }
     }
 
-    func application(_ application: UIApplication,
+    func application(_ application: PlatformApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         Task { @MainActor [weak self] in
             self?.push?.registrationError = error.localizedDescription
@@ -161,7 +223,7 @@ final class PushNotificationManager {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
             guard granted else { return }
-            UIApplication.shared.registerForRemoteNotifications()
+            PlatformApplication.shared.registerForRemoteNotifications()
         } catch {
             registrationError = error.localizedDescription
         }

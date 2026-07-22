@@ -187,6 +187,9 @@ struct SpeakerModelsSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(minHeight: 420, idealHeight: 600, maxHeight: 720)
+        #endif
         .presentationDetents([.medium, .large])
         .interactiveDismissDisabled(updatingSpeaker != nil)
         .task {

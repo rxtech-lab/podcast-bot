@@ -63,13 +63,35 @@ struct ChapterChecklistSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                #if os(macOS)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        submit()
+                    } label: {
+                        if isSubmitting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label(generateButtonTitle, systemImage: "waveform")
+                        }
+                    }
+                    .disabled(selected.isEmpty || isSubmitting || isLoading || loadError != nil)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("chapters.generate")
+                }
+                #endif
             }
+            #if !os(macOS)
             .safeAreaInset(edge: .bottom) {
                 if !isLoading, loadError == nil {
                     generateButton
                 }
             }
+            #endif
         }
+        #if os(macOS)
+        .frame(minHeight: 520)
+        #endif
         .presentationDetents([.medium, .large])
         .alert("Couldn't start generation", isPresented: submitErrorBinding) {
             Button("OK", role: .cancel) { submitError = nil }

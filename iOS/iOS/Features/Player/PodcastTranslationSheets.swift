@@ -165,6 +165,9 @@ struct TranslationSettingsSheet: View {
                     }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle("Translate Podcast")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -401,7 +404,11 @@ struct CaptionDownloadSheet: View {
                 title: title,
                 language: language
             )
+            #if os(macOS)
+            _ = try await MacFileSavePanel.save(url)
+            #else
             downloadedFile = CaptionDownloadedFile(url: url)
+            #endif
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

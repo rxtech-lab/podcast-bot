@@ -1,7 +1,9 @@
 import Kingfisher
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 struct FullScreenMovingArtwork<Content: View>: View {
     let isPlaying: Bool
