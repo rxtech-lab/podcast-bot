@@ -1,6 +1,9 @@
 package util
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // RuneBoundary returns the largest offset <= i that starts a UTF-8 rune in s,
 // clamped to [0, len(s)]. Slicing a string at an arbitrary byte offset can cut
@@ -23,4 +26,11 @@ func RuneBoundary(s string, i int) int {
 // TruncateBytes returns at most limit bytes of s, cut on a rune boundary.
 func TruncateBytes(s string, limit int) string {
 	return s[:RuneBoundary(s, limit)]
+}
+
+// SanitizePostgresText removes byte sequences that PostgreSQL TEXT cannot
+// store. Invalid UTF-8 can enter through byte-oriented processing, while NUL is
+// valid UTF-8 but PostgreSQL rejects it with SQLSTATE 22021.
+func SanitizePostgresText(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, ""), "\x00", "")
 }

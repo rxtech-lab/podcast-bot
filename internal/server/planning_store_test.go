@@ -43,6 +43,37 @@ func TestPlanningEnsureConversationIdempotent(t *testing.T) {
 	}
 }
 
+func TestPlanningAppendTurnSanitizesPostgresText(t *testing.T) {
+	_, ps, discID := newTestPlanningStore(t)
+	ctx := context.Background()
+	conv, err := ps.EnsureConversation(ctx, "u1", discID)
+	if err != nil {
+		t.Fatalf("EnsureConversation: %v", err)
+	}
+
+	unsafe := "before\x00middle" + string([]byte{0xff}) + "after"
+	if err := ps.AppendTurn(ctx, conv.ID, planningTurnInput{
+		Role:       "tool",
+		Text:       unsafe,
+		ResultText: unsafe,
+		Markdown:   unsafe,
+	}); err != nil {
+		t.Fatalf("AppendTurn: %v", err)
+	}
+	turns, err := ps.Turns(ctx, conv.ID)
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(turns))
+	}
+	const want = "beforemiddleafter"
+	if turns[0].Text != want || turns[0].ResultText != want || turns[0].Markdown != want {
+		t.Fatalf("sanitized turn = text %q result %q markdown %q, want %q",
+			turns[0].Text, turns[0].ResultText, turns[0].Markdown, want)
+	}
+}
+
 func TestPlanningConversationWithTurnsByDiscussionJoinedLoad(t *testing.T) {
 	_, ps, discID := newTestPlanningStore(t)
 	ctx := context.Background()

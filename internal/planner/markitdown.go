@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/util"
 )
 
 // PDF/docx conversion can be slow, especially for large documents, so allow
@@ -177,5 +178,9 @@ func fetchMarkitdownPage(ctx context.Context, method, endpoint, apiKey string, b
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return markitdownResponse{}, fmt.Errorf("decode markitdown response: %w", err)
 	}
+	// MarkItDown can preserve NUL characters extracted from PDFs. They are valid
+	// JSON/UTF-8, but PostgreSQL rejects them when the converted text is later
+	// persisted in a planning turn.
+	parsed.Content = util.SanitizePostgresText(parsed.Content)
 	return parsed, nil
 }

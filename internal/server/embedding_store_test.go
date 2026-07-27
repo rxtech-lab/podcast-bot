@@ -132,6 +132,29 @@ func TestEmbeddingStoreReplaceChunksSwapsAtomically(t *testing.T) {
 	}
 }
 
+func TestEmbeddingStoreReplaceChunksSanitizesPostgresText(t *testing.T) {
+	ctx := context.Background()
+	ds, es := newEmbeddingTestStores(t)
+	d := newReadyEmbeddingDiscussion(t, ctx, ds, "owner", "Unsafe text")
+	unsafe := "before\x00middle" + string([]byte{0xff}) + "after"
+
+	if err := es.ReplaceChunks(ctx, d.ID, "model-a", "hash-unsafe", []ChunkInput{{
+		Kind:       ChunkKindTranscript,
+		ChunkIndex: 0,
+		Text:       unsafe,
+		Embedding:  []float32{1, 0, 0, 0},
+	}}); err != nil {
+		t.Fatalf("ReplaceChunks: %v", err)
+	}
+	hits, err := es.SearchDiscussion(ctx, "owner", d.ID, []float32{1, 0, 0, 0}, "model-a", 1)
+	if err != nil {
+		t.Fatalf("SearchDiscussion: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Text != "beforemiddleafter" {
+		t.Fatalf("hits = %+v, want sanitized text", hits)
+	}
+}
+
 func TestEmbeddingStoreIndexStatusAndStaleness(t *testing.T) {
 	ctx := context.Background()
 	ds, es := newEmbeddingTestStores(t)
