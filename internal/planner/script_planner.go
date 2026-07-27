@@ -18,8 +18,10 @@ import (
 // agent loop runs (searching the web, reading a URL, writing the plan). It backs
 // the streaming plan endpoints so clients can show live progress.
 type ProgressEvent struct {
-	Phase string `json:"phase"` // "search" | "read" | "sources" | "writing"
-	Text  string `json:"text"`
+	Phase       string `json:"phase"` // "search" | "read" | "sources" | "writing" | "retrying"
+	Text        string `json:"text"`
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
 }
 
 // Planner drafts and revises discussion scripts with a single LLM.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/planner"
 )
@@ -778,6 +779,9 @@ func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload
 		// Turn persistence is append-only, so a retry continues from the
 		// persisted prefix. Keep the Active record and the reservation
 		// alive; the dispatch layer either retries or fails terminally.
+		if llm.IsBadRequest(runErr) {
+			return mq.Permanent(runErr)
+		}
 		return runErr
 	}
 	s.settlePlanningConversation(workCtx, pl.UserID, d.ID, conv, pl.Reserved, pl.ReserveLedgerID, meter)
@@ -829,8 +833,10 @@ func (s *Server) PlanningTurnRetrying(pl PlanningTurnPayload, attempt int, delay
 		conversationID: pl.ConversationID,
 	}
 	_ = sink.send("progress", planner.ProgressEvent{
-		Phase: "retrying",
-		Text:  fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+		Phase:       "retrying",
+		Text:        fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+		Attempt:     attempt + 1,
+		MaxAttempts: mq.MaxAttempts,
 	})
 }
 

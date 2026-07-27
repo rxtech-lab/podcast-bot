@@ -179,6 +179,7 @@
 				Features/Library/LibraryTypeFilter.swift,
 				Features/Library/LibraryView.swift,
 				"Features/Library/LibraryView+Behavior.swift",
+				"Features/Library/LibraryView+Chat.swift",
 				Features/Library/LibraryVisibilityFilter.swift,
 				Features/Library/MarketDestination.swift,
 				Features/Library/MarketDisplayItem.swift,

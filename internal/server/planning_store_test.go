@@ -110,9 +110,10 @@ func TestPlanningTurnsRebuildAndQuestionRoundTrip(t *testing.T) {
 
 	mustAppend(planningTurnInput{Role: "user", Text: "make me a podcast"})
 	mustAppend(planningTurnInput{Role: "assistant", Text: "", ToolCalls: []llm.ToolCall{{
-		ID:        "call_1",
-		Name:      "ask_question",
-		Arguments: `{"questions":[{"title":"How long?","type":"single_choice"}]}`,
+		ID:               "call_1",
+		Name:             "ask_question",
+		Arguments:        `{"questions":[{"title":"How long?","type":"single_choice"}]}`,
+		ThoughtSignature: "signed-question",
 	}}})
 	mustAppend(planningTurnInput{
 		Role:           "question",
@@ -156,6 +157,9 @@ func TestPlanningTurnsRebuildAndQuestionRoundTrip(t *testing.T) {
 	}
 	if msgs[1].Role != llm.RoleAssistant || len(msgs[1].ToolCalls) != 1 || msgs[1].ToolCalls[0].ID != "call_1" {
 		t.Fatalf("msg1 should be assistant with tool call call_1: %+v", msgs[1])
+	}
+	if msgs[1].ToolCalls[0].ThoughtSignature != "signed-question" {
+		t.Fatalf("persisted thought signature = %q, want signed-question", msgs[1].ToolCalls[0].ThoughtSignature)
 	}
 	if msgs[2].Role != llm.RoleTool || msgs[2].ToolCallID != "call_1" {
 		t.Fatalf("msg2 should be a tool result for call_1: %+v", msgs[2])

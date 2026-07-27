@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/util"
 )
 
 // Chunk sizing (characters, ≈4 chars/token). Transcript chunks stay small so
@@ -81,7 +82,7 @@ func chunkTranscript(lines []DiscussionLine) []ChunkInput {
 	var size int
 	for _, e := range entries {
 		if len(e.text) > transcriptChunkMax {
-			e.text = e.text[:transcriptChunkMax]
+			e.text = util.TruncateBytes(e.text, transcriptChunkMax)
 		}
 		if size+len(e.text) > transcriptChunkTarget && size > 0 {
 			chunks = append(chunks, build(buf, len(chunks)))
@@ -157,7 +158,10 @@ func splitTextChunks(text string, target, overlap int) []string {
 			out = append(out, text)
 			break
 		}
-		cut := target
+		// Snap to a rune boundary first: CJK and other multi-byte text has no
+		// separator to fall back to, so the raw target offset would land
+		// mid-character and produce bytes Postgres refuses to store.
+		cut := util.RuneBoundary(text, target)
 		if idx := strings.LastIndex(text[:cut], "\n\n"); idx > target/2 {
 			cut = idx
 		} else if idx := strings.LastIndex(text[:cut], "\n"); idx > target/2 {
@@ -166,7 +170,7 @@ func splitTextChunks(text string, target, overlap int) []string {
 			cut = idx
 		}
 		out = append(out, strings.TrimSpace(text[:cut]))
-		next := cut - overlap
+		next := util.RuneBoundary(text, cut-overlap)
 		if next < cut/2 {
 			next = cut
 		}

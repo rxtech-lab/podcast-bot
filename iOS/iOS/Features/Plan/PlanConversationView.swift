@@ -47,6 +47,7 @@ struct PlanConversationView: View {
     @State var isTranscribing = false
     @State var transcribePollTask: Task<Void, Never>?
     @State var streamHasActivity = false
+    @State var isRetryingStream = false
     @FocusState var inputFocused: Bool
 
     init(discussion: Discussion,
@@ -89,6 +90,12 @@ struct PlanConversationView: View {
         .navigationTitle(discussion.title.isEmpty ? "Plan" : discussion.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
+        #if !os(macOS)
+        // Planning is a full-screen conversation with its own bottom edit bar;
+        // the tab bar would sit under it. Every entry point pushes this view,
+        // so the tab bar comes back on pop.
+        .toolbar(.hidden, for: .tabBar)
+        #endif
         .sheet(item: $pendingQuestion) { question in
             QuestionSheetView(
                 question: question,
@@ -472,8 +479,8 @@ struct PlanConversationView: View {
     var loadingBubble: some View {
         HStack {
             HStack(spacing: 10) {
-                if !streamHasActivity {
-                    Text(String(localized: "Thinking…", comment: "Default progress text while the planning agent works"))
+                if !streamHasActivity || isRetryingStream {
+                    Text(progressText ?? String(localized: "Thinking…", comment: "Default progress text while the planning agent works"))
                         .font(.callout)
                         .foregroundStyle(Theme.secondaryText)
                         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .leading)))
@@ -484,6 +491,7 @@ struct PlanConversationView: View {
             .padding(.vertical, 11)
             .background(Theme.agentBubble, in: .rect(cornerRadius: 20))
             .animation(.easeInOut(duration: 0.18), value: streamHasActivity)
+            .animation(.easeInOut(duration: 0.18), value: isRetryingStream)
             Spacer(minLength: 34)
         }
         .accessibilityLabel(progressText ?? String(localized: "Thinking…", comment: "Default progress text while the planning agent works"))

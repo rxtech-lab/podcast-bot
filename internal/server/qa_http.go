@@ -398,8 +398,10 @@ func (s *Server) QATurnRetrying(pl QATurnPayload, attempt int, delay time.Durati
 		conversationID: pl.ConversationID,
 	}
 	_ = sink.send("progress", planner.ProgressEvent{
-		Phase: "retrying",
-		Text:  fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+		Phase:       "retrying",
+		Text:        fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+		Attempt:     attempt + 1,
+		MaxAttempts: mq.MaxAttempts,
 	})
 }
 

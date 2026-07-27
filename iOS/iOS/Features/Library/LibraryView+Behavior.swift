@@ -362,9 +362,20 @@ extension LibraryView {
             // Stack -> split: surface the top of the pushed stack as the selection.
             selection = path.last
             path = []
+            // The chat tab becomes the inspector column; `showingGlobalChat`
+            // carries over so an open chat stays open.
+            if selectedTab == .chat { selectedTab = .home }
         } else {
             // Split -> stack: rebuild the stack from the current selection.
             path = selection.map { [$0] } ?? []
+            // The inspector becomes the chat tab; drop it if Chat has no tab.
+            if showingGlobalChat {
+                if homeChatAction != nil {
+                    selectedTab = .chat
+                } else {
+                    showingGlobalChat = false
+                }
+            }
         }
     }
 
