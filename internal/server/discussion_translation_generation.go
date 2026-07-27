@@ -86,9 +86,9 @@ func (s *Server) StartPodcastTranslation(ctx context.Context, d *Discussion, tar
 		meta := existing.Meta()
 		return &meta, nil
 	}
-	model := s.resolvedTranslationModel(ctx)
-	if model == "" {
-		return nil, errors.New("translation model is not configured")
+	model, err := s.resolvedTranslationModel(ctx)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.d.Discussions.BeginTranslation(ctx, d.ID, target, model); err != nil {
 		return nil, err
@@ -119,7 +119,10 @@ func (s *Server) RunPodcastTranslationTask(ctx context.Context, p TranslationTas
 		}
 		return err
 	}
-	model := s.resolvedTranslationModel(ctx)
+	model, err := s.resolvedTranslationModel(ctx)
+	if err != nil {
+		return err
+	}
 	meter := &summaryUsageMeter{}
 	client := llm.New(s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey, model).
 		WithUsageRecorder(meter.record).

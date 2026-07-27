@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,17 +135,40 @@ func TestAppConfigStoreGetSet(t *testing.T) {
 	}
 }
 
-func TestResolvedModelDefaultsOverride(t *testing.T) {
+func seedTestAppModels(t *testing.T, ac *AppConfigStore, languageModel, embeddingModel string) {
+	t.Helper()
+	for key, value := range map[string]string{
+		appConfigKeyDefaultHostModel:  languageModel,
+		appConfigKeyScenePlannerModel: languageModel,
+		appConfigKeyCompressionModel:  languageModel,
+		appConfigKeySummaryModel:      languageModel,
+		appConfigKeyTranslationModel:  languageModel,
+		appConfigKeyJudgementModel:    languageModel,
+		appConfigKeySummaryPPTModel:   languageModel,
+		appConfigKeyQAModel:           languageModel,
+		appConfigKeyEmbeddingModel:    embeddingModel,
+		appConfigKeySTTGeminiModel:    languageModel,
+	} {
+		if err := ac.Set(context.Background(), key, value); err != nil {
+			t.Fatalf("set test model %s: %v", key, err)
+		}
+	}
+}
+
+func TestResolvedModelsAreAdminOnly(t *testing.T) {
 	ac, _ := newTestAppConfigStore(t)
-	env := &config.Env{HostModel: "env/host", ScenePlannerModel: "env/host"}
+	env := &config.Env{Models: config.ModelConfig{
+		Host:         "legacy/env-host",
+		ScenePlanner: "legacy/env-planner",
+	}}
 	s := &Server{d: Deps{Env: env, AppConfig: ac}}
 	ctx := context.Background()
 
-	// No override → env defaults.
-	if d := s.resolvedModelDefaults(ctx); d.Host != "env/host" {
-		t.Fatalf("without override Host = %q, want env/host", d.Host)
+	// Even a legacy caller-populated Env is not a model source. No admin row
+	// means no model, and nothing falls back to another role.
+	if d := s.resolvedModelDefaults(ctx); d != (config.ModelDefaults{}) {
+		t.Fatalf("without admin config defaults = %+v, want empty", d)
 	}
-	// Override moves both host and (env-linked) scene planner.
 	if err := ac.Set(ctx, appConfigKeyDefaultHostModel, "admin/model"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -152,18 +176,46 @@ func TestResolvedModelDefaultsOverride(t *testing.T) {
 	if d.Host != "admin/model" {
 		t.Errorf("Host = %q, want admin/model", d.Host)
 	}
-	if d.ScenePlanner != "admin/model" {
-		t.Errorf("ScenePlanner = %q, want admin/model (env-linked)", d.ScenePlanner)
+	if d.ScenePlanner != "" {
+		t.Errorf("ScenePlanner = %q, want empty without its own admin row", d.ScenePlanner)
 	}
 
-	// plannerEnv returns a copy with the override applied, leaving the base Env
-	// untouched.
-	pe := s.plannerEnv()
-	if pe.HostModel != "admin/model" {
-		t.Errorf("plannerEnv HostModel = %q", pe.HostModel)
+	pe, err := s.plannerEnv(ctx)
+	if err != nil {
+		t.Fatalf("plannerEnv: %v", err)
 	}
-	if env.HostModel != "env/host" {
-		t.Errorf("base Env mutated: HostModel = %q", env.HostModel)
+	if pe.Models.Host != "admin/model" {
+		t.Errorf("plannerEnv host model = %q", pe.Models.Host)
+	}
+	if env.Models.Host != "legacy/env-host" {
+		t.Errorf("base Env mutated: host model = %q", env.Models.Host)
+	}
+}
+
+func TestMissingAdminModelsReturnConfigurationErrors(t *testing.T) {
+	ac, _ := newTestAppConfigStore(t)
+	s := &Server{d: Deps{Env: &config.Env{}, AppConfig: ac}}
+	ctx := context.Background()
+
+	if _, err := s.newPlanner(ctx); err == nil || !strings.Contains(err.Error(), "host model") {
+		t.Fatalf("newPlanner without host model error = %v", err)
+	}
+	if err := ac.Set(ctx, appConfigKeyDefaultHostModel, "admin/host"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.newPlanner(ctx); err == nil || !strings.Contains(err.Error(), "scene planner model") {
+		t.Fatalf("newPlanner without scene planner model error = %v", err)
+	}
+
+	for name, resolve := range map[string]func(context.Context) (string, error){
+		"translation":   s.resolvedTranslationModel,
+		"Q&A":           s.resolvedQAModel,
+		"embedding":     s.resolvedEmbeddingModel,
+		"transcription": s.resolvedSTTGeminiModel,
+	} {
+		if _, err := resolve(ctx); err == nil || !strings.Contains(err.Error(), "admin App Config") {
+			t.Errorf("%s resolver error = %v, want admin App Config configuration error", name, err)
+		}
 	}
 }
 

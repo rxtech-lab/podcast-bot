@@ -53,10 +53,11 @@ type Delta struct {
 // emit ID + name in the first chunk and append arguments incrementally; the
 // receiver must accumulate by Index.
 type DeltaToolCall struct {
-	Index     int
-	ID        string
-	Name      string
-	Arguments string
+	Index            int
+	ID               string
+	Name             string
+	Arguments        string
+	ThoughtSignature string
 }
 
 // Stream wraps the underlying SSE stream and exposes a channel of Deltas plus

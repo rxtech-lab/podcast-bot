@@ -357,12 +357,10 @@ func planIllustrationScenes(ctx context.Context, log *slog.Logger, env *config.E
 		}
 		return nil
 	}
-	model := env.ScenePlannerModel
+	model := env.Models.ScenePlanner
 	if model == "" {
-		model = env.HostModel
-	}
-	if model == "" {
-		return scenes.FallbackAudioBookScenePlan(topic)
+		log.Error("scene planner model is not configured in admin App Config")
+		return nil
 	}
 	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
 	t0 := time.Now()

@@ -87,8 +87,9 @@ func TestMaintenanceMiddleware(t *testing.T) {
 }
 
 func TestAppConfigResource(t *testing.T) {
+	gw := fakeTypedGateway(t)
 	ac, _ := newTestAppConfigStore(t)
-	env := &config.Env{HostModel: "env/host"}
+	env := &config.Env{OpenAIBaseURL: gw.URL, OpenAIKey: "test"}
 	s := &Server{d: Deps{Env: env, AppConfig: ac}}
 	res := s.newAppConfigResource()
 	ctx := context.Background()
@@ -108,26 +109,27 @@ func TestAppConfigResource(t *testing.T) {
 		t.Fatal("form missing default_host_model property")
 	}
 
-	// Prefill returns the current effective host model.
+	// With no admin row, prefill stays empty; Env is never a model source.
 	got, err := res.Fetch(ctx, req, admin.ActionEdit, nil)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if m, _ := got.Data.(map[string]any); m["default_host_model"] != "env/host" {
+	if m, _ := got.Data.(map[string]any); m["default_host_model"] != "" {
 		t.Errorf("Fetch = %#v", got.Data)
 	}
 
-	// Submitting an unknown model is rejected (not in the empty catalog).
-	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"default_host_model": "bogus/model"}); err == nil {
-		t.Error("expected unknown-model rejection")
+	// Every model role is required; clearing a role is rejected.
+	invalid := validAppConfigData("openai/gpt-4o", "openai/text-embedding-3-small")
+	invalid["compression_model"] = ""
+	if _, err := res.Act(ctx, req, admin.ActionEdit, invalid); err == nil {
+		t.Error("expected missing compression-model rejection")
 	}
 
-	// Clearing (empty) is allowed and persists.
-	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"default_host_model": ""}); err != nil {
-		t.Fatalf("Act clear: %v", err)
+	if _, err := res.Act(ctx, req, admin.ActionEdit, validAppConfigData("openai/gpt-4o", "openai/text-embedding-3-small")); err != nil {
+		t.Fatalf("Act save: %v", err)
 	}
-	if v, ok, _ := ac.Get(ctx, appConfigKeyDefaultHostModel); !ok || v != "" {
-		t.Errorf("cleared value = %q ok=%v", v, ok)
+	if v, ok, _ := ac.Get(ctx, appConfigKeyCompressionModel); !ok || v != "openai/gpt-4o" {
+		t.Errorf("compression value = %q ok=%v", v, ok)
 	}
 }
 
@@ -153,14 +155,29 @@ func fakeTypedGateway(t *testing.T) *httptest.Server {
 	return srv
 }
 
+func validAppConfigData(languageModel, embeddingModel string) map[string]any {
+	return map[string]any{
+		"default_host_model":        languageModel,
+		"scene_planner_model":       languageModel,
+		"compression_model":         languageModel,
+		"podcast_summary_model":     languageModel,
+		"translation_model":         languageModel,
+		"judgement_model":           languageModel,
+		"podcast_summary_ppt_model": languageModel,
+		"qa_model":                  languageModel,
+		"embedding_model":           embeddingModel,
+		"stt_provider":              "azure",
+	}
+}
+
 // TestAppConfigEmbeddingModelSelection pins the embedding-model field as a
-// dropdown: options come from the gateway's embedding-typed models (plus the
-// empty default branch), chat dropdowns exclude non-language models, and the
+// dropdown: options come from the gateway's embedding-typed models, chat
+// dropdowns exclude non-language models, and the
 // save handler rejects ids that aren't embedding models.
 func TestAppConfigEmbeddingModelSelection(t *testing.T) {
 	gw := fakeTypedGateway(t)
 	ac, _ := newTestAppConfigStore(t)
-	env := &config.Env{HostModel: "openai/gpt-4o", OpenAIBaseURL: gw.URL, OpenAIKey: "test"}
+	env := &config.Env{OpenAIBaseURL: gw.URL, OpenAIKey: "test"}
 	s := &Server{d: Deps{Env: env, AppConfig: ac}}
 	res := s.newAppConfigResource()
 	ctx := context.Background()
@@ -176,13 +193,10 @@ func TestAppConfigEmbeddingModelSelection(t *testing.T) {
 	if !ok {
 		t.Fatal("form missing embedding_model property")
 	}
-	if len(embedding.OneOf) != 3 {
-		t.Fatalf("embedding options = %d, want empty branch + 2 embedding models: %+v", len(embedding.OneOf), embedding.OneOf)
+	if len(embedding.OneOf) != 2 {
+		t.Fatalf("embedding options = %d, want 2 embedding models: %+v", len(embedding.OneOf), embedding.OneOf)
 	}
-	if embedding.OneOf[0].Const != "" {
-		t.Fatalf("first embedding option = %#v, want the empty default branch", embedding.OneOf[0])
-	}
-	ids := []any{embedding.OneOf[1].Const, embedding.OneOf[2].Const}
+	ids := []any{embedding.OneOf[0].Const, embedding.OneOf[1].Const}
 	for _, want := range []any{"openai/text-embedding-3-small", "google/gemini-embedding-001"} {
 		if ids[0] != want && ids[1] != want {
 			t.Fatalf("embedding options missing %v: %v", want, ids)
@@ -196,33 +210,38 @@ func TestAppConfigEmbeddingModelSelection(t *testing.T) {
 	}
 
 	// A chat model is not a valid embedding model.
-	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"embedding_model": "openai/gpt-4o"}); err == nil {
+	invalidEmbedding := validAppConfigData("openai/gpt-4o", "openai/gpt-4o")
+	if _, err := res.Act(ctx, req, admin.ActionEdit, invalidEmbedding); err == nil {
 		t.Error("expected chat-model-as-embedding rejection")
 	}
 	// An embedding model is not a valid host model.
-	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"default_host_model": "openai/text-embedding-3-small"}); err == nil {
+	invalidHost := validAppConfigData("openai/text-embedding-3-small", "openai/text-embedding-3-small")
+	if _, err := res.Act(ctx, req, admin.ActionEdit, invalidHost); err == nil {
 		t.Error("expected embedding-model-as-host rejection")
 	}
 	// A catalog embedding model saves.
-	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"embedding_model": "google/gemini-embedding-001"}); err != nil {
+	if _, err := res.Act(ctx, req, admin.ActionEdit, validAppConfigData("openai/gpt-4o", "google/gemini-embedding-001")); err != nil {
 		t.Fatalf("Act embedding save: %v", err)
 	}
-	if got := s.resolvedEmbeddingModel(ctx); got != "google/gemini-embedding-001" {
-		t.Fatalf("stored embedding model = %q", got)
+	if got, err := s.resolvedEmbeddingModel(ctx); err != nil || got != "google/gemini-embedding-001" {
+		t.Fatalf("stored embedding model = %q err=%v", got, err)
 	}
-	// The stored value is re-offered and re-savable, and clearing works.
-	if _, err := res.Act(ctx, req, admin.ActionEdit, map[string]any{"embedding_model": ""}); err != nil {
-		t.Fatalf("Act embedding clear: %v", err)
+	// Clearing is rejected: semantic features have no model fallback.
+	clearEmbedding := validAppConfigData("openai/gpt-4o", "")
+	if _, err := res.Act(ctx, req, admin.ActionEdit, clearEmbedding); err == nil {
+		t.Fatal("expected empty embedding model rejection")
 	}
 }
 
-// TestAppConfigEmbeddingModelFailsOpenWithoutCatalog pins the outage behavior:
-// with no reachable gateway the embedding field accepts any value (matching
-// the Gemini STT model's fail-open) and the current value is offered as its
-// own dropdown branch so the prefill validates.
-func TestAppConfigEmbeddingModelFailsOpenWithoutCatalog(t *testing.T) {
+// TestAppConfigEmbeddingModelPreservesStoredValueWithoutCatalog pins the
+// offline form behavior: the current admin value remains selectable, but there
+// is no empty/default branch.
+func TestAppConfigEmbeddingModelPreservesStoredValueWithoutCatalog(t *testing.T) {
 	ac, _ := newTestAppConfigStore(t)
-	env := &config.Env{EmbeddingModel: "text-embedding-3-small"}
+	if err := ac.Set(context.Background(), appConfigKeyEmbeddingModel, "text-embedding-3-small"); err != nil {
+		t.Fatal(err)
+	}
+	env := &config.Env{}
 	s := &Server{d: Deps{Env: env, AppConfig: ac}}
 	res := s.newAppConfigResource()
 	ctx := context.Background()
@@ -233,12 +252,8 @@ func TestAppConfigEmbeddingModelFailsOpenWithoutCatalog(t *testing.T) {
 	}
 	fs := raw.(*admin.FormSchema)
 	embedding, _ := fs.Schema.Properties.Get("embedding_model")
-	if len(embedding.OneOf) != 2 || embedding.OneOf[1].Const != "text-embedding-3-small" {
-		t.Fatalf("offline embedding options = %+v, want empty branch + current value", embedding.OneOf)
-	}
-
-	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, map[string]any{"embedding_model": "anything/goes"}); err != nil {
-		t.Fatalf("Act should fail open without a catalog: %v", err)
+	if len(embedding.OneOf) != 1 || embedding.OneOf[0].Const != "text-embedding-3-small" {
+		t.Fatalf("offline embedding options = %+v, want current value only", embedding.OneOf)
 	}
 }
 
@@ -1134,8 +1149,9 @@ func TestAdminResourceForbidsNonAdmin(t *testing.T) {
 // keyed on stt_provider, so the form shows it only when Gemini is selected.
 // Saving with the field absent (Azure selected) must preserve the stored model.
 func TestAppConfigGeminiModelConditional(t *testing.T) {
+	gw := fakeTypedGateway(t)
 	ac, _ := newTestAppConfigStore(t)
-	env := &config.Env{HostModel: "env/host", TranscribeModel: "gemini-2.5-flash"}
+	env := &config.Env{OpenAIBaseURL: gw.URL, OpenAIKey: "test"}
 	s := &Server{d: Deps{Env: env, AppConfig: ac}}
 	res := s.newAppConfigResource()
 	ctx := context.Background()
@@ -1165,21 +1181,21 @@ func TestAppConfigGeminiModelConditional(t *testing.T) {
 	}
 
 	// Save with Gemini selected: the model persists.
-	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, map[string]any{
-		"stt_provider": "gemini", "stt_gemini_model": "gemini-2.5-pro",
-	}); err != nil {
+	geminiData := validAppConfigData("openai/gpt-4o", "openai/text-embedding-3-small")
+	geminiData["stt_provider"] = "gemini"
+	geminiData["stt_gemini_model"] = "gemini-2.5-pro"
+	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, geminiData); err != nil {
 		t.Fatalf("Act gemini: %v", err)
 	}
-	if got := s.resolvedSTTGeminiModel(ctx); got != "gemini-2.5-pro" {
-		t.Fatalf("stored gemini model = %q", got)
+	if got, err := s.resolvedSTTGeminiModel(ctx); err != nil || got != "gemini-2.5-pro" {
+		t.Fatalf("stored gemini model = %q err=%v", got, err)
 	}
 	// Save with Azure selected (field not rendered → absent): stored model kept.
-	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, map[string]any{
-		"stt_provider": "azure",
-	}); err != nil {
+	azureData := validAppConfigData("openai/gpt-4o", "openai/text-embedding-3-small")
+	if _, err := res.Act(ctx, adminReq(""), admin.ActionEdit, azureData); err != nil {
 		t.Fatalf("Act azure: %v", err)
 	}
-	if got := s.resolvedSTTGeminiModel(ctx); got != "gemini-2.5-pro" {
-		t.Fatalf("gemini model after azure save = %q, want preserved", got)
+	if got, err := s.resolvedSTTGeminiModel(ctx); err != nil || got != "gemini-2.5-pro" {
+		t.Fatalf("gemini model after azure save = %q err=%v, want preserved", got, err)
 	}
 }

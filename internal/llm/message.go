@@ -16,9 +16,10 @@ const (
 
 // ToolCall is a provider-neutral function call request from the model.
 type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments string // JSON string as emitted by the model
+	ID               string
+	Name             string
+	Arguments        string // JSON string as emitted by the model
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 // Message is the provider-neutral chat history entry.
@@ -33,6 +34,15 @@ type Message struct {
 
 // ToOpenAIParams converts a slice of Messages to openai-go's union params.
 func ToOpenAIParams(history []Message) []openai.ChatCompletionMessageParamUnion {
+	return toOpenAIParams(history, false)
+}
+
+// toOpenAIParams converts provider-neutral history to OpenAI-compatible
+// messages. legacyGemini3 enables the documented validator bypass only for the
+// first call in an assistant step whose Gemini thought signature was persisted
+// before signature support existed. Parallel calls after the first correctly
+// remain unsigned.
+func toOpenAIParams(history []Message, legacyGemini3 bool) []openai.ChatCompletionMessageParamUnion {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(history))
 	for _, m := range history {
 		switch m.Role {
@@ -53,14 +63,28 @@ func ToOpenAIParams(history []Message) []openai.ChatCompletionMessageParamUnion 
 			}
 			if len(m.ToolCalls) > 0 {
 				calls := make([]openai.ChatCompletionMessageToolCallParam, 0, len(m.ToolCalls))
-				for _, tc := range m.ToolCalls {
-					calls = append(calls, openai.ChatCompletionMessageToolCallParam{
+				for i, tc := range m.ToolCalls {
+					call := openai.ChatCompletionMessageToolCallParam{
 						ID: tc.ID,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      tc.Name,
 							Arguments: tc.Arguments,
 						},
-					})
+					}
+					signature := tc.ThoughtSignature
+					if signature == "" && legacyGemini3 && i == 0 {
+						signature = geminiThoughtSignatureBypass
+					}
+					if signature != "" {
+						call.SetExtraFields(map[string]any{
+							"extra_content": map[string]any{
+								"google": map[string]any{
+									"thought_signature": signature,
+								},
+							},
+						})
+					}
+					calls = append(calls, call)
 				}
 				asst.ToolCalls = calls
 			}

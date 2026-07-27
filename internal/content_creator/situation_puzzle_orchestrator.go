@@ -20,10 +20,10 @@ func (o *Orchestrator) buildPuzzleAgents() error {
 			BaseURL: o.Topic.PuzzleHost.BaseURL,
 			APIKey:  o.Topic.PuzzleHost.APIKey,
 		},
-		agent.RolePuzzleHost, o.Env.HostModel)
+		agent.RolePuzzleHost)
 	for _, s := range o.Topic.Players {
 		o.Registry.Players = append(o.Registry.Players,
-			o.makeAgent(s, agent.RolePlayer, ""))
+			o.makeAgent(s, agent.RolePlayer))
 	}
 	return nil
 }

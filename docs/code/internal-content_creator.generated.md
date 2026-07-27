@@ -55,9 +55,10 @@ func BuildRecap(ctx context.Context, comp *llm.Client,
     Errors are LLM/transport-level only — a thin recap or an empty highlight
     list is treated as success (the caller uses whatever came back).
 
-    `comp` is the compression LLM client (Env.CompressionBaseURL/Key/Model). We
-    pick this rather than the host LLM because it's already tuned for short-form
-    summarisation and avoids burning the host model on non-creative text.
+    `comp` is the compression LLM client (provider credentials plus the
+    admin-owned compression model). We pick this rather than the host LLM because
+    it's already tuned for short-form summarisation and avoids burning the host
+    model on non-creative text.
 
 func EnsureEpisodeDir(persistentRoot, show string, season, episode int) (string, error)
     EnsureEpisodeDir creates EpisodeDir(...) and its standard subdirectories.

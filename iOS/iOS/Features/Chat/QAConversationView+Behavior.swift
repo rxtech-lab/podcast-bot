@@ -78,6 +78,7 @@ extension QAConversationView {
     func beginStream(_ makeStream: @escaping () -> AsyncThrowingStream<QAStreamEvent, Error>) {
         isStreaming = true
         streamHasActivity = false
+        isRetryingStream = false
         progressText = nil
         streamTask?.cancel()
         let stream = makeStream()
@@ -182,13 +183,16 @@ extension QAConversationView {
                 return p
             }
         case let .progress(ev):
-            progressText = ev.text
+            isRetryingStream = ev.phase == "retrying"
+            progressText = ev.localizedText
         case let .done(payload):
             parts = payload.conversation.parts
             isStreaming = false
+            isRetryingStream = false
             progressText = nil
         case let .failed(message):
             isStreaming = false
+            isRetryingStream = false
             progressText = nil
             presentError(message, offersTopUp: false)
         }

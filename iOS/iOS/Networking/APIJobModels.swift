@@ -4,6 +4,34 @@ import JSONSchemaForm
 struct PlanProgressEvent: Decodable, Sendable {
     var phase: String
     var text: String
+    var attempt: Int?
+    var maxAttempts: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case phase
+        case text
+        case attempt
+        case maxAttempts = "max_attempts"
+    }
+
+    var localizedText: String {
+        guard phase == "retrying" else { return text }
+
+        let values: (attempt: Int, maximum: Int)?
+        if let attempt, let maxAttempts {
+            values = (attempt, maxAttempts)
+        } else {
+            // Keep localization working while an older server is still active
+            // during a rolling deployment and only supplies the English text.
+            let numbers = text.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            values = numbers.count >= 2 ? (numbers[0], numbers[1]) : nil
+        }
+        guard let values else { return text }
+        return String(
+            localized: "Retrying (attempt \(values.attempt)/\(values.maximum))…",
+            comment: "Progress while an agent retries a failed request; values are the current and maximum attempt numbers"
+        )
+    }
 }
 
 /// POST /api/plan and /api/plan/improve response body.

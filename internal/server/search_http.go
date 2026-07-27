@@ -63,8 +63,8 @@ func semanticMatchFromHit(h ChunkHit) SemanticMatch {
 
 // handleSemanticSearch serves POST /api/search/semantic: a global semantic
 // search over the caller's indexed podcast content, grouped by podcast with
-// the matched text + similarity per hit. Returns enabled=false (200) when
-// embeddings are unconfigured so the client can show a graceful empty state.
+// the matched text + similarity per hit. Missing model configuration is an
+// explicit service error; there is no disabled/default-model fallback.
 func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	user := s.requestUser(r)
 	var req semanticSearchRequest
@@ -74,10 +74,6 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		http.Error(w, "query is required", http.StatusBadRequest)
-		return
-	}
-	if !s.SemanticSearchEnabled(r.Context()) {
-		writeJSON(w, semanticSearchResponse{Enabled: false, Results: []SemanticSearchGroup{}})
 		return
 	}
 	limit := req.Limit
@@ -92,7 +88,11 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "search unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	model := s.resolvedEmbeddingModel(r.Context())
+	model, err := s.resolvedEmbeddingModel(r.Context())
+	if err != nil {
+		http.Error(w, "search unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	hits, err := s.d.Embeddings.SearchGlobal(r.Context(), user.ID, vec, model, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -143,10 +143,6 @@ func (s *Server) handleDiscussionSemanticSearch(w http.ResponseWriter, r *http.R
 		http.Error(w, "query is required", http.StatusBadRequest)
 		return
 	}
-	if !s.SemanticSearchEnabled(r.Context()) {
-		writeJSON(w, discussionSearchResponse{Enabled: false, Matches: []SemanticMatch{}})
-		return
-	}
 	limit := req.Limit
 	if limit <= 0 {
 		limit = semanticSearchDefaultLimit
@@ -159,7 +155,11 @@ func (s *Server) handleDiscussionSemanticSearch(w http.ResponseWriter, r *http.R
 		http.Error(w, "search unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	model := s.resolvedEmbeddingModel(r.Context())
+	model, err := s.resolvedEmbeddingModel(r.Context())
+	if err != nil {
+		http.Error(w, "search unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	hits, err := s.d.Embeddings.SearchDiscussion(r.Context(), user.ID, d.ID, vec, model, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

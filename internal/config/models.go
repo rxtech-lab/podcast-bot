@@ -18,9 +18,9 @@ type ModelInfo struct {
 	// "image", ...). Empty when the gateway doesn't type its models; such
 	// entries are treated as chat models.
 	Type string `json:"type,omitempty"`
-	// DefaultFor lists the engine roles this model is the env-configured
-	// default for (any of "host", "scene_planner", "compression"). Empty for
-	// models that are merely available but not a default.
+	// DefaultFor lists the engine roles this model is admin-configured for (any
+	// of "host", "scene_planner", "compression"). Empty for models that are
+	// merely available but not assigned to one of those client-facing roles.
 	DefaultFor []string `json:"default_for,omitempty"`
 }
 
@@ -31,23 +31,36 @@ const (
 	ModelTypeEmbedding = "embedding"
 )
 
-// ModelDefaults maps engine roles to the configured default model ids.
+// ModelDefaults maps client-facing engine roles to their configured model ids.
 type ModelDefaults struct {
 	Host         string `json:"host"`
 	ScenePlanner string `json:"scene_planner"`
 	Compression  string `json:"compression"`
 }
 
-// DefaultsForEnv reports the env-configured default model id for each engine
-// role so the dashboard/app can preselect sensible models.
-func DefaultsForEnv(e *Env) ModelDefaults {
-	if e == nil {
-		return ModelDefaults{}
-	}
+// ModelConfig contains the model id assigned to every runtime role. Values are
+// loaded from the admin App Config, never from environment variables. No role
+// falls back to another role when empty.
+type ModelConfig struct {
+	Host               string
+	ScenePlanner       string
+	Compression        string
+	PodcastSummary     string
+	PodcastTranslation string
+	Judgement          string
+	PodcastSummaryPPT  string
+	QA                 string
+	Embedding          string
+	Transcription      string
+}
+
+// Defaults reports the subset exposed by GET /api/models for client-side
+// speaker/role preselection.
+func (m ModelConfig) Defaults() ModelDefaults {
 	return ModelDefaults{
-		Host:         e.HostModel,
-		ScenePlanner: e.ScenePlannerModel,
-		Compression:  e.CompressionModel,
+		Host:         m.Host,
+		ScenePlanner: m.ScenePlanner,
+		Compression:  m.Compression,
 	}
 }
 
@@ -61,9 +74,9 @@ type ModelDescriptor struct {
 
 // ModelsFromDescriptors turns the gateway model roster into ModelInfo entries,
 // deriving Provider from the "provider/model" id prefix, carrying the gateway
-// type through, and stamping DefaultFor for any id the env points at as a role
-// default. Blank/duplicate ids are dropped so the resulting roster is clean
-// for the pickers.
+// type through, and stamping DefaultFor for admin-assigned client roles.
+// Blank/duplicate ids are dropped so the resulting roster is clean for the
+// pickers.
 func ModelsFromDescriptors(entries []ModelDescriptor, defaults ModelDefaults) []ModelInfo {
 	out := make([]ModelInfo, 0, len(entries))
 	seen := make(map[string]bool, len(entries))

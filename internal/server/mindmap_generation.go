@@ -46,6 +46,9 @@ func StartMindmapGeneration(ctx context.Context, deps SummaryGenerationDeps, inp
 	}
 
 	model := summarizer.NewMindmapGenerator(deps.Env).Model()
+	if model == "" {
+		return nil, errors.New("podcast summary model is not configured in admin App Config")
+	}
 	if err := deps.Discussions.BeginSummary(ctx, input.DiscussionID, docType, model); err != nil {
 		return nil, err
 	}
@@ -74,6 +77,9 @@ func RunMindmapGenerationTask(deps SummaryGenerationDeps, input SummaryGeneratio
 	logger := log.With("job", input.JobID, "discussion_id", input.DiscussionID, "task", "mindmap")
 	docType := SummaryDocTypeMindmap
 	model := summarizer.NewMindmapGenerator(deps.Env).Model()
+	if model == "" {
+		return mq.Permanent(errors.New("podcast summary model is not configured in admin App Config"))
+	}
 
 	var reserved, reserveLedgerID int64
 	if deps.Points != nil {
@@ -88,7 +94,11 @@ func RunMindmapGenerationTask(deps SummaryGenerationDeps, input SummaryGeneratio
 	}
 
 	meter := &summaryUsageMeter{}
-	spec, err := summarizer.NewMindmapGenerator(deps.Env).WithUsageRecorder(meter.record).Generate(ctx, summarizer.Input{
+	runner := summarizer.NewMindmapGenerator(deps.Env).WithUsageRecorder(meter.record)
+	if runner == nil {
+		return mq.Permanent(errors.New("podcast summary model is not configured in admin App Config"))
+	}
+	spec, err := runner.Generate(ctx, summarizer.Input{
 		Title:    input.Title,
 		Topic:    input.Topic,
 		Language: input.Language,

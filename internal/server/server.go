@@ -79,9 +79,9 @@ type Deps struct {
 	// disables points gating/charging/hiding entirely — the server behaves as
 	// before. Wired from the same database as Discussions.
 	Points *PointsStore
-	// AppConfig holds admin-editable app-level configuration (e.g. the default
-	// generation model) that overrides the env defaults. nil falls back to env
-	// entirely. Wired from the same database as Discussions.
+	// AppConfig is the sole source of model assignments. A nil store leaves
+	// model-dependent features unconfigured so they return explicit errors.
+	// Wired from the same database as Discussions.
 	AppConfig *AppConfigStore
 	// IAPProducts holds the admin-owned in-app-purchase product catalog. Purchase
 	// webhooks and admin top-ups use this table as the source of truth for
@@ -283,7 +283,7 @@ func New(d Deps) *Server {
 	} else {
 		s.logger().Info("APNs disabled")
 	}
-	// Admin-backed stores. AppConfig (default-model override) shares the
+	// Admin-backed stores. AppConfig (the model source of truth) shares the
 	// discussion database; Maintenance (window gating) shares the job database.
 	// Built here so the resolver, precheck/config gating, and the admin API can
 	// all reach them. Gating is active wherever the backing store exists (video
@@ -293,6 +293,11 @@ func New(d Deps) *Server {
 			s.logger().Warn("app config store disabled", "err", err)
 		} else {
 			s.d.AppConfig = ac
+		}
+	}
+	if d.Env != nil && d.Env.E2EMode && s.d.AppConfig != nil {
+		if err := s.d.AppConfig.SeedE2EModels(context.Background()); err != nil {
+			s.logger().Warn("e2e model config seed failed", "err", err)
 		}
 	}
 	if s.d.IAPProducts == nil && d.Discussions != nil {

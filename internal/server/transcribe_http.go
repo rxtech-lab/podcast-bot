@@ -13,16 +13,11 @@ import (
 	"time"
 )
 
-// defaultTranscribeModel is the Gemini model used to transcribe a voice message
-// when the sender's device can't do it on-device. Override with GEMINI_TRANSCRIBE_MODEL.
-//
 // Gemini (not the Vercel AI Gateway) does the work: the gateway lists whisper /
 // gpt-4o-transcribe in its catalog but does NOT proxy the OpenAI-compatible
 // /audio/transcriptions endpoint (it 404s — see vercel/ai#13504), so we
 // transcribe through Google's multimodal generateContent instead, reusing the
 // GEMINI_API_KEY already required at startup.
-const defaultTranscribeModel = "gemini-2.5-flash"
-
 // geminiModelsBase is the Generative Language REST base for generateContent.
 const geminiModelsBase = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -88,9 +83,9 @@ func (s *Server) cloudTranscribe(ctx context.Context, key string) (string, error
 	if err != nil {
 		return "", err
 	}
-	model := strings.TrimSpace(s.d.Env.TranscribeModel)
-	if model == "" {
-		model = defaultTranscribeModel
+	model, err := s.resolvedSTTGeminiModel(ctx)
+	if err != nil {
+		return "", err
 	}
 	return geminiTranscribe(ctx, s.d.Env.GeminiAPIKey, model, data, geminiAudioMIME(key))
 }

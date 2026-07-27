@@ -7,31 +7,36 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sirily11/debate-bot/internal/stt"
 )
 
 // TestTranscribeSample exercises the real Gemini transcription path end-to-end
 // against the committed sample clip (assets/testspeech.m4a, which says "test
 // test"). It runs only when GEMINI_API_KEY is set — CI provides it from a GitHub
 // secret; locally without the key it skips, so `go test ./...` stays
-// offline-friendly. The model comes from GEMINI_TRANSCRIBE_MODEL (same var the
-// server reads), falling back to the package default.
+// offline-friendly. The test selects one current audio-capable catalog entry;
+// production model selection remains admin-owned.
 func TestTranscribeSample(t *testing.T) {
 	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	if apiKey == "" {
 		t.Skip("GEMINI_API_KEY not set; skipping live transcription test")
 	}
-	model := strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL"))
-	if model == "" {
-		model = defaultTranscribeModel
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	modelCatalog, err := stt.ListGeminiAudioModels(ctx, apiKey)
+	if err != nil {
+		t.Fatalf("list Gemini audio models: %v", err)
 	}
+	if len(modelCatalog) == 0 {
+		t.Fatal("Gemini returned no audio-capable models")
+	}
+	model := modelCatalog[0].ID
 
 	audio, err := os.ReadFile(filepath.Join("..", "..", "assets", "testspeech.m4a"))
 	if err != nil {
 		t.Fatalf("read sample audio: %v", err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 
 	text, err := geminiTranscribe(ctx, apiKey, model, audio, geminiAudioMIME("testspeech.m4a"))
 	if err != nil {

@@ -27,6 +27,18 @@ extension View {
         self
     }
 
+    /// Keeps multiline chat entry native on macOS while making an unmodified
+    /// Return key submit the current message.
+    func chatSubmitOnReturn(canSubmit: Bool, action: @escaping () -> Void) -> some View {
+        onKeyPress(.return, phases: .down) { keyPress in
+            guard keyPress.modifiers.isEmpty else { return .ignored }
+            if canSubmit {
+                action()
+            }
+            return .handled
+        }
+    }
+
     /// macOS has no full-screen modal presentation; fall back to a sheet.
     func fullScreenCover<Item: Identifiable, Content: View>(
         item: Binding<Item?>,

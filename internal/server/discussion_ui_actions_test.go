@@ -83,8 +83,10 @@ func TestDiscussionUIActionsGroupDocumentsBeforeSearchAndAsk(t *testing.T) {
 	srv.d.Embeddings = embeddings
 	srv.d.QA = qa
 	srv.d.Env = &config.Env{
-		OpenAIBaseURL:  "https://api.example.test/v1",
-		EmbeddingModel: "test-embedding",
+		OpenAIBaseURL: "https://api.example.test/v1",
+	}
+	if err := srv.d.AppConfig.Set(ctx, appConfigKeyEmbeddingModel, "test-embedding"); err != nil {
+		t.Fatalf("set embedding model: %v", err)
 	}
 	if err := embeddings.MarkReady(ctx, d.ID, "test-embedding", "content-hash"); err != nil {
 		t.Fatalf("MarkReady: %v", err)
@@ -385,8 +387,10 @@ func TestHomeUIActionsEnableChatWhenQAIsConfigured(t *testing.T) {
 	}
 	srv.d.SubscriptionPermissions = permissions
 	srv.d.Env = &config.Env{
-		OpenAIBaseURL:  "https://api.example.test/v1",
-		EmbeddingModel: "test-embedding",
+		OpenAIBaseURL: "https://api.example.test/v1",
+	}
+	if err := srv.d.AppConfig.Set(context.Background(), appConfigKeyEmbeddingModel, "test-embedding"); err != nil {
+		t.Fatalf("set embedding model: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/home/ui-actions", nil)

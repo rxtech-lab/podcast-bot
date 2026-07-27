@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -21,6 +22,11 @@ type ToolDispatcher func(ctx context.Context, name, jsonArgs string) (string, er
 // maxToolRounds caps the assistant↔tool ping-pong inside StreamWithTools so a
 // model that keeps re-calling tools can never loop forever.
 const maxToolRounds = 8
+
+// geminiThoughtSignatureBypass is Google's documented compatibility value for
+// manually reconstructed function calls whose original thought signature is
+// unavailable. It is used only for legacy Gemini 3 history.
+const geminiThoughtSignatureBypass = "skip_thought_signature_validator"
 
 // Client wraps an OpenAI-compatible chat completions endpoint with a fixed model.
 // One Client per agent so per-agent BaseURL/API-key overrides are simple.
@@ -79,7 +85,7 @@ func (c *Client) Stream(
 	if system != "" {
 		msgs = append(msgs, openai.SystemMessage(system))
 	}
-	msgs = append(msgs, ToOpenAIParams(history)...)
+	msgs = append(msgs, toOpenAIParams(history, isGemini3Model(c.model))...)
 
 	params := openai.ChatCompletionNewParams{
 		Model:    c.model,
@@ -151,10 +157,11 @@ func (c *Client) consumeChatStream(
 			emitted = true
 			select {
 			case out.deltas <- Delta{ToolCall: &DeltaToolCall{
-				Index:     int(tc.Index),
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
+				Index:            int(tc.Index),
+				ID:               tc.ID,
+				Name:             tc.Function.Name,
+				Arguments:        tc.Function.Arguments,
+				ThoughtSignature: geminiThoughtSignature(tc),
 			}}:
 			case <-ctx.Done():
 				return emitted, ctx.Err()
@@ -439,12 +446,42 @@ func isStreamOptionsRejection(err error) bool {
 			strings.Contains(msg, "unsupported"))
 }
 
+// IsBadRequest reports an HTTP 400 returned by the OpenAI-compatible endpoint.
+// These are deterministic request failures and should not be retried unchanged
+// by the durable queue.
+func IsBadRequest(err error) bool {
+	var apiErr *openai.Error
+	return errors.As(err, &apiErr) && apiErr.StatusCode == 400
+}
+
+func isGemini3Model(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if slash := strings.LastIndexByte(model, '/'); slash >= 0 {
+		model = model[slash+1:]
+	}
+	return strings.HasPrefix(model, "gemini-3")
+}
+
+func geminiThoughtSignature(tc openai.ChatCompletionChunkChoiceDeltaToolCall) string {
+	var extra struct {
+		ExtraContent struct {
+			Google struct {
+				ThoughtSignature string `json:"thought_signature"`
+			} `json:"google"`
+		} `json:"extra_content"`
+	}
+	if err := json.Unmarshal([]byte(tc.RawJSON()), &extra); err != nil {
+		return ""
+	}
+	return extra.ExtraContent.Google.ThoughtSignature
+}
+
 // AssembleToolCalls turns a sequence of streamed tool-call deltas into
 // finalised ToolCall values keyed by index.
 func AssembleToolCalls(deltas []DeltaToolCall) []ToolCall {
 	type acc struct {
-		id, name string
-		args     []byte
+		id, name, thoughtSignature string
+		args                       []byte
 	}
 	byIdx := map[int]*acc{}
 	for _, d := range deltas {
@@ -462,6 +499,9 @@ func AssembleToolCalls(deltas []DeltaToolCall) []ToolCall {
 		if d.Arguments != "" {
 			a.args = append(a.args, d.Arguments...)
 		}
+		if d.ThoughtSignature != "" {
+			a.thoughtSignature = d.ThoughtSignature
+		}
 	}
 	out := make([]ToolCall, 0, len(byIdx))
 	for i := 0; i < len(byIdx); i++ {
@@ -473,7 +513,12 @@ func AssembleToolCalls(deltas []DeltaToolCall) []ToolCall {
 		if !json.Valid(a.args) {
 			a.args = []byte(fmt.Sprintf("%q", string(a.args)))
 		}
-		out = append(out, ToolCall{ID: a.id, Name: a.name, Arguments: string(a.args)})
+		out = append(out, ToolCall{
+			ID:               a.id,
+			Name:             a.name,
+			Arguments:        string(a.args),
+			ThoughtSignature: a.thoughtSignature,
+		})
 	}
 	return out
 }

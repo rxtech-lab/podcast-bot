@@ -11,6 +11,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/sirily11/debate-bot/internal/config"
+	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/mq"
 	"github.com/sirily11/debate-bot/internal/planner"
 )
@@ -309,7 +310,7 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p, err := planner.New(s.plannerEnv())
+	p, err := s.newPlanner(r.Context())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -455,7 +456,7 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 		s.streamPlanningActiveRun(w, r, active.RunID)
 		return
 	}
-	p, err := planner.New(s.plannerEnv())
+	p, err := s.newPlanner(r.Context())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -722,7 +723,7 @@ func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload
 	if d == nil || conv == nil || conv.ID != pl.ConversationID {
 		return mq.Permanent(fmt.Errorf("planning conversation %s not found", pl.ConversationID))
 	}
-	p, err := planner.New(s.plannerEnv())
+	p, err := s.newPlanner(workCtx)
 	if err != nil {
 		return fmt.Errorf("planner init: %w", err)
 	}
@@ -778,6 +779,9 @@ func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload
 		// Turn persistence is append-only, so a retry continues from the
 		// persisted prefix. Keep the Active record and the reservation
 		// alive; the dispatch layer either retries or fails terminally.
+		if llm.IsBadRequest(runErr) {
+			return mq.Permanent(runErr)
+		}
 		return runErr
 	}
 	s.settlePlanningConversation(workCtx, pl.UserID, d.ID, conv, pl.Reserved, pl.ReserveLedgerID, meter)
@@ -829,8 +833,10 @@ func (s *Server) PlanningTurnRetrying(pl PlanningTurnPayload, attempt int, delay
 		conversationID: pl.ConversationID,
 	}
 	_ = sink.send("progress", planner.ProgressEvent{
-		Phase: "retrying",
-		Text:  fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+		Phase:       "retrying",
+		Text:        fmt.Sprintf("Retrying (attempt %d/%d)…", attempt+1, mq.MaxAttempts),
+		Attempt:     attempt + 1,
+		MaxAttempts: mq.MaxAttempts,
 	})
 }
 

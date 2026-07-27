@@ -73,41 +73,51 @@ struct LibraryView: View {
 
     var body: some View {
         withLifecycle(withPresentations(
-            TabView(selection: $selectedTab) {
-                Tab("Home", systemImage: "waveform.circle.fill", value: HomeTab.home) {
-                    Group {
-                        if isRegular { splitView } else { stackView }
-                    }
-                    #if os(macOS)
-                    .searchable(text: $searchText,
-                                prompt: "Search \(AppStringLiteral.stationsNameRaw)")
-                    #endif
-                }
-
-                if homeChatAction != nil {
-                    Tab("Chat", systemImage: "bubble.left.and.text.bubble.right", value: HomeTab.chat) {
-                        chatTab
-                    }
-                }
-
-                #if !os(macOS)
-                Tab(value: HomeTab.search, role: .search) {
-                    searchTab
-                }
-                #endif
-            }
-            .onChange(of: selectedTab) { _, newValue in
-                if newValue == .chat {
-                    if homeChatAction?.enabled == true {
-                        showingGlobalChat = true
-                    } else {
-                        showingGlobalChat = false
-                        selectedTab = .home
-                        showingChatUpgradePrompt = true
-                    }
-                }
+            Group {
+                if isRegular { regularLayout } else { compactLayout }
             }
         ))
+    }
+
+    /// iPhone / compact: tab bar with Home, Chat, and Search.
+    var compactLayout: some View {
+        TabView(selection: $selectedTab) {
+            Tab("Home", systemImage: "waveform.circle.fill", value: HomeTab.home) {
+                stackView
+            }
+
+            if homeChatAction != nil {
+                Tab("Chat", systemImage: "bubble.left.and.text.bubble.right", value: HomeTab.chat) {
+                    chatTab
+                }
+            }
+
+            #if !os(macOS)
+            Tab(value: HomeTab.search, role: .search) {
+                searchTab
+            }
+            #endif
+        }
+        .onChange(of: selectedTab) { _, newValue in
+            if newValue == .chat {
+                if homeChatAction?.enabled == true {
+                    showingGlobalChat = true
+                } else {
+                    showingGlobalChat = false
+                    selectedTab = .home
+                    showingChatUpgradePrompt = true
+                }
+            }
+        }
+    }
+
+    /// iPad / macOS: no tab bar. Three columns — library sidebar, detail, and
+    /// the global chat as a trailing inspector. Search lives in the sidebar's
+    /// search field instead of a dedicated tab.
+    var regularLayout: some View {
+        splitView
+            .searchable(text: $searchText,
+                        prompt: "Search \(AppStringLiteral.stationsNameRaw)")
     }
 
     /// Sheets, covers, and alerts hung off the root view. Split out of `body`
@@ -207,35 +217,6 @@ struct LibraryView: View {
             }
     }
 
-    /// Global chat over every podcast in the library. Selecting Chat pushes the
-    /// conversation in this tab's navigation stack; the pushed view hides the
-    /// tab bar, so popping it restores the bar with the navigation animation.
-    var chatTab: some View {
-        NavigationStack {
-            Color.clear
-                .navigationTitle("Home")
-                .navigationDestination(isPresented: $showingGlobalChat) {
-                    QAConversationView(scope: .global, allowsClearingMessages: true) { discussionID in
-                        showingGlobalChat = false
-                        Task {
-                            if let discussion = try? await APIClient(tokens: auth).discussion(id: discussionID) {
-                                upsert(discussion)
-                                navigate(to: discussion)
-                            }
-                        }
-                    }
-                    #if !os(macOS)
-                    .toolbar(.hidden, for: .tabBar)
-                    #endif
-                }
-                .onChange(of: showingGlobalChat) { _, isPresented in
-                    if !isPresented, selectedTab == .chat {
-                        selectedTab = .home
-                    }
-                }
-        }
-    }
-
     /// Semantic content search over the whole library, living behind the iOS
     /// tab bar's search button. Results push onto the tab's own stack.
     var searchTab: some View {
@@ -325,7 +306,7 @@ struct LibraryView: View {
         }
     }
 
-    /// iPad / regular: sidebar list + detail column.
+    /// iPad / regular: sidebar list + detail column + chat inspector.
     var splitView: some View {
         NavigationSplitView {
             libraryContainer
@@ -336,15 +317,21 @@ struct LibraryView: View {
                 #endif
         } detail: {
             NavigationStack {
-                if let selection {
-                    destinationView(selection)
-                        .id(selectionIdentity(selection))
-                        .navigationDestination(for: LibraryDestination.self) { destination in
-                            destinationView(destination)
-                        }
-                } else {
-                    placeholder
+                Group {
+                    if let selection {
+                        destinationView(selection)
+                            .id(selectionIdentity(selection))
+                            .navigationDestination(for: LibraryDestination.self) { destination in
+                                destinationView(destination)
+                            }
+                    } else {
+                        placeholder
+                    }
                 }
+                .toolbar { chatInspectorToolbar }
+            }
+            .inspector(isPresented: $showingGlobalChat) {
+                chatInspector
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -352,15 +339,13 @@ struct LibraryView: View {
 
     var libraryContainer: some View {
         Group {
-            #if os(macOS)
-            if normalizedSearchQuery(searchText).isEmpty {
-                libraryContent
+            // Compact keeps its dedicated search tab; regular searches from the
+            // sidebar's own search field and renders results in place.
+            if isRegular, !normalizedSearchQuery(searchText).isEmpty {
+                regularSearchContent
             } else {
-                macOSSearchContent
+                libraryContent
             }
-            #else
-            libraryContent
-            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background.ignoresSafeArea())
@@ -373,9 +358,10 @@ struct LibraryView: View {
             .animation(.easeInOut(duration: 0.18), value: isSearchLoading)
     }
 
-    #if os(macOS)
+    /// Sidebar search results for the regular layout; selecting a result drives
+    /// the detail column rather than pushing a stack.
     @ViewBuilder
-    var macOSSearchContent: some View {
+    var regularSearchContent: some View {
         if let groups = semanticGroups, !loadedSearchQuery.isEmpty {
             if groups.isEmpty {
                 searchEmptyState
@@ -388,7 +374,6 @@ struct LibraryView: View {
             searchPromptState
         }
     }
-    #endif
 
     @ViewBuilder
     var libraryContent: some View {

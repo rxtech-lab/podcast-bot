@@ -134,8 +134,13 @@ func (s *Server) handleDiscussionMindmapGenerate(w http.ResponseWriter, r *http.
 		return
 	}
 	input := SummaryGenerationInputFromDiscussion(d)
+	configuredEnv, err := s.ConfiguredEnv(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if _, err := StartMindmapGeneration(r.Context(), SummaryGenerationDeps{
-		Env:         s.d.Env,
+		Env:         configuredEnv,
 		Bus:         s.d.Bus,
 		Discussions: s.d.Discussions,
 		Points:      s.d.Points,

@@ -49,11 +49,11 @@ func (o *Orchestrator) buildDiscussionAgents() error {
 			BaseURL: o.Topic.Host.BaseURL,
 			APIKey:  o.Topic.Host.APIKey,
 		},
-		agent.RoleHost, o.Env.HostModel)
+		agent.RoleHost)
 
 	for _, s := range o.Topic.Discussants {
 		o.Registry.Discussants = append(o.Registry.Discussants,
-			o.makeAgent(s, agent.RoleDiscussant, ""))
+			o.makeAgent(s, agent.RoleDiscussant))
 	}
 
 	commanderName := o.Topic.Commander.Name
@@ -67,14 +67,14 @@ func (o *Orchestrator) buildDiscussionAgents() error {
 			BaseURL: o.Topic.Commander.BaseURL,
 			APIKey:  o.Topic.Commander.APIKey,
 		},
-		agent.RoleCommander, o.Env.HostModel)
+		agent.RoleCommander)
 
 	o.Registry.Judgement = o.makeAgent(
 		config.AgentSpec{
 			Name:  "Judgement",
-			Model: o.Env.JudgementModel,
+			Model: o.Env.Models.Judgement,
 		},
-		agent.RoleJudgement, o.Env.JudgementModel)
+		agent.RoleJudgement)
 	return nil
 }
 

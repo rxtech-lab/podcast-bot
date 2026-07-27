@@ -147,19 +147,14 @@ func LoadTopic(path string) (*DebateTopic, error)
 type Env struct {
 	OpenAIBaseURL string
 	OpenAIKey     string
-	HostModel     string
 
-	// ScenePlannerModel is the LLM used for the visual director call that
-	// proposes the per-frame surface + conclusion beats. Falls back to
-	// HostModel if unset. Use a higher-quality model here (e.g.
-	// openai/gpt-5.4 or anthropic/claude-opus-4-7) since the plan only
-	// runs once per puzzle and benefits from richer reasoning about
-	// scene composition + story-beat ordering. Set via SCENE_PLANNER_MODEL.
-	ScenePlannerModel string
+	// Models is populated from the admin App Config at the point an operation
+	// starts. Model ids are deliberately not loaded from process environment
+	// variables: every role must have an explicit admin-owned value.
+	Models ModelConfig
 
 	CompressionBaseURL string
 	CompressionKey     string
-	CompressionModel   string
 
 	AzureSpeechKey    string
 	AzureSpeechRegion string

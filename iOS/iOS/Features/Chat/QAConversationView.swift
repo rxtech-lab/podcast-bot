@@ -18,6 +18,7 @@ struct QAConversationView: View {
     @State var input = ""
     @State var isStreaming = false
     @State var streamHasActivity = false
+    @State var isRetryingStream = false
     @State var progressText: String?
     @State var errorMessage: String?
     @State var showingErrorAlert = false
@@ -349,7 +350,7 @@ struct QAConversationView: View {
     var loadingBubble: some View {
         HStack {
             HStack(spacing: 10) {
-                if !streamHasActivity {
+                if !streamHasActivity || isRetryingStream {
                     Text(progressText ?? String(localized: "Thinking…", comment: "Default progress text while the chat agent works"))
                         .font(.callout)
                         .foregroundStyle(Theme.secondaryText)
@@ -361,6 +362,7 @@ struct QAConversationView: View {
             .padding(.vertical, 11)
             .background(Theme.agentBubble, in: .rect(cornerRadius: 20))
             .animation(.easeInOut(duration: 0.18), value: streamHasActivity)
+            .animation(.easeInOut(duration: 0.18), value: isRetryingStream)
             Spacer(minLength: 34)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -410,6 +412,9 @@ struct QAConversationView: View {
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
                 .accessibilityIdentifier("qa.input")
+                #if os(macOS)
+                .chatSubmitOnReturn(canSubmit: canSend, action: send)
+                #endif
             Button(action: send) {
                 Image(systemName: isStreaming ? "ellipsis" : "arrow.up.circle.fill")
                     .font(.title2)

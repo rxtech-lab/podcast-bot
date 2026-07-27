@@ -6515,6 +6515,9 @@
         }
       }
     },
+    "Hide Chat" : {
+
+    },
     "Home" : {
       "localizations" : {
         "zh-Hans" : {
@@ -11300,6 +11303,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重試"
+          }
+        }
+      }
+    },
+    "Retrying (attempt %lld/%lld)…" : {
+      "comment" : "Progress while an agent retries a failed request; values are the current and maximum attempt numbers",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Retrying (attempt %1$lld/%2$lld)…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重试（第 %1$lld/%2$lld 次）…"
+          }
+        },
+        "zh-Hant-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重試（第 %1$lld/%2$lld 次）…"
+          }
+        },
+        "zh-Hant-TW" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重試（第 %1$lld/%2$lld 次）…"
           }
         }
       }

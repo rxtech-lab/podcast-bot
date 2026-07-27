@@ -247,18 +247,23 @@ func (s *EmbeddingStore) ReplaceChunks(ctx context.Context, discussionID, model,
 			return err
 		}
 		vecText := encodeVector(c.Embedding)
+		// Last line of defense: Postgres rejects invalid UTF-8 outright
+		// (SQLSTATE 22021), and a single bad chunk fails the whole indexing
+		// job through every retry. Drop stray bytes rather than poison the
+		// queue if a chunker ever cuts mid-character again.
+		text := strings.ToValidUTF8(c.Text, "")
 		if s.pgvectorReady {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO discussion_chunks
 				(discussion_id, kind, chunk_index, text, meta_json, content_hash, embedding_model, embedding_json, embedding, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, '', ?::vector, ?)`,
-				discussionID, c.Kind, c.ChunkIndex, c.Text, string(metaJSON), contentHash, model, vecText, now); err != nil {
+				discussionID, c.Kind, c.ChunkIndex, text, string(metaJSON), contentHash, model, vecText, now); err != nil {
 				return err
 			}
 		} else {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO discussion_chunks
 				(discussion_id, kind, chunk_index, text, meta_json, content_hash, embedding_model, embedding_json, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				discussionID, c.Kind, c.ChunkIndex, c.Text, string(metaJSON), contentHash, model, vecText, now); err != nil {
+				discussionID, c.Kind, c.ChunkIndex, text, string(metaJSON), contentHash, model, vecText, now); err != nil {
 				return err
 			}
 		}

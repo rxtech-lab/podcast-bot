@@ -18,8 +18,10 @@ import (
 // agent loop runs (searching the web, reading a URL, writing the plan). It backs
 // the streaming plan endpoints so clients can show live progress.
 type ProgressEvent struct {
-	Phase string `json:"phase"` // "search" | "read" | "sources" | "writing"
-	Text  string `json:"text"`
+	Phase       string `json:"phase"` // "search" | "read" | "sources" | "writing" | "retrying"
+	Text        string `json:"text"`
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
 }
 
 // Planner drafts and revises discussion scripts with a single LLM.
@@ -40,6 +42,12 @@ const audioBookMaxChapters = 40
 func New(env *config.Env) (*Planner, error) {
 	if env == nil {
 		return nil, fmt.Errorf("planner requires engine env")
+	}
+	if strings.TrimSpace(env.Models.Host) == "" {
+		return nil, fmt.Errorf("host model is not configured in admin App Config")
+	}
+	if strings.TrimSpace(env.Models.ScenePlanner) == "" {
+		return nil, fmt.Errorf("scene planner model is not configured in admin App Config")
 	}
 	return &Planner{env: env}, nil
 }
@@ -896,19 +904,12 @@ func RenderAudioBookOutlineIndexed(summary string, chapters []config.AudioBookCh
 }
 
 func (p *Planner) scriptModel() string {
-	if p.env.ScenePlannerModel != "" {
-		return p.env.ScenePlannerModel
-	}
-	return p.env.HostModel
+	return p.env.Models.ScenePlanner
 }
 
-// agentModel is the model assigned to the planned agents. Uses the host model
-// so the generated roster runs on a sensible default the user can later change.
+// agentModel is the explicit admin-configured model assigned to planned agents.
 func (p *Planner) agentModel() string {
-	if p.env.HostModel != "" {
-		return p.env.HostModel
-	}
-	return p.scriptModel()
+	return p.env.Models.Host
 }
 
 func defaultChannel(c string) string {

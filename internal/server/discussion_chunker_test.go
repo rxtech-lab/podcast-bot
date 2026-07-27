@@ -3,6 +3,7 @@ package server
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sirily11/debate-bot/internal/config"
 )
@@ -122,6 +123,84 @@ func TestSplitTextChunksOverlap(t *testing.T) {
 	for i, p := range parts {
 		if len(p) > 2000+200 {
 			t.Fatalf("part %d too long: %d", i, len(p))
+		}
+	}
+}
+
+// cjkProse is multi-byte text with no ASCII space or newline to cut on, so
+// every chunk boundary falls back to the raw target offset — the shape that
+// produced "invalid byte sequence for encoding UTF8" (SQLSTATE 22021) in
+// production. The fullwidth comma is EF BC 8C; the ideographic period E3 80 82.
+const cjkProse = "这是一段很长的中文内容，用来测试分块逻辑是否会把一个字符切成两半。" +
+	"没有空格也没有换行，所以切分只能落在目标偏移量上。"
+
+func TestSplitTextChunksPreservesUTF8OnMultibyteText(t *testing.T) {
+	text := strings.Repeat(cjkProse, 60) // ~17k bytes, no spaces or newlines
+	// Sweep targets so a boundary lands at every offset within a rune.
+	for target := 200; target < 260; target++ {
+		parts := splitTextChunks(text, target, 40)
+		if len(parts) < 2 {
+			t.Fatalf("target=%d produced %d parts, expected a split", target, len(parts))
+		}
+		for i, p := range parts {
+			if !utf8.ValidString(p) {
+				t.Fatalf("target=%d part %d is not valid UTF-8: %q", target, i, p)
+			}
+		}
+	}
+}
+
+func TestSplitTextChunksCoversWholeMultibyteInput(t *testing.T) {
+	text := strings.Repeat(cjkProse, 20)
+	parts := splitTextChunks(text, sourceChunkTarget, sourceChunkOverlap)
+	// Chunks overlap, so joining over-covers; every rune must still appear in
+	// order somewhere, which a mid-rune cut would break.
+	joined := strings.Join(parts, "")
+	for _, r := range text {
+		if !strings.ContainsRune(joined, r) {
+			t.Fatalf("rune %q lost during chunking", r)
+		}
+	}
+	if !strings.HasPrefix(joined, string([]rune(text)[:10])) {
+		t.Fatal("first chunk does not begin at the start of the input")
+	}
+}
+
+func TestChunkTranscriptTruncatesOnRuneBoundary(t *testing.T) {
+	// One line far past transcriptChunkMax forces the hard truncation path.
+	lines := []DiscussionLine{{
+		Speaker: "主持人",
+		Role:    "host",
+		Text:    strings.Repeat(cjkProse, 40),
+		StartMS: 0,
+	}}
+	chunks := chunkTranscript(lines)
+	if len(chunks) == 0 {
+		t.Fatal("expected at least one chunk")
+	}
+	for i, c := range chunks {
+		if !utf8.ValidString(c.Text) {
+			t.Fatalf("chunk %d is not valid UTF-8", i)
+		}
+		if len(c.Text) > transcriptChunkMax+transcriptChunkTarget {
+			t.Fatalf("chunk %d too large: %d bytes", i, len(c.Text))
+		}
+	}
+}
+
+func TestChunkSourcesProducesValidUTF8(t *testing.T) {
+	sources := []config.Source{
+		{Title: "中文文档", URL: "https://example.com/cn", Markdown: strings.Repeat(cjkProse, 80)},
+		{Title: "Emoji", URL: "https://example.com/e", Markdown: strings.Repeat("ok 🎧 done ", 500)},
+		{Title: "Punctuation", URL: "https://example.com/p", Markdown: strings.Repeat("a—b“c”d ", 500)},
+	}
+	chunks := chunkSources(sources, 0)
+	if len(chunks) < 3 {
+		t.Fatalf("expected several chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if !utf8.ValidString(c.Text) {
+			t.Fatalf("chunk %d (%s) is not valid UTF-8: %q", i, c.Meta.SourceURL, c.Text)
 		}
 	}
 }

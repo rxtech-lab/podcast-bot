@@ -39,8 +39,8 @@ type Gemini struct {
 	client *http.Client
 }
 
-// NewGemini builds the provider around the same key/model the voice-message
-// transcription fallback already uses (GEMINI_API_KEY / GEMINI_TRANSCRIBE_MODEL).
+// NewGemini builds the provider around the Gemini credential and the
+// admin-configured transcription model.
 func NewGemini(apiKey, model string) *Gemini {
 	return &Gemini{
 		apiKey: strings.TrimSpace(apiKey),

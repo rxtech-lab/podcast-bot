@@ -416,21 +416,11 @@ func planPuzzleScenes(ctx context.Context, log *slog.Logger, env *config.Env, to
 		}
 		return nil
 	}
-	// Prefer the dedicated scene-planner model (SCENE_PLANNER_MODEL) when
-	// configured; LoadEnv falls back to HostModel if unset. The planner
-	// only runs once per puzzle so a higher-quality model is cheap here.
-	model := env.ScenePlannerModel
+	// The visual-director role has its own explicit admin-owned model.
+	model := env.Models.ScenePlanner
 	if model == "" {
-		model = env.HostModel
-	}
-	if model == "" {
-		if fb := scenes.FallbackPlan(topic); fb != nil {
-			log.Info("scene plan fallback ready (no model configured)",
-				"title", topic.Title,
-				"surface_frames", fb.SurfaceCount(),
-				"conclusion_frames", fb.ConclusionCount())
-			return fb
-		}
+		log.Error("scene planner model is not configured in admin App Config",
+			"title", topic.Title)
 		return nil
 	}
 	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)

@@ -63,18 +63,15 @@ type DeckGenerator struct {
 	env    *config.Env
 }
 
-// NewDeckGenerator builds a deck generator using PodcastSummaryPPTModel, falling
-// back to the normal summary model, then HostModel.
+// NewDeckGenerator builds a deck generator using the explicit admin-configured
+// podcast slide-deck model.
 func NewDeckGenerator(env *config.Env) *DeckGenerator {
 	if env == nil {
 		return &DeckGenerator{}
 	}
-	model := strings.TrimSpace(env.PodcastSummaryPPTModel)
+	model := strings.TrimSpace(env.Models.PodcastSummaryPPT)
 	if model == "" {
-		model = strings.TrimSpace(env.PodcastSummaryModel)
-	}
-	if model == "" {
-		model = strings.TrimSpace(env.HostModel)
+		return &DeckGenerator{}
 	}
 	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
 	return &DeckGenerator{client: client, env: env}

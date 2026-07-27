@@ -90,10 +90,12 @@ Unknown types abort startup with a clear error.
 
 ## Configuration & environment
 
-Configured via flags plus a `.env` file (see `cmd/debate-bot` usage):
+Configured via flags, a `.env` file, and the admin App Config:
 
-- LLM: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `HOST_MODEL`,
-  `COMPRESSION_BASE_URL` / `COMPRESSION_API_KEY` / `COMPRESSION_MODEL`.
+- LLM credentials/endpoints: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and optional
+  `COMPRESSION_BASE_URL` / `COMPRESSION_API_KEY`.
+- Model ids: admin App Config only. Every model role is explicit and has no env
+  or cross-role fallback.
 - Media: `GEMINI_API_KEY` (Lyria music + Gemini scene image generation),
   `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` (Azure TTS), `ELEVENLABS_API_KEY`
   (ElevenLabs TTS).

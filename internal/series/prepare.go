@@ -121,9 +121,9 @@ func prepareEpisode(ctx context.Context, log *slog.Logger, env *config.Env,
 
 	var recap string
 	var highlightIDs []string
-	if len(priors) > 0 && env.CompressionBaseURL != "" && env.CompressionKey != "" && env.CompressionModel != "" {
+	if len(priors) > 0 && env.CompressionBaseURL != "" && env.CompressionKey != "" && env.Models.Compression != "" {
 		status("generating recap narrative (compression LLM)…")
-		comp := llm.New(env.CompressionBaseURL, env.CompressionKey, env.CompressionModel)
+		comp := llm.New(env.CompressionBaseURL, env.CompressionKey, env.Models.Compression)
 		t0 := time.Now()
 		r, ids, rerr := contentcreator.BuildRecap(ctx, comp, priors, topic.Show)
 		if rerr != nil {
@@ -291,12 +291,10 @@ func planScenes(ctx context.Context, log *slog.Logger, env *config.Env,
 		}
 		return nil
 	}
-	model := env.ScenePlannerModel
+	model := env.Models.ScenePlanner
 	if model == "" {
-		model = env.HostModel
-	}
-	if model == "" {
-		return scenes.FallbackSeriesPlan(topic)
+		log.Error("scene planner model is not configured in admin App Config")
+		return nil
 	}
 	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
 	t0 := time.Now()

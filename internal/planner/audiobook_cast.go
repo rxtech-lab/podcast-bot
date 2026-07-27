@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/util"
 )
 
 // Cast-extraction bounds: chapters longer than the chunk limit are walked in
@@ -167,9 +168,11 @@ func chunkText(text string, limit int) []string {
 	}
 	var chunks []string
 	for len(text) > limit {
-		cut := strings.LastIndex(text[:limit], "\n\n")
-		if cut < limit/2 {
-			cut = limit
+		// The fallback cut is snapped to a rune boundary so multi-byte text
+		// without paragraph breaks is not sheared mid-character.
+		cut := util.RuneBoundary(text, limit)
+		if idx := strings.LastIndex(text[:cut], "\n\n"); idx >= limit/2 {
+			cut = idx
 		}
 		chunks = append(chunks, strings.TrimSpace(text[:cut]))
 		text = strings.TrimSpace(text[cut:])

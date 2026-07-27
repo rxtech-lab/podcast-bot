@@ -258,6 +258,7 @@ extension PlanConversationView {
     func beginStream(_ makeStream: @escaping () -> AsyncThrowingStream<PlanningStreamEvent, Error>) {
         isStreaming = true
         streamHasActivity = false
+        isRetryingStream = false
         progressText = String(localized: "Thinking…", comment: "Progress text while the planning agent works")
         streamTask?.cancel()
         let stream = makeStream()
@@ -397,16 +398,19 @@ extension PlanConversationView {
             }
             pendingQuestion = payload
         case let .progress(ev):
-            progressText = ev.text
+            isRetryingStream = ev.phase == "retrying"
+            progressText = ev.localizedText
         case let .done(payload):
             if let updated = payload.discussion { discussion = updated }
             parts = payload.conversation.parts
             isStreaming = false
+            isRetryingStream = false
             progressText = nil
         case let .failed(message):
             isStreaming = false
+            isRetryingStream = false
             progressText = nil
-            errorMessage = message
+            presentPlanningError(message, offersTopUp: false)
         }
     }
 
