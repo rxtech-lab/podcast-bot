@@ -125,8 +125,9 @@ type recapResult struct {
 // highlight list is treated as success (the caller uses whatever came
 // back).
 //
-// `comp` is the compression LLM client (Env.CompressionBaseURL/Key/Model).
-// We pick this rather than the host LLM because it's already tuned for
+// `comp` is the compression LLM client (provider credentials plus the
+// admin-owned compression model). We pick this rather than the host LLM
+// because it's already tuned for
 // short-form summarisation and avoids burning the host model on
 // non-creative text.
 func BuildRecap(ctx context.Context, comp *llm.Client,

@@ -174,6 +174,9 @@ struct SpeakerModelsSheet: View {
                     }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle(isUploadedAudio ? "Speakers" : "Speaker Models")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(item: $pickerRoute) { route in

@@ -7,79 +7,81 @@ import (
 
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
+	"github.com/sirily11/debate-bot/internal/planner"
 	"github.com/sirily11/debate-bot/internal/stt"
 )
 
-// resolvedModelDefaults returns the effective generation model defaults: the
-// env-configured defaults with any admin overrides from AppConfig overlaid on
-// top. ENV remains the default when no override row exists (or AppConfig is
-// nil), so behavior is unchanged unless an admin sets a value in the UI.
-func (s *Server) resolvedModelDefaults(ctx context.Context) config.ModelDefaults {
-	defaults := config.DefaultsForEnv(s.d.Env)
+// appConfigValue returns one admin-owned value without supplying a default.
+// It is used by admin/meta surfaces that must remain renderable while the app
+// is being configured.
+func (s *Server) appConfigValue(ctx context.Context, key string) string {
 	if s.d.AppConfig == nil {
-		return defaults
+		return ""
 	}
-	if v, ok, err := s.d.AppConfig.Get(ctx, appConfigKeyDefaultHostModel); err == nil && ok && v != "" {
-		defaults.Host = v
-		// ScenePlanner falls back to the host model when unset in env; keep that
-		// relationship so overriding the host default also moves the planner
-		// unless the planner had its own explicit env default.
-		if s.d.Env != nil && s.d.Env.ScenePlannerModel == s.d.Env.HostModel {
-			defaults.ScenePlanner = v
+	v, ok, err := s.d.AppConfig.Get(ctx, key)
+	if err != nil {
+		if s.d.Log != nil {
+			s.d.Log.Warn("read app model config", "key", key, "err", err)
 		}
+		return ""
 	}
-	return defaults
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
-func (s *Server) resolvedTranslationModel(ctx context.Context) string {
-	model := ""
-	if s.d.Env != nil {
-		model = strings.TrimSpace(s.d.Env.PodcastTranslationModel)
-		if model == "" {
-			model = strings.TrimSpace(s.d.Env.PodcastSummaryModel)
-		}
-		if model == "" {
-			model = strings.TrimSpace(s.d.Env.HostModel)
-		}
+func (s *Server) requiredModel(ctx context.Context, key, label string) (string, error) {
+	if s.d.AppConfig == nil {
+		return "", fmt.Errorf("%s model is not configured: admin App Config store unavailable", label)
 	}
-	if s.d.AppConfig != nil {
-		if v, ok, err := s.d.AppConfig.Get(ctx, appConfigKeyTranslationModel); err == nil && ok && strings.TrimSpace(v) != "" {
-			model = strings.TrimSpace(v)
-		}
+	v, ok, err := s.d.AppConfig.Get(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("read %s model from admin App Config: %w", label, err)
 	}
-	return model
+	v = strings.TrimSpace(v)
+	if !ok || v == "" {
+		return "", fmt.Errorf("%s model is not configured in admin App Config", label)
+	}
+	return v, nil
 }
 
-// resolvedQAModel returns the LLM used by the Q&A / global chat agent: the env
-// default (QA_MODEL, falling back to HOST_MODEL in LoadEnv) with the admin App
-// Config override overlaid.
-func (s *Server) resolvedQAModel(ctx context.Context) string {
-	model := ""
-	if s.d.Env != nil {
-		model = strings.TrimSpace(s.d.Env.QAModel)
+// resolvedModels returns the admin values exactly as stored. Empty means the
+// role is unconfigured; runtime entry points validate the roles they use and
+// return an explicit error.
+func (s *Server) resolvedModels(ctx context.Context) config.ModelConfig {
+	return config.ModelConfig{
+		Host:               s.appConfigValue(ctx, appConfigKeyDefaultHostModel),
+		ScenePlanner:       s.appConfigValue(ctx, appConfigKeyScenePlannerModel),
+		Compression:        s.appConfigValue(ctx, appConfigKeyCompressionModel),
+		PodcastSummary:     s.appConfigValue(ctx, appConfigKeySummaryModel),
+		PodcastTranslation: s.appConfigValue(ctx, appConfigKeyTranslationModel),
+		Judgement:          s.appConfigValue(ctx, appConfigKeyJudgementModel),
+		PodcastSummaryPPT:  s.appConfigValue(ctx, appConfigKeySummaryPPTModel),
+		QA:                 s.appConfigValue(ctx, appConfigKeyQAModel),
+		Embedding:          s.appConfigValue(ctx, appConfigKeyEmbeddingModel),
+		Transcription:      s.appConfigValue(ctx, appConfigKeySTTGeminiModel),
 	}
-	if s.d.AppConfig != nil {
-		if v, ok, err := s.d.AppConfig.Get(ctx, appConfigKeyQAModel); err == nil && ok && strings.TrimSpace(v) != "" {
-			model = strings.TrimSpace(v)
-		}
-	}
-	return model
 }
 
-// resolvedEmbeddingModel returns the embedding model used for podcast content
-// vectorization and semantic search queries: the env default with the admin
-// App Config override overlaid. Empty means semantic features are disabled.
-func (s *Server) resolvedEmbeddingModel(ctx context.Context) string {
-	model := ""
-	if s.d.Env != nil {
-		model = strings.TrimSpace(s.d.Env.EmbeddingModel)
-	}
-	if s.d.AppConfig != nil {
-		if v, ok, err := s.d.AppConfig.Get(ctx, appConfigKeyEmbeddingModel); err == nil && ok && strings.TrimSpace(v) != "" {
-			model = strings.TrimSpace(v)
-		}
-	}
-	return model
+// resolvedModelDefaults reports admin-configured client defaults. Missing
+// values stay empty; they are never filled from another role or the env.
+func (s *Server) resolvedModelDefaults(ctx context.Context) config.ModelDefaults {
+	return s.resolvedModels(ctx).Defaults()
+}
+
+func (s *Server) resolvedTranslationModel(ctx context.Context) (string, error) {
+	return s.requiredModel(ctx, appConfigKeyTranslationModel, "podcast translation")
+}
+
+// resolvedQAModel returns the explicit admin-owned Q&A / global-chat model.
+func (s *Server) resolvedQAModel(ctx context.Context) (string, error) {
+	return s.requiredModel(ctx, appConfigKeyQAModel, "Q&A")
+}
+
+// resolvedEmbeddingModel returns the explicit admin-owned embedding model.
+func (s *Server) resolvedEmbeddingModel(ctx context.Context) (string, error) {
+	return s.requiredModel(ctx, appConfigKeyEmbeddingModel, "embedding")
 }
 
 // resolvedSTTProvider returns the effective speech-to-text provider id: the
@@ -98,20 +100,10 @@ func (s *Server) resolvedSTTProvider(ctx context.Context) string {
 	return provider
 }
 
-// resolvedSTTGeminiModel returns the Gemini model used for uploaded-audio
-// transcription: the env transcribe model with the admin App Config override
-// overlaid.
-func (s *Server) resolvedSTTGeminiModel(ctx context.Context) string {
-	model := ""
-	if s.d.Env != nil {
-		model = strings.TrimSpace(s.d.Env.TranscribeModel)
-	}
-	if s.d.AppConfig != nil {
-		if v, ok, err := s.d.AppConfig.Get(ctx, appConfigKeySTTGeminiModel); err == nil && ok && strings.TrimSpace(v) != "" {
-			model = strings.TrimSpace(v)
-		}
-	}
-	return model
+// resolvedSTTGeminiModel returns the explicit admin-owned Gemini transcription
+// model.
+func (s *Server) resolvedSTTGeminiModel(ctx context.Context) (string, error) {
+	return s.requiredModel(ctx, appConfigKeySTTGeminiModel, "Gemini transcription")
 }
 
 // sttProvider constructs the effective STT provider from the resolved id and
@@ -127,7 +119,11 @@ func (s *Server) sttProvider(ctx context.Context) (stt.Provider, error) {
 		if s.d.Env.GeminiAPIKey == "" {
 			return nil, fmt.Errorf("stt: gemini selected but GEMINI_API_KEY not set")
 		}
-		return stt.NewGemini(s.d.Env.GeminiAPIKey, s.resolvedSTTGeminiModel(ctx)), nil
+		model, err := s.resolvedSTTGeminiModel(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return stt.NewGemini(s.d.Env.GeminiAPIKey, model), nil
 	default:
 		return nil, fmt.Errorf("stt: unknown provider %q", id)
 	}
@@ -170,27 +166,60 @@ func (s *Server) sttCostPerHour(provider string) float64 {
 	return s.d.Env.GeminiSTTCostPerHour
 }
 
-// plannerEnv returns the Env the in-server planner should run with: a shallow
-// copy of the configured Env with the admin-overridden default generation model
-// applied. The planner bakes this default into the planned agent roster
-// (Planner.agentModel/scriptModel), so overriding here is what makes the admin
-// "default model" setting take effect for newly generated content. When no
-// override is set it returns the unmodified Env.
-func (s *Server) plannerEnv() *config.Env {
+// ConfiguredEnv returns a shallow Env copy populated with the current
+// admin-owned model set. Runtime components validate the roles they use.
+func (s *Server) ConfiguredEnv(ctx context.Context) (*config.Env, error) {
 	if s.d.Env == nil {
-		return nil
+		return nil, fmt.Errorf("engine env is not configured")
 	}
 	if s.d.AppConfig == nil {
-		return s.d.Env
+		return nil, fmt.Errorf("admin App Config store is unavailable")
 	}
-	defaults := s.resolvedModelDefaults(context.Background())
-	if defaults.Host == s.d.Env.HostModel && defaults.ScenePlanner == s.d.Env.ScenePlannerModel {
-		return s.d.Env
+	read := func(key string) (string, error) {
+		value, _, err := s.d.AppConfig.Get(ctx, key)
+		if err != nil {
+			return "", fmt.Errorf("read admin App Config %q: %w", key, err)
+		}
+		return strings.TrimSpace(value), nil
+	}
+	var models config.ModelConfig
+	fields := []struct {
+		key string
+		set func(string)
+	}{
+		{appConfigKeyDefaultHostModel, func(v string) { models.Host = v }},
+		{appConfigKeyScenePlannerModel, func(v string) { models.ScenePlanner = v }},
+		{appConfigKeyCompressionModel, func(v string) { models.Compression = v }},
+		{appConfigKeySummaryModel, func(v string) { models.PodcastSummary = v }},
+		{appConfigKeyTranslationModel, func(v string) { models.PodcastTranslation = v }},
+		{appConfigKeyJudgementModel, func(v string) { models.Judgement = v }},
+		{appConfigKeySummaryPPTModel, func(v string) { models.PodcastSummaryPPT = v }},
+		{appConfigKeyQAModel, func(v string) { models.QA = v }},
+		{appConfigKeyEmbeddingModel, func(v string) { models.Embedding = v }},
+		{appConfigKeySTTGeminiModel, func(v string) { models.Transcription = v }},
+	}
+	for _, field := range fields {
+		value, err := read(field.key)
+		if err != nil {
+			return nil, err
+		}
+		field.set(value)
 	}
 	envCopy := *s.d.Env
-	envCopy.HostModel = defaults.Host
-	envCopy.ScenePlannerModel = defaults.ScenePlanner
-	return &envCopy
+	envCopy.Models = models
+	return &envCopy, nil
+}
+
+func (s *Server) plannerEnv(ctx context.Context) (*config.Env, error) {
+	return s.ConfiguredEnv(ctx)
+}
+
+func (s *Server) newPlanner(ctx context.Context) (*planner.Planner, error) {
+	env, err := s.plannerEnv(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return planner.New(env)
 }
 
 // modelCatalog returns the full roster of gateway models (all types),

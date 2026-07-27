@@ -11,7 +11,7 @@ import (
 )
 
 func testConversationSession() *conversationSession {
-	p := &Planner{env: &config.Env{HostModel: "test-model"}}
+	p := &Planner{env: &config.Env{Models: config.ModelConfig{Host: "test-model"}}}
 	return &conversationSession{
 		planner: p,
 		opts:    ConversationOptions{Language: "en-US"},

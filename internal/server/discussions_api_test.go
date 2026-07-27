@@ -40,13 +40,12 @@ func newDiscussionAPITestEnv(t *testing.T) *discussionAPITestEnv {
 		Sessions:    NewSessionRegistry(),
 		Discussions: store,
 		Env: &config.Env{
-			OpenAIBaseURL:     openai.URL(),
-			OpenAIKey:         "test-key",
-			HostModel:         "test-model",
-			ScenePlannerModel: "test-model",
+			OpenAIBaseURL: openai.URL(),
+			OpenAIKey:     "test-key",
 		},
 		Log: slog.Default(),
 	})
+	seedTestAppModels(t, srv.d.AppConfig, "test-model", "test-embedding")
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()

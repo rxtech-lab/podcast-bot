@@ -16,40 +16,11 @@ import (
 type Env struct {
 	OpenAIBaseURL string
 	OpenAIKey     string
-	HostModel     string
 
-	// ScenePlannerModel is the LLM used for the visual director call that
-	// proposes the per-frame surface + conclusion beats. Falls back to
-	// HostModel if unset. Use a higher-quality model here (e.g.
-	// openai/gpt-5.4 or anthropic/claude-opus-4-7) since the plan only
-	// runs once per puzzle and benefits from richer reasoning about
-	// scene composition + story-beat ordering. Set via SCENE_PLANNER_MODEL.
-	ScenePlannerModel string
-
-	// PodcastSummaryModel is the LLM used by the post-generation summarizer agent
-	// that writes the Markdown summary document for a finished podcast. Falls back
-	// to HostModel when unset. Set via PODCAST_SUMMARY_MODEL.
-	PodcastSummaryModel string
-	// PodcastTranslationModel translates the durable, text-only presentation of
-	// a podcast. It falls back to PodcastSummaryModel, then HostModel.
-	PodcastTranslationModel string
-	// JudgementModel is the silent fact-checker used during discussion
-	// podcasts. Falls back to HostModel when unset. Set via
-	// JUDGEMENT_MODEL_NAME.
-	JudgementModel string
-
-	// PodcastSummaryPPTModel is reserved for the future slide-deck ("PPT") summary
-	// document type. Falls back to PodcastSummaryModel when unset. Set via
-	// PODCAST_SUMMARY_PPT_MODEL.
-	PodcastSummaryPPTModel string
-
-	// QAModel is the LLM used by the podcast Q&A / global chat agent. Falls back
-	// to HostModel when unset. Set via QA_MODEL; admin App Config can override.
-	QAModel string
-	// EmbeddingModel is the OpenAI-compatible embedding model used to vectorize
-	// podcast transcripts, sources, and search queries. Set via EMBEDDING_MODEL;
-	// admin App Config can override. Semantic features are disabled when empty.
-	EmbeddingModel string
+	// Models is populated from the admin App Config at the point an operation
+	// starts. Model ids are deliberately not loaded from process environment
+	// variables: every role must have an explicit admin-owned value.
+	Models ModelConfig
 	// EmbeddingDimensions is the fixed dimension of stored embedding vectors
 	// (and the pgvector column). Changing it invalidates all stored chunks and
 	// requires a full re-index. Default 1536; set via EMBEDDING_DIMENSIONS.
@@ -66,15 +37,6 @@ type Env struct {
 
 	CompressionBaseURL string
 	CompressionKey     string
-	CompressionModel   string
-
-	// TranscribeModel is the Gemini model used to transcribe a voice message
-	// server-side when the sender's device can't do it on-device (no on-device
-	// model for the language, or Speech recognition unauthorized). Transcription
-	// runs through Google's generateContent (reusing GeminiAPIKey) because the
-	// Vercel AI Gateway does not proxy an OpenAI /audio/transcriptions endpoint.
-	// Defaults to "gemini-2.5-flash"; override with GEMINI_TRANSCRIBE_MODEL.
-	TranscribeModel string
 
 	// Optional pricing override for OpenAI-compatible chat calls. Values are
 	// dollars per million tokens and are used only when the provider response
@@ -366,23 +328,13 @@ func LoadEnv() (*Env, error) {
 	pointsCostLeverage, pointsPerUSDCost := loadPointsCostConfig()
 
 	e := &Env{
-		OpenAIBaseURL:           strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
-		OpenAIKey:               strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
-		HostModel:               strings.TrimSpace(os.Getenv("HOST_MODEL")),
-		ScenePlannerModel:       strings.TrimSpace(os.Getenv("SCENE_PLANNER_MODEL")),
-		PodcastSummaryModel:     strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_MODEL")),
-		PodcastTranslationModel: strings.TrimSpace(os.Getenv("PODCAST_TRANSLATION_MODEL")),
-		JudgementModel:          strings.TrimSpace(os.Getenv("JUDGEMENT_MODEL_NAME")),
-		PodcastSummaryPPTModel:  strings.TrimSpace(os.Getenv("PODCAST_SUMMARY_PPT_MODEL")),
-		QAModel:                 strings.TrimSpace(os.Getenv("QA_MODEL")),
-		EmbeddingModel:          strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
-		EmbeddingDimensions:     int(parseIntEnvDefault("EMBEDDING_DIMENSIONS", 1536)),
-		PPTXRendererScript:      strings.TrimSpace(os.Getenv("PPTX_RENDERER_SCRIPT")),
-		LibreOfficePath:         strings.TrimSpace(os.Getenv("LIBREOFFICE_PATH")),
-		CompressionBaseURL:      strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
-		CompressionKey:          strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
-		CompressionModel:        strings.TrimSpace(os.Getenv("COMPRESSION_MODEL")),
-		TranscribeModel:         strings.TrimSpace(os.Getenv("GEMINI_TRANSCRIBE_MODEL")),
+		OpenAIBaseURL:       strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")),
+		OpenAIKey:           strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+		EmbeddingDimensions: int(parseIntEnvDefault("EMBEDDING_DIMENSIONS", 1536)),
+		PPTXRendererScript:  strings.TrimSpace(os.Getenv("PPTX_RENDERER_SCRIPT")),
+		LibreOfficePath:     strings.TrimSpace(os.Getenv("LIBREOFFICE_PATH")),
+		CompressionBaseURL:  strings.TrimSpace(os.Getenv("COMPRESSION_BASE_URL")),
+		CompressionKey:      strings.TrimSpace(os.Getenv("COMPRESSION_API_KEY")),
 		LLMInputCostPerMillion: parseFloatEnv(
 			"LLM_INPUT_COST_PER_MILLION",
 		),
@@ -472,29 +424,8 @@ func LoadEnv() (*Env, error) {
 	if e.CompressionKey == "" {
 		e.CompressionKey = e.OpenAIKey
 	}
-	if e.ScenePlannerModel == "" {
-		e.ScenePlannerModel = e.HostModel
-	}
-	if e.PodcastSummaryModel == "" {
-		e.PodcastSummaryModel = e.HostModel
-	}
-	if e.PodcastTranslationModel == "" {
-		e.PodcastTranslationModel = e.PodcastSummaryModel
-	}
-	if e.JudgementModel == "" {
-		e.JudgementModel = e.HostModel
-	}
-	if e.PodcastSummaryPPTModel == "" {
-		e.PodcastSummaryPPTModel = e.PodcastSummaryModel
-	}
-	if e.QAModel == "" {
-		e.QAModel = e.HostModel
-	}
 	if e.EmbeddingDimensions <= 0 {
 		e.EmbeddingDimensions = 1536
-	}
-	if e.TranscribeModel == "" {
-		e.TranscribeModel = "gemini-2.5-flash"
 	}
 	if e.STTProvider == "" {
 		e.STTProvider = "gemini"
@@ -563,14 +494,6 @@ func LoadEnv() (*Env, error) {
 		if e.OpenAIKey == "" {
 			e.OpenAIKey = "e2e"
 		}
-		for _, m := range []*string{&e.HostModel, &e.CompressionModel, &e.ScenePlannerModel, &e.PodcastSummaryModel, &e.PodcastTranslationModel, &e.JudgementModel, &e.PodcastSummaryPPTModel, &e.QAModel} {
-			if *m == "" {
-				*m = "e2e-fake-model"
-			}
-		}
-		if e.EmbeddingModel == "" {
-			e.EmbeddingModel = "e2e-fake-embedding"
-		}
 		if e.CompressionBaseURL == "" {
 			e.CompressionBaseURL = e.OpenAIBaseURL
 		}
@@ -589,12 +512,6 @@ func LoadEnv() (*Env, error) {
 	}
 	if e.OpenAIKey == "" {
 		missing = append(missing, "OPENAI_API_KEY")
-	}
-	if e.HostModel == "" {
-		missing = append(missing, "HOST_MODEL")
-	}
-	if e.CompressionModel == "" {
-		missing = append(missing, "COMPRESSION_MODEL")
 	}
 	if e.GeminiAPIKey == "" {
 		missing = append(missing, "GEMINI_API_KEY")

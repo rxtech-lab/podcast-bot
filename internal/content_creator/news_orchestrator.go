@@ -93,11 +93,11 @@ func (o *Orchestrator) buildNewsAgents() error {
 			BaseURL: o.Topic.Host.BaseURL,
 			APIKey:  o.Topic.Host.APIKey,
 		},
-		agent.RoleHost, o.Env.HostModel, noTools)
+		agent.RoleHost, noTools)
 	o.Registry.Host = agent.NewNewsAnchor(anchorBase, roster, rundown)
 
 	for _, s := range o.Topic.Discussants {
-		base := o.newAgentBase(s, agent.RoleDiscussant, o.Env.HostModel, noTools)
+		base := o.newAgentBase(s, agent.RoleDiscussant, noTools)
 		o.Registry.Discussants = append(o.Registry.Discussants,
 			agent.NewNewsCommentator(base, s.Aspect, roster))
 	}
@@ -113,7 +113,7 @@ func (o *Orchestrator) buildNewsAgents() error {
 			BaseURL: o.Topic.Commander.BaseURL,
 			APIKey:  o.Topic.Commander.APIKey,
 		},
-		agent.RoleCommander, o.Env.HostModel)
+		agent.RoleCommander)
 	return nil
 }
 
@@ -126,7 +126,7 @@ func (o *Orchestrator) newNewsPlanner() Planner {
 			Model:   o.Topic.Host.Model,
 			BaseURL: o.Topic.Host.BaseURL,
 			APIKey:  o.Topic.Host.APIKey,
-		}, o.Env.HostModel),
+		}),
 		newsAnchorName(o.Topic),
 		newsBeats(o.Topic),
 		o.Topic.Language,

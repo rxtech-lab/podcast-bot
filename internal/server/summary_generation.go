@@ -161,6 +161,9 @@ func StartSummaryGeneration(ctx context.Context, deps SummaryGenerationDeps, inp
 
 	gen := summarizer.New(deps.Env)
 	model := gen.Model()
+	if model == "" {
+		return nil, errors.New("podcast summary model is not configured in admin App Config")
+	}
 	if err := deps.Discussions.BeginSummary(ctx, input.DiscussionID, docType, model); err != nil {
 		return nil, err
 	}
@@ -190,6 +193,9 @@ func RunSummaryGenerationTask(deps SummaryGenerationDeps, input SummaryGeneratio
 	logger := log.With("job", input.JobID, "discussion_id", input.DiscussionID, "task", "summary")
 	docType := SummaryDocTypeSummary
 	model := summarizer.New(deps.Env).Model()
+	if model == "" {
+		return mq.Permanent(errors.New("podcast summary model is not configured in admin App Config"))
+	}
 
 	var reserved, reserveLedgerID int64
 	if deps.Points != nil {
@@ -204,7 +210,11 @@ func RunSummaryGenerationTask(deps SummaryGenerationDeps, input SummaryGeneratio
 	}
 
 	meter := &summaryUsageMeter{}
-	res, err := summarizer.New(deps.Env).WithUsageRecorder(meter.record).Generate(ctx, summarizer.Input{
+	runner := summarizer.New(deps.Env).WithUsageRecorder(meter.record)
+	if runner == nil {
+		return mq.Permanent(errors.New("podcast summary model is not configured in admin App Config"))
+	}
+	res, err := runner.Generate(ctx, summarizer.Input{
 		Title:    input.Title,
 		Topic:    input.Topic,
 		Language: input.Language,

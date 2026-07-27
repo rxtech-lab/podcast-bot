@@ -59,7 +59,13 @@ func (w *Worker) podcastRunner() runner {
 					"job", p.JobID, "attempt", t.Attempt)
 				return nil
 			}
-			if err := videojob.RunFromTask(ctx, w.videojobDeps(p.DiscussionID), p); err != nil {
+			env, err := w.d.Srv.ConfiguredEnv(ctx)
+			if err != nil {
+				return mq.Permanent(err)
+			}
+			deps := w.videojobDeps(p.DiscussionID)
+			deps.Env = env
+			if err := videojob.RunFromTask(ctx, deps, p); err != nil {
 				return err
 			}
 			// The podcast just became ready: vectorize its transcript + sources

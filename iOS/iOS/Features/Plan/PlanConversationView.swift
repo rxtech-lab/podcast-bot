@@ -632,6 +632,9 @@ struct PlanConversationView: View {
                     .textFieldStyle(.plain)
                     .focused($inputFocused)
                     .accessibilityIdentifier("plan.input")
+                    #if os(macOS)
+                    .chatSubmitOnReturn(canSubmit: canSend, action: send)
+                    #endif
                 Button(action: send) {
                     Image(systemName: isStreaming ? "ellipsis" : "arrow.up.circle.fill")
                         .font(.title2)

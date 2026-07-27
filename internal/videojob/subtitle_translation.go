@@ -63,8 +63,8 @@ func subtitleTracksForJob(ctx context.Context, client subtitleJSONClient,
 	return tracks, nil
 }
 
-func newSubtitleTranslator(envBaseURL, envKey, envModel string) subtitleJSONClient {
-	return llm.New(envBaseURL, envKey, envModel)
+func newSubtitleTranslator(baseURL, key, model string) subtitleJSONClient {
+	return llm.New(baseURL, key, model)
 }
 
 func normalizeRequestedSubtitleLanguages(sourceLanguage string, raw []string) ([]subtitleLanguage, error) {

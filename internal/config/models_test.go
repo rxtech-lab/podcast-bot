@@ -100,8 +100,13 @@ func TestAnnotateModelDefaultsPreservesType(t *testing.T) {
 	}
 }
 
-func TestDefaultsForEnvNil(t *testing.T) {
-	if got := config.DefaultsForEnv(nil); got != (config.ModelDefaults{}) {
-		t.Errorf("DefaultsForEnv(nil) = %+v, want zero value", got)
+func TestModelConfigDefaults(t *testing.T) {
+	models := config.ModelConfig{
+		Host:         "host",
+		ScenePlanner: "planner",
+		Compression:  "compressor",
+	}
+	if got := models.Defaults(); got != (config.ModelDefaults{Host: "host", ScenePlanner: "planner", Compression: "compressor"}) {
+		t.Errorf("ModelConfig.Defaults() = %+v", got)
 	}
 }

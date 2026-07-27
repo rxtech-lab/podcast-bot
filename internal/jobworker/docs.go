@@ -27,6 +27,16 @@ func (w *Worker) summaryGenerationDeps() server.SummaryGenerationDeps {
 	}
 }
 
+func (w *Worker) configuredSummaryGenerationDeps(ctx context.Context) (server.SummaryGenerationDeps, error) {
+	deps := w.summaryGenerationDeps()
+	env, err := w.d.Srv.ConfiguredEnv(ctx)
+	if err != nil {
+		return deps, err
+	}
+	deps.Env = env
+	return deps, nil
+}
+
 func decodeSummaryTask(t mq.Task) (server.SummaryTaskPayload, error) {
 	var p server.SummaryTaskPayload
 	if err := json.Unmarshal(t.Payload, &p); err != nil {
@@ -168,7 +178,11 @@ func (w *Worker) summaryDocRunner(docType string,
 			if owner == "" {
 				return mq.Permanent(fmt.Errorf("discussion %s has no owner", p.DiscussionID))
 			}
-			return runTask(w.summaryGenerationDeps(), input, owner)
+			deps, err := w.configuredSummaryGenerationDeps(ctx)
+			if err != nil {
+				return mq.Permanent(err)
+			}
+			return runTask(deps, input, owner)
 		},
 		terminal: func(ctx context.Context, t mq.Task, err error) {
 			p, _ := decodeSummaryTask(t)

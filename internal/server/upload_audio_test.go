@@ -83,16 +83,16 @@ func TestUploadAudioConfigResolvers(t *testing.T) {
 		t.Fatalf("app config: %v", err)
 	}
 	ctx := context.Background()
-	s := &Server{d: Deps{AppConfig: appCfg, Env: &config.Env{STTProvider: "gemini", TranscribeModel: "gemini-2.5-flash"}}}
+	s := &Server{d: Deps{AppConfig: appCfg, Env: &config.Env{STTProvider: "gemini"}}}
 
 	if got := s.resolvedSTTProvider(ctx); got != stt.ProviderGemini {
 		t.Fatalf("default provider = %q, want gemini", got)
 	}
-	if got := s.resolvedSTTGeminiModel(ctx); got != "gemini-2.5-flash" {
-		t.Fatalf("default gemini model = %q, want env transcribe model", got)
+	if _, err := s.resolvedSTTGeminiModel(ctx); err == nil {
+		t.Fatal("missing admin Gemini model should return an error")
 	}
 
-	// Admin overrides win over the env defaults.
+	// Admin config is the only source of the Gemini model.
 	if err := appCfg.Set(ctx, appConfigKeySTTProvider, "azure"); err != nil {
 		t.Fatalf("set provider: %v", err)
 	}
@@ -102,8 +102,8 @@ func TestUploadAudioConfigResolvers(t *testing.T) {
 	if got := s.resolvedSTTProvider(ctx); got != stt.ProviderAzure {
 		t.Fatalf("overridden provider = %q, want azure", got)
 	}
-	if got := s.resolvedSTTGeminiModel(ctx); got != "gemini-3.5-flash" {
-		t.Fatalf("overridden gemini model = %q", got)
+	if got, err := s.resolvedSTTGeminiModel(ctx); err != nil || got != "gemini-3.5-flash" {
+		t.Fatalf("admin gemini model = %q err=%v", got, err)
 	}
 }
 

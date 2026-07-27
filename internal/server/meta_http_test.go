@@ -17,17 +17,46 @@ import (
 func newMetaServer(t *testing.T, env *config.Env, mcp *config.MCPConfig) *httptest.Server {
 	t.Helper()
 	bus := eventbus.New(nil)
+	var discussions *DiscussionStore
+	var appConfig *AppConfigStore
+	if env != nil {
+		var err error
+		discussions, err = NewDiscussionStore(t.TempDir()+"/meta.db", "", "")
+		if err != nil {
+			t.Fatalf("discussion store: %v", err)
+		}
+		appConfig, err = NewAppConfigStore(discussions)
+		if err != nil {
+			t.Fatalf("app config: %v", err)
+		}
+		for key, value := range map[string]string{
+			appConfigKeyDefaultHostModel:  env.Models.Host,
+			appConfigKeyScenePlannerModel: env.Models.ScenePlanner,
+			appConfigKeyCompressionModel:  env.Models.Compression,
+		} {
+			if value != "" {
+				if err := appConfig.Set(t.Context(), key, value); err != nil {
+					t.Fatalf("seed model config: %v", err)
+				}
+			}
+		}
+	}
 	srv := New(Deps{
-		Bus:      bus,
-		Sessions: NewSessionRegistry(),
-		Log:      slog.Default(),
-		Env:      env,
-		MCPCfg:   mcp,
+		Bus:         bus,
+		Sessions:    NewSessionRegistry(),
+		Discussions: discussions,
+		AppConfig:   appConfig,
+		Log:         slog.Default(),
+		Env:         env,
+		MCPCfg:      mcp,
 	})
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
 		bus.Close()
+		if discussions != nil {
+			_ = discussions.Close()
+		}
 	})
 	return ts
 }
@@ -43,11 +72,13 @@ func TestHandleModels(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	env := &config.Env{
-		OpenAIBaseURL:     upstream.URL,
-		OpenAIKey:         "test-key",
-		HostModel:         "openai/custom-host",
-		ScenePlannerModel: "openai/custom-host",
-		CompressionModel:  "openai/gpt-4o-mini",
+		OpenAIBaseURL: upstream.URL,
+		OpenAIKey:     "test-key",
+		Models: config.ModelConfig{
+			Host:         "openai/custom-host",
+			ScenePlanner: "openai/custom-host",
+			Compression:  "openai/gpt-4o-mini",
+		},
 	}
 	ts := newMetaServer(t, env, nil)
 
@@ -66,17 +97,17 @@ func TestHandleModels(t *testing.T) {
 	if out.Defaults.Host != "openai/custom-host" {
 		t.Fatalf("defaults.host = %q, want openai/custom-host", out.Defaults.Host)
 	}
-	var sawEnvDefault, sawUpstream bool
+	var sawAdminDefault, sawUpstream bool
 	for _, m := range out.Models {
 		if m.ID == "openai/custom-host" {
-			sawEnvDefault = len(m.DefaultFor) == 2 && m.Provider == "openai"
+			sawAdminDefault = len(m.DefaultFor) == 2 && m.Provider == "openai"
 		}
 		if m.ID == "anthropic/claude-sonnet-4-5" {
 			sawUpstream = m.Provider == "anthropic"
 		}
 	}
-	if !sawEnvDefault {
-		t.Error("env-default host model not present in upstream models list")
+	if !sawAdminDefault {
+		t.Error("admin-configured host model not present in upstream models list")
 	}
 	if !sawUpstream {
 		t.Error("upstream model missing from models list")

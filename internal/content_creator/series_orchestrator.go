@@ -26,7 +26,7 @@ func (o *Orchestrator) buildSeriesAgents() error {
 			BaseURL: o.Topic.SeriesHost.BaseURL,
 			APIKey:  o.Topic.SeriesHost.APIKey,
 		},
-		agent.RoleSeriesHost, o.Env.HostModel)
+		agent.RoleSeriesHost)
 	return nil
 }
 

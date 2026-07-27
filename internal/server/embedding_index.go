@@ -28,29 +28,32 @@ type DiscussionIndexPayload struct {
 }
 
 // embeddingLLM builds an embeddings client on the shared OpenAI-compatible
-// endpoint with the admin-resolved embedding model. Nil when semantic
-// features are unconfigured (no model, no endpoint, or no vector storage).
-func (s *Server) embeddingLLM(ctx context.Context) *llm.Client {
+// endpoint with the admin-resolved embedding model.
+func (s *Server) embeddingLLM(ctx context.Context) (*llm.Client, error) {
 	if s.d.Env == nil || s.d.Embeddings == nil || !s.d.Embeddings.SemanticEnabled() {
-		return nil
+		return nil, ErrIndexingNotConfigured
 	}
-	model := s.resolvedEmbeddingModel(ctx)
-	if model == "" || s.d.Env.OpenAIBaseURL == "" {
-		return nil
+	model, err := s.resolvedEmbeddingModel(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return llm.New(s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey, model)
+	if s.d.Env.OpenAIBaseURL == "" {
+		return nil, ErrIndexingNotConfigured
+	}
+	return llm.New(s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey, model), nil
 }
 
 // SemanticSearchEnabled reports whether semantic endpoints can serve.
 func (s *Server) SemanticSearchEnabled(ctx context.Context) bool {
-	return s.embeddingLLM(ctx) != nil
+	_, err := s.embeddingLLM(ctx)
+	return err == nil
 }
 
 // embedQuery vectorizes one search/retrieval query.
 func (s *Server) embedQuery(ctx context.Context, text string) ([]float32, error) {
-	client := s.embeddingLLM(ctx)
-	if client == nil {
-		return nil, ErrIndexingNotConfigured
+	client, err := s.embeddingLLM(ctx)
+	if err != nil {
+		return nil, err
 	}
 	vecs, _, err := client.Embed(ctx, []string{text}, s.d.Embeddings.Dimensions())
 	if err != nil {
@@ -71,8 +74,11 @@ func (s *Server) StartDiscussionIndexing(ctx context.Context, discussionID strin
 	if discussionID == "" || s.d.Discussions == nil || s.d.Embeddings == nil || s.d.MQ == nil {
 		return ErrIndexingNotConfigured
 	}
-	model := s.resolvedEmbeddingModel(ctx)
-	if model == "" || !s.d.Embeddings.SemanticEnabled() {
+	model, err := s.resolvedEmbeddingModel(ctx)
+	if err != nil {
+		return err
+	}
+	if !s.d.Embeddings.SemanticEnabled() {
 		return ErrIndexingNotConfigured
 	}
 	d, err := s.d.Discussions.DiscussionWithTranscript(ctx, discussionID)
@@ -115,10 +121,13 @@ func (s *Server) StartDiscussionIndexing(ctx context.Context, discussionID strin
 func (s *Server) RunDiscussionIndexTask(ctx context.Context, p DiscussionIndexPayload) error {
 	ctx, cancel := context.WithTimeout(ctx, discussionIndexTimeout)
 	defer cancel()
-	model := s.resolvedEmbeddingModel(ctx)
-	client := s.embeddingLLM(ctx)
-	if client == nil {
-		return mq.Permanent(ErrIndexingNotConfigured)
+	model, err := s.resolvedEmbeddingModel(ctx)
+	if err != nil {
+		return mq.Permanent(err)
+	}
+	client, err := s.embeddingLLM(ctx)
+	if err != nil {
+		return mq.Permanent(err)
 	}
 	d, err := s.d.Discussions.DiscussionWithTranscript(ctx, p.DiscussionID)
 	if err != nil {
@@ -178,7 +187,7 @@ func (s *Server) FailDiscussionIndexTask(p DiscussionIndexPayload, cause error) 
 		msg = cause.Error()
 	}
 	ctx := context.Background()
-	_ = s.d.Embeddings.MarkFailed(ctx, p.DiscussionID, s.resolvedEmbeddingModel(ctx), msg)
+	_ = s.d.Embeddings.MarkFailed(ctx, p.DiscussionID, s.appConfigValue(ctx, appConfigKeyEmbeddingModel), msg)
 }
 
 // SeedE2EIndexes synchronously indexes every seeded ready podcast at E2E
@@ -188,8 +197,8 @@ func (s *Server) SeedE2EIndexes(ctx context.Context) {
 	if s.d.Embeddings == nil || !s.d.Embeddings.SemanticEnabled() {
 		return
 	}
-	model := s.resolvedEmbeddingModel(ctx)
-	if model == "" {
+	model, err := s.resolvedEmbeddingModel(ctx)
+	if err != nil {
 		return
 	}
 	for _, owner := range []string{"test", "test2"} {
@@ -227,8 +236,8 @@ func (s *Server) enqueueStaleIndexBackfill(userID string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	model := s.resolvedEmbeddingModel(ctx)
-	if model == "" || !s.d.Embeddings.SemanticEnabled() {
+	model, err := s.resolvedEmbeddingModel(ctx)
+	if err != nil || !s.d.Embeddings.SemanticEnabled() {
 		return
 	}
 	ids, err := s.d.Embeddings.StaleDiscussions(ctx, userID, model, indexBackfillLimit)

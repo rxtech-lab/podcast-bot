@@ -53,15 +53,15 @@ type MindmapGenerator struct {
 	env    *config.Env
 }
 
-// NewMindmapGenerator builds a mindmap generator using PodcastSummaryModel,
-// falling back to HostModel.
+// NewMindmapGenerator builds a mindmap generator using the explicit
+// admin-configured podcast summary model.
 func NewMindmapGenerator(env *config.Env) *MindmapGenerator {
 	if env == nil {
 		return &MindmapGenerator{}
 	}
-	model := strings.TrimSpace(env.PodcastSummaryModel)
+	model := strings.TrimSpace(env.Models.PodcastSummary)
 	if model == "" {
-		model = strings.TrimSpace(env.HostModel)
+		return &MindmapGenerator{}
 	}
 	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
 	return &MindmapGenerator{client: client, env: env}

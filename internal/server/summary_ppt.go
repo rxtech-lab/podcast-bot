@@ -110,8 +110,15 @@ func (s *Server) generateSummaryDeckDocument(ctx context.Context, d *Discussion)
 		return nil, errSummaryDeckUnavailable
 	}
 
-	gen := summarizer.NewDeckGenerator(s.d.Env)
+	configuredEnv, err := s.ConfiguredEnv(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gen := summarizer.NewDeckGenerator(configuredEnv)
 	model := gen.Model()
+	if model == "" {
+		return nil, errors.New("podcast slide-deck model is not configured in admin App Config")
+	}
 	meter := &summaryUsageMeter{}
 	runner := gen.WithUsageRecorder(meter.record)
 	if runner == nil {

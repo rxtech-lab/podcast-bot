@@ -10,8 +10,8 @@ import (
 // populated by buildAgents in the base orchestrator before this is called.
 func (o *Orchestrator) buildDebateAgents() error {
 	o.Registry.Host = o.makeAgent(
-		config.AgentSpec{Name: "Host", Model: o.Env.HostModel},
-		agent.RoleHost, o.Env.HostModel)
+		config.AgentSpec{Name: "Host", Model: o.Env.Models.Host},
+		agent.RoleHost)
 	o.Registry.Judge = o.makeAgent(
 		config.AgentSpec{
 			Name:    "Judge",
@@ -19,14 +19,14 @@ func (o *Orchestrator) buildDebateAgents() error {
 			BaseURL: o.Topic.Judge.BaseURL,
 			APIKey:  o.Topic.Judge.APIKey,
 		},
-		agent.RoleJudge, o.Env.HostModel)
+		agent.RoleJudge)
 	for _, s := range o.Topic.Affirmative {
 		o.Registry.Affirmatve = append(o.Registry.Affirmatve,
-			o.makeAgent(s, agent.RoleAffirmative, ""))
+			o.makeAgent(s, agent.RoleAffirmative))
 	}
 	for _, s := range o.Topic.Negative {
 		o.Registry.Negative = append(o.Registry.Negative,
-			o.makeAgent(s, agent.RoleNegative, ""))
+			o.makeAgent(s, agent.RoleNegative))
 	}
 	return nil
 }

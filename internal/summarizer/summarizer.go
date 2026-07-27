@@ -59,14 +59,12 @@ type Generator struct {
 	env    *config.Env
 }
 
-// New builds a Generator using the configured PodcastSummaryModel (falling back
-// to HostModel is handled at config load time).
+// New builds a Generator using the explicit admin-configured summary model.
 func New(env *config.Env) *Generator {
-	model := env.PodcastSummaryModel
-	if strings.TrimSpace(model) == "" {
-		model = env.HostModel
+	if env == nil || strings.TrimSpace(env.Models.PodcastSummary) == "" {
+		return &Generator{}
 	}
-	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, model)
+	client := llm.New(env.OpenAIBaseURL, env.OpenAIKey, env.Models.PodcastSummary)
 	return &Generator{client: client, env: env}
 }
 
@@ -82,7 +80,7 @@ func (g *Generator) Model() string {
 // applying the same pricing fallback the planner uses so cost is filled in even
 // when the provider omits it from the usage payload.
 func (g *Generator) WithUsageRecorder(record func(llm.Usage)) *Generator {
-	if g == nil {
+	if g == nil || g.client == nil || g.env == nil {
 		return nil
 	}
 	next := *g

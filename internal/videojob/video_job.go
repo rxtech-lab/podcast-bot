@@ -890,7 +890,7 @@ func run(ctx context.Context, deps Deps, jobID string,
 			status(fmt.Sprintf("translating subtitles (%d language%s)…",
 				len(langs), pluralS(len(langs))))
 			client := newSubtitleTranslator(deps.Env.CompressionBaseURL,
-				deps.Env.CompressionKey, deps.Env.CompressionModel)
+				deps.Env.CompressionKey, deps.Env.Models.Compression)
 			tracks, err := subtitleTracksForJob(ctx, client, jobOutDir,
 				topic.Language, orch.SubtitleCues(), sub.SubtitleLanguages)
 			if err != nil {

@@ -193,6 +193,26 @@ type SoundCueDirection struct {
 func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 	send func(any), log *slog.Logger, liveStream *audio.LiveStream,
 ) (*Orchestrator, error) {
+	if env == nil {
+		return nil, fmt.Errorf("orchestrator requires engine env")
+	}
+	if strings.TrimSpace(env.Models.Host) == "" {
+		return nil, fmt.Errorf("host model is not configured in admin App Config")
+	}
+	if strings.TrimSpace(env.Models.Compression) == "" {
+		return nil, fmt.Errorf("compression model is not configured in admin App Config")
+	}
+	if topic != nil && topic.Type == config.ContentTypeDiscussion &&
+		strings.TrimSpace(env.Models.Judgement) == "" {
+		return nil, fmt.Errorf("judgement model is not configured in admin App Config")
+	}
+	if topic != nil &&
+		(topic.Type == config.ContentTypeAudioBook ||
+			topic.Type == config.ContentTypeSeries ||
+			topic.Type == config.ContentTypeSituationPuzzle) &&
+		strings.TrimSpace(env.Models.ScenePlanner) == "" {
+		return nil, fmt.Errorf("scene planner model is not configured in admin App Config")
+	}
 	memStore, err := memory.NewStore(filepath.Join(env.OutDir, "memory"))
 	if err != nil {
 		return nil, fmt.Errorf("memory store: %w", err)
@@ -233,7 +253,7 @@ func New(env *config.Env, topic *config.DebateTopic, mcpCfg *config.MCPConfig,
 		Tools:     ttsRegistry,
 		MemStore:  memStore,
 		Compressor: memory.New(
-			pricedClient(env.CompressionBaseURL, env.CompressionKey, env.CompressionModel),
+			pricedClient(env.CompressionBaseURL, env.CompressionKey, env.Models.Compression),
 			memory.DefaultThreshold,
 		),
 		TTS:        newMeteredTTS(ttsClient, tracker),
@@ -262,11 +282,11 @@ func (o *Orchestrator) Setup(ctx context.Context) error {
 		"OPENAI_BASE_URL", o.Env.OpenAIBaseURL,
 		"OPENAI_API_KEY_len", len(o.Env.OpenAIKey),
 		"OPENAI_API_KEY_preview", maskKey(o.Env.OpenAIKey),
-		"HOST_MODEL", o.Env.HostModel,
+		"host_model", o.Env.Models.Host,
 		"COMPRESSION_BASE_URL", o.Env.CompressionBaseURL,
 		"COMPRESSION_API_KEY_len", len(o.Env.CompressionKey),
 		"COMPRESSION_API_KEY_preview", maskKey(o.Env.CompressionKey),
-		"COMPRESSION_MODEL", o.Env.CompressionModel,
+		"compression_model", o.Env.Models.Compression,
 		"TTS_PROVIDER", o.Topic.TTSProvider,
 		"AZURE_SPEECH_REGION", o.Env.AzureSpeechRegion,
 		"AZURE_SPEECH_KEY_len", len(o.Env.AzureSpeechKey),
@@ -366,8 +386,9 @@ func (o *Orchestrator) speakerGenders() map[string]string {
 }
 
 // newAgentLLMClient builds the priced, usage-recorded LLM client for one
-// agent spec, falling back to env-level defaults for any blank fields.
-func (o *Orchestrator) newAgentLLMClient(spec config.AgentSpec, defaultModel string) *llm.Client {
+// agent spec. Each agent must carry an explicit model; only provider
+// credentials may inherit the shared environment configuration.
+func (o *Orchestrator) newAgentLLMClient(spec config.AgentSpec) *llm.Client {
 	baseURL := spec.BaseURL
 	if baseURL == "" {
 		baseURL = o.Env.OpenAIBaseURL
@@ -376,11 +397,7 @@ func (o *Orchestrator) newAgentLLMClient(spec config.AgentSpec, defaultModel str
 	if key == "" {
 		key = o.Env.OpenAIKey
 	}
-	model := spec.Model
-	if model == "" {
-		model = defaultModel
-	}
-	return llm.New(baseURL, key, model).
+	return llm.New(baseURL, key, spec.Model).
 		WithUsageRecorder(o.Tracker.AddLLMUsage).
 		WithPricing(o.Env.LLMInputCostPerMillion, o.Env.LLMOutputCostPerMillion)
 }
@@ -391,9 +408,9 @@ func (o *Orchestrator) newAgentLLMClient(spec config.AgentSpec, defaultModel str
 // diagram can show who is searching / taking memory. reg is the tool registry
 // the agent may call mid-turn — pass an empty registry for speakers that must
 // never stall a live broadcast on tool loops (see buildNewsAgents).
-func (o *Orchestrator) newAgentBase(spec config.AgentSpec, role agent.Role, defaultModel string, reg *tools.Registry) *agent.Base {
+func (o *Orchestrator) newAgentBase(spec config.AgentSpec, role agent.Role, reg *tools.Registry) *agent.Base {
 	mem := o.MemStore.For(spec.Name)
-	base := agent.NewBase(spec.Name, role, o.newAgentLLMClient(spec, defaultModel), mem, o.Compressor, reg, o.Transcript)
+	base := agent.NewBase(spec.Name, role, o.newAgentLLMClient(spec), mem, o.Compressor, reg, o.Transcript)
 	agentName, agentRole := spec.Name, string(role)
 	base.SetActivityEmitter(func(activity, detail string) {
 		o.Send(AgentActivityMsg{
@@ -406,13 +423,12 @@ func (o *Orchestrator) newAgentBase(spec config.AgentSpec, role agent.Role, defa
 	return base
 }
 
-// makeAgent constructs one role-typed agent from a config.AgentSpec, falling
-// back to env-level defaults for any blank fields. Shared between the per-
-// format buildAgents methods (see debate_orchestrator.go and
+// makeAgent constructs one role-typed agent from a config.AgentSpec. Shared
+// between the per-format buildAgents methods (see debate_orchestrator.go and
 // situation_puzzle_orchestrator.go) — every role recognised by the registry
 // is wired up here so a new format only needs to call this with its specs.
-func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, defaultModel string) agent.Agent {
-	base := o.newAgentBase(spec, role, defaultModel, o.Tools)
+func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role) agent.Agent {
+	base := o.newAgentBase(spec, role, o.Tools)
 	switch role {
 	case agent.RoleHost:
 		// Discussions reuse the generic host role but need a facilitator
@@ -491,7 +507,7 @@ func (o *Orchestrator) makeAgent(spec config.AgentSpec, role agent.Role, default
 func (o *Orchestrator) buildAgents() error {
 	o.Registry = &agent.Registry{}
 	for _, s := range o.Topic.Viewers {
-		o.Registry.Viewers = append(o.Registry.Viewers, o.makeAgent(s, agent.RoleViewer, ""))
+		o.Registry.Viewers = append(o.Registry.Viewers, o.makeAgent(s, agent.RoleViewer))
 	}
 	switch o.Topic.Type {
 	case config.ContentTypeSituationPuzzle:

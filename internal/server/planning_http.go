@@ -310,7 +310,7 @@ func (s *Server) handlePlanningStream(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p, err := planner.New(s.plannerEnv())
+	p, err := s.newPlanner(r.Context())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -456,7 +456,7 @@ func (s *Server) handlePlanningAnswer(w http.ResponseWriter, r *http.Request) {
 		s.streamPlanningActiveRun(w, r, active.RunID)
 		return
 	}
-	p, err := planner.New(s.plannerEnv())
+	p, err := s.newPlanner(r.Context())
 	if err != nil {
 		http.Error(w, "planning not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -723,7 +723,7 @@ func (s *Server) RunPlanningTurnTask(ctx context.Context, pl PlanningTurnPayload
 	if d == nil || conv == nil || conv.ID != pl.ConversationID {
 		return mq.Permanent(fmt.Errorf("planning conversation %s not found", pl.ConversationID))
 	}
-	p, err := planner.New(s.plannerEnv())
+	p, err := s.newPlanner(workCtx)
 	if err != nil {
 		return fmt.Errorf("planner init: %w", err)
 	}

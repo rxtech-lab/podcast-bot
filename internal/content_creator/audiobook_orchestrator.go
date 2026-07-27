@@ -193,7 +193,7 @@ func (o *Orchestrator) buildAudioBookAgents() error {
 		Model:   o.Topic.AudioBookHost.Model,
 		BaseURL: o.Topic.AudioBookHost.BaseURL,
 		APIKey:  o.Topic.AudioBookHost.APIKey,
-	}, agent.RoleSeriesHost, o.Env.HostModel)
+	}, agent.RoleSeriesHost)
 	o.Registry.SeriesHost = base
 	// Seed the series-character roster from the audiobook speakers so Setup's
 	// assignSeriesCharacterVoices picks a distinct Azure neural voice per

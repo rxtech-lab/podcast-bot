@@ -28,22 +28,27 @@ func requireAdmin() func(context.Context, admin.Identity, admin.ActionType) erro
 // ---------------------------------------------------------------------------
 
 type appConfigForm struct {
-	DefaultHostModel string `json:"default_host_model" jsonschema:"title=Default generation model"`
-	TranslationModel string `json:"translation_model" jsonschema:"title=Podcast translation model"`
-	QAModel          string `json:"qa_model" jsonschema:"title=Q&A chat model"`
-	EmbeddingModel   string `json:"embedding_model" jsonschema:"title=Embedding model"`
-	STTProvider      string `json:"stt_provider" jsonschema:"title=Speech-to-text provider"`
-	STTGeminiModel   string `json:"stt_gemini_model" jsonschema:"title=Gemini transcription model"`
+	DefaultHostModel       string `json:"default_host_model" jsonschema:"title=Host and agent model"`
+	ScenePlannerModel      string `json:"scene_planner_model" jsonschema:"title=Planning and visual-director model"`
+	CompressionModel       string `json:"compression_model" jsonschema:"title=Memory and subtitle compression model"`
+	PodcastSummaryModel    string `json:"podcast_summary_model" jsonschema:"title=Podcast summary and mindmap model"`
+	TranslationModel       string `json:"translation_model" jsonschema:"title=Podcast translation model"`
+	JudgementModel         string `json:"judgement_model" jsonschema:"title=Discussion judgement model"`
+	PodcastSummaryPPTModel string `json:"podcast_summary_ppt_model" jsonschema:"title=Podcast slide-deck model"`
+	QAModel                string `json:"qa_model" jsonschema:"title=Q&A chat model"`
+	EmbeddingModel         string `json:"embedding_model" jsonschema:"title=Embedding model"`
+	STTProvider            string `json:"stt_provider" jsonschema:"title=Speech-to-text provider"`
+	STTGeminiModel         string `json:"stt_gemini_model" jsonschema:"title=Gemini transcription model"`
 }
 
 // newAppConfigResource serves the single app-level configuration form. The
-// default-model field is a dropdown populated live from the model catalog, and
-// submitting persists the override (env stays the fallback).
+// model fields are dropdowns populated live from the provider catalogs. The
+// stored values are the only runtime source of model ids.
 func (s *Server) newAppConfigResource() admin.Resource {
 	return admin.NewFormResource(admin.FormResourceConfig{
 		ID:          "app-config",
 		Name:        "App Config",
-		Description: "Application-level settings. Overrides the env defaults.",
+		Description: "Application-level model settings. Every model is admin-owned and required by the feature that uses it.",
 		Icon:        "settings",
 		Authorize:   requireAdmin(),
 		Schema: func(ctx context.Context, req admin.Request, _ admin.ActionType) (*admin.FormSchema, error) {
@@ -53,20 +58,46 @@ func (s *Server) newAppConfigResource() admin.Resource {
 				return nil, err
 			}
 			if p, ok := fs.Schema.Properties.Get("default_host_model"); ok {
-				p.Description = "The default model used when generating new content. Fetched live from the gateway."
+				p.Description = "Model used by hosts and newly planned agents."
 				p.OneOf = modelOptions(s.languageModelCatalog(ctx))
+			}
+			for _, field := range []string{
+				"scene_planner_model",
+				"compression_model",
+				"podcast_summary_model",
+				"translation_model",
+				"judgement_model",
+				"podcast_summary_ppt_model",
+				"qa_model",
+			} {
+				if p, ok := fs.Schema.Properties.Get(field); ok {
+					p.OneOf = modelOptions(s.languageModelCatalog(ctx))
+				}
+			}
+			if p, ok := fs.Schema.Properties.Get("scene_planner_model"); ok {
+				p.Description = "Model used for planning-agent calls and visual scene direction."
+			}
+			if p, ok := fs.Schema.Properties.Get("compression_model"); ok {
+				p.Description = "Model used for agent-memory compression, series recaps, and subtitle translation."
+			}
+			if p, ok := fs.Schema.Properties.Get("podcast_summary_model"); ok {
+				p.Description = "Model used to generate podcast summaries and mindmaps."
 			}
 			if p, ok := fs.Schema.Properties.Get("translation_model"); ok {
 				p.Description = "Model used for podcast title, plan, transcript, caption, summary, and mindmap translations."
-				p.OneOf = modelOptions(s.languageModelCatalog(ctx))
+			}
+			if p, ok := fs.Schema.Properties.Get("judgement_model"); ok {
+				p.Description = "Silent fact-checking model used during discussion podcasts."
+			}
+			if p, ok := fs.Schema.Properties.Get("podcast_summary_ppt_model"); ok {
+				p.Description = "Model used to turn a podcast summary into a slide-deck specification."
 			}
 			if p, ok := fs.Schema.Properties.Get("qa_model"); ok {
-				p.Description = "Model behind the podcast Q&A and global chat agent. Empty falls back to QA_MODEL / HOST_MODEL."
-				p.OneOf = modelOptions(s.languageModelCatalog(ctx))
+				p.Description = "Model behind the podcast Q&A and global chat agent."
 			}
 			if p, ok := fs.Schema.Properties.Get("embedding_model"); ok {
-				p.Description = "Embedding model for podcast content vectorization and semantic search, fetched live from the gateway. Switching triggers a background re-index; the default option falls back to EMBEDDING_MODEL (semantic features are disabled when that is unset too)."
-				p.OneOf = embeddingModelOptions(s.embeddingModelCatalog(ctx), s.resolvedEmbeddingModel(ctx))
+				p.Description = "Embedding model for podcast vectorization and semantic search. Switching triggers a background re-index."
+				p.OneOf = embeddingModelOptions(s.embeddingModelCatalog(ctx), s.appConfigValue(ctx, appConfigKeyEmbeddingModel))
 			}
 			if p, ok := fs.Schema.Properties.Get("stt_provider"); ok {
 				p.Description = "Speech-to-text provider used to transcribe uploaded audio with speaker diarization."
@@ -113,36 +144,72 @@ func (s *Server) newAppConfigResource() admin.Resource {
 				}
 				// The wildcard lets RJSF accept the dependency-injected field
 				// without tripping its ui:order completeness check.
-				fs.UISchema["ui:order"] = []any{"default_host_model", "translation_model", "qa_model", "embedding_model", "stt_provider", "*"}
+				fs.UISchema["ui:order"] = []any{
+					"default_host_model",
+					"scene_planner_model",
+					"compression_model",
+					"podcast_summary_model",
+					"translation_model",
+					"judgement_model",
+					"podcast_summary_ppt_model",
+					"qa_model",
+					"embedding_model",
+					"stt_provider",
+					"*",
+				}
 			}
 			return fs, nil
 		},
 		Fetch: func(ctx context.Context, _ admin.Request, _ admin.ActionType, _ map[string]any) (*admin.ActionResponse, error) {
-			d := s.resolvedModelDefaults(ctx)
+			models := s.resolvedModels(ctx)
 			return admin.Detail(map[string]any{
-				"default_host_model": d.Host,
-				"translation_model":  s.resolvedTranslationModel(ctx),
-				"qa_model":           s.resolvedQAModel(ctx),
-				"embedding_model":    s.resolvedEmbeddingModel(ctx),
-				"stt_provider":       s.resolvedSTTProvider(ctx),
-				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
+				"default_host_model":        models.Host,
+				"scene_planner_model":       models.ScenePlanner,
+				"compression_model":         models.Compression,
+				"podcast_summary_model":     models.PodcastSummary,
+				"translation_model":         models.PodcastTranslation,
+				"judgement_model":           models.Judgement,
+				"podcast_summary_ppt_model": models.PodcastSummaryPPT,
+				"qa_model":                  models.QA,
+				"embedding_model":           models.Embedding,
+				"stt_provider":              s.resolvedSTTProvider(ctx),
+				"stt_gemini_model":          models.Transcription,
 			}), nil
 		},
 		Act: func(ctx context.Context, _ admin.Request, _ admin.ActionType, data map[string]any) (*admin.ActionResponse, error) {
-			model, _ := data["default_host_model"].(string)
-			model = strings.TrimSpace(model)
-			if model != "" && !s.modelExists(ctx, model) {
-				return nil, fmt.Errorf("%w: unknown model %q", admin.ErrBadInput, model)
+			required := func(field, label string) (string, error) {
+				value, _ := data[field].(string)
+				value = strings.TrimSpace(value)
+				if value == "" {
+					return "", fmt.Errorf("%w: %s is required", admin.ErrBadInput, label)
+				}
+				return value, nil
 			}
-			translationModel, _ := data["translation_model"].(string)
-			translationModel = strings.TrimSpace(translationModel)
-			if translationModel != "" && !s.modelExists(ctx, translationModel) {
-				return nil, fmt.Errorf("%w: unknown translation model %q", admin.ErrBadInput, translationModel)
+			languageFields := []struct {
+				field string
+				label string
+				key   string
+			}{
+				{"default_host_model", "host model", appConfigKeyDefaultHostModel},
+				{"scene_planner_model", "scene planner model", appConfigKeyScenePlannerModel},
+				{"compression_model", "compression model", appConfigKeyCompressionModel},
+				{"podcast_summary_model", "podcast summary model", appConfigKeySummaryModel},
+				{"translation_model", "podcast translation model", appConfigKeyTranslationModel},
+				{"judgement_model", "judgement model", appConfigKeyJudgementModel},
+				{"podcast_summary_ppt_model", "podcast slide-deck model", appConfigKeySummaryPPTModel},
+				{"qa_model", "Q&A model", appConfigKeyQAModel},
 			}
-			qaModel, _ := data["qa_model"].(string)
-			qaModel = strings.TrimSpace(qaModel)
-			if qaModel != "" && !s.modelExists(ctx, qaModel) {
-				return nil, fmt.Errorf("%w: unknown Q&A model %q", admin.ErrBadInput, qaModel)
+			values := make(map[string]string, len(languageFields))
+			catalog := s.languageModelCatalog(ctx)
+			for _, field := range languageFields {
+				value, err := required(field.field, field.label)
+				if err != nil {
+					return nil, err
+				}
+				if !modelInList(catalog, value) {
+					return nil, fmt.Errorf("%w: unknown %s %q", admin.ErrBadInput, field.label, value)
+				}
+				values[field.key] = value
 			}
 			// The embedding model must be one of the gateway's embedding models.
 			// Fail open (accept the id) when the catalog can't be fetched so a
@@ -150,7 +217,10 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			// always accepted since the dropdown offers it as a branch.
 			embeddingModel, _ := data["embedding_model"].(string)
 			embeddingModel = strings.TrimSpace(embeddingModel)
-			if embeddingModel != "" && embeddingModel != s.resolvedEmbeddingModel(ctx) {
+			if embeddingModel == "" {
+				return nil, fmt.Errorf("%w: embedding model is required", admin.ErrBadInput)
+			}
+			if embeddingModel != s.appConfigValue(ctx, appConfigKeyEmbeddingModel) {
 				if catalog := s.embeddingModelCatalog(ctx); len(catalog) > 0 && !modelInList(catalog, embeddingModel) {
 					return nil, fmt.Errorf("%w: unknown embedding model %q", admin.ErrBadInput, embeddingModel)
 				}
@@ -171,6 +241,9 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			// Validate against the live catalog when it is reachable; fail open
 			// (accept the id) when the catalog can't be fetched so a transient
 			// Google outage never locks the form.
+			if provider == stt.ProviderGemini && geminiModel == "" {
+				return nil, fmt.Errorf("%w: Gemini transcription model is required", admin.ErrBadInput)
+			}
 			if geminiModel != "" {
 				if catalog := s.geminiSTTModelOptions(ctx); len(catalog) > 0 && !geminiModelInCatalog(catalog, geminiModel) {
 					return nil, fmt.Errorf("%w: unknown gemini model %q", admin.ErrBadInput, geminiModel)
@@ -179,14 +252,10 @@ func (s *Server) newAppConfigResource() admin.Resource {
 			if s.d.AppConfig == nil {
 				return nil, fmt.Errorf("%w: app config store unavailable", admin.ErrBadInput)
 			}
-			if err := s.d.AppConfig.Set(ctx, appConfigKeyDefaultHostModel, model); err != nil {
-				return nil, err
-			}
-			if err := s.d.AppConfig.Set(ctx, appConfigKeyTranslationModel, translationModel); err != nil {
-				return nil, err
-			}
-			if err := s.d.AppConfig.Set(ctx, appConfigKeyQAModel, qaModel); err != nil {
-				return nil, err
+			for _, field := range languageFields {
+				if err := s.d.AppConfig.Set(ctx, field.key, values[field.key]); err != nil {
+					return nil, err
+				}
 			}
 			if err := s.d.AppConfig.Set(ctx, appConfigKeyEmbeddingModel, embeddingModel); err != nil {
 				return nil, err
@@ -201,13 +270,19 @@ func (s *Server) newAppConfigResource() admin.Resource {
 					return nil, err
 				}
 			}
+			models := s.resolvedModels(ctx)
 			return admin.Detail(map[string]any{
-				"default_host_model": model,
-				"translation_model":  s.resolvedTranslationModel(ctx),
-				"qa_model":           s.resolvedQAModel(ctx),
-				"embedding_model":    s.resolvedEmbeddingModel(ctx),
-				"stt_provider":       s.resolvedSTTProvider(ctx),
-				"stt_gemini_model":   s.resolvedSTTGeminiModel(ctx),
+				"default_host_model":        models.Host,
+				"scene_planner_model":       models.ScenePlanner,
+				"compression_model":         models.Compression,
+				"podcast_summary_model":     models.PodcastSummary,
+				"translation_model":         models.PodcastTranslation,
+				"judgement_model":           models.Judgement,
+				"podcast_summary_ppt_model": models.PodcastSummaryPPT,
+				"qa_model":                  models.QA,
+				"embedding_model":           models.Embedding,
+				"stt_provider":              s.resolvedSTTProvider(ctx),
+				"stt_gemini_model":          models.Transcription,
 			}), nil
 		},
 	})
@@ -251,15 +326,12 @@ func modelOptions(models []config.ModelInfo) []*jsonschema.Schema {
 	return opts
 }
 
-// embeddingModelOptions builds the embedding-model dropdown: an explicit
-// empty branch first (the field is optional and prefilled values must match a
-// oneOf branch — see the users-resource topup dropdown for the same pattern),
-// then the gateway's embedding models. When the stored value isn't in the
-// catalog (configured against a different gateway, or the catalog is
-// unreachable) it is appended as its own branch so the prefill still renders
-// and re-saving doesn't error.
+// embeddingModelOptions builds the required embedding-model dropdown. When the
+// stored value isn't in the catalog (configured against a different gateway,
+// or the catalog is unreachable) it is appended as its own branch so the
+// prefill still renders and can be corrected.
 func embeddingModelOptions(models []config.ModelInfo, current string) []*jsonschema.Schema {
-	opts := []*jsonschema.Schema{{Const: "", Title: "— Default (EMBEDDING_MODEL env, or disabled) —"}}
+	opts := make([]*jsonschema.Schema, 0, len(models)+1)
 	current = strings.TrimSpace(current)
 	found := current == ""
 	for _, m := range models {

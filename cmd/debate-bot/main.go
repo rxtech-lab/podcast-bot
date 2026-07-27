@@ -92,13 +92,17 @@ usage:
   default) to leave the server open.
 
 env (loaded from .env if present):
-  OPENAI_BASE_URL   OPENAI_API_KEY   HOST_MODEL
-  COMPRESSION_BASE_URL   COMPRESSION_API_KEY   COMPRESSION_MODEL
+  OPENAI_BASE_URL   OPENAI_API_KEY
+  COMPRESSION_BASE_URL   COMPRESSION_API_KEY
   GEMINI_API_KEY                            (required — drives Lyria music
                                               and Gemini scene image gen)
   AZURE_SPEECH_KEY   AZURE_SPEECH_REGION   (required when tts_provider=azure)
   ELEVENLABS_API_KEY                        (required when tts_provider=eleven)
-  OUT_DIR (optional, default ./out)`)
+  OUT_DIR (optional, default ./out)
+
+model ids:
+  Configure every model role in Admin -> App Config. Model ids are not loaded
+  from env, and an unconfigured role returns an error.`)
 }
 
 // loadedDebate is one resolved debate.md file with its parsed config.
@@ -577,12 +581,36 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 
 	bus := eventbus.New(log)
 	sessions := server.NewSessionRegistry()
+	adminDBPath := filepath.Join(videoDataRoot(env, modeDashboard), "native-discussions.db")
+	if err := os.MkdirAll(filepath.Dir(adminDBPath), 0o755); err != nil {
+		cancel()
+		fmt.Fprintln(os.Stderr, "admin config dir:", err)
+		return nil, 1
+	}
+	adminDiscussions, err := server.NewDiscussionStore(
+		adminDBPath,
+		env.DatabaseURL,
+		env.TursoAuthToken,
+	)
+	if err != nil {
+		cancel()
+		fmt.Fprintln(os.Stderr, "admin config db:", err)
+		return nil, 1
+	}
+	appConfig, err := server.NewAppConfigStore(adminDiscussions)
+	if err != nil {
+		_ = adminDiscussions.Close()
+		cancel()
+		fmt.Fprintln(os.Stderr, "admin model config:", err)
+		return nil, 1
+	}
 
 	rt := &runtime{
 		ctx: ctx, cancel: cancel, log: log, closer: closer,
 		mode: modeStream,
 		env:  env, mcpCfg: mcpCfg, bus: bus, sessions: sessions,
-		addr: addr, stopSig: stopSig,
+		discussions: adminDiscussions,
+		addr:        addr, stopSig: stopSig,
 		channelByID:   map[string]*channelRuntime{},
 		loadedDebates: map[string]loadedRef{},
 		usedIDs:       map[string]int{},
@@ -735,6 +763,8 @@ func bootstrap(channelsPath string, debateSpecs []string, mcpPath, outOverride, 
 		Mode:           modeStream,
 		Bus:            bus,
 		Sessions:       sessions,
+		Discussions:    adminDiscussions,
+		AppConfig:      appConfig,
 		Log:            log,
 		Password:       password,
 		Env:            env,
@@ -1138,7 +1168,13 @@ func (r *runtime) runChannel(ch *channelRuntime) {
 		total := ch.total
 		ch.counterMu.Unlock()
 
-		debateEnv := *r.env
+		configuredEnv, err := r.srv.ConfiguredEnv(r.ctx)
+		if err != nil {
+			r.log.Error("model config", "channel", ch.def.ID, "id", d.id, "err", err)
+			r.sessions.SetDebateStatus(ch.def.ID, d.id, server.StatusError)
+			continue
+		}
+		debateEnv := *configuredEnv
 		debateEnv.OutDir = filepath.Join(r.env.OutDir, ch.def.ID, d.id)
 		if err := contentcreator.EnsureOutDir(debateEnv.OutDir); err != nil {
 			r.log.Error("debate out dir", "channel", ch.def.ID, "id", d.id, "err", err)

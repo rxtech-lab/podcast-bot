@@ -7,25 +7,29 @@ import (
 	"time"
 )
 
-// App-level configuration keys. Values are stored as strings and overlaid on
-// top of the env defaults by the resolver methods below, so ENV remains the
-// default and the admin UI can override without a redeploy.
+// App-level configuration keys. Model values are stored only here; process
+// environment variables never provide model ids or fallbacks.
 const (
-	appConfigKeyDefaultHostModel = "default_host_model"
-	appConfigKeyTranslationModel = "translation_model"
+	appConfigKeyDefaultHostModel  = "default_host_model"
+	appConfigKeyScenePlannerModel = "scene_planner_model"
+	appConfigKeyCompressionModel  = "compression_model"
+	appConfigKeySummaryModel      = "podcast_summary_model"
+	appConfigKeyTranslationModel  = "translation_model"
+	appConfigKeyJudgementModel    = "judgement_model"
+	appConfigKeySummaryPPTModel   = "podcast_summary_ppt_model"
 	// appConfigKeySTTProvider picks the speech-to-text provider used to
 	// transcribe uploaded podcast audio (stt.ProviderGemini / stt.ProviderAzure).
 	appConfigKeySTTProvider = "stt_provider"
 	// appConfigKeySTTGeminiModel picks the Gemini model used when the STT
-	// provider is gemini; empty falls back to the env transcribe model.
+	// provider is gemini.
 	appConfigKeySTTGeminiModel = "stt_gemini_model"
 	// appConfigKeyQAModel picks the LLM behind the podcast Q&A / global chat
-	// agent; empty falls back to QA_MODEL then HOST_MODEL.
+	// agent.
 	appConfigKeyQAModel = "qa_model"
 	// appConfigKeyEmbeddingModel picks the embedding model used to vectorize
-	// podcast content and search queries; empty falls back to EMBEDDING_MODEL.
-	// Switching it marks previously indexed chunks stale (they are keyed by
-	// model) and the precheck backfill re-indexes them.
+	// podcast content and search queries. Switching it marks previously indexed
+	// chunks stale (they are keyed by model) and the precheck backfill re-indexes
+	// them.
 	appConfigKeyEmbeddingModel = "embedding_model"
 )
 
@@ -58,8 +62,7 @@ func (s *AppConfigStore) ensureSchema(ctx context.Context) error {
 	return err
 }
 
-// Get returns the stored value for key. The bool is false when no override row
-// exists (the caller should fall back to the env default).
+// Get returns the stored value for key. The bool is false when no row exists.
 func (s *AppConfigStore) Get(ctx context.Context, key string) (string, bool, error) {
 	if s == nil {
 		return "", false, nil
@@ -75,7 +78,7 @@ func (s *AppConfigStore) Get(ctx context.Context, key string) (string, bool, err
 	return value, true, nil
 }
 
-// Set upserts an override value for key.
+// Set upserts an admin-owned value for key.
 func (s *AppConfigStore) Set(ctx context.Context, key, value string) error {
 	if s == nil {
 		return errors.New("app config store: nil")
@@ -85,4 +88,34 @@ func (s *AppConfigStore) Set(ctx context.Context, key, value string) error {
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
 		key, value, time.Now().UnixMilli())
 	return err
+}
+
+// SeedE2EModels writes deterministic model assignments into the same
+// admin-owned table used in production. It is only called by the hermetic E2E
+// bootstrap and never overwrites a value, so E2E exercises the real ownership
+// path without model environment variables.
+func (s *AppConfigStore) SeedE2EModels(ctx context.Context) error {
+	values := map[string]string{
+		appConfigKeyDefaultHostModel:  "e2e-fake-model",
+		appConfigKeyScenePlannerModel: "e2e-fake-model",
+		appConfigKeyCompressionModel:  "e2e-fake-model",
+		appConfigKeySummaryModel:      "e2e-fake-model",
+		appConfigKeyTranslationModel:  "e2e-fake-model",
+		appConfigKeyJudgementModel:    "e2e-fake-model",
+		appConfigKeySummaryPPTModel:   "e2e-fake-model",
+		appConfigKeyQAModel:           "e2e-fake-model",
+		appConfigKeyEmbeddingModel:    "e2e-fake-embedding",
+		appConfigKeySTTGeminiModel:    "e2e-fake-model",
+	}
+	for key, value := range values {
+		if _, ok, err := s.Get(ctx, key); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
+		if err := s.Set(ctx, key, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }

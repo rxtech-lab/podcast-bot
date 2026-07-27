@@ -83,12 +83,9 @@ Required vars (validated at startup — the process refuses to boot if any are m
 |-----|----------|-------------|
 | `OPENAI_BASE_URL` | ✅ | OpenAI-compatible chat endpoint shared by host + agents |
 | `OPENAI_API_KEY` | ✅ | API key for the chat endpoint |
-| `HOST_MODEL` | ✅ | model id used by the host/moderator agent |
-| `COMPRESSION_MODEL` | ✅ | model used to compress per-agent memory when it grows |
 | `GEMINI_API_KEY` | ✅ | drives Lyria music + Gemini scene image generation |
-| `COMPRESSION_BASE_URL` | — | defaults to `OPENAI_BASE_URL` |
-| `COMPRESSION_API_KEY` | — | defaults to `OPENAI_API_KEY` |
-| `SCENE_PLANNER_MODEL` | — | model for the visual-director pass; defaults to `HOST_MODEL` |
+| `COMPRESSION_BASE_URL` | — | optional endpoint for the admin-configured compression model; defaults to `OPENAI_BASE_URL` |
+| `COMPRESSION_API_KEY` | — | optional key for the compression endpoint; defaults to `OPENAI_API_KEY` |
 | `LLM_INPUT_COST_PER_MILLION` | — | optional input-token price used when the provider does not return cost usage |
 | `LLM_OUTPUT_COST_PER_MILLION` | — | optional output-token price used when the provider does not return cost usage |
 | `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` | when `tts_provider: azure` | Azure Speech credentials |
@@ -104,6 +101,12 @@ Required vars (validated at startup — the process refuses to boot if any are m
 | `POINTS_SIGNUP_GRANT` | — | optional starter balance granted once per signed-in user |
 
 Provider-specific TTS keys are only required when a `topic.md` selects that provider.
+
+Model ids are not environment variables. Configure them in the admin dashboard
+under **App Config**: host/agent, planning/visual director, compression,
+summary/mindmap, translation, judgement, slide deck, Q&A, embedding, and Gemini
+transcription. Each feature returns a configuration error when its model is
+blank; models never fall back to another role or to `.env`.
 
 ### Points purchases with RevenueCat
 

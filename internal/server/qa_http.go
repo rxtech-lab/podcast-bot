@@ -436,7 +436,11 @@ func (s *Server) runQATurnCore(ctx context.Context, sink planningEventWriter, us
 		s.refundPlanning(ctx, userID, pointsRef, reserved, reserveLedgerID)
 		return err
 	}
-	turns, history := s.compactQAHistory(ctx, conv, turns)
+	turns, history, err := s.compactQAHistory(ctx, conv, turns)
+	if err != nil {
+		s.refundPlanning(ctx, userID, pointsRef, reserved, reserveLedgerID)
+		return err
+	}
 
 	opts, err := s.qaOptions(ctx, userID, conv, language)
 	if err != nil {
@@ -444,7 +448,12 @@ func (s *Server) runQATurnCore(ctx context.Context, sink planningEventWriter, us
 		return err
 	}
 	meter := &usageAccumulator{}
-	client := llm.New(s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey, s.resolvedQAModel(ctx)).
+	qaModel, err := s.resolvedQAModel(ctx)
+	if err != nil {
+		s.refundPlanning(ctx, userID, pointsRef, reserved, reserveLedgerID)
+		return err
+	}
+	client := llm.New(s.d.Env.OpenAIBaseURL, s.d.Env.OpenAIKey, qaModel).
 		WithUsageRecorder(meter.record).
 		WithPricing(s.d.Env.LLMInputCostPerMillion, s.d.Env.LLMOutputCostPerMillion)
 	retriever := &qaRetriever{s: s, owner: userID}
@@ -478,38 +487,42 @@ func (s *Server) runQATurnCore(ctx context.Context, sink planningEventWriter, us
 // exceeds the budget, the evicted prefix is LLM-summarized into a summary
 // turn and marked compacted. Graceful degradation — any failure returns the
 // original history untouched.
-func (s *Server) compactQAHistory(ctx context.Context, conv *QAConversation, turns []qaTurnRow) ([]qaTurnRow, []llm.Message) {
+func (s *Server) compactQAHistory(ctx context.Context, conv *QAConversation, turns []qaTurnRow) ([]qaTurnRow, []llm.Message, error) {
 	history := qaMessagesForLLM(turns)
 	if !qa.NeedsCompaction(history, qaSystemPromptAllowance) {
-		return turns, history
+		return turns, history, nil
 	}
 	// Model-view rows map 1:1 onto history messages, so a message boundary
 	// index is also a turn index.
 	boundary := qa.CompactionBoundary(history)
 	if boundary <= 0 || boundary > len(turns) {
-		return turns, history
+		return turns, history, nil
 	}
-	compressClient := llm.New(s.d.Env.CompressionBaseURL, s.d.Env.CompressionKey, s.d.Env.CompressionModel)
+	compressionModel, err := s.requiredModel(ctx, appConfigKeyCompressionModel, "compression")
+	if err != nil {
+		return turns, history, err
+	}
+	compressClient := llm.New(s.d.Env.CompressionBaseURL, s.d.Env.CompressionKey, compressionModel)
 	summary, err := qa.SummarizeEvicted(ctx, compressClient, history[:boundary])
 	if err != nil {
 		s.logger().Warn("qa compaction failed; continuing uncompacted", "conversation", conv.ID, "err", err)
-		return turns, history
+		return turns, history, nil
 	}
 	keepFromSeq := turns[boundary].Seq
 	if err := s.d.QA.Compact(ctx, conv.ID, keepFromSeq, summary); err != nil {
 		s.logger().Warn("qa compaction persist failed", "conversation", conv.ID, "err", err)
-		return turns, history
+		return turns, history, nil
 	}
 	fresh, err := s.d.QA.ModelTurns(ctx, conv.ID)
 	if err != nil {
-		return turns, history
+		return turns, history, nil
 	}
 	s.logger().Info("qa history compacted",
 		"conversation", conv.ID,
 		"evicted", boundary,
 		"kept", len(fresh),
 	)
-	return fresh, qaMessagesForLLM(fresh)
+	return fresh, qaMessagesForLLM(fresh), nil
 }
 
 // qaOptions assembles the per-turn agent options for a conversation's scope.
@@ -685,14 +698,14 @@ func (r *qaRetriever) SearchSummaries(ctx context.Context, discussionID, query s
 }
 
 func (r *qaRetriever) SearchContent(ctx context.Context, discussionID, query string, limit int) ([]qa.ContentHit, error) {
-	if !r.s.SemanticSearchEnabled(ctx) {
-		return nil, errors.New("semantic search is unavailable")
-	}
 	vec, err := r.s.embedQuery(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	model := r.s.resolvedEmbeddingModel(ctx)
+	model, err := r.s.resolvedEmbeddingModel(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var hits []ChunkHit
 	if discussionID != "" {
 		hits, err = r.s.d.Embeddings.SearchDiscussion(ctx, r.owner, discussionID, vec, model, limit)
