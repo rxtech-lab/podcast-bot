@@ -52,6 +52,23 @@ func TestConvertFileSinglePage(t *testing.T) {
 	}
 }
 
+func TestConvertFileSanitizesPostgresUnsafeContent(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeMarkitdownPage(t, w, "unsafe", 1, 1, "before\x00after", false, 0)
+	}))
+	defer server.Close()
+
+	got, err := ConvertFile(t.Context(), markitdownTestEnv(server.URL), "https://example.com/book.pdf")
+	if err != nil {
+		t.Fatalf("ConvertFile: %v", err)
+	}
+	if want := "beforeafter"; got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
 func TestConvertFileFetchesEveryPageInOrder(t *testing.T) {
 	t.Parallel()
 

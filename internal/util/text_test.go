@@ -37,3 +37,10 @@ func TestTruncateBytesKeepsValidUTF8(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizePostgresTextRemovesInvalidUTF8AndNUL(t *testing.T) {
+	input := "before\x00middle" + string([]byte{0xff}) + "after"
+	if got, want := SanitizePostgresText(input), "beforemiddleafter"; got != want {
+		t.Fatalf("SanitizePostgresText() = %q, want %q", got, want)
+	}
+}

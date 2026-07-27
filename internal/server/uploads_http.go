@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sirily11/debate-bot/internal/planner"
+	"github.com/sirily11/debate-bot/internal/util"
 )
 
 // maxUploadBytes caps an uploaded reference file. markitdown handles documents,
@@ -275,11 +276,16 @@ func (s *Server) validatedAudioKey(userID, key string) string {
 	return key
 }
 
-// sanitizedAttachments drops any client-supplied storage key the authenticated
-// user does not own, so a forged key can never be re-signed by the server and
-// replayed to the model later (mirrors validatedAudioKey).
+// sanitizedAttachments makes client-supplied attachment text safe to persist
+// and drops any storage key the authenticated user does not own, so a forged
+// key can never be re-signed by the server and replayed to the model later
+// (mirrors validatedAudioKey).
 func (s *Server) sanitizedAttachments(userID string, atts []planner.Attachment) []planner.Attachment {
 	for i := range atts {
+		atts[i].Filename = util.SanitizePostgresText(atts[i].Filename)
+		atts[i].Markdown = util.SanitizePostgresText(atts[i].Markdown)
+		atts[i].URL = util.SanitizePostgresText(atts[i].URL)
+		atts[i].MIMEType = util.SanitizePostgresText(atts[i].MIMEType)
 		key := strings.TrimSpace(atts[i].Key)
 		if key == "" {
 			continue

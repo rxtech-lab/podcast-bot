@@ -12,6 +12,7 @@ import (
 	"github.com/sirily11/debate-bot/internal/config"
 	"github.com/sirily11/debate-bot/internal/llm"
 	"github.com/sirily11/debate-bot/internal/planner"
+	"github.com/sirily11/debate-bot/internal/util"
 )
 
 // PlanningConversationStatus tracks the lifecycle of a conversational planning
@@ -398,13 +399,19 @@ func (s *PlanningStore) AppendTurn(ctx context.Context, conversationID string, i
 		}
 		sourcesJSON = string(b)
 	}
+	// External documents, model output, and user input can all reach these raw
+	// TEXT fields. Keep this guard at the persistence boundary even though
+	// known ingestion paths sanitize earlier.
+	text := util.SanitizePostgresText(in.Text)
+	resultText := util.SanitizePostgresText(in.ResultText)
+	markdown := util.SanitizePostgresText(in.Markdown)
 	now := time.Now().UnixMilli()
 	_, err := s.exec(ctx, `INSERT INTO planning_turns
 		(op_id, conversation_id, seq, role, text, attachments_json, references_json, tool_calls_json, tool_call_id, tool_name, result_text, is_error,
 		 script_json, sources_json, markdown, question_id, questions_json, answers_json, question_status, created_at)
 		VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM planning_turns WHERE conversation_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-		opID, conversationID, conversationID, in.Role, in.Text, attachmentsJSON, referencesJSON, toolCallsJSON, in.ToolCallID, in.ToolName, in.ResultText, boolInt(in.IsError),
-		scriptJSON, sourcesJSON, in.Markdown, in.QuestionID, in.QuestionsJSON, in.AnswersJSON, in.QuestionStatus, now)
+		opID, conversationID, conversationID, in.Role, text, attachmentsJSON, referencesJSON, toolCallsJSON, in.ToolCallID, in.ToolName, resultText, boolInt(in.IsError),
+		scriptJSON, sourcesJSON, markdown, in.QuestionID, in.QuestionsJSON, in.AnswersJSON, in.QuestionStatus, now)
 	if err != nil {
 		return err
 	}
