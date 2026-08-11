@@ -36,6 +36,7 @@
 		DF985E4B300F9D4B00BBB638 /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF985E4A300F9D4B00BBB638 /* icon.icon */; };
 		DF985E4C300F9D4B00BBB638 /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF985E4A300F9D4B00BBB638 /* icon.icon */; };
 		DF985E4D300F9D4B00BBB638 /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DF985E4A300F9D4B00BBB638 /* icon.icon */; };
+		DF9D6E5B302B2E3100CD3C3D /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF9D6E5A302B2E3100CD3C3D /* StoreKit.framework */; };
 		DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269D2FE8529A007BEF2A /* RxAuthSwift */; };
 		DFF526A02FE8529A007BEF2A /* RxAuthSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = DFF5269F2FE8529A007BEF2A /* RxAuthSwiftUI */; };
 /* End PBXBuildFile section */
@@ -120,6 +121,7 @@
 		DF6AF9DD2FF0EB4D0045484F /* iosUITestPlan.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = iosUITestPlan.xctestplan; sourceTree = "<group>"; };
 		DF9822EC3009306500BBB638 /* iOSShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = iOSShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF985E4A300F9D4B00BBB638 /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
+		DF9D6E5A302B2E3100CD3C3D /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
 		DFF526A12FE852D0007BEF2A /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		DFF526A22FE852D0007BEF2A /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		DFF526A32FE852D0007BEF2A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -400,6 +402,7 @@
 				DFF5269E2FE8529A007BEF2A /* RxAuthSwift in Frameworks */,
 				DF6AE9CF2FEC0E850045484F /* MarkdownUI in Frameworks */,
 				DF6AF75A2FEE6A380045484F /* JSONSchemaForm in Frameworks */,
+				DF9D6E5B302B2E3100CD3C3D /* StoreKit.framework in Frameworks */,
 				AABBCCDD0000000000000003 /* BeautifulMermaid in Frameworks */,
 				DF6A14EC2FFA9D550045484F /* JSONSchemaValidator in Frameworks */,
 				DF6AF75C2FEE6A380045484F /* JSONSchemaValidator in Frameworks */,
@@ -505,6 +508,7 @@
 		DF6ADDF02FEB03A30045484F /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				DF9D6E5A302B2E3100CD3C3D /* StoreKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";

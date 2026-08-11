@@ -17,6 +17,8 @@ final class PurchaseManager {
 
     private(set) var customerInfo: CustomerInfo?
     private(set) var offerings: Offerings?
+    private(set) var offeringsError: String?
+    private(set) var isRefreshingOfferings = false
     private(set) var pointsBalance: Int?
     let isConfigured: Bool
 
@@ -53,7 +55,48 @@ final class PurchaseManager {
 
     func refreshOfferings() async {
         guard isConfigured else { return }
-        offerings = try? await Purchases.shared.offerings()
+        isRefreshingOfferings = true
+        defer { isRefreshingOfferings = false }
+        do {
+            offerings = try await Purchases.shared.offerings()
+            offeringsError = nil
+        } catch {
+            offeringsError = error.localizedDescription
+        }
+    }
+
+    /// Purchases a package from the active RevenueCat Offering. RevenueCat
+    /// still owns receipt validation and entitlement updates; the app owns only
+    /// the presentation of the plans and purchase state.
+    ///
+    /// Returns `false` when the user cancels the App Store purchase sheet.
+    func purchase(package: Package) async throws -> Bool {
+        guard isConfigured else { return false }
+        do {
+            let result = try await Purchases.shared.purchase(package: package)
+            customerInfo = result.customerInfo
+            guard !result.userCancelled else { return false }
+            await refreshBalanceAfterPurchase()
+            return true
+        } catch {
+            // RevenueCat's async API can surface StoreKit cancellation as a
+            // thrown PublicError instead of returning `userCancelled == true`.
+            // Closing Apple's purchase sheet is a normal user action, not a
+            // purchase failure that should produce an alert.
+            if (error as NSError).asErrorCode == .purchaseCancelledError {
+                return false
+            }
+            throw error
+        }
+    }
+
+    /// Re-syncs App Store purchases and returns whether the Pro entitlement is
+    /// active after the restore completes.
+    func restorePurchases() async throws -> Bool {
+        guard isConfigured else { return false }
+        customerInfo = try await Purchases.shared.restorePurchases()
+        await refreshBalance()
+        return isPro
     }
 
     func refreshBalance() async {
