@@ -2260,6 +2260,9 @@
         }
       }
     },
+    "Check your App Store connection and try again." : {
+
+    },
     "Checking Notion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2351,6 +2354,9 @@
           }
         }
       }
+    },
+    "Choose a plan" : {
+
     },
     "Choose AI, write a prompt, and generate cover art on the server." : {
       "localizations" : {
@@ -2485,6 +2491,9 @@
         }
       }
     },
+    "Choose the plan that fits how you create. Prices and billing periods come directly from the App Store." : {
+
+    },
     "Choose whether short gaps between subtitles are removed when you save." : {
       "localizations" : {
         "zh-Hans" : {
@@ -2618,6 +2627,9 @@
         }
       }
     },
+    "Completing purchase…" : {
+
+    },
     "Connect Notion" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2728,6 +2740,9 @@
         }
       }
     },
+    "Continue" : {
+
+    },
     "Continue Recording" : {
       "comment" : "Resume recording from the review step",
       "localizations" : {
@@ -2750,6 +2765,9 @@
           }
         }
       }
+    },
+    "Continue with %@" : {
+
     },
     "Copied User ID" : {
       "localizations" : {
@@ -3791,6 +3809,12 @@
           }
         }
       }
+    },
+    "Create more podcasts and audiobooks" : {
+
+    },
+    "Create more with %@" : {
+
     },
     "Create or search for a podcast to use as follow-up context." : {
       "localizations" : {
@@ -6699,6 +6723,9 @@
         }
       }
     },
+    "Keep purchases and access synced across devices" : {
+
+    },
     "Keep Recording" : {
       "comment" : "Keep recording button",
       "localizations" : {
@@ -6922,6 +6949,9 @@
         }
       }
     },
+    "Loading activity…" : {
+
+    },
     "Loading formats" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7033,6 +7063,9 @@
           }
         }
       }
+    },
+    "Loading plans…" : {
+
     },
     "Loading podcast" : {
       "extractionState" : "stale",
@@ -7557,6 +7590,9 @@
           }
         }
       }
+    },
+    "MOST ACCESS" : {
+
     },
     "MP3, M4A, WAV, and more" : {
       "comment" : "Audio upload formats",
@@ -8943,6 +8979,9 @@
         }
       }
     },
+    "Payment will be charged to your Apple Account. The subscription renews automatically unless canceled at least 24 hours before the end of the current billing period. You can manage or cancel it in App Store account settings." : {
+
+    },
     "PDF, Word, slides, images" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9433,6 +9472,9 @@
           }
         }
       }
+    },
+    "Plans are temporarily unavailable" : {
+
     },
     "Play" : {
       "comment" : "Play recording playback button",
@@ -11239,6 +11281,12 @@
         }
       }
     },
+    "Restore Purchases" : {
+
+    },
+    "Restoring purchases…" : {
+
+    },
     "Result" : {
       "comment" : "Tool detail sheet section for the tool's result",
       "localizations" : {
@@ -12353,6 +12401,9 @@
           }
         }
       }
+    },
+    "Selected" : {
+
     },
     "Send audio" : {
       "localizations" : {
@@ -14794,6 +14845,9 @@
         }
       }
     },
+    "Try Again" : {
+
+    },
     "Try again later." : {
       "localizations" : {
         "zh-Hans" : {
@@ -15227,6 +15281,9 @@
           }
         }
       }
+    },
+    "Use subscriber-only models, voices, and tools" : {
+
     },
     "Use the actions menu to publish this podcast to Market or make a public podcast private again." : {
       "localizations" : {
@@ -15790,6 +15847,12 @@
           }
         }
       }
+    },
+    "Your subscriber features are ready to use." : {
+
+    },
+    "Your subscription is active" : {
+
     },
     "中文支持" : {
       "localizations" : {

@@ -32,6 +32,14 @@ struct PointsHistoryView: View {
             NavigationStack {
                 pointsScreen
             }
+            #if os(macOS)
+            .frame(minWidth: 620,
+                   idealWidth: 720,
+                   maxWidth: 820,
+                   minHeight: 500,
+                   idealHeight: 620,
+                   maxHeight: 760)
+            #endif
         } else {
             pointsScreen
         }
@@ -80,35 +88,32 @@ struct PointsHistoryView: View {
         ScrollView {
             LazyVStack(spacing: 20) {
                 header
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                if isLoading && !hasLoadedInitialPage {
+                    loadingState
+                } else {
+                    if let errorMessage {
+                        errorBanner(errorMessage)
+                    }
+                    if !chronological.isEmpty {
+                        chartCard
+                    }
+                    if hasLoadedInitialPage && entries.isEmpty && errorMessage == nil {
+                        emptyState
+                    } else if !entries.isEmpty {
+                        ledgerSection
+                        loadMoreFooter
+                    }
                 }
-                if !chronological.isEmpty {
-                    chartCard
-                }
-                ledgerSection
-                loadMoreFooter
             }
-            .padding(16)
-        }
-        .overlay {
-            if isLoading && !hasLoadedInitialPage {
-                ProgressView().tint(Theme.accent)
-            } else if hasLoadedInitialPage && !isLoading && entries.isEmpty && errorMessage == nil {
-                ContentUnavailableView(
-                    "No usage yet",
-                    systemImage: "chart.line.uptrend.xyaxis",
-                    description: Text("Planning and generating \(AppStringLiteral.stationsNameRaw) will show up here.")
-                )
-            }
+            .frame(maxWidth: 720)
+            .padding(20)
+            .frame(maxWidth: .infinity)
         }
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 24) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Balance")
                     .font(.caption.weight(.semibold))
@@ -122,15 +127,66 @@ struct PointsHistoryView: View {
                     .foregroundStyle(Theme.secondaryText)
             }
             Spacer()
-            Button { showingPaywall = true } label: {
-                Label("Get Points", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-            }
-            .glassEffect(in: .capsule)
+            getPointsButton
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        #if os(macOS)
+        .padding(20)
+        .background(Theme.rowBackground, in: .rect(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(Theme.divider.opacity(0.45))
+        }
+        #endif
+    }
+
+    private var getPointsButton: some View {
+        Button { showingPaywall = true } label: {
+            Label("Get Points", systemImage: "plus")
+                .font(.subheadline.weight(.semibold))
+        }
+        #if os(macOS)
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .tint(Theme.accent)
+        #else
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glassEffect(in: .capsule)
+        #endif
+        .accessibilityIdentifier("points.getPoints")
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .tint(Theme.accent)
+            Text("Loading activity…")
+                .font(.callout)
+                .foregroundStyle(Theme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, minHeight: 220)
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "No usage yet",
+            systemImage: "chart.line.uptrend.xyaxis",
+            description: Text("Planning and generating \(AppStringLiteral.stationsNameRaw) will show up here.")
+        )
+        .frame(maxWidth: .infinity, minHeight: 240)
+        #if os(macOS)
+        .background(Theme.rowBackground.opacity(0.65), in: .rect(cornerRadius: 18))
+        #endif
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color.red.opacity(0.08), in: .rect(cornerRadius: 12))
     }
 
     private var chartCard: some View {
